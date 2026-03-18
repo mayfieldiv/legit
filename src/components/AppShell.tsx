@@ -1,7 +1,10 @@
-import { createSignal, createEffect, Show } from "solid-js";
-import { useKeyboard } from "@opentui/solid";
-import { PRList } from "./PRList";
+import { createSignal, Show, Switch, Match } from "solid-js";
+import { ListView } from "./ListView";
 import type { PR } from "../lib/types";
+
+export type ViewTarget =
+	| { view: "list" }
+	| { view: "detail"; pr: PR };
 
 interface AppShellProps {
 	prs: PR[];
@@ -12,27 +15,7 @@ interface AppShellProps {
 }
 
 export function AppShell(props: AppShellProps) {
-	const [selectedIndex, setSelectedIndex] = createSignal(0);
-
-	// Clamp selectedIndex when PR list changes (refresh, initial load, etc.)
-	createEffect(() => {
-		const maxIndex = Math.max(0, props.prs.length - 1);
-		setSelectedIndex((i) => Math.min(i, maxIndex));
-	});
-
-	useKeyboard((event) => {
-		const name = event.name;
-
-		if (name === "j" || name === "down") {
-			if (props.prs.length > 0) {
-				setSelectedIndex((i) => Math.min(i + 1, props.prs.length - 1));
-			}
-		} else if (name === "k" || name === "up") {
-			setSelectedIndex((i) => Math.max(i - 1, 0));
-		} else if (name === "r") {
-			props.onRefresh();
-		}
-	});
+	const [view, setView] = createSignal<ViewTarget>({ view: "list" });
 
 	return (
 		<box flexDirection="column" width="100%" height="100%">
@@ -46,12 +29,14 @@ export function AppShell(props: AppShellProps) {
 				</text>
 			</box>
 
-			{/* Content */}
+			{/* Error */}
 			<Show when={props.error}>
 				<text>
 					<span color="red">Error: {props.error}</span>
 				</text>
 			</Show>
+
+			{/* Content */}
 			<Show
 				when={!props.loading}
 				fallback={
@@ -60,7 +45,19 @@ export function AppShell(props: AppShellProps) {
 					</text>
 				}
 			>
-				<PRList prs={props.prs} selectedIndex={selectedIndex()} />
+				<Switch>
+					<Match when={view().view === "list"}>
+						<ListView
+							prs={props.prs}
+							onRefresh={props.onRefresh}
+							onNavigate={setView}
+						/>
+					</Match>
+					<Match when={view().view === "detail"}>
+						{/* DetailView placeholder — slice #7 */}
+						<text>Detail view (not yet implemented)</text>
+					</Match>
+				</Switch>
 			</Show>
 		</box>
 	);

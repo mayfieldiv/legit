@@ -1,5 +1,5 @@
 import { describe, test, expect, afterAll } from "bun:test";
-import { detectRepo, parseRemoteUrl } from "../src/lib/detect-repo";
+import { Legit, parseRemoteUrl } from "../src/lib/legit";
 import { execFileSync } from "child_process";
 import { mkdtempSync, rmSync } from "fs";
 import { join } from "path";
@@ -26,44 +26,46 @@ afterAll(() => {
 	}
 });
 
-describe("detectRepo", () => {
+describe("Legit.repo", () => {
 	test("detects owner/repo from SSH remote", () => {
 		const dir = makeTmpGitRepo("git@github.com:acme/widgets.git");
-		const result = detectRepo(dir);
-		expect(result).toEqual({ owner: "acme", repo: "widgets" });
+		const app = new Legit({ cwd: dir });
+		expect(app.repo).toEqual({ owner: "acme", repo: "widgets" });
 	});
 
 	test("detects owner/repo from HTTPS remote", () => {
 		const dir = makeTmpGitRepo("https://github.com/acme/widgets.git");
-		const result = detectRepo(dir);
-		expect(result).toEqual({ owner: "acme", repo: "widgets" });
+		const app = new Legit({ cwd: dir });
+		expect(app.repo).toEqual({ owner: "acme", repo: "widgets" });
 	});
 
 	test("detects owner/repo from HTTPS remote without .git suffix", () => {
 		const dir = makeTmpGitRepo("https://github.com/acme/widgets");
-		const result = detectRepo(dir);
-		expect(result).toEqual({ owner: "acme", repo: "widgets" });
+		const app = new Legit({ cwd: dir });
+		expect(app.repo).toEqual({ owner: "acme", repo: "widgets" });
 	});
 
 	test("throws when git repo has no remote", () => {
 		const dir = makeTmpGitRepo();
-		expect(() => detectRepo(dir)).toThrow(/No git remote/);
+		const app = new Legit({ cwd: dir });
+		expect(() => app.repo).toThrow(/No git remote/);
 	});
 
 	test("throws when directory is not a git repo", () => {
 		const dir = mkdtempSync(join(tmpdir(), "legit-test-"));
 		tmpDirs.push(dir);
-		expect(() => detectRepo(dir)).toThrow();
+		const app = new Legit({ cwd: dir });
+		expect(() => app.repo).toThrow();
 	});
 
 	test("throws when directory does not exist", () => {
-		expect(() => detectRepo("/nonexistent/path")).toThrow();
+		const app = new Legit({ cwd: "/nonexistent/path" });
+		expect(() => app.repo).toThrow();
 	});
 
 	test("defaults to process.cwd() when no cwd provided", () => {
-		// The legit repo itself should be detectable
-		const result = detectRepo();
-		expect(result).toEqual({ owner: "mayfieldiv", repo: "legit" });
+		const app = new Legit();
+		expect(app.repo).toEqual({ owner: "mayfieldiv", repo: "legit" });
 	});
 });
 

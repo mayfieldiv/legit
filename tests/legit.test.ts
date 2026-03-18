@@ -1,7 +1,6 @@
 import { describe, test, expect, afterAll } from "bun:test";
-import { Legit, type LegitOptions } from "../src/lib/legit";
+import { Legit, type LegitOptions, type AuthExecutor } from "../src/lib/legit";
 import type { HttpFetch } from "../src/lib/github-client";
-import type { AuthExecutor } from "../src/lib/auth";
 import { mkdtempSync, rmSync } from "fs";
 import { execFileSync } from "child_process";
 import { join } from "path";
