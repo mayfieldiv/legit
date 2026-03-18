@@ -3,6 +3,9 @@
 	"module": "index.ts",
 	"type": "module",
 	"private": true,
+	"bin": {
+		"legit": "src/cli.ts"
+	},
 	"dependencies": {
 		"@opentui/core": "0.1.88",
 		"@opentui/solid": "0.1.88",

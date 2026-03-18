@@ -1,4 +1,7 @@
 preload = ["@opentui/solid/preload"]
 
+[test]
+preload = ["@opentui/solid/preload"]
+
 [install]
 exact = true

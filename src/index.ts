@@ -1,4 +1,2 @@
-import { render } from "@opentui/solid";
-import App from "./App";
-
-render(App);
+// Main entry point — delegates to cli.ts
+import "./cli";
