@@ -11,19 +11,7 @@
  *   pr <n>   — fetch and print single PR detail as JSON
  */
 
-import { detectRepo } from "./lib/detect-repo";
-import { resolveAuth } from "./lib/auth";
-import {
-	loadConfig,
-	saveConfig,
-	addRepo,
-	DEFAULT_CONFIG,
-} from "./lib/config";
-import { createGitHubClient } from "./lib/github-client";
-
-const CONFIG_PATH =
-	process.env.LEGIT_CONFIG_PATH ??
-	`${process.env.HOME}/.config/legit/config.json`;
+import { Legit } from "./lib/legit";
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -33,81 +21,36 @@ function fail(message: string): never {
 	process.exit(1);
 }
 
-function ensureConfig(auth?: { user: string }) {
-	let config = loadConfig(CONFIG_PATH);
-
-	// Auto-detect user if not set
-	if (!config.user && auth) {
-		config = { ...config, user: auth.user };
-		saveConfig(CONFIG_PATH, config);
-	}
-
-	return config;
+function print(data: unknown): void {
+	console.log(JSON.stringify(data, null, "\t"));
 }
 
 try {
+	const app = new Legit();
+
 	switch (command) {
-		case "detect": {
-			const repo = detectRepo();
-			console.log(JSON.stringify(repo, null, "\t"));
+		case "detect":
+			print(app.repo);
 			break;
-		}
 
-		case "auth": {
-			const auth = resolveAuth();
-			console.log(
-				JSON.stringify(
-					{ user: auth.user, tokenSource: auth.tokenSource },
-					null,
-					"\t",
-				),
-			);
+		case "auth":
+			print({ user: app.auth.user, tokenSource: app.auth.tokenSource });
 			break;
-		}
 
-		case "config": {
-			try {
-				const auth = resolveAuth();
-				const config = ensureConfig(auth);
-				console.log(JSON.stringify(config, null, "\t"));
-			} catch {
-				const config = ensureConfig();
-				console.log(JSON.stringify(config, null, "\t"));
-			}
+		case "config":
+			print(app.config);
 			break;
-		}
 
-		case "prs": {
-			const auth = resolveAuth();
-			const config = ensureConfig(auth);
-			const client = createGitHubClient(auth.token);
-			const repo = detectRepo();
-			const repoSlug = `${repo.owner}/${repo.repo}`;
-
-			// Auto-add repo to config if not tracked
-			if (!config.repos.includes(repoSlug)) {
-				const updated = addRepo(config, repoSlug);
-				saveConfig(CONFIG_PATH, updated);
-			}
-
-			const prs = await client.fetchOpenPRs(repoSlug);
-			console.log(JSON.stringify(prs, null, "\t"));
+		case "prs":
+			print(await app.fetchPRs());
 			break;
-		}
 
 		case "pr": {
 			const prNumber = parseInt(args[1], 10);
 			if (isNaN(prNumber)) {
 				fail("Usage: legit pr <number>");
 			}
-
-			const auth = resolveAuth();
-			const client = createGitHubClient(auth.token);
-			const repo = detectRepo();
-			const repoSlug = `${repo.owner}/${repo.repo}`;
-
-			const pr = await client.fetchPR(repoSlug, prNumber);
-			console.log(JSON.stringify(pr, null, "\t"));
+			print(await app.fetchPR(app.repoSlug, prNumber));
 			break;
 		}
 
