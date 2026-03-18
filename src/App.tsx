@@ -1,7 +1,7 @@
 import { createSignal, onMount } from "solid-js";
 import { AppShell } from "./components/AppShell";
 import { Legit } from "./lib/legit";
-import type { PR } from "./lib/github-client";
+import type { PR } from "./lib/types";
 
 const app = new Legit();
 

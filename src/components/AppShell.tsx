@@ -1,7 +1,7 @@
 import { createSignal, createEffect, Show } from "solid-js";
 import { useKeyboard } from "@opentui/solid";
 import { PRList } from "./PRList";
-import type { PR } from "../lib/github-client";
+import type { PR } from "../lib/types";
 
 interface AppShellProps {
 	prs: PR[];

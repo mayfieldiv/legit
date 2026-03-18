@@ -1,5 +1,5 @@
 import { For, Show } from "solid-js";
-import type { PR } from "../lib/github-client";
+import type { PR } from "../lib/types";
 import { formatAge, formatSize, formatReviewDecision } from "../lib/format";
 
 interface PRListProps {

@@ -3,32 +3,15 @@
  * HTTP transport is injected for testability.
  */
 
+import type { PR, PRDetail } from "./types";
+
+// Re-export domain types for backward compatibility
+export type { PR, PRDetail } from "./types";
+
 export type HttpFetch = (
 	url: string,
 	init?: RequestInit,
 ) => Promise<Response>;
-
-export interface PR {
-	number: number;
-	title: string;
-	author: string;
-	createdAt: string;
-	updatedAt: string;
-	additions: number;
-	deletions: number;
-	isDraft: boolean;
-	labels: string[];
-	requestedReviewers: string[];
-	assignees: string[];
-	// GraphQL-enriched fields
-	reviewDecision: string;
-	mergeable: string;
-	lastCommitDate: string;
-}
-
-export interface PRDetail extends PR {
-	body: string;
-}
 
 export interface GitHubClient {
 	fetchOpenPRs(repo: string): Promise<PR[]>;

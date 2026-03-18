@@ -1,4 +1,4 @@
-import type { PR } from "../src/lib/github-client";
+import type { PR } from "../src/lib/types";
 
 /**
  * Create a PR with sensible defaults. Override any field.

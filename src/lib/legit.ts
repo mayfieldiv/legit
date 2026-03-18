@@ -10,9 +10,8 @@ import {
 	createGitHubClient,
 	type GitHubClient,
 	type HttpFetch,
-	type PR,
-	type PRDetail,
 } from "./github-client";
+import type { PR, PRDetail } from "./types";
 
 export interface LegitOptions {
 	configPath?: string;
