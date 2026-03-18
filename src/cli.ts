@@ -33,18 +33,13 @@ function fail(message: string): never {
 	process.exit(1);
 }
 
-function ensureConfig() {
+function ensureConfig(auth?: { user: string }) {
 	let config = loadConfig(CONFIG_PATH);
 
 	// Auto-detect user if not set
-	if (!config.user) {
-		try {
-			const auth = resolveAuth();
-			config = { ...config, user: auth.user };
-			saveConfig(CONFIG_PATH, config);
-		} catch {
-			// Ignore — user can set later
-		}
+	if (!config.user && auth) {
+		config = { ...config, user: auth.user };
+		saveConfig(CONFIG_PATH, config);
 	}
 
 	return config;
@@ -71,14 +66,20 @@ try {
 		}
 
 		case "config": {
-			const config = ensureConfig();
-			console.log(JSON.stringify(config, null, "\t"));
+			try {
+				const auth = resolveAuth();
+				const config = ensureConfig(auth);
+				console.log(JSON.stringify(config, null, "\t"));
+			} catch {
+				const config = ensureConfig();
+				console.log(JSON.stringify(config, null, "\t"));
+			}
 			break;
 		}
 
 		case "prs": {
-			const config = ensureConfig();
 			const auth = resolveAuth();
+			const config = ensureConfig(auth);
 			const client = createGitHubClient(auth.token);
 			const repo = detectRepo();
 			const repoSlug = `${repo.owner}/${repo.repo}`;

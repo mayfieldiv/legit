@@ -57,11 +57,14 @@ export function createGitHubClient(
 		return res.json();
 	}
 
-	async function graphql(query: string): Promise<unknown> {
+	async function graphql(
+		query: string,
+		variables?: Record<string, unknown>,
+	): Promise<unknown> {
 		const res = await httpFetch(`${GITHUB_API}/graphql`, {
 			method: "POST",
 			headers: { ...headers, "Content-Type": "application/json" },
-			body: JSON.stringify({ query }),
+			body: JSON.stringify({ query, variables }),
 		});
 		if (!res.ok) {
 			throw new Error(
@@ -90,15 +93,20 @@ export function createGitHubClient(
 	/**
 	 * Fetch GraphQL metadata for a batch of PR numbers.
 	 */
+	interface GraphQLMeta {
+		additions: number;
+		deletions: number;
+		reviewDecision: string;
+		mergeable: string;
+		lastCommitDate: string;
+	}
+
 	async function fetchGraphQLMeta(
 		owner: string,
 		repo: string,
 		numbers: number[],
-	): Promise<Map<number, { reviewDecision: string; mergeable: string; lastCommitDate: string }>> {
-		const meta = new Map<
-			number,
-			{ reviewDecision: string; mergeable: string; lastCommitDate: string }
-		>();
+	): Promise<Map<number, GraphQLMeta>> {
+		const meta = new Map<number, GraphQLMeta>();
 
 		if (numbers.length === 0) return meta;
 
@@ -107,12 +115,12 @@ export function createGitHubClient(
 			const aliases = batch
 				.map(
 					(n, idx) =>
-						`pr${idx}: pullRequest(number: ${n}) { number reviewDecision mergeable commits(last: 1) { nodes { commit { committedDate } } } }`,
+						`pr${idx}: pullRequest(number: ${n}) { number additions deletions reviewDecision mergeable commits(last: 1) { nodes { commit { committedDate } } } }`,
 				)
 				.join(" ");
 
-			const query = `query { repository(owner: "${owner}", name: "${repo}") { ${aliases} } }`;
-			const result = (await graphql(query)) as {
+			const query = `query($owner: String!, $repo: String!) { repository(owner: $owner, name: $repo) { ${aliases} } }`;
+			const result = (await graphql(query, { owner, repo })) as {
 				data: { repository: Record<string, any> };
 			};
 
@@ -121,6 +129,8 @@ export function createGitHubClient(
 				const pr = repoData[`pr${idx}`];
 				if (pr) {
 					meta.set(pr.number, {
+						additions: pr.additions ?? 0,
+						deletions: pr.deletions ?? 0,
 						reviewDecision: pr.reviewDecision ?? "",
 						mergeable: pr.mergeable ?? "UNKNOWN",
 						lastCommitDate:
@@ -175,6 +185,8 @@ export function createGitHubClient(
 				const m = meta.get(pr.number);
 				return {
 					...pr,
+					additions: m?.additions ?? pr.additions,
+					deletions: m?.deletions ?? pr.deletions,
 					reviewDecision: m?.reviewDecision ?? "",
 					mergeable: m?.mergeable ?? "UNKNOWN",
 					lastCommitDate: m?.lastCommitDate ?? "",
@@ -196,6 +208,8 @@ export function createGitHubClient(
 			return {
 				...restPR,
 				body: raw.body ?? "",
+				additions: m?.additions ?? restPR.additions,
+				deletions: m?.deletions ?? restPR.deletions,
 				reviewDecision: m?.reviewDecision ?? "",
 				mergeable: m?.mergeable ?? "UNKNOWN",
 				lastCommitDate: m?.lastCommitDate ?? "",

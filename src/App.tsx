@@ -53,6 +53,7 @@ const App = () => {
 			prs={prs()}
 			loading={loading()}
 			repoSlug={repoSlug()}
+			error={error()}
 			onRefresh={fetchPRs}
 		/>
 	);

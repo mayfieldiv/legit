@@ -48,25 +48,27 @@ function createMockFetch(routes: MockRoute[]): {
 
 // ── Test data ───────────────────────────────────────────────────────────────
 
+// REST list endpoint does NOT include additions/deletions
 const SAMPLE_PR_REST = {
 	number: 42,
 	title: "Fix the thing",
 	user: { login: "alice", type: "User" },
 	created_at: "2026-03-01T00:00:00Z",
 	updated_at: "2026-03-15T00:00:00Z",
-	additions: 50,
-	deletions: 10,
 	draft: false,
 	labels: [{ name: "bug" }],
 	requested_reviewers: [{ login: "bob" }],
 	assignees: [{ login: "alice" }],
 };
 
+// GraphQL provides additions/deletions along with other metadata
 const SAMPLE_GRAPHQL_RESPONSE = {
 	data: {
 		repository: {
 			pr0: {
 				number: 42,
+				additions: 50,
+				deletions: 10,
 				reviewDecision: "REVIEW_REQUIRED",
 				mergeable: "MERGEABLE",
 				commits: {
@@ -131,6 +133,8 @@ describe("GitHubClient", () => {
 			for (let i = 0; i < 101; i++) {
 				gqlData[`pr${i}`] = {
 					number: i + 1,
+					additions: 10,
+					deletions: 5,
 					reviewDecision: "REVIEW_REQUIRED",
 					mergeable: "MERGEABLE",
 					commits: {

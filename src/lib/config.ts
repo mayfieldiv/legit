@@ -34,7 +34,7 @@ export const DEFAULT_CONFIG: LegitConfig = {
  */
 export function loadConfig(configPath: string): LegitConfig {
 	if (!existsSync(configPath)) {
-		return { ...DEFAULT_CONFIG };
+		return structuredClone(DEFAULT_CONFIG);
 	}
 
 	const raw = readFileSync(configPath, "utf-8");

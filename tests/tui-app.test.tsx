@@ -213,4 +213,48 @@ describe("AppShell", () => {
 		const frame = captureCharFrame();
 		expect(frame).toContain("Only PR");
 	});
+
+	test("j/k keys do nothing when PR list is empty", async () => {
+		const { renderOnce, captureCharFrame, mockInput } = await testRender(
+			() => (
+				<AppShell
+					prs={[]}
+					loading={false}
+					repoSlug="acme/widgets"
+					onRefresh={() => {}}
+				/>
+			),
+			{ width: 120, height: 20 },
+		);
+
+		await renderOnce();
+
+		// Press j on empty list — should not crash or corrupt state
+		mockInput.pressKey("j");
+		mockInput.pressKey("j");
+		mockInput.pressKey("k");
+		await renderOnce();
+
+		const frame = captureCharFrame();
+		expect(frame).toContain("No open pull requests");
+	});
+
+	test("shows error message when error is set", async () => {
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => (
+				<AppShell
+					prs={[]}
+					loading={false}
+					repoSlug="acme/widgets"
+					error="Network timeout"
+					onRefresh={() => {}}
+				/>
+			),
+			{ width: 120, height: 20 },
+		);
+
+		await renderOnce();
+		const frame = captureCharFrame();
+		expect(frame).toContain("Network timeout");
+	});
 });

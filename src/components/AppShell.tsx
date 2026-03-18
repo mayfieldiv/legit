@@ -1,4 +1,4 @@
-import { createSignal, Show } from "solid-js";
+import { createSignal, createEffect, Show } from "solid-js";
 import { useKeyboard } from "@opentui/solid";
 import { PRList } from "./PRList";
 import type { PR } from "../lib/github-client";
@@ -7,17 +7,26 @@ interface AppShellProps {
 	prs: PR[];
 	loading: boolean;
 	repoSlug: string;
+	error?: string;
 	onRefresh: () => void;
 }
 
 export function AppShell(props: AppShellProps) {
 	const [selectedIndex, setSelectedIndex] = createSignal(0);
 
+	// Clamp selectedIndex when PR list changes (refresh, initial load, etc.)
+	createEffect(() => {
+		const maxIndex = Math.max(0, props.prs.length - 1);
+		setSelectedIndex((i) => Math.min(i, maxIndex));
+	});
+
 	useKeyboard((event) => {
 		const name = event.name;
 
 		if (name === "j" || name === "down") {
-			setSelectedIndex((i) => Math.min(i + 1, props.prs.length - 1));
+			if (props.prs.length > 0) {
+				setSelectedIndex((i) => Math.min(i + 1, props.prs.length - 1));
+			}
 		} else if (name === "k" || name === "up") {
 			setSelectedIndex((i) => Math.max(i - 1, 0));
 		} else if (name === "r") {
@@ -38,6 +47,11 @@ export function AppShell(props: AppShellProps) {
 			</box>
 
 			{/* Content */}
+			<Show when={props.error}>
+				<text>
+					<span color="red">Error: {props.error}</span>
+				</text>
+			</Show>
 			<Show
 				when={!props.loading}
 				fallback={
