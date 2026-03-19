@@ -133,6 +133,64 @@ describe("GitHubClient", () => {
 			const client = createGitHubClient("fake-token", fetch);
 			expect(client.fetchOpenPRs("acme/widgets")).rejects.toThrow(/403/);
 		});
+
+		test("reports page and metadata batch progress while loading open PRs", async () => {
+			const page1 = Array.from({ length: 100 }, (_, i) => ({
+				...SAMPLE_REST_PR,
+				number: i + 1,
+				title: `PR ${i + 1}`,
+			}));
+			const page2 = [{ ...SAMPLE_REST_PR, number: 101, title: "PR 101" }];
+			const gqlBatch1 = Array.from({ length: 50 }, (_, i) => ({
+				...SAMPLE_GQL_META,
+				number: i + 1,
+			}));
+			const gqlBatch2 = Array.from({ length: 50 }, (_, i) => ({
+				...SAMPLE_GQL_META,
+				number: i + 51,
+			}));
+			const gqlBatch3 = [{ ...SAMPLE_GQL_META, number: 101 }];
+
+			const { fetch } = createMockFetch([
+				{
+					url: "https://api.github.com/repos/acme/widgets/pulls?state=open&per_page=100&page=1",
+					response: { status: 200, body: page1 },
+				},
+				{
+					url: "https://api.github.com/repos/acme/widgets/pulls?state=open&per_page=100&page=2",
+					response: { status: 200, body: page2 },
+				},
+				{
+					url: "https://api.github.com/graphql",
+					method: "POST",
+					response: { status: 200, body: makeGraphQLResponse(gqlBatch1) },
+				},
+				{
+					url: "https://api.github.com/graphql",
+					method: "POST",
+					response: { status: 200, body: makeGraphQLResponse(gqlBatch2) },
+				},
+				{
+					url: "https://api.github.com/graphql",
+					method: "POST",
+					response: { status: 200, body: makeGraphQLResponse(gqlBatch3) },
+				},
+			]);
+
+			const progress: string[] = [];
+			const client = createGitHubClient("fake-token", fetch);
+			await client.fetchOpenPRs("acme/widgets", (message) => {
+				progress.push(message);
+			});
+
+			expect(progress).toEqual([
+				"Loading pull requests… page 1",
+				"Loading pull requests… page 2",
+				"Loading PR metadata… batch 1/3",
+				"Loading PR metadata… batch 2/3",
+				"Loading PR metadata… batch 3/3",
+			]);
+		});
 	});
 
 	describe("fetchPR", () => {

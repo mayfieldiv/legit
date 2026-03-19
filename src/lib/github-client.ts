@@ -13,8 +13,10 @@ export type HttpFetch = (
 	init?: RequestInit,
 ) => Promise<Response>;
 
+export type ProgressReporter = (message: string) => void;
+
 export interface GitHubClient {
-	fetchOpenPRs(repo: string): Promise<PR[]>;
+	fetchOpenPRs(repo: string, onProgress?: ProgressReporter): Promise<PR[]>;
 	fetchPR(repo: string, number: number): Promise<PRDetail>;
 }
 
@@ -59,10 +61,14 @@ export function createGitHubClient(
 		return res.json();
 	}
 
-	async function paginateRest(baseUrl: string): Promise<unknown[]> {
+	async function paginateRest(
+		baseUrl: string,
+		onProgress?: ProgressReporter,
+	): Promise<unknown[]> {
 		const results: unknown[] = [];
 		let page = 1;
 		while (true) {
+			onProgress?.(`Loading pull requests… page ${page}`);
 			const url = `${baseUrl}${baseUrl.includes("?") ? "&" : "?"}per_page=${PER_PAGE}&page=${page}`;
 			const data = (await apiGet(url)) as unknown[];
 			results.push(...data);
@@ -120,12 +126,16 @@ export function createGitHubClient(
 		owner: string,
 		repo: string,
 		numbers: number[],
+		onProgress?: ProgressReporter,
 	): Promise<Map<number, GraphQLMeta>> {
 		const meta = new Map<number, GraphQLMeta>();
 		if (numbers.length === 0) return meta;
+		const totalBatches = Math.ceil(numbers.length / GRAPHQL_BATCH_SIZE);
 
 		for (let i = 0; i < numbers.length; i += GRAPHQL_BATCH_SIZE) {
 			const batch = numbers.slice(i, i + GRAPHQL_BATCH_SIZE);
+			const batchNumber = Math.floor(i / GRAPHQL_BATCH_SIZE) + 1;
+			onProgress?.(`Loading PR metadata… batch ${batchNumber}/${totalBatches}`);
 			const aliases = batch
 				.map(
 					(n, idx) =>
@@ -179,11 +189,15 @@ export function createGitHubClient(
 	// ── Public API ──────────────────────────────────────────────────────
 
 	return {
-		async fetchOpenPRs(repo: string): Promise<PR[]> {
+		async fetchOpenPRs(
+			repo: string,
+			onProgress?: ProgressReporter,
+		): Promise<PR[]> {
 			const [owner, repoName] = parseOwnerRepo(repo);
 
 			const rawPRs = await paginateRest(
 				`${GITHUB_API}/repos/${owner}/${repoName}/pulls?state=open`,
+				onProgress,
 			);
 			if (rawPRs.length === 0) return [];
 
@@ -192,6 +206,7 @@ export function createGitHubClient(
 				owner,
 				repoName,
 				restPRs.map((pr) => pr.number),
+				onProgress,
 			);
 
 			return restPRs.map((pr) => mergePR(pr, meta.get(pr.number)));

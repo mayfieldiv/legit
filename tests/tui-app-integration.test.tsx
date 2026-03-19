@@ -64,6 +64,30 @@ describe("App integration", () => {
 		expect(frame).toContain("acme/widgets");
 	});
 
+	test("shows loading progress text while fetching", async () => {
+		const { fetch } = createMockFetch([
+			{
+				url: /pulls/,
+				response: { status: 200, body: [] },
+			},
+		]);
+		const delayedFetch = async (url: string, init?: RequestInit) => {
+			await new Promise((r) => setTimeout(r, 25));
+			return fetch(url, init);
+		};
+		const app = createTestLegit({ httpFetch: delayedFetch });
+
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => <App app={app} />,
+			{ width: 120, height: 20 },
+		);
+
+		await renderOnce();
+		const frame = captureCharFrame();
+		expect(frame).toContain("Loading pull requests");
+		expect(frame).toContain("page 1");
+	});
+
 	test("shows error when fetch fails", async () => {
 		const { fetch } = createMockFetch([
 			{

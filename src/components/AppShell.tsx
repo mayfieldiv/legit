@@ -9,6 +9,7 @@ export type ViewTarget =
 interface AppShellProps {
 	prs: PR[];
 	loading: boolean;
+	loadingMessage?: string;
 	repoSlug: string;
 	error?: string;
 	onRefresh: () => void;
@@ -41,7 +42,7 @@ export function AppShell(props: AppShellProps) {
 				when={!props.loading}
 				fallback={
 					<text>
-						<span color="yellow">Loading pull requests...</span>
+						<span color="yellow">{props.loadingMessage ?? "Loading pull requests..."}</span>
 					</text>
 				}
 			>

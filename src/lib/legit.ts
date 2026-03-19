@@ -9,6 +9,7 @@ import {
 	createGitHubClient,
 	type GitHubClient,
 	type HttpFetch,
+	type ProgressReporter,
 } from "./github-client";
 import type { PR, PRDetail } from "./types";
 
@@ -193,7 +194,7 @@ export class Legit {
 	 * Fetch open PRs. Defaults to the detected repo.
 	 * Auto-adds repo to config if not already tracked.
 	 */
-	async fetchPRs(repo?: string): Promise<PR[]> {
+	async fetchPRs(repo?: string, onProgress?: ProgressReporter): Promise<PR[]> {
 		const slug = repo ?? this.repoSlug;
 
 		// Auto-add repo to config if not tracked
@@ -202,7 +203,7 @@ export class Legit {
 			saveConfig(this.configPath, this._config);
 		}
 
-		return this.client.fetchOpenPRs(slug);
+		return this.client.fetchOpenPRs(slug, onProgress);
 	}
 
 	/**

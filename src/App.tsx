@@ -9,12 +9,16 @@ export interface AppProps {
 
 export function App(props: AppProps) {
 	const [error, setError] = createSignal("");
+	const [loadingMessage, setLoadingMessage] = createSignal(
+		"Loading pull requests...",
+	);
 
 	const [prs, { refetch }] = createResource<PR[]>(
 		async () => {
 			try {
 				setError("");
-				return await props.app.fetchPRs();
+				setLoadingMessage("Loading pull requests...");
+				return await props.app.fetchPRs(undefined, setLoadingMessage);
 			} catch (err: any) {
 				setError(err.message ?? String(err));
 				return [];
@@ -27,6 +31,7 @@ export function App(props: AppProps) {
 		<AppShell
 			prs={prs() ?? []}
 			loading={prs.loading}
+			loadingMessage={loadingMessage()}
 			repoSlug={props.app.repoSlug}
 			error={error()}
 			onRefresh={refetch}
