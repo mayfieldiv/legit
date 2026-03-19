@@ -7,6 +7,83 @@ interface PRListProps {
 	selectedIndex: number;
 }
 
+// Column widths — fixed columns; title gets remaining space via flexGrow
+const COL = {
+	pr: 7,
+	author: 14,
+	size: 18,
+	age: 6,
+	review: 18,
+} as const;
+
+function Cell(props: {
+	width?: number;
+	flexGrow?: number;
+	children: any;
+}) {
+	return (
+		<box
+			width={props.width}
+			flexGrow={props.flexGrow}
+			overflow="hidden"
+		>
+			<text>{props.children}</text>
+		</box>
+	);
+}
+
+function PRRow(props: { pr: PR; selected: boolean; id: string }) {
+	const pr = props.pr;
+	const fg = () => (props.selected ? "white" : undefined);
+	return (
+		<box
+			id={props.id}
+			flexDirection="row"
+			width="100%"
+			background={props.selected ? "blue" : undefined}
+		>
+			<Cell width={COL.pr}>
+				<span color={props.selected ? "white" : "cyan"}>#{pr.number}</span>
+			</Cell>
+			<Cell flexGrow={1}>
+				<span color={fg()}>{pr.title}</span>
+				<Show when={pr.isDraft}>
+					<span color="yellow"> draft</span>
+				</Show>
+			</Cell>
+			<Cell width={COL.author}>
+				<span color={props.selected ? "white" : "green"}>{pr.author}</span>
+			</Cell>
+			<Cell width={COL.size}>
+				<span color={fg()}>{formatSize(pr.additions, pr.deletions)}</span>
+			</Cell>
+			<Cell width={COL.age}>
+				<span color={fg()}>{formatAge(pr.createdAt)}</span>
+			</Cell>
+			<Cell width={COL.review}>
+				<span color={fg()}>{formatReviewDecision(pr.reviewDecision)}</span>
+			</Cell>
+		</box>
+	);
+}
+
+function HeaderRow() {
+	return (
+		<box flexDirection="row" width="100%" height={1}>
+			<Cell width={COL.pr}><span bold>PR</span></Cell>
+			<Cell flexGrow={1}><span bold>Title</span></Cell>
+			<Cell width={COL.author}><span bold>Author</span></Cell>
+			<Cell width={COL.size}><span bold>Size</span></Cell>
+			<Cell width={COL.age}><span bold>Age</span></Cell>
+			<Cell width={COL.review}><span bold>Review</span></Cell>
+		</box>
+	);
+}
+
+export function PRListHeader() {
+	return <HeaderRow />;
+}
+
 export function PRList(props: PRListProps) {
 	return (
 		<box flexDirection="column" width="100%">
@@ -16,69 +93,14 @@ export function PRList(props: PRListProps) {
 					<text>No open pull requests</text>
 				}
 			>
-				{/* Header */}
-				<box flexDirection="row" width="100%">
-					<text width={8}>
-						<span bold>PR</span>
-					</text>
-					<text width={45}>
-						<span bold>Title</span>
-					</text>
-					<text width={14}>
-						<span bold>Author</span>
-					</text>
-					<text width={14}>
-						<span bold>Size</span>
-					</text>
-					<text width={8}>
-						<span bold>Age</span>
-					</text>
-					<text width={18}>
-						<span bold>Review</span>
-					</text>
-				</box>
-
-				{/* Rows */}
 				<For each={props.prs}>
-					{(pr, index) => {
-						const isSelected = () => index() === props.selectedIndex;
-						const draft = () => pr.isDraft ? " draft" : "";
-						return (
-							<box
-								flexDirection="row"
-								width="100%"
-								background={isSelected() ? "blue" : undefined}
-							>
-								<text width={8}>
-									<span color={isSelected() ? "white" : "cyan"}>
-										#{pr.number}
-									</span>
-								</text>
-								<text width={45}>
-									<span color={isSelected() ? "white" : undefined}>
-										{pr.title}
-									</span>
-									<Show when={pr.isDraft}>
-										<span color="yellow"> draft</span>
-									</Show>
-								</text>
-								<text width={14}>
-									<span color={isSelected() ? "white" : "green"}>
-										{pr.author}
-									</span>
-								</text>
-								<text width={14}>
-									<span>{formatSize(pr.additions, pr.deletions)}</span>
-								</text>
-								<text width={8}>
-									<span>{formatAge(pr.createdAt)}</span>
-								</text>
-								<text width={18}>
-									<span>{formatReviewDecision(pr.reviewDecision)}</span>
-								</text>
-							</box>
-						);
-					}}
+					{(pr, index) => (
+						<PRRow
+							id={`pr-row-${index()}`}
+							pr={pr}
+							selected={index() === props.selectedIndex}
+						/>
+					)}
 				</For>
 			</Show>
 		</box>
