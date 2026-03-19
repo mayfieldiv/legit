@@ -118,4 +118,49 @@ describe("PRList", () => {
 		const frame = captureCharFrame();
 		expect(frame).toContain("2d");
 	});
+
+	test("truncates long titles instead of wrapping rows", async () => {
+		const prs = [
+			makePR({
+				number: 1,
+				author: "alice",
+				title:
+					"This is a very long PR title that should not bleed into author or other columns when rendered in a constrained terminal width",
+			}),
+		];
+
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => <PRList prs={prs} selectedIndex={0} />,
+			{ width: 80, height: 8 },
+		);
+
+		await renderOnce();
+		const frame = captureCharFrame();
+		const lines = frame.split("\n");
+		const nonEmptyLines = lines.filter((line) => line.trim() !== "");
+
+		expect(lines[0]).toContain("alice");
+		expect(nonEmptyLines).toHaveLength(1);
+		expect(frame).not.toContain("author or other columns");
+	});
+
+	test("keeps a visible gap before the author column when title is truncated", async () => {
+		const prs = [
+			makePR({
+				number: 1,
+				author: "alice",
+				title: "X".repeat(200),
+			}),
+		];
+
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => <PRList prs={prs} selectedIndex={0} />,
+			{ width: 80, height: 8 },
+		);
+
+		await renderOnce();
+		const line = captureCharFrame().split("\n")[0] ?? "";
+
+		expect(line).toMatch(/\salice\s+/);
+	});
 });
