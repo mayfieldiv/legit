@@ -42,15 +42,15 @@ export interface LegitOptions {
 // ── Internal: repo detection ────────────────────────────────────────────────
 
 export function parseRemoteUrl(url: string): RepoInfo {
-	// SSH: git@github.com:owner/repo.git
-	const sshMatch = url.match(/git@github\.com:([^/]+)\/([^/.]+)(?:\.git)?$/);
+	// SSH: git@github.com:owner/repo.git  (repo may contain dots, e.g. angular.js)
+	const sshMatch = url.match(/git@github\.com:([^/]+)\/(.+?)(?:\.git)?$/);
 	if (sshMatch) {
 		return { owner: sshMatch[1], repo: sshMatch[2] };
 	}
 
-	// HTTPS: https://github.com/owner/repo.git
+	// HTTPS: https://github.com/owner/repo.git  (repo may contain dots)
 	const httpsMatch = url.match(
-		/https?:\/\/github\.com\/([^/]+)\/([^/.]+)(?:\.git)?$/,
+		/https?:\/\/github\.com\/([^/]+)\/(.+?)(?:\.git)?$/,
 	);
 	if (httpsMatch) {
 		return { owner: httpsMatch[1], repo: httpsMatch[2] };
@@ -197,11 +197,15 @@ export class Legit {
 	async fetchPRs(repo?: string, onProgress?: ProgressReporter): Promise<PR[]> {
 		const slug = repo ?? this.repoSlug;
 
-		// Auto-add repo to config if not tracked
+		// Auto-add repo to config if not tracked (non-fatal if save fails)
 		const updated = addRepo(this.config, slug);
 		if (updated !== this.config) {
 			this._config = updated;
-			saveConfig(this.configPath, this._config);
+			try {
+				saveConfig(this.configPath, this._config);
+			} catch {
+				// Config persistence is non-essential — don't block PR fetching
+			}
 		}
 
 		return this.client.fetchOpenPRs(slug, onProgress);

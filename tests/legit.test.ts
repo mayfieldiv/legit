@@ -90,6 +90,34 @@ describe("parseRemoteUrl", () => {
 		});
 	});
 
+	test("parses SSH URL with dots in repo name", () => {
+		expect(parseRemoteUrl("git@github.com:angular/angular.js.git")).toEqual({
+			owner: "angular",
+			repo: "angular.js",
+		});
+	});
+
+	test("parses SSH URL with dots in repo name without .git suffix", () => {
+		expect(parseRemoteUrl("git@github.com:socketio/socket.io")).toEqual({
+			owner: "socketio",
+			repo: "socket.io",
+		});
+	});
+
+	test("parses HTTPS URL with dots in repo name", () => {
+		expect(parseRemoteUrl("https://github.com/highlightjs/highlight.js.git")).toEqual({
+			owner: "highlightjs",
+			repo: "highlight.js",
+		});
+	});
+
+	test("parses HTTPS URL with dots in repo name without .git suffix", () => {
+		expect(parseRemoteUrl("https://github.com/kubernetes/kubernetes.io")).toEqual({
+			owner: "kubernetes",
+			repo: "kubernetes.io",
+		});
+	});
+
 	test("throws on non-GitHub URL", () => {
 		expect(() => parseRemoteUrl("git@gitlab.com:owner/repo.git")).toThrow(
 			/Cannot parse/,

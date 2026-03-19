@@ -48,7 +48,13 @@ export function createListSelection(
 		},
 
 		moveUp() {
-			setRawIndex((i) => Math.max(i - 1, 0));
+			setRawIndex((i) => {
+				const len = listLength();
+				// Clamp to current list bounds before decrementing,
+				// so a stale raw index doesn't require many presses after list shrink
+				const clamped = len === 0 ? 0 : Math.min(Math.max(i, 0), len - 1);
+				return Math.max(clamped - 1, 0);
+			});
 		},
 
 		selectedItem<T>(list: T[]): T | undefined {

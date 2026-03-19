@@ -45,10 +45,11 @@ export async function runCommand(
 			return { output: await app.fetchPRs() };
 
 		case "pr": {
-			const prNumber = parseInt(args[1], 10);
-			if (isNaN(prNumber)) {
+			const rawNumber = args[1];
+			if (!rawNumber || !/^[1-9]\d*$/.test(rawNumber)) {
 				return { error: "Usage: legit pr <number>" };
 			}
+			const prNumber = Number(rawNumber);
 			return { output: await app.fetchPR(app.repoSlug, prNumber) };
 		}
 

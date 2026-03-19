@@ -87,6 +87,21 @@ describe("createListSelection", () => {
 		});
 	});
 
+	test("moveUp recovers immediately after list shrink", () => {
+		createRoot(() => {
+			const [len, setLen] = createSignal(20);
+			const sel = createListSelection(len);
+			sel.select(19); // select last item in 20-item list
+			expect(sel.index()).toBe(19);
+
+			setLen(2); // shrink to 2 items
+			expect(sel.index()).toBe(1); // clamped on read
+
+			sel.moveUp(); // should move to 0 in one press
+			expect(sel.index()).toBe(0);
+		});
+	});
+
 	test("selectedItem returns item at current index", () => {
 		createRoot(() => {
 			const sel = createListSelection(() => 3);

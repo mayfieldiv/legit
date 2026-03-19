@@ -74,6 +74,18 @@ describe("runCommand", () => {
 		expect(result.error).toContain("Usage");
 	});
 
+	test("pr rejects malformed numeric input like '12abc'", async () => {
+		const app = createTestLegit();
+		const result = await runCommand(["pr", "12abc"], app);
+		expect(result.error).toContain("Usage");
+	});
+
+	test("pr rejects zero", async () => {
+		const app = createTestLegit();
+		const result = await runCommand(["pr", "0"], app);
+		expect(result.error).toContain("Usage");
+	});
+
 	test("unknown command returns error", async () => {
 		const app = createTestLegit();
 		const result = await runCommand(["nonsense"], app);

@@ -37,13 +37,15 @@ export function AppShell(props: AppShellProps) {
 				</text>
 			</Show>
 
-			{/* Content */}
+			{/* Content — hide when error with no data (first-load failure) */}
 			<Show
-				when={!props.loading}
+				when={!props.loading && !(props.error && props.prs.length === 0)}
 				fallback={
-					<text>
-						<span color="yellow">{props.loadingMessage ?? "Loading pull requests..."}</span>
-					</text>
+					<Show when={props.loading}>
+						<text>
+							<span color="yellow">{props.loadingMessage ?? "Loading pull requests..."}</span>
+						</text>
+					</Show>
 				}
 			>
 				<Switch>

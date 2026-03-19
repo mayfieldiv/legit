@@ -145,10 +145,11 @@ export function createGitHubClient(
 
 			const query = `query($owner: String!, $repo: String!) { repository(owner: $owner, name: $repo) { ${aliases} } }`;
 			const result = (await graphql(query, { owner, repo })) as {
-				data: { repository: Record<string, any> };
+				data?: { repository?: Record<string, any> };
 			};
 
-			const repoData = result.data.repository;
+			const repoData = result.data?.repository;
+			if (!repoData) continue;
 			for (let idx = 0; idx < batch.length; idx++) {
 				const pr = repoData[`pr${idx}`];
 				if (pr) {
