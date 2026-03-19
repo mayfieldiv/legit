@@ -48,7 +48,7 @@ function PRRow(props: { pr: PR; selected: boolean; id: string }) {
 			<Cell width={COL.pr} paddingRight={1}>
 				<span color={props.selected ? "white" : "cyan"}>#{pr.number}</span>
 			</Cell>
-			<Cell flexGrow={1} paddingRight={1}>
+			<Cell flexGrow={1} paddingRight={3}>
 				<span color={fg()}>{pr.title}</span>
 				<Show when={pr.isDraft}>
 					<span color="yellow"> draft</span>
@@ -74,7 +74,7 @@ function HeaderRow() {
 	return (
 		<box flexDirection="row" width="100%" height={1}>
 			<Cell width={COL.pr} paddingRight={1}><span bold>PR</span></Cell>
-			<Cell flexGrow={1} paddingRight={1}><span bold>Title</span></Cell>
+			<Cell flexGrow={1} paddingRight={3}><span bold>Title</span></Cell>
 			<Cell width={COL.author} paddingRight={1}><span bold>Author</span></Cell>
 			<Cell width={COL.size} paddingRight={1}><span bold>Size</span></Cell>
 			<Cell width={COL.age} paddingRight={1}><span bold>Age</span></Cell>
