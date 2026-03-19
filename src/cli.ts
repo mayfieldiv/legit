@@ -13,62 +13,77 @@
 
 import { Legit } from "./lib/legit";
 
-const args = process.argv.slice(2);
-const command = args[0];
-
-function fail(message: string): never {
-	console.error(message);
-	process.exit(1);
+export interface CommandResult {
+	output?: unknown;
+	error?: string;
+	launchTui?: boolean;
 }
 
-function print(data: unknown): void {
-	console.log(JSON.stringify(data, null, "\t"));
-}
-
-try {
-	const app = new Legit();
+/**
+ * Execute a CLI subcommand. Returns structured result for testability.
+ * The thin entry point below handles printing and process.exit.
+ */
+export async function runCommand(
+	args: string[],
+	app: Legit,
+): Promise<CommandResult> {
+	const command = args[0];
 
 	switch (command) {
 		case "detect":
-			print(app.repo);
-			break;
+			return { output: app.repo };
 
 		case "auth":
-			print({ user: app.auth.user, tokenSource: app.auth.tokenSource });
-			break;
+			return {
+				output: { user: app.auth.user, tokenSource: app.auth.tokenSource },
+			};
 
 		case "config":
-			print(app.config);
-			break;
+			return { output: app.config };
 
 		case "prs":
-			print(await app.fetchPRs());
-			break;
+			return { output: await app.fetchPRs() };
 
 		case "pr": {
 			const prNumber = parseInt(args[1], 10);
 			if (isNaN(prNumber)) {
-				fail("Usage: legit pr <number>");
+				return { error: "Usage: legit pr <number>" };
 			}
-			print(await app.fetchPR(app.repoSlug, prNumber));
-			break;
+			return { output: await app.fetchPR(app.repoSlug, prNumber) };
 		}
 
-		case undefined: {
-			// Register the Solid JSX transform plugin before importing any .tsx files.
-			// bunfig.toml only applies relative to CWD, but legit runs from anywhere.
+		case undefined:
+			return { launchTui: true };
+
+		default:
+			return {
+				error: `Unknown command: ${command}\n\nUsage: legit [detect|auth|config|prs|pr <number>]`,
+			};
+	}
+}
+
+// ── Entry point ─────────────────────────────────────────────────────────────
+
+if (import.meta.main) {
+	try {
+		const app = new Legit();
+		const result = await runCommand(process.argv.slice(2), app);
+
+		if (result.error) {
+			console.error(result.error);
+			process.exit(1);
+		}
+
+		if (result.launchTui) {
 			await import("@opentui/solid/preload");
 			const { render } = await import("@opentui/solid");
 			const { default: App } = await import("./App");
 			await render(App);
-			break;
+		} else if (result.output !== undefined) {
+			console.log(JSON.stringify(result.output, null, "\t"));
 		}
-
-		default:
-			fail(
-				`Unknown command: ${command}\n\nUsage: legit [detect|auth|config|prs|pr <number>]`,
-			);
+	} catch (err: any) {
+		console.error(err.message ?? String(err));
+		process.exit(1);
 	}
-} catch (err: any) {
-	fail(err.message ?? String(err));
 }

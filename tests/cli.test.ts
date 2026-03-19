@@ -1,106 +1,148 @@
 import { describe, test, expect, afterAll } from "bun:test";
-import { mkdtempSync, rmSync } from "fs";
-import { join } from "path";
-import { tmpdir } from "os";
+import { runCommand, type CommandResult } from "../src/cli";
+import { Legit, type LegitOptions } from "../src/lib/legit";
+import {
+	cleanupTmpDirs,
+	makeTmpGitRepo,
+	tmpConfigPath,
+	mockAuthExec,
+	mockHttpFetch,
+	makeSampleRestPR,
+} from "./helpers";
 import { execFileSync } from "child_process";
+import { join } from "path";
 
-const tmpDirs: string[] = [];
+afterAll(cleanupTmpDirs);
 
-function makeTmpGitRepo(remoteUrl: string): string {
-	const dir = mkdtempSync(join(tmpdir(), "legit-cli-test-"));
-	tmpDirs.push(dir);
-	execFileSync("git", ["init"], { cwd: dir, stdio: "pipe" });
-	execFileSync("git", ["remote", "add", "origin", remoteUrl], {
-		cwd: dir,
-		stdio: "pipe",
+function createTestLegit(overrides?: Partial<LegitOptions>): Legit {
+	return new Legit({
+		cwd: makeTmpGitRepo("git@github.com:acme/widgets.git"),
+		configPath: tmpConfigPath(),
+		authExec: mockAuthExec(),
+		httpFetch: mockHttpFetch([makeSampleRestPR(42)]),
+		...overrides,
 	});
-	return dir;
 }
 
-afterAll(() => {
-	for (const dir of tmpDirs) {
-		rmSync(dir, { recursive: true, force: true });
-	}
+// ── In-process command tests (fast) ─────────────────────────────────────────
+
+describe("runCommand", () => {
+	test("detect returns owner/repo", async () => {
+		const app = createTestLegit();
+		const result = await runCommand(["detect"], app);
+		expect(result.output).toEqual({ owner: "acme", repo: "widgets" });
+		expect(result.error).toBeUndefined();
+	});
+
+	test("auth returns user and tokenSource without token", async () => {
+		const app = createTestLegit();
+		const result = await runCommand(["auth"], app);
+		const output = result.output as any;
+		expect(output.user).toBe("testuser");
+		expect(output.tokenSource).toBe("gh-cli");
+		expect(output.token).toBeUndefined();
+	});
+
+	test("config returns config object", async () => {
+		const app = createTestLegit();
+		const result = await runCommand(["config"], app);
+		const output = result.output as any;
+		expect(output).toHaveProperty("repos");
+		expect(output).toHaveProperty("ui");
+	});
+
+	test("prs returns PR list", async () => {
+		const app = createTestLegit();
+		const result = await runCommand(["prs"], app);
+		const output = result.output as any[];
+		expect(output).toHaveLength(1);
+		expect(output[0].number).toBe(42);
+	});
+
+	test("pr <number> returns PR detail", async () => {
+		const detailPR = {
+			...makeSampleRestPR(42),
+			body: "Detail body",
+		};
+		const app = createTestLegit({
+			httpFetch: async (url: string, init?: RequestInit) => {
+				if (typeof url === "string" && url.includes("/pulls/42") && !init?.method) {
+					return new Response(JSON.stringify(detailPR), {
+						status: 200,
+						headers: { "Content-Type": "application/json" },
+					});
+				}
+				if (typeof url === "string" && url.includes("/graphql")) {
+					return new Response(
+						JSON.stringify({
+							data: {
+								repository: {
+									pr0: {
+										number: 42,
+										additions: 50,
+										deletions: 10,
+										reviewDecision: "APPROVED",
+										mergeable: "MERGEABLE",
+										commits: {
+											nodes: [
+												{
+													commit: {
+														committedDate:
+															"2026-03-14T00:00:00Z",
+													},
+												},
+											],
+										},
+									},
+								},
+							},
+						}),
+						{
+							status: 200,
+							headers: { "Content-Type": "application/json" },
+						},
+					);
+				}
+				return new Response("{}", { status: 404 });
+			},
+		});
+		const result = await runCommand(["pr", "42"], app);
+		const output = result.output as any;
+		expect(output.number).toBe(42);
+		expect(output.body).toBe("Detail body");
+	});
+
+	test("pr without number returns error", async () => {
+		const app = createTestLegit();
+		const result = await runCommand(["pr"], app);
+		expect(result.error).toContain("Usage");
+	});
+
+	test("unknown command returns error", async () => {
+		const app = createTestLegit();
+		const result = await runCommand(["nonsense"], app);
+		expect(result.error).toContain("Unknown command");
+	});
+
+	test("no command signals launchTui", async () => {
+		const app = createTestLegit();
+		const result = await runCommand([], app);
+		expect(result.launchTui).toBe(true);
+	});
 });
 
-function runCli(
-	args: string[],
-	options?: { cwd?: string; env?: Record<string, string> },
-): { stdout: string; exitCode: number } {
-	const cliPath = join(import.meta.dir, "..", "src", "cli.ts");
-	try {
-		const stdout = execFileSync("bun", ["run", cliPath, ...args], {
-			cwd: options?.cwd ?? import.meta.dir + "/..",
-			encoding: "utf-8",
-			env: { ...process.env, ...options?.env },
-			stdio: ["pipe", "pipe", "pipe"],
-		});
-		return { stdout: stdout.trim(), exitCode: 0 };
-	} catch (err: any) {
-		return {
-			stdout: (err.stdout ?? "").trim(),
-			exitCode: err.status ?? 1,
-		};
-	}
-}
+// ── Subprocess smoke test (one test to verify the entry point works) ────────
 
-describe("CLI: legit detect", () => {
-	test("outputs owner/repo JSON for a git repo with SSH remote", () => {
+describe("CLI subprocess", () => {
+	test("legit detect runs end-to-end as subprocess", () => {
 		const dir = makeTmpGitRepo("git@github.com:acme/widgets.git");
-		const { stdout, exitCode } = runCli(["detect"], { cwd: dir });
-		expect(exitCode).toBe(0);
+		const cliPath = join(import.meta.dir, "..", "src", "cli.ts");
+		const stdout = execFileSync("bun", ["run", cliPath, "detect"], {
+			cwd: dir,
+			encoding: "utf-8",
+			stdio: ["pipe", "pipe", "pipe"],
+		}).trim();
 		const result = JSON.parse(stdout);
 		expect(result).toEqual({ owner: "acme", repo: "widgets" });
-	});
-
-	test("outputs owner/repo JSON for HTTPS remote", () => {
-		const dir = makeTmpGitRepo("https://github.com/acme/gadgets.git");
-		const { stdout, exitCode } = runCli(["detect"], { cwd: dir });
-		expect(exitCode).toBe(0);
-		const result = JSON.parse(stdout);
-		expect(result).toEqual({ owner: "acme", repo: "gadgets" });
-	});
-
-	test("exits with error when not in a git repo", () => {
-		const dir = mkdtempSync(join(tmpdir(), "legit-cli-test-"));
-		tmpDirs.push(dir);
-		const { exitCode } = runCli(["detect"], { cwd: dir });
-		expect(exitCode).not.toBe(0);
-	});
-});
-
-describe("CLI: legit auth", () => {
-	test("outputs user and token source", () => {
-		const { stdout, exitCode } = runCli(["auth"]);
-		expect(exitCode).toBe(0);
-		const result = JSON.parse(stdout);
-		expect(result).toHaveProperty("user");
-		expect(result).toHaveProperty("tokenSource");
-		expect(result.user).toBe("mayfieldiv");
-		expect(result.tokenSource).toBe("gh-cli");
-		// Token itself should NOT be in the output
-		expect(result).not.toHaveProperty("token");
-	});
-});
-
-describe("CLI: legit config", () => {
-	test("outputs config JSON", () => {
-		const dir = mkdtempSync(join(tmpdir(), "legit-cli-test-"));
-		tmpDirs.push(dir);
-		const configPath = join(dir, "config.json");
-		const { stdout, exitCode } = runCli(["config"], {
-			env: { LEGIT_CONFIG_PATH: configPath },
-		});
-		expect(exitCode).toBe(0);
-		const result = JSON.parse(stdout);
-		expect(result).toHaveProperty("repos");
-		expect(result).toHaveProperty("ui");
-	});
-});
-
-describe("CLI: unknown subcommand", () => {
-	test("exits with error and shows help", () => {
-		const { exitCode, stdout } = runCli(["nonsense"]);
-		expect(exitCode).not.toBe(0);
 	});
 });

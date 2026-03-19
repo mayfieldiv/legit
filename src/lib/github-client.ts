@@ -32,6 +32,8 @@ export function createGitHubClient(
 		"X-GitHub-Api-Version": "2022-11-28",
 	};
 
+	// ── Transport ───────────────────────────────────────────────────────
+
 	async function apiGet(url: string): Promise<unknown> {
 		const res = await httpFetch(url, { headers });
 		if (!res.ok) {
@@ -57,9 +59,6 @@ export function createGitHubClient(
 		return res.json();
 	}
 
-	/**
-	 * Paginate REST endpoint — keeps fetching while a page returns PER_PAGE items.
-	 */
 	async function paginateRest(baseUrl: string): Promise<unknown[]> {
 		const results: unknown[] = [];
 		let page = 1;
@@ -73,9 +72,42 @@ export function createGitHubClient(
 		return results;
 	}
 
-	/**
-	 * Fetch GraphQL metadata for a batch of PR numbers.
-	 */
+	// ── REST parsing ────────────────────────────────────────────────────
+
+	interface RestPR {
+		number: number;
+		title: string;
+		author: string;
+		createdAt: string;
+		updatedAt: string;
+		additions: number;
+		deletions: number;
+		isDraft: boolean;
+		labels: string[];
+		requestedReviewers: string[];
+		assignees: string[];
+	}
+
+	function parseRestPR(raw: any): RestPR {
+		return {
+			number: raw.number,
+			title: raw.title,
+			author: raw.user.login,
+			createdAt: raw.created_at,
+			updatedAt: raw.updated_at,
+			additions: raw.additions ?? 0,
+			deletions: raw.deletions ?? 0,
+			isDraft: raw.draft ?? false,
+			labels: (raw.labels ?? []).map((l: any) => l.name),
+			requestedReviewers: (raw.requested_reviewers ?? []).map(
+				(r: any) => r.login,
+			),
+			assignees: (raw.assignees ?? []).map((a: any) => a.login),
+		};
+	}
+
+	// ── GraphQL metadata ────────────────────────────────────────────────
+
 	interface GraphQLMeta {
 		additions: number;
 		deletions: number;
@@ -90,7 +122,6 @@ export function createGitHubClient(
 		numbers: number[],
 	): Promise<Map<number, GraphQLMeta>> {
 		const meta = new Map<number, GraphQLMeta>();
-
 		if (numbers.length === 0) return meta;
 
 		for (let i = 0; i < numbers.length; i += GRAPHQL_BATCH_SIZE) {
@@ -126,21 +157,16 @@ export function createGitHubClient(
 		return meta;
 	}
 
-	function parseRestPR(raw: any): Omit<PR, "reviewDecision" | "mergeable" | "lastCommitDate"> {
+	// ── Merge REST + GraphQL ────────────────────────────────────────────
+
+	function mergePR(rest: RestPR, meta?: GraphQLMeta): PR {
 		return {
-			number: raw.number,
-			title: raw.title,
-			author: raw.user.login,
-			createdAt: raw.created_at,
-			updatedAt: raw.updated_at,
-			additions: raw.additions ?? 0,
-			deletions: raw.deletions ?? 0,
-			isDraft: raw.draft ?? false,
-			labels: (raw.labels ?? []).map((l: any) => l.name),
-			requestedReviewers: (raw.requested_reviewers ?? []).map(
-				(r: any) => r.login,
-			),
-			assignees: (raw.assignees ?? []).map((a: any) => a.login),
+			...rest,
+			additions: meta?.additions ?? rest.additions,
+			deletions: meta?.deletions ?? rest.deletions,
+			reviewDecision: meta?.reviewDecision ?? "",
+			mergeable: meta?.mergeable ?? "UNKNOWN",
+			lastCommitDate: meta?.lastCommitDate ?? "",
 		};
 	}
 
@@ -150,6 +176,8 @@ export function createGitHubClient(
 		return [parts[0], parts[1]];
 	}
 
+	// ── Public API ──────────────────────────────────────────────────────
+
 	return {
 		async fetchOpenPRs(repo: string): Promise<PR[]> {
 			const [owner, repoName] = parseOwnerRepo(repo);
@@ -157,24 +185,16 @@ export function createGitHubClient(
 			const rawPRs = await paginateRest(
 				`${GITHUB_API}/repos/${owner}/${repoName}/pulls?state=open`,
 			);
-
 			if (rawPRs.length === 0) return [];
 
 			const restPRs = rawPRs.map(parseRestPR);
-			const numbers = restPRs.map((pr) => pr.number);
-			const meta = await fetchGraphQLMeta(owner, repoName, numbers);
+			const meta = await fetchGraphQLMeta(
+				owner,
+				repoName,
+				restPRs.map((pr) => pr.number),
+			);
 
-			return restPRs.map((pr) => {
-				const m = meta.get(pr.number);
-				return {
-					...pr,
-					additions: m?.additions ?? pr.additions,
-					deletions: m?.deletions ?? pr.deletions,
-					reviewDecision: m?.reviewDecision ?? "",
-					mergeable: m?.mergeable ?? "UNKNOWN",
-					lastCommitDate: m?.lastCommitDate ?? "",
-				};
-			});
+			return restPRs.map((pr) => mergePR(pr, meta.get(pr.number)));
 		},
 
 		async fetchPR(repo: string, number: number): Promise<PRDetail> {
@@ -186,16 +206,10 @@ export function createGitHubClient(
 
 			const restPR = parseRestPR(raw);
 			const meta = await fetchGraphQLMeta(owner, repoName, [number]);
-			const m = meta.get(number);
 
 			return {
-				...restPR,
+				...mergePR(restPR, meta.get(number)),
 				body: raw.body ?? "",
-				additions: m?.additions ?? restPR.additions,
-				deletions: m?.deletions ?? restPR.deletions,
-				reviewDecision: m?.reviewDecision ?? "",
-				mergeable: m?.mergeable ?? "UNKNOWN",
-				lastCommitDate: m?.lastCommitDate ?? "",
 			};
 		},
 	};

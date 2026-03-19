@@ -1,4 +1,4 @@
-import { createSignal, onMount } from "solid-js";
+import { createResource } from "solid-js";
 import { AppShell } from "./components/AppShell";
 import { Legit } from "./lib/legit";
 import type { PR } from "./lib/types";
@@ -6,34 +6,18 @@ import type { PR } from "./lib/types";
 const app = new Legit();
 
 const App = () => {
-	const [prs, setPrs] = createSignal<PR[]>([]);
-	const [loading, setLoading] = createSignal(true);
-	const [error, setError] = createSignal("");
-
-	async function fetchPRs() {
-		try {
-			setLoading(true);
-			setError("");
-			const data = await app.fetchPRs();
-			setPrs(data);
-		} catch (err: any) {
-			setError(err.message ?? String(err));
-		} finally {
-			setLoading(false);
-		}
-	}
-
-	onMount(() => {
-		fetchPRs();
-	});
+	const [prs, { refetch }] = createResource<PR[]>(
+		async () => app.fetchPRs(),
+		{ initialValue: [] },
+	);
 
 	return (
 		<AppShell
-			prs={prs()}
-			loading={loading()}
+			prs={prs() ?? []}
+			loading={prs.loading}
 			repoSlug={app.repoSlug}
-			error={error()}
-			onRefresh={fetchPRs}
+			error={prs.error?.message}
+			onRefresh={refetch}
 		/>
 	);
 };

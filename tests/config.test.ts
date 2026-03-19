@@ -7,23 +7,13 @@ import {
 	DEFAULT_CONFIG,
 	type LegitConfig,
 } from "../src/lib/config";
-import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { writeFileSync } from "fs";
 import { join } from "path";
+import { cleanupTmpDirs, tmpConfigPath } from "./helpers";
+import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 
-const tmpDirs: string[] = [];
-
-function tmpConfigPath(): string {
-	const dir = mkdtempSync(join(tmpdir(), "legit-config-test-"));
-	tmpDirs.push(dir);
-	return join(dir, "config.json");
-}
-
-afterAll(() => {
-	for (const dir of tmpDirs) {
-		rmSync(dir, { recursive: true, force: true });
-	}
-});
+afterAll(cleanupTmpDirs);
 
 describe("loadConfig", () => {
 	test("returns default config when file does not exist", () => {
@@ -46,7 +36,6 @@ describe("loadConfig", () => {
 
 	test("fills missing fields with defaults", () => {
 		const path = tmpConfigPath();
-		// Write a partial config (only user)
 		writeFileSync(path, JSON.stringify({ user: "partial" }));
 		const loaded = loadConfig(path);
 		expect(loaded.user).toBe("partial");
@@ -59,7 +48,6 @@ describe("loadConfig", () => {
 describe("saveConfig", () => {
 	test("creates parent directories if needed", () => {
 		const dir = mkdtempSync(join(tmpdir(), "legit-config-test-"));
-		tmpDirs.push(dir);
 		const path = join(dir, "nested", "deep", "config.json");
 		saveConfig(path, DEFAULT_CONFIG);
 		const loaded = loadConfig(path);
