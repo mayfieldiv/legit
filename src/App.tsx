@@ -1,13 +1,25 @@
-import { createResource } from "solid-js";
+import { createResource, createSignal } from "solid-js";
 import { AppShell } from "./components/AppShell";
-import { Legit } from "./lib/legit";
+import type { Legit } from "./lib/legit";
 import type { PR } from "./lib/types";
 
-const app = new Legit();
+export interface AppProps {
+	app: Legit;
+}
 
-const App = () => {
+export function App(props: AppProps) {
+	const [error, setError] = createSignal("");
+
 	const [prs, { refetch }] = createResource<PR[]>(
-		async () => app.fetchPRs(),
+		async () => {
+			try {
+				setError("");
+				return await props.app.fetchPRs();
+			} catch (err: any) {
+				setError(err.message ?? String(err));
+				return [];
+			}
+		},
 		{ initialValue: [] },
 	);
 
@@ -15,11 +27,17 @@ const App = () => {
 		<AppShell
 			prs={prs() ?? []}
 			loading={prs.loading}
-			repoSlug={app.repoSlug}
-			error={prs.error?.message}
+			repoSlug={props.app.repoSlug}
+			error={error()}
 			onRefresh={refetch}
 		/>
 	);
-};
+}
 
-export default App;
+/**
+ * Create a render-ready App component bound to a Legit instance.
+ * Used by cli.ts (which is .ts, not .tsx) to avoid JSX in the entry point.
+ */
+export function createApp(app: Legit) {
+	return () => <App app={app} />;
+}

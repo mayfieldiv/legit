@@ -8,7 +8,7 @@ import {
 	mockAuthExec,
 	mockHttpFetch,
 	makeSampleRestPR,
-	SAMPLE_GQL_PR,
+	SAMPLE_GQL_META,
 } from "./helpers";
 import { mkdtempSync } from "fs";
 import { join } from "path";
@@ -251,7 +251,7 @@ describe("Legit.fetchPR", () => {
 				return new Response(
 					JSON.stringify({
 						data: {
-							repository: { pr0: { ...SAMPLE_GQL_PR, number: 99 } },
+							repository: { pr0: { ...SAMPLE_GQL_META, number: 99 } },
 						},
 					}),
 					{ status: 200, headers: { "Content-Type": "application/json" } },

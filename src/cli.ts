@@ -77,8 +77,8 @@ if (import.meta.main) {
 		if (result.launchTui) {
 			await import("@opentui/solid/preload");
 			const { render } = await import("@opentui/solid");
-			const { default: App } = await import("./App");
-			await render(App);
+			const { createApp } = await import("./App");
+			await render(createApp(app));
 		} else if (result.output !== undefined) {
 			console.log(JSON.stringify(result.output, null, "\t"));
 		}

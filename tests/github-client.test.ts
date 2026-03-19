@@ -1,87 +1,17 @@
 import { describe, test, expect } from "bun:test";
+import { createGitHubClient, type GitHubClient, type HttpFetch } from "../src/lib/github-client";
 import {
-	createGitHubClient,
-	type GitHubClient,
-	type HttpFetch,
-	type PR,
-} from "../src/lib/github-client";
-
-// ── Mock HTTP transport ─────────────────────────────────────────────────────
-
-interface MockRoute {
-	url: string | RegExp;
-	method?: string;
-	body?: unknown;
-	response: { status: number; body: unknown };
-}
-
-function createMockFetch(routes: MockRoute[]): {
-	fetch: HttpFetch;
-	calls: Array<{ url: string; init?: RequestInit }>;
-} {
-	const calls: Array<{ url: string; init?: RequestInit }> = [];
-
-	const fetch: HttpFetch = async (url, init) => {
-		calls.push({ url, init });
-		const method = init?.method ?? "GET";
-
-		for (const route of routes) {
-			const urlMatch =
-				typeof route.url === "string" ? url === route.url : route.url.test(url);
-			const methodMatch = !route.method || route.method === method;
-
-			if (urlMatch && methodMatch) {
-				return new Response(JSON.stringify(route.response.body), {
-					status: route.response.status,
-					headers: { "Content-Type": "application/json" },
-				});
-			}
-		}
-
-		return new Response(JSON.stringify({ message: "Not Found" }), {
-			status: 404,
-		});
-	};
-
-	return { fetch, calls };
-}
-
-// ── Test data ───────────────────────────────────────────────────────────────
-
-// REST list endpoint does NOT include additions/deletions
-const SAMPLE_PR_REST = {
-	number: 42,
-	title: "Fix the thing",
-	user: { login: "alice", type: "User" },
-	created_at: "2026-03-01T00:00:00Z",
-	updated_at: "2026-03-15T00:00:00Z",
-	draft: false,
-	labels: [{ name: "bug" }],
-	requested_reviewers: [{ login: "bob" }],
-	assignees: [{ login: "alice" }],
-};
-
-// GraphQL provides additions/deletions along with other metadata
-const SAMPLE_GRAPHQL_RESPONSE = {
-	data: {
-		repository: {
-			pr0: {
-				number: 42,
-				additions: 50,
-				deletions: 10,
-				reviewDecision: "REVIEW_REQUIRED",
-				mergeable: "MERGEABLE",
-				commits: {
-					nodes: [
-						{ commit: { committedDate: "2026-03-14T00:00:00Z" } },
-					],
-				},
-			},
-		},
-	},
-};
+	createMockFetch,
+	SAMPLE_REST_PR,
+	SAMPLE_GQL_META,
+	makeGraphQLResponse,
+} from "./helpers";
 
 // ── Tests ───────────────────────────────────────────────────────────────────
+
+const GRAPHQL_RESPONSE = makeGraphQLResponse([
+	{ ...SAMPLE_GQL_META, reviewDecision: "REVIEW_REQUIRED" },
+]);
 
 describe("GitHubClient", () => {
 	describe("fetchOpenPRs", () => {
@@ -89,12 +19,12 @@ describe("GitHubClient", () => {
 			const { fetch } = createMockFetch([
 				{
 					url: "https://api.github.com/repos/acme/widgets/pulls?state=open&per_page=100&page=1",
-					response: { status: 200, body: [SAMPLE_PR_REST] },
+					response: { status: 200, body: [SAMPLE_REST_PR] },
 				},
 				{
 					url: "https://api.github.com/graphql",
 					method: "POST",
-					response: { status: 200, body: SAMPLE_GRAPHQL_RESPONSE },
+					response: { status: 200, body: GRAPHQL_RESPONSE },
 				},
 			]);
 
@@ -122,28 +52,17 @@ describe("GitHubClient", () => {
 
 		test("paginates when response has 100 items", async () => {
 			const page1 = Array.from({ length: 100 }, (_, i) => ({
-				...SAMPLE_PR_REST,
+				...SAMPLE_REST_PR,
 				number: i + 1,
 				title: `PR ${i + 1}`,
 			}));
-			const page2 = [{ ...SAMPLE_PR_REST, number: 101, title: "PR 101" }];
+			const page2 = [{ ...SAMPLE_REST_PR, number: 101, title: "PR 101" }];
 
-			// GraphQL for 101 PRs
-			const gqlData: Record<string, unknown> = {};
-			for (let i = 0; i < 101; i++) {
-				gqlData[`pr${i}`] = {
-					number: i + 1,
-					additions: 10,
-					deletions: 5,
-					reviewDecision: "REVIEW_REQUIRED",
-					mergeable: "MERGEABLE",
-					commits: {
-						nodes: [
-							{ commit: { committedDate: "2026-03-14T00:00:00Z" } },
-						],
-					},
-				};
-			}
+			const gqlMetas = Array.from({ length: 101 }, (_, i) => ({
+				...SAMPLE_GQL_META,
+				number: i + 1,
+				reviewDecision: "REVIEW_REQUIRED",
+			}));
 
 			const { fetch } = createMockFetch([
 				{
@@ -159,7 +78,7 @@ describe("GitHubClient", () => {
 					method: "POST",
 					response: {
 						status: 200,
-						body: { data: { repository: gqlData } },
+						body: makeGraphQLResponse(gqlMetas),
 					},
 				},
 			]);
@@ -219,7 +138,7 @@ describe("GitHubClient", () => {
 	describe("fetchPR", () => {
 		test("fetches a single PR with full detail", async () => {
 			const detailResponse = {
-				...SAMPLE_PR_REST,
+				...SAMPLE_REST_PR,
 				body: "## Description\n\nFixes the thing.",
 			};
 
@@ -231,7 +150,7 @@ describe("GitHubClient", () => {
 				{
 					url: "https://api.github.com/graphql",
 					method: "POST",
-					response: { status: 200, body: SAMPLE_GRAPHQL_RESPONSE },
+					response: { status: 200, body: GRAPHQL_RESPONSE },
 				},
 			]);
 

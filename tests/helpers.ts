@@ -38,7 +38,7 @@ export function tmpConfigPath(): string {
 	return join(dir, "config.json");
 }
 
-// ── Mock factories ──────────────────────────────────────────────────────────
+// ── Auth mock ───────────────────────────────────────────────────────────────
 
 export function mockAuthExec(
 	responses: Record<string, string> = {
@@ -54,7 +54,70 @@ export function mockAuthExec(
 	};
 }
 
-export const SAMPLE_GQL_PR = {
+// ── HTTP mock (route-based) ─────────────────────────────────────────────────
+
+export interface MockRoute {
+	url: string | RegExp;
+	method?: string;
+	response: { status: number; body: unknown };
+}
+
+export interface MockFetch {
+	fetch: HttpFetch;
+	calls: Array<{ url: string; init?: RequestInit }>;
+}
+
+/**
+ * Route-based HTTP mock. Routes are matched in order.
+ * Falls back to 404 if no route matches.
+ */
+export function createMockFetch(routes: MockRoute[]): MockFetch {
+	const calls: Array<{ url: string; init?: RequestInit }> = [];
+
+	const fetch: HttpFetch = async (url, init) => {
+		calls.push({ url, init });
+		const method = init?.method ?? "GET";
+
+		for (const route of routes) {
+			const urlMatch =
+				typeof route.url === "string"
+					? url === route.url
+					: route.url.test(url);
+			const methodMatch = !route.method || route.method === method;
+
+			if (urlMatch && methodMatch) {
+				return new Response(JSON.stringify(route.response.body), {
+					status: route.response.status,
+					headers: { "Content-Type": "application/json" },
+				});
+			}
+		}
+
+		return new Response(JSON.stringify({ message: "Not Found" }), {
+			status: 404,
+		});
+	};
+
+	return { fetch, calls };
+}
+
+// ── Sample GitHub API data ──────────────────────────────────────────────────
+
+/** Sample REST PR object as returned by the GitHub REST API. */
+export const SAMPLE_REST_PR = {
+	number: 42,
+	title: "Fix the thing",
+	user: { login: "alice", type: "User" },
+	created_at: "2026-03-01T00:00:00Z",
+	updated_at: "2026-03-15T00:00:00Z",
+	draft: false,
+	labels: [{ name: "bug" }],
+	requested_reviewers: [{ login: "bob" }],
+	assignees: [{ login: "alice" }],
+};
+
+/** Sample GraphQL PR metadata. */
+export const SAMPLE_GQL_META = {
 	number: 42,
 	additions: 50,
 	deletions: 10,
@@ -63,46 +126,61 @@ export const SAMPLE_GQL_PR = {
 	commits: { nodes: [{ commit: { committedDate: "2026-03-14T00:00:00Z" } }] },
 };
 
+/** Build a sample GraphQL response for a set of PR metadata objects. */
+export function makeGraphQLResponse(
+	prMetas: Array<{ number: number } & Record<string, unknown>>,
+) {
+	const repository: Record<string, unknown> = {};
+	prMetas.forEach((meta, i) => {
+		repository[`pr${i}`] = meta;
+	});
+	return { data: { repository } };
+}
+
+/** Create a minimal REST PR with a given number. */
 export function makeSampleRestPR(n: number) {
 	return {
+		...SAMPLE_REST_PR,
 		number: n,
 		title: `PR #${n}`,
-		user: { login: "alice" },
-		created_at: "2026-03-01T00:00:00Z",
-		updated_at: "2026-03-15T00:00:00Z",
-		draft: false,
 		labels: [],
 		requested_reviewers: [],
 		assignees: [],
 	};
 }
 
+// ── Convenience: simple mock that returns a list of PRs ─────────────────────
+
+/**
+ * Convenience mock: returns the given REST PRs from the list endpoint,
+ * and matching GraphQL metadata from the graphql endpoint.
+ */
 export function mockHttpFetch(restPRs: unknown[] = []): HttpFetch {
-	return async (url, init) => {
-		if (typeof url === "string" && url.includes("/pulls") && !init?.method) {
-			return new Response(JSON.stringify(restPRs), {
+	const { fetch } = createMockFetch([
+		{
+			url: /\/pulls/,
+			response: { status: 200, body: restPRs },
+		},
+		{
+			url: /\/graphql/,
+			method: "POST",
+			response: {
 				status: 200,
-				headers: { "Content-Type": "application/json" },
-			});
-		}
-		if (typeof url === "string" && url.includes("/graphql")) {
-			const gqlData: Record<string, unknown> = {};
-			restPRs.forEach((pr: any, i: number) => {
-				gqlData[`pr${i}`] = { ...SAMPLE_GQL_PR, number: pr.number };
-			});
-			return new Response(
-				JSON.stringify({ data: { repository: gqlData } }),
-				{ status: 200, headers: { "Content-Type": "application/json" } },
-			);
-		}
-		return new Response(JSON.stringify({ message: "Not Found" }), {
-			status: 404,
-		});
-	};
+				body: makeGraphQLResponse(
+					restPRs.map((pr: any, i: number) => ({
+						...SAMPLE_GQL_META,
+						number: pr.number,
+					})),
+				),
+			},
+		},
+	]);
+	return fetch;
 }
 
-// ── PR factory ──────────────────────────────────────────────────────────────
+// ── PR factory (domain type) ────────────────────────────────────────────────
 
+/** Create a fully-populated domain PR with sensible defaults. Override any field. */
 export function makePR(overrides: Partial<PR> = {}): PR {
 	return {
 		number: 42,
