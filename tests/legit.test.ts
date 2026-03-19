@@ -1,13 +1,14 @@
 import { describe, test, expect, afterAll } from "bun:test";
-import { Legit, type LegitOptions, type AuthExecutor, parseRemoteUrl } from "../src/lib/legit";
-import type { HttpFetch } from "../src/lib/github-client";
+import { Legit, type AuthExecutor, parseRemoteUrl } from "../src/lib/legit";
 import {
 	cleanupTmpDirs,
 	makeTmpGitRepo,
 	tmpConfigPath,
 	mockAuthExec,
-	mockHttpFetch,
 	makeSampleRestPR,
+	createTestLegit,
+	createMockFetch,
+	makeGraphQLResponse,
 	SAMPLE_GQL_META,
 } from "./helpers";
 import { mkdtempSync } from "fs";
@@ -15,16 +16,6 @@ import { join } from "path";
 import { tmpdir } from "os";
 
 afterAll(cleanupTmpDirs);
-
-function createTestLegit(overrides?: Partial<LegitOptions>): Legit {
-	return new Legit({
-		cwd: makeTmpGitRepo("git@github.com:acme/widgets.git"),
-		configPath: tmpConfigPath(),
-		authExec: mockAuthExec(),
-		httpFetch: mockHttpFetch([makeSampleRestPR(42)]),
-		...overrides,
-	});
-}
 
 // ── Repo detection ──────────────────────────────────────────────────────────
 
@@ -217,49 +208,30 @@ describe("Legit.fetchPRs", () => {
 	});
 
 	test("with explicit repo overrides detected repo", async () => {
-		let fetchedRepo = "";
-		const httpFetch: HttpFetch = async (url) => {
-			if (typeof url === "string" && url.includes("/pulls")) {
-				fetchedRepo = url;
-				return new Response(JSON.stringify([]), {
-					status: 200,
-					headers: { "Content-Type": "application/json" },
-				});
-			}
-			return new Response("{}", { status: 200 });
-		};
-		const app = createTestLegit({ httpFetch });
+		const { fetch, calls } = createMockFetch([
+			{ url: /\/pulls/, response: { status: 200, body: [] } },
+		]);
+		const app = createTestLegit({ httpFetch: fetch });
 		await app.fetchPRs("other/repo");
-		expect(fetchedRepo).toContain("other/repo");
+		const pullsCall = calls.find((c) => c.url.includes("/pulls"));
+		expect(pullsCall?.url).toContain("other/repo");
 	});
 });
 
 describe("Legit.fetchPR", () => {
 	test("returns single PR detail", async () => {
-		const detailPR = {
-			...makeSampleRestPR(99),
-			body: "## Fix\n\nDoes the thing.",
-		};
-		const httpFetch: HttpFetch = async (url, init) => {
-			if (typeof url === "string" && url.includes("/pulls/99")) {
-				return new Response(JSON.stringify(detailPR), {
-					status: 200,
-					headers: { "Content-Type": "application/json" },
-				});
-			}
-			if (typeof url === "string" && url.includes("/graphql")) {
-				return new Response(
-					JSON.stringify({
-						data: {
-							repository: { pr0: { ...SAMPLE_GQL_META, number: 99 } },
-						},
-					}),
-					{ status: 200, headers: { "Content-Type": "application/json" } },
-				);
-			}
-			return new Response("{}", { status: 404 });
-		};
-		const app = createTestLegit({ httpFetch });
+		const { fetch } = createMockFetch([
+			{
+				url: /\/pulls\/99$/,
+				response: { status: 200, body: { ...makeSampleRestPR(99), body: "## Fix\n\nDoes the thing." } },
+			},
+			{
+				url: /\/graphql/,
+				method: "POST",
+				response: { status: 200, body: makeGraphQLResponse([{ ...SAMPLE_GQL_META, number: 99 }]) },
+			},
+		]);
+		const app = createTestLegit({ httpFetch: fetch });
 		const pr = await app.fetchPR("acme/widgets", 99);
 		expect(pr.number).toBe(99);
 		expect(pr.body).toBe("## Fix\n\nDoes the thing.");

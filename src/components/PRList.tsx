@@ -70,7 +70,7 @@ function PRRow(props: { pr: PR; selected: boolean; id: string }) {
 	);
 }
 
-function HeaderRow() {
+export function PRListHeader() {
 	return (
 		<box flexDirection="row" width="100%" height={1}>
 			<Cell width={COL.pr} paddingRight={1}><span bold>PR</span></Cell>
@@ -81,10 +81,6 @@ function HeaderRow() {
 			<Cell width={COL.review}><span bold>Review</span></Cell>
 		</box>
 	);
-}
-
-export function PRListHeader() {
-	return <HeaderRow />;
 }
 
 export function PRList(props: PRListProps) {

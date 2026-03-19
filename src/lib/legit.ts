@@ -198,8 +198,9 @@ export class Legit {
 		const slug = repo ?? this.repoSlug;
 
 		// Auto-add repo to config if not tracked
-		if (!this.config.repos.includes(slug)) {
-			this._config = addRepo(this.config, slug);
+		const updated = addRepo(this.config, slug);
+		if (updated !== this.config) {
+			this._config = updated;
 			saveConfig(this.configPath, this._config);
 		}
 

@@ -3,7 +3,8 @@ import { execFileSync } from "child_process";
 import { join } from "path";
 import { tmpdir } from "os";
 import type { PR } from "../src/lib/types";
-import type { AuthExecutor } from "../src/lib/legit";
+import type { AuthExecutor, LegitOptions } from "../src/lib/legit";
+import { Legit } from "../src/lib/legit";
 import type { HttpFetch } from "../src/lib/github-client";
 
 // ── Temp directory management ───────────────────────────────────────────────
@@ -179,6 +180,17 @@ export function mockHttpFetch(restPRs: unknown[] = []): HttpFetch {
 }
 
 // ── PR factory (domain type) ────────────────────────────────────────────────
+
+/** Create a test Legit instance with all external dependencies mocked. */
+export function createTestLegit(overrides?: Partial<LegitOptions>): Legit {
+	return new Legit({
+		cwd: makeTmpGitRepo("git@github.com:acme/widgets.git"),
+		configPath: tmpConfigPath(),
+		authExec: mockAuthExec(),
+		httpFetch: mockHttpFetch([makeSampleRestPR(42)]),
+		...overrides,
+	});
+}
 
 /** Create a fully-populated domain PR with sensible defaults. Override any field. */
 export function makePR(overrides: Partial<PR> = {}): PR {

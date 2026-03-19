@@ -1,28 +1,18 @@
 import { describe, test, expect, afterAll } from "bun:test";
 import { runCommand, type CommandResult } from "../src/cli";
-import { Legit, type LegitOptions } from "../src/lib/legit";
 import {
 	cleanupTmpDirs,
 	makeTmpGitRepo,
-	tmpConfigPath,
-	mockAuthExec,
-	mockHttpFetch,
 	makeSampleRestPR,
+	createTestLegit,
+	createMockFetch,
+	makeGraphQLResponse,
+	SAMPLE_GQL_META,
 } from "./helpers";
 import { execFileSync } from "child_process";
 import { join } from "path";
 
 afterAll(cleanupTmpDirs);
-
-function createTestLegit(overrides?: Partial<LegitOptions>): Legit {
-	return new Legit({
-		cwd: makeTmpGitRepo("git@github.com:acme/widgets.git"),
-		configPath: tmpConfigPath(),
-		authExec: mockAuthExec(),
-		httpFetch: mockHttpFetch([makeSampleRestPR(42)]),
-		...overrides,
-	});
-}
 
 // ── In-process command tests (fast) ─────────────────────────────────────────
 
@@ -60,52 +50,18 @@ describe("runCommand", () => {
 	});
 
 	test("pr <number> returns PR detail", async () => {
-		const detailPR = {
-			...makeSampleRestPR(42),
-			body: "Detail body",
-		};
-		const app = createTestLegit({
-			httpFetch: async (url: string, init?: RequestInit) => {
-				if (typeof url === "string" && url.includes("/pulls/42") && !init?.method) {
-					return new Response(JSON.stringify(detailPR), {
-						status: 200,
-						headers: { "Content-Type": "application/json" },
-					});
-				}
-				if (typeof url === "string" && url.includes("/graphql")) {
-					return new Response(
-						JSON.stringify({
-							data: {
-								repository: {
-									pr0: {
-										number: 42,
-										additions: 50,
-										deletions: 10,
-										reviewDecision: "APPROVED",
-										mergeable: "MERGEABLE",
-										commits: {
-											nodes: [
-												{
-													commit: {
-														committedDate:
-															"2026-03-14T00:00:00Z",
-													},
-												},
-											],
-										},
-									},
-								},
-							},
-						}),
-						{
-							status: 200,
-							headers: { "Content-Type": "application/json" },
-						},
-					);
-				}
-				return new Response("{}", { status: 404 });
+		const { fetch } = createMockFetch([
+			{
+				url: /\/pulls\/42$/,
+				response: { status: 200, body: { ...makeSampleRestPR(42), body: "Detail body" } },
 			},
-		});
+			{
+				url: /\/graphql/,
+				method: "POST",
+				response: { status: 200, body: makeGraphQLResponse([{ ...SAMPLE_GQL_META, number: 42 }]) },
+			},
+		]);
+		const app = createTestLegit({ httpFetch: fetch });
 		const result = await runCommand(["pr", "42"], app);
 		const output = result.output as any;
 		expect(output.number).toBe(42);

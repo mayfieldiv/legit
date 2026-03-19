@@ -29,7 +29,7 @@ export function App(props: AppProps) {
 
 	return (
 		<AppShell
-			prs={prs() ?? []}
+			prs={prs()}
 			loading={prs.loading}
 			loadingMessage={loadingMessage()}
 			repoSlug={props.app.repoSlug}

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname } from "path";
 
 export interface FileRule {
@@ -33,11 +33,13 @@ export const DEFAULT_CONFIG: LegitConfig = {
  * Merges partial configs with defaults so missing fields get filled in.
  */
 export function loadConfig(configPath: string): LegitConfig {
-	if (!existsSync(configPath)) {
-		return structuredClone(DEFAULT_CONFIG);
+	let raw: string;
+	try {
+		raw = readFileSync(configPath, "utf-8");
+	} catch (e: any) {
+		if (e.code === "ENOENT") return structuredClone(DEFAULT_CONFIG);
+		throw e;
 	}
-
-	const raw = readFileSync(configPath, "utf-8");
 	const partial = JSON.parse(raw);
 
 	return {
@@ -58,10 +60,7 @@ export function loadConfig(configPath: string): LegitConfig {
  * Save config to disk. Creates parent directories if needed.
  */
 export function saveConfig(configPath: string, config: LegitConfig): void {
-	const dir = dirname(configPath);
-	if (!existsSync(dir)) {
-		mkdirSync(dir, { recursive: true });
-	}
+	mkdirSync(dirname(configPath), { recursive: true });
 	writeFileSync(configPath, JSON.stringify(config, null, "\t") + "\n");
 }
 

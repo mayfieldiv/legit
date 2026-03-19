@@ -1,32 +1,19 @@
 import { describe, test, expect, afterAll } from "bun:test";
 import { testRender } from "@opentui/solid";
 import { App } from "../src/App";
-import { Legit, type LegitOptions } from "../src/lib/legit";
 import {
 	cleanupTmpDirs,
-	makeTmpGitRepo,
-	tmpConfigPath,
-	mockAuthExec,
-	mockHttpFetch,
 	makeSampleRestPR,
+	mockHttpFetch,
+	createTestLegit,
 	createMockFetch,
 } from "./helpers";
 
 afterAll(cleanupTmpDirs);
 
-function createTestLegit(overrides?: Partial<LegitOptions>): Legit {
-	return new Legit({
-		cwd: makeTmpGitRepo("git@github.com:acme/widgets.git"),
-		configPath: tmpConfigPath(),
-		authExec: mockAuthExec(),
-		httpFetch: mockHttpFetch([makeSampleRestPR(1), makeSampleRestPR(2)]),
-		...overrides,
-	});
-}
-
 describe("App integration", () => {
 	test("renders loading state then PR list after fetch", async () => {
-		const app = createTestLegit();
+		const app = createTestLegit({ httpFetch: mockHttpFetch([makeSampleRestPR(1), makeSampleRestPR(2)]) });
 
 		const { renderOnce, captureCharFrame } = await testRender(
 			() => <App app={app} />,
@@ -112,23 +99,11 @@ describe("App integration", () => {
 	});
 
 	test("r key triggers refetch", async () => {
-		let fetchCount = 0;
-		const { fetch } = createMockFetch([
-			{
-				url: /pulls/,
-				response: { status: 200, body: [] },
-			},
+		const { fetch, calls } = createMockFetch([
+			{ url: /pulls/, response: { status: 200, body: [] } },
 		]);
 
-		// Wrap fetch to count calls
-		const countingFetch = async (url: string, init?: RequestInit) => {
-			if (typeof url === "string" && url.includes("/pulls")) {
-				fetchCount++;
-			}
-			return fetch(url, init);
-		};
-
-		const app = createTestLegit({ httpFetch: countingFetch });
+		const app = createTestLegit({ httpFetch: fetch });
 
 		const { renderOnce, mockInput } = await testRender(
 			() => <App app={app} />,
@@ -139,13 +114,14 @@ describe("App integration", () => {
 		await new Promise((r) => setTimeout(r, 50));
 		await renderOnce();
 
-		const initialCount = fetchCount;
+		const initialCount = calls.filter((c) => c.url.includes("/pulls")).length;
 
 		// Press r to refetch
 		mockInput.pressKey("r");
 		await new Promise((r) => setTimeout(r, 50));
 		await renderOnce();
 
-		expect(fetchCount).toBeGreaterThan(initialCount);
+		const newCount = calls.filter((c) => c.url.includes("/pulls")).length;
+		expect(newCount).toBeGreaterThan(initialCount);
 	});
 });
