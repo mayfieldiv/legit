@@ -100,6 +100,55 @@ describe("runCommand", () => {
 		const result = await runCommand([], app);
 		expect(result.launchTui).toBe(true);
 	});
+
+	test("files <number> returns categorized file list with breakdown", async () => {
+		const { fetch } = createMockFetch([
+			{
+				url: /\/files/,
+				response: {
+					status: 200,
+					body: [
+						{
+							filename: "src/app.ts",
+							additions: 30,
+							deletions: 10,
+							changes: 40,
+							status: "modified",
+						},
+						{
+							filename: "bun.lock",
+							additions: 500,
+							deletions: 200,
+							changes: 700,
+							status: "modified",
+						},
+					],
+				},
+			},
+		]);
+		const app = createTestLegit({ httpFetch: fetch });
+		const result = await runCommand(["files", "42"], app);
+		const output = result.output as any;
+
+		expect(output.files).toHaveLength(2);
+		expect(output.files[0].category).toBe("code");
+		expect(output.files[1].category).toBe("generated");
+		expect(output.breakdown.code).toEqual({ additions: 30, deletions: 10, files: 1 });
+		expect(output.breakdown.generated).toEqual({ additions: 500, deletions: 200, files: 1 });
+		expect(output.breakdown.total).toEqual({ additions: 530, deletions: 210, files: 2 });
+	});
+
+	test("files without number returns error", async () => {
+		const app = createTestLegit();
+		const result = await runCommand(["files"], app);
+		expect(result.error).toContain("Usage");
+	});
+
+	test("files rejects zero", async () => {
+		const app = createTestLegit();
+		const result = await runCommand(["files", "0"], app);
+		expect(result.error).toContain("Usage");
+	});
 });
 
 // ── Subprocess smoke test (one test to verify the entry point works) ────────

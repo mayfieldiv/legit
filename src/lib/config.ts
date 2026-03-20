@@ -1,9 +1,10 @@
 import { mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname } from "path";
+import type { FileCategory } from "./types";
 
 export interface FileRule {
 	pattern: string;
-	category: "code" | "test" | "generated";
+	category: FileCategory;
 }
 
 export interface LegitConfig {

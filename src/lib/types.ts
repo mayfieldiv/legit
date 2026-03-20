@@ -28,3 +28,32 @@ export interface PR {
 export interface PRDetail extends PR {
 	body: string;
 }
+
+// ── File categorization ─────────────────────────────────────────────────────
+
+export interface FileChange {
+	path: string;
+	additions: number;
+	deletions: number;
+}
+
+export type FileCategory = "code" | "test" | "generated" | "docs" | "config";
+
+export interface FileChangeWithCategory extends FileChange {
+	category: FileCategory;
+}
+
+export interface CategoryStats {
+	additions: number;
+	deletions: number;
+	files: number;
+}
+
+export type StatsByFileCategory = Record<FileCategory, CategoryStats> & {
+	total: CategoryStats;
+};
+
+export interface FileCategorization {
+	files: FileChangeWithCategory[];
+	breakdown: StatsByFileCategory;
+}

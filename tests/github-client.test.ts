@@ -1,6 +1,13 @@
 import { describe, test, expect } from "bun:test";
 import { createGitHubClient } from "../src/lib/github-client";
-import { createMockFetch, SAMPLE_REST_PR, SAMPLE_GQL_META, makeGraphQLResponse } from "./helpers";
+import {
+	createMockFetch,
+	SAMPLE_REST_PR,
+	SAMPLE_GQL_META,
+	makeGraphQLResponse,
+	SAMPLE_FILE,
+	makeSampleFile,
+} from "./helpers";
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 
@@ -229,6 +236,68 @@ describe("GitHubClient", () => {
 			expect(prs[0]!.reviewDecision).toBe("APPROVED");
 			expect(prs[50]!.reviewDecision).toBe("APPROVED");
 			expect(prs[100]!.reviewDecision).toBe("APPROVED");
+		});
+	});
+
+	describe("fetchFiles", () => {
+		test("fetches and maps file list for a PR", async () => {
+			const { fetch } = createMockFetch([
+				{
+					url: "https://api.github.com/repos/acme/widgets/pulls/42/files?per_page=100&page=1",
+					response: {
+						status: 200,
+						body: [
+							SAMPLE_FILE,
+							{
+								...SAMPLE_FILE,
+								filename: "tests/bar.test.ts",
+								additions: 15,
+								deletions: 2,
+							},
+						],
+					},
+				},
+			]);
+
+			const client = createGitHubClient("fake-token", fetch);
+			const files = await client.fetchFiles("acme/widgets", 42);
+
+			expect(files).toHaveLength(2);
+			expect(files[0]).toEqual({ path: "src/lib/foo.ts", additions: 25, deletions: 5 });
+			expect(files[1]).toEqual({ path: "tests/bar.test.ts", additions: 15, deletions: 2 });
+		});
+
+		test("paginates when response has 100 items", async () => {
+			const page1 = Array.from({ length: 100 }, (_, i) => makeSampleFile(`file${i}.ts`));
+			const page2 = [makeSampleFile("file100.ts")];
+
+			const { fetch } = createMockFetch([
+				{
+					url: "https://api.github.com/repos/acme/widgets/pulls/42/files?per_page=100&page=1",
+					response: { status: 200, body: page1 },
+				},
+				{
+					url: "https://api.github.com/repos/acme/widgets/pulls/42/files?per_page=100&page=2",
+					response: { status: 200, body: page2 },
+				},
+			]);
+
+			const client = createGitHubClient("fake-token", fetch);
+			const files = await client.fetchFiles("acme/widgets", 42);
+			expect(files).toHaveLength(101);
+		});
+
+		test("returns empty array for PR with no files", async () => {
+			const { fetch } = createMockFetch([
+				{
+					url: /\/files/,
+					response: { status: 200, body: [] },
+				},
+			]);
+
+			const client = createGitHubClient("fake-token", fetch);
+			const files = await client.fetchFiles("acme/widgets", 42);
+			expect(files).toEqual([]);
 		});
 	});
 

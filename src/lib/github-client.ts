@@ -3,10 +3,10 @@
  * HTTP transport is injected for testability.
  */
 
-import type { PR, PRDetail } from "./types";
+import type { PR, PRDetail, FileChange } from "./types";
 
 // Re-export domain types for backward compatibility
-export type { PR, PRDetail } from "./types";
+export type { PR, PRDetail, FileChange } from "./types";
 
 export type HttpFetch = (url: string, init?: RequestInit) => Promise<Response>;
 
@@ -15,6 +15,7 @@ export type ProgressReporter = (message: string) => void;
 export interface GitHubClient {
 	fetchOpenPRs(repo: string, onProgress?: ProgressReporter): Promise<PR[]>;
 	fetchPR(repo: string, number: number): Promise<PRDetail>;
+	fetchFiles(repo: string, number: number): Promise<FileChange[]>;
 }
 
 const GITHUB_API = "https://api.github.com";
@@ -56,11 +57,12 @@ export function createGitHubClient(
 	async function paginateRest(
 		baseUrl: string,
 		onProgress?: ProgressReporter,
+		label = "pull requests",
 	): Promise<unknown[]> {
 		const results: unknown[] = [];
 		let page = 1;
 		while (true) {
-			onProgress?.(`Loading pull requests… page ${page}`);
+			onProgress?.(`Loading ${label}… page ${page}`);
 			const url = `${baseUrl}${baseUrl.includes("?") ? "&" : "?"}per_page=${PER_PAGE}&page=${page}`;
 			const data = (await apiGet(url)) as unknown[];
 			results.push(...data);
@@ -198,6 +200,18 @@ export function createGitHubClient(
 			);
 
 			return restPRs.map((pr) => mergePR(pr, meta.get(pr.number)));
+		},
+
+		async fetchFiles(repo: string, number: number): Promise<FileChange[]> {
+			const [owner, repoName] = parseOwnerRepo(repo);
+			const rawFiles = await paginateRest(
+				`${GITHUB_API}/repos/${owner}/${repoName}/pulls/${number}/files`,
+			);
+			return rawFiles.map((f: any) => ({
+				path: f.filename,
+				additions: f.additions ?? 0,
+				deletions: f.deletions ?? 0,
+			}));
 		},
 
 		async fetchPR(repo: string, number: number): Promise<PRDetail> {

@@ -159,7 +159,7 @@ export function makeSampleRestPR(n: number) {
 export function mockHttpFetch(restPRs: unknown[] = []): HttpFetch {
 	const { fetch } = createMockFetch([
 		{
-			url: /\/pulls/,
+			url: /\/pulls\?/,
 			response: { status: 200, body: restPRs },
 		},
 		{
@@ -190,6 +190,20 @@ export function createTestLegit(overrides?: Partial<LegitOptions>): Legit {
 		httpFetch: mockHttpFetch([makeSampleRestPR(42)]),
 		...overrides,
 	});
+}
+
+/** Sample file object as returned by GitHub's PR files endpoint. */
+export const SAMPLE_FILE = {
+	filename: "src/lib/foo.ts",
+	additions: 25,
+	deletions: 5,
+	changes: 30,
+	status: "modified",
+};
+
+/** Create a sample file response with a given filename. */
+export function makeSampleFile(filename: string, additions = 10, deletions = 3) {
+	return { ...SAMPLE_FILE, filename, additions, deletions, changes: additions + deletions };
 }
 
 /** Create a fully-populated domain PR with sensible defaults. Override any field. */
