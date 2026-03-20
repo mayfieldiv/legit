@@ -73,7 +73,11 @@ if (import.meta.main) {
 		}
 
 		if (result.launchTui) {
-			await import("@opentui/solid/preload");
+			// Register the Solid JSX transform before importing any .tsx files.
+			// Can't rely on bunfig.toml alone — legit runs from arbitrary cwd.
+			const { plugin } = await import("bun");
+			const { default: solidPlugin } = await import("@opentui/solid/bun-plugin");
+			plugin(solidPlugin);
 			const { render } = await import("@opentui/solid");
 			const { createApp } = await import("./App");
 			await render(createApp(app));
