@@ -53,11 +53,19 @@ describe("GitHubClient", () => {
 			}));
 			const page2 = [{ ...SAMPLE_REST_PR, number: 101, title: "PR 101" }];
 
-			const gqlMetas = Array.from({ length: 101 }, (_, i) => ({
+			const gqlBatch1 = Array.from({ length: 50 }, (_, i) => ({
 				...SAMPLE_GQL_META,
 				number: i + 1,
 				reviewDecision: "REVIEW_REQUIRED",
 			}));
+			const gqlBatch2 = Array.from({ length: 50 }, (_, i) => ({
+				...SAMPLE_GQL_META,
+				number: i + 51,
+				reviewDecision: "REVIEW_REQUIRED",
+			}));
+			const gqlBatch3 = [
+				{ ...SAMPLE_GQL_META, number: 101, reviewDecision: "REVIEW_REQUIRED" as const },
+			];
 
 			const { fetch } = createMockFetch([
 				{
@@ -71,10 +79,17 @@ describe("GitHubClient", () => {
 				{
 					url: "https://api.github.com/graphql",
 					method: "POST",
-					response: {
-						status: 200,
-						body: makeGraphQLResponse(gqlMetas),
-					},
+					response: { status: 200, body: makeGraphQLResponse(gqlBatch1) },
+				},
+				{
+					url: "https://api.github.com/graphql",
+					method: "POST",
+					response: { status: 200, body: makeGraphQLResponse(gqlBatch2) },
+				},
+				{
+					url: "https://api.github.com/graphql",
+					method: "POST",
+					response: { status: 200, body: makeGraphQLResponse(gqlBatch3) },
 				},
 			]);
 
@@ -197,7 +212,7 @@ describe("GitHubClient", () => {
 
 			const progress: string[] = [];
 			const client = createGitHubClient("fake-token", fetch);
-			await client.fetchOpenPRs("acme/widgets", (message) => {
+			const prs = await client.fetchOpenPRs("acme/widgets", (message) => {
 				progress.push(message);
 			});
 
@@ -208,6 +223,12 @@ describe("GitHubClient", () => {
 				"Loading PR metadata… batch 2/3",
 				"Loading PR metadata… batch 3/3",
 			]);
+
+			// Verify all 101 PRs received correct GraphQL metadata
+			expect(prs).toHaveLength(101);
+			expect(prs[0]!.reviewDecision).toBe("APPROVED");
+			expect(prs[50]!.reviewDecision).toBe("APPROVED");
+			expect(prs[100]!.reviewDecision).toBe("APPROVED");
 		});
 	});
 
