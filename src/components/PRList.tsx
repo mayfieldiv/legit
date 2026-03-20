@@ -35,7 +35,6 @@ function Cell(props: {
 }
 
 function PRRow(props: { pr: PR; selected: boolean; id: string }) {
-	const pr = props.pr;
 	const fg = () => (props.selected ? "white" : undefined);
 	return (
 		<box
@@ -46,25 +45,25 @@ function PRRow(props: { pr: PR; selected: boolean; id: string }) {
 			background={props.selected ? "blue" : undefined}
 		>
 			<Cell width={COL.pr} paddingRight={1}>
-				<span color={props.selected ? "white" : "cyan"}>#{pr.number}</span>
+				<span color={props.selected ? "white" : "cyan"}>#{props.pr.number}</span>
 			</Cell>
 			<Cell flexGrow={1} paddingRight={3}>
-				<span color={fg()}>{pr.title}</span>
-				<Show when={pr.isDraft}>
+				<span color={fg()}>{props.pr.title}</span>
+				<Show when={props.pr.isDraft}>
 					<span color="yellow"> draft</span>
 				</Show>
 			</Cell>
 			<Cell width={COL.author} paddingRight={1}>
-				<span color={props.selected ? "white" : "green"}>{pr.author}</span>
+				<span color={props.selected ? "white" : "green"}>{props.pr.author}</span>
 			</Cell>
 			<Cell width={COL.size} paddingRight={1}>
-				<span color={fg()}>{formatSize(pr.additions, pr.deletions)}</span>
+				<span color={fg()}>{formatSize(props.pr.additions, props.pr.deletions)}</span>
 			</Cell>
 			<Cell width={COL.age} paddingRight={1}>
-				<span color={fg()}>{formatAge(pr.createdAt)}</span>
+				<span color={fg()}>{formatAge(props.pr.createdAt)}</span>
 			</Cell>
 			<Cell width={COL.review}>
-				<span color={fg()}>{formatReviewDecision(pr.reviewDecision)}</span>
+				<span color={fg()}>{formatReviewDecision(props.pr.reviewDecision)}</span>
 			</Cell>
 		</box>
 	);
