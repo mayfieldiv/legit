@@ -9,9 +9,7 @@ export interface AppProps {
 
 export function App(props: AppProps) {
 	const [error, setError] = createSignal("");
-	const [loadingMessage, setLoadingMessage] = createSignal(
-		"Loading pull requests...",
-	);
+	const [loadingMessage, setLoadingMessage] = createSignal("Loading pull requests...");
 
 	const [prs, { refetch }] = createResource<PR[]>(
 		async () => {

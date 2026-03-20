@@ -1,5 +1,5 @@
 import { describe, test, expect, afterAll } from "bun:test";
-import { runCommand, type CommandResult } from "../src/cli";
+import { runCommand } from "../src/cli";
 import {
 	cleanupTmpDirs,
 	makeTmpGitRepo,
@@ -58,7 +58,10 @@ describe("runCommand", () => {
 			{
 				url: /\/graphql/,
 				method: "POST",
-				response: { status: 200, body: makeGraphQLResponse([{ ...SAMPLE_GQL_META, number: 42 }]) },
+				response: {
+					status: 200,
+					body: makeGraphQLResponse([{ ...SAMPLE_GQL_META, number: 42 }]),
+				},
 			},
 		]);
 		const app = createTestLegit({ httpFetch: fetch });

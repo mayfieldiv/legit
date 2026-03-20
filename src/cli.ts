@@ -23,10 +23,7 @@ export interface CommandResult {
  * Execute a CLI subcommand. Returns structured result for testability.
  * The thin entry point below handles printing and process.exit.
  */
-export async function runCommand(
-	args: string[],
-	app: Legit,
-): Promise<CommandResult> {
+export async function runCommand(args: string[], app: Legit): Promise<CommandResult> {
 	const command = args[0];
 
 	switch (command) {
@@ -76,7 +73,11 @@ if (import.meta.main) {
 		}
 
 		if (result.launchTui) {
-			await import("@opentui/solid/preload");
+			// Register the Solid JSX transform before importing any .tsx files.
+			// Can't rely on bunfig.toml alone — legit runs from arbitrary cwd.
+			const { plugin } = await import("bun");
+			const { default: solidPlugin } = await import("@opentui/solid/bun-plugin");
+			plugin(solidPlugin);
 			const { render } = await import("@opentui/solid");
 			const { createApp } = await import("./App");
 			await render(createApp(app));

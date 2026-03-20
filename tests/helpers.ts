@@ -69,24 +69,26 @@ export interface MockFetch {
 }
 
 /**
- * Route-based HTTP mock. Routes are matched in order.
+ * Route-based HTTP mock. Routes are matched in order and consumed — each
+ * route fires once, so duplicate URL patterns return successive responses.
  * Falls back to 404 if no route matches.
  */
 export function createMockFetch(routes: MockRoute[]): MockFetch {
+	const remaining = [...routes];
 	const calls: Array<{ url: string; init?: RequestInit }> = [];
 
 	const fetch: HttpFetch = async (url, init) => {
 		calls.push({ url, init });
 		const method = init?.method ?? "GET";
 
-		for (const route of routes) {
+		for (let i = 0; i < remaining.length; i++) {
+			const route = remaining[i]!;
 			const urlMatch =
-				typeof route.url === "string"
-					? url === route.url
-					: route.url.test(url);
+				typeof route.url === "string" ? url === route.url : route.url.test(url);
 			const methodMatch = !route.method || route.method === method;
 
 			if (urlMatch && methodMatch) {
+				remaining.splice(i, 1);
 				return new Response(JSON.stringify(route.response.body), {
 					status: route.response.status,
 					headers: { "Content-Type": "application/json" },
@@ -128,9 +130,7 @@ export const SAMPLE_GQL_META = {
 };
 
 /** Build a sample GraphQL response for a set of PR metadata objects. */
-export function makeGraphQLResponse(
-	prMetas: Array<{ number: number } & Record<string, unknown>>,
-) {
+export function makeGraphQLResponse(prMetas: Array<{ number: number } & Record<string, unknown>>) {
 	const repository: Record<string, unknown> = {};
 	prMetas.forEach((meta, i) => {
 		repository[`pr${i}`] = meta;
@@ -168,7 +168,7 @@ export function mockHttpFetch(restPRs: unknown[] = []): HttpFetch {
 			response: {
 				status: 200,
 				body: makeGraphQLResponse(
-					restPRs.map((pr: any, i: number) => ({
+					restPRs.map((pr: any, _i: number) => ({
 						...SAMPLE_GQL_META,
 						number: pr.number,
 					})),

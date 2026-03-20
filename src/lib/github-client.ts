@@ -8,10 +8,7 @@ import type { PR, PRDetail } from "./types";
 // Re-export domain types for backward compatibility
 export type { PR, PRDetail } from "./types";
 
-export type HttpFetch = (
-	url: string,
-	init?: RequestInit,
-) => Promise<Response>;
+export type HttpFetch = (url: string, init?: RequestInit) => Promise<Response>;
 
 export type ProgressReporter = (message: string) => void;
 
@@ -44,19 +41,14 @@ export function createGitHubClient(
 		return res.json();
 	}
 
-	async function graphql(
-		query: string,
-		variables?: Record<string, unknown>,
-	): Promise<unknown> {
+	async function graphql(query: string, variables?: Record<string, unknown>): Promise<unknown> {
 		const res = await httpFetch(`${GITHUB_API}/graphql`, {
 			method: "POST",
 			headers: { ...headers, "Content-Type": "application/json" },
 			body: JSON.stringify({ query, variables }),
 		});
 		if (!res.ok) {
-			throw new Error(
-				`GitHub GraphQL error: ${res.status} ${res.statusText}`,
-			);
+			throw new Error(`GitHub GraphQL error: ${res.status} ${res.statusText}`);
 		}
 		return res.json();
 	}
@@ -105,9 +97,7 @@ export function createGitHubClient(
 			deletions: raw.deletions ?? 0,
 			isDraft: raw.draft ?? false,
 			labels: (raw.labels ?? []).map((l: any) => l.name),
-			requestedReviewers: (raw.requested_reviewers ?? []).map(
-				(r: any) => r.login,
-			),
+			requestedReviewers: (raw.requested_reviewers ?? []).map((r: any) => r.login),
 			assignees: (raw.assignees ?? []).map((a: any) => a.login),
 		};
 	}
@@ -158,8 +148,7 @@ export function createGitHubClient(
 						deletions: pr.deletions ?? 0,
 						reviewDecision: pr.reviewDecision ?? "",
 						mergeable: pr.mergeable ?? "UNKNOWN",
-						lastCommitDate:
-							pr.commits.nodes[0]?.commit?.committedDate ?? "",
+						lastCommitDate: pr.commits.nodes[0]?.commit?.committedDate ?? "",
 					});
 				}
 			}
@@ -183,17 +172,15 @@ export function createGitHubClient(
 
 	function parseOwnerRepo(repo: string): [string, string] {
 		const parts = repo.split("/");
-		if (parts.length !== 2) throw new Error(`Invalid repo format: ${repo}`);
+		if (parts.length !== 2 || !parts[0] || !parts[1])
+			throw new Error(`Invalid repo format: ${repo}`);
 		return [parts[0], parts[1]];
 	}
 
 	// ── Public API ──────────────────────────────────────────────────────
 
 	return {
-		async fetchOpenPRs(
-			repo: string,
-			onProgress?: ProgressReporter,
-		): Promise<PR[]> {
+		async fetchOpenPRs(repo: string, onProgress?: ProgressReporter): Promise<PR[]> {
 			const [owner, repoName] = parseOwnerRepo(repo);
 
 			const rawPRs = await paginateRest(

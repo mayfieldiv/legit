@@ -48,10 +48,8 @@ export function loadConfig(configPath: string): LegitConfig {
 		botLogins: partial.botLogins ?? [...DEFAULT_CONFIG.botLogins],
 		fileRules: partial.fileRules ?? [...DEFAULT_CONFIG.fileRules],
 		ui: {
-			defaultGroupBy:
-				partial.ui?.defaultGroupBy ?? DEFAULT_CONFIG.ui.defaultGroupBy,
-			defaultSortBy:
-				partial.ui?.defaultSortBy ?? DEFAULT_CONFIG.ui.defaultSortBy,
+			defaultGroupBy: partial.ui?.defaultGroupBy ?? DEFAULT_CONFIG.ui.defaultGroupBy,
+			defaultSortBy: partial.ui?.defaultSortBy ?? DEFAULT_CONFIG.ui.defaultSortBy,
 		},
 	};
 }

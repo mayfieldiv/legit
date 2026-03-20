@@ -16,12 +16,7 @@ const COL = {
 	review: 18,
 } as const;
 
-function Cell(props: {
-	width?: number;
-	flexGrow?: number;
-	paddingRight?: number;
-	children: any;
-}) {
+function Cell(props: { width?: number; flexGrow?: number; paddingRight?: number; children: any }) {
 	return (
 		<box
 			width={props.width}
@@ -29,7 +24,9 @@ function Cell(props: {
 			paddingRight={props.paddingRight}
 			overflow="hidden"
 		>
-			<text wrapMode="none" truncate={true}>{props.children}</text>
+			<text wrapMode="none" truncate={true}>
+				{props.children}
+			</text>
 		</box>
 	);
 }
@@ -42,28 +39,30 @@ function PRRow(props: { pr: PR; selected: boolean; id: string }) {
 			flexDirection="row"
 			width="100%"
 			height={1}
-			background={props.selected ? "blue" : undefined}
+			backgroundColor={props.selected ? "blue" : undefined}
 		>
 			<Cell width={COL.pr} paddingRight={1}>
-				<span color={props.selected ? "white" : "cyan"}>#{props.pr.number}</span>
+				<span style={{ fg: props.selected ? "white" : "cyan" }}>#{props.pr.number}</span>
 			</Cell>
 			<Cell flexGrow={1} paddingRight={3}>
-				<span color={fg()}>{props.pr.title}</span>
+				<span style={{ fg: fg() }}>{props.pr.title}</span>
 				<Show when={props.pr.isDraft}>
-					<span color="yellow"> draft</span>
+					<span style={{ fg: "yellow" }}> draft</span>
 				</Show>
 			</Cell>
 			<Cell width={COL.author} paddingRight={1}>
-				<span color={props.selected ? "white" : "green"}>{props.pr.author}</span>
+				<span style={{ fg: props.selected ? "white" : "green" }}>{props.pr.author}</span>
 			</Cell>
 			<Cell width={COL.size} paddingRight={1}>
-				<span color={fg()}>{formatSize(props.pr.additions, props.pr.deletions)}</span>
+				<span style={{ fg: fg() }}>
+					{formatSize(props.pr.additions, props.pr.deletions)}
+				</span>
 			</Cell>
 			<Cell width={COL.age} paddingRight={1}>
-				<span color={fg()}>{formatAge(props.pr.createdAt)}</span>
+				<span style={{ fg: fg() }}>{formatAge(props.pr.createdAt)}</span>
 			</Cell>
 			<Cell width={COL.review}>
-				<span color={fg()}>{formatReviewDecision(props.pr.reviewDecision)}</span>
+				<span style={{ fg: fg() }}>{formatReviewDecision(props.pr.reviewDecision)}</span>
 			</Cell>
 		</box>
 	);
@@ -72,12 +71,24 @@ function PRRow(props: { pr: PR; selected: boolean; id: string }) {
 export function PRListHeader() {
 	return (
 		<box flexDirection="row" width="100%" height={1}>
-			<Cell width={COL.pr} paddingRight={1}><span bold>PR</span></Cell>
-			<Cell flexGrow={1} paddingRight={3}><span bold>Title</span></Cell>
-			<Cell width={COL.author} paddingRight={1}><span bold>Author</span></Cell>
-			<Cell width={COL.size} paddingRight={1}><span bold>Size</span></Cell>
-			<Cell width={COL.age} paddingRight={1}><span bold>Age</span></Cell>
-			<Cell width={COL.review}><span bold>Review</span></Cell>
+			<Cell width={COL.pr} paddingRight={1}>
+				<b>PR</b>
+			</Cell>
+			<Cell flexGrow={1} paddingRight={3}>
+				<b>Title</b>
+			</Cell>
+			<Cell width={COL.author} paddingRight={1}>
+				<b>Author</b>
+			</Cell>
+			<Cell width={COL.size} paddingRight={1}>
+				<b>Size</b>
+			</Cell>
+			<Cell width={COL.age} paddingRight={1}>
+				<b>Age</b>
+			</Cell>
+			<Cell width={COL.review}>
+				<b>Review</b>
+			</Cell>
 		</box>
 	);
 }
@@ -85,12 +96,7 @@ export function PRListHeader() {
 export function PRList(props: PRListProps) {
 	return (
 		<box flexDirection="column" width="100%">
-			<Show
-				when={props.prs.length > 0}
-				fallback={
-					<text>No open pull requests</text>
-				}
-			>
+			<Show when={props.prs.length > 0} fallback={<text>No open pull requests</text>}>
 				<For each={props.prs}>
 					{(pr, index) => (
 						<PRRow

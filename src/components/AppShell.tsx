@@ -2,9 +2,7 @@ import { createSignal, Show, Switch, Match } from "solid-js";
 import { ListView } from "./ListView";
 import type { PR } from "../lib/types";
 
-export type ViewTarget =
-	| { view: "list" }
-	| { view: "detail"; pr: PR };
+export type ViewTarget = { view: "list" } | { view: "detail"; pr: PR };
 
 interface AppShellProps {
 	prs: PR[];
@@ -23,9 +21,9 @@ export function AppShell(props: AppShellProps) {
 			{/* Header */}
 			<box flexDirection="row" width="100%" height={1}>
 				<text>
-					<span bold color="cyan">legit</span>
+					<span style={{ fg: "cyan", bold: true }}>legit</span>
 					<span> — </span>
-					<span bold>{props.repoSlug}</span>
+					<b>{props.repoSlug}</b>
 					<span> — {props.prs.length} open PRs</span>
 				</text>
 			</box>
@@ -33,7 +31,7 @@ export function AppShell(props: AppShellProps) {
 			{/* Error */}
 			<Show when={props.error}>
 				<text>
-					<span color="red">Error: {props.error}</span>
+					<span style={{ fg: "red" }}>Error: {props.error}</span>
 				</text>
 			</Show>
 
@@ -43,7 +41,9 @@ export function AppShell(props: AppShellProps) {
 				fallback={
 					<Show when={props.loading}>
 						<text>
-							<span color="yellow">{props.loadingMessage ?? "Loading pull requests..."}</span>
+							<span style={{ fg: "yellow" }}>
+								{props.loadingMessage ?? "Loading pull requests..."}
+							</span>
 						</text>
 					</Show>
 				}

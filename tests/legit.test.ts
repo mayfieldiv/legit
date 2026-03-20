@@ -119,9 +119,7 @@ describe("parseRemoteUrl", () => {
 	});
 
 	test("throws on non-GitHub URL", () => {
-		expect(() => parseRemoteUrl("git@gitlab.com:owner/repo.git")).toThrow(
-			/Cannot parse/,
-		);
+		expect(() => parseRemoteUrl("git@gitlab.com:owner/repo.git")).toThrow(/Cannot parse/);
 	});
 
 	test("throws on malformed URL", () => {
@@ -219,10 +217,10 @@ describe("Legit.fetchPRs", () => {
 		const app = createTestLegit();
 		const prs = await app.fetchPRs();
 		expect(prs).toHaveLength(1);
-		expect(prs[0].number).toBe(42);
-		expect(prs[0].title).toBe("PR #42");
-		expect(prs[0].additions).toBe(50);
-		expect(prs[0].reviewDecision).toBe("APPROVED");
+		expect(prs[0]!.number).toBe(42);
+		expect(prs[0]!.title).toBe("PR #42");
+		expect(prs[0]!.additions).toBe(50);
+		expect(prs[0]!.reviewDecision).toBe("APPROVED");
 	});
 
 	test("auto-adds detected repo to config", async () => {
@@ -251,12 +249,18 @@ describe("Legit.fetchPR", () => {
 		const { fetch } = createMockFetch([
 			{
 				url: /\/pulls\/99$/,
-				response: { status: 200, body: { ...makeSampleRestPR(99), body: "## Fix\n\nDoes the thing." } },
+				response: {
+					status: 200,
+					body: { ...makeSampleRestPR(99), body: "## Fix\n\nDoes the thing." },
+				},
 			},
 			{
 				url: /\/graphql/,
 				method: "POST",
-				response: { status: 200, body: makeGraphQLResponse([{ ...SAMPLE_GQL_META, number: 99 }]) },
+				response: {
+					status: 200,
+					body: makeGraphQLResponse([{ ...SAMPLE_GQL_META, number: 99 }]),
+				},
 			},
 		]);
 		const app = createTestLegit({ httpFetch: fetch });

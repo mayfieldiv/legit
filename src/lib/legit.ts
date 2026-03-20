@@ -1,10 +1,5 @@
 import { execFileSync } from "child_process";
-import {
-	loadConfig,
-	saveConfig,
-	addRepo,
-	type LegitConfig,
-} from "./config";
+import { loadConfig, saveConfig, addRepo, type LegitConfig } from "./config";
 import {
 	createGitHubClient,
 	type GitHubClient,
@@ -43,17 +38,17 @@ export interface LegitOptions {
 
 export function parseRemoteUrl(url: string): RepoInfo {
 	// SSH: git@github.com:owner/repo.git  (repo may contain dots, e.g. angular.js)
-	const sshMatch = url.match(/git@github\.com:([^/]+)\/(.+?)(?:\.git)?$/);
-	if (sshMatch) {
-		return { owner: sshMatch[1], repo: sshMatch[2] };
+	const sshMatch = url.match(/git@github\.com:(?<owner>[^/]+)\/(?<repo>.+?)(?:\.git)?$/);
+	if (sshMatch?.groups?.owner && sshMatch.groups.repo) {
+		return { owner: sshMatch.groups.owner, repo: sshMatch.groups.repo };
 	}
 
 	// HTTPS: https://github.com/owner/repo.git  (repo may contain dots)
 	const httpsMatch = url.match(
-		/https?:\/\/github\.com\/([^/]+)\/(.+?)(?:\.git)?$/,
+		/https?:\/\/github\.com\/(?<owner>[^/]+)\/(?<repo>.+?)(?:\.git)?$/,
 	);
-	if (httpsMatch) {
-		return { owner: httpsMatch[1], repo: httpsMatch[2] };
+	if (httpsMatch?.groups?.owner && httpsMatch.groups.repo) {
+		return { owner: httpsMatch.groups.owner, repo: httpsMatch.groups.repo };
 	}
 
 	throw new Error(`Cannot parse GitHub remote URL: ${url}`);
@@ -112,9 +107,7 @@ function resolveAuth(exec: AuthExecutor = defaultExecutor): AuthInfo {
 	try {
 		user = exec("gh", ["api", "user", "--jq", ".login"]).trim();
 	} catch {
-		throw new Error(
-			"Could not determine GitHub username. Ensure `gh` CLI is authenticated.",
-		);
+		throw new Error("Could not determine GitHub username. Ensure `gh` CLI is authenticated.");
 	}
 
 	return { user, token, tokenSource: "gh-cli" };
@@ -136,11 +129,7 @@ export class Legit {
 	}
 
 	get configPath(): string {
-		return (
-			this._options.configPath ??
-			process.env.LEGIT_CONFIG_PATH ??
-			DEFAULT_CONFIG_PATH
-		);
+		return this._options.configPath ?? process.env.LEGIT_CONFIG_PATH ?? DEFAULT_CONFIG_PATH;
 	}
 
 	get repo(): RepoInfo {
@@ -178,10 +167,7 @@ export class Legit {
 
 	get client(): GitHubClient {
 		if (!this._client) {
-			this._client = createGitHubClient(
-				this.auth.token,
-				this._options.httpFetch,
-			);
+			this._client = createGitHubClient(this.auth.token, this._options.httpFetch);
 		}
 		return this._client;
 	}

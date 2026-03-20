@@ -1,10 +1,15 @@
 {
 	"name": "legit",
-	"module": "src/cli.ts",
-	"type": "module",
 	"private": true,
 	"bin": {
 		"legit": "src/cli.ts"
+	},
+	"type": "module",
+	"module": "src/cli.ts",
+	"scripts": {
+		"prepare": "husky",
+		"typecheck": "tsgo --noEmit",
+		"precommit": "bunx lint-staged"
 	},
 	"dependencies": {
 		"@opentui/core": "0.1.88",
@@ -15,6 +20,11 @@
 	"devDependencies": {
 		"@tsconfig/bun": "1.0.10",
 		"@types/bun": "1.3.10",
+		"@typescript/native-preview": "7.0.0-dev.20260320.1",
+		"husky": "9.1.7",
+		"lint-staged": "16.4.0",
+		"oxfmt": "0.41.0",
+		"oxlint": "1.56.0",
 		"typescript": "5.9.3"
 	}
 }

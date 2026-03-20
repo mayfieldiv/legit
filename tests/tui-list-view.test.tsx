@@ -11,13 +11,7 @@ describe("ListView", () => {
 		];
 
 		const { renderOnce, captureCharFrame } = await testRender(
-			() => (
-				<ListView
-					prs={prs}
-					onRefresh={() => {}}
-					onNavigate={() => {}}
-				/>
-			),
+			() => <ListView prs={prs} onRefresh={() => {}} onNavigate={() => {}} />,
 			{ width: 120, height: 20 },
 		);
 
@@ -35,13 +29,7 @@ describe("ListView", () => {
 		];
 
 		const { renderOnce, captureCharFrame, mockInput } = await testRender(
-			() => (
-				<ListView
-					prs={prs}
-					onRefresh={() => {}}
-					onNavigate={() => {}}
-				/>
-			),
+			() => <ListView prs={prs} onRefresh={() => {}} onNavigate={() => {}} />,
 			{ width: 120, height: 20 },
 		);
 
@@ -68,13 +56,7 @@ describe("ListView", () => {
 		];
 
 		const { renderOnce, mockInput } = await testRender(
-			() => (
-				<ListView
-					prs={prs}
-					onRefresh={() => {}}
-					onNavigate={() => {}}
-				/>
-			),
+			() => <ListView prs={prs} onRefresh={() => {}} onNavigate={() => {}} />,
 			{ width: 120, height: 20 },
 		);
 
@@ -91,7 +73,9 @@ describe("ListView", () => {
 			() => (
 				<ListView
 					prs={[makePR()]}
-					onRefresh={() => { refreshed = true; }}
+					onRefresh={() => {
+						refreshed = true;
+					}}
 					onNavigate={() => {}}
 				/>
 			),
@@ -114,7 +98,9 @@ describe("ListView", () => {
 				<ListView
 					prs={[pr]}
 					onRefresh={() => {}}
-					onNavigate={(target) => { navigated = target; }}
+					onNavigate={(target) => {
+						navigated = target;
+					}}
 				/>
 			),
 			{ width: 120, height: 20 },
@@ -129,13 +115,7 @@ describe("ListView", () => {
 
 	test("shows empty state when no PRs", async () => {
 		const { renderOnce, captureCharFrame } = await testRender(
-			() => (
-				<ListView
-					prs={[]}
-					onRefresh={() => {}}
-					onNavigate={() => {}}
-				/>
-			),
+			() => <ListView prs={[]} onRefresh={() => {}} onNavigate={() => {}} />,
 			{ width: 120, height: 20 },
 		);
 
@@ -146,13 +126,7 @@ describe("ListView", () => {
 
 	test("j/k does nothing on empty list", async () => {
 		const { renderOnce, captureCharFrame, mockInput } = await testRender(
-			() => (
-				<ListView
-					prs={[]}
-					onRefresh={() => {}}
-					onNavigate={() => {}}
-				/>
-			),
+			() => <ListView prs={[]} onRefresh={() => {}} onNavigate={() => {}} />,
 			{ width: 120, height: 20 },
 		);
 
