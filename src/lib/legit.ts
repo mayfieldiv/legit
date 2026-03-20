@@ -6,7 +6,8 @@ import {
 	type HttpFetch,
 	type ProgressReporter,
 } from "./github-client";
-import type { PR, PRDetail } from "./types";
+import { categorizeFiles as _categorizeFiles } from "./file-categorizer";
+import type { PR, PRDetail, FileChange, FileCategorization } from "./types";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -202,5 +203,13 @@ export class Legit {
 	 */
 	async fetchPR(repo: string, number: number): Promise<PRDetail> {
 		return this.client.fetchPR(repo, number);
+	}
+
+	async fetchFiles(repo: string, number: number): Promise<FileChange[]> {
+		return this.client.fetchFiles(repo, number);
+	}
+
+	categorizeFiles(files: FileChange[]): FileCategorization {
+		return _categorizeFiles(files, this.config.fileRules);
 	}
 }

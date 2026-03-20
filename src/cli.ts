@@ -50,12 +50,22 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
 			return { output: await app.fetchPR(app.repoSlug, prNumber) };
 		}
 
+		case "files": {
+			const rawNumber = args[1];
+			if (!rawNumber || !/^[1-9]\d*$/.test(rawNumber)) {
+				return { error: "Usage: legit files <number>" };
+			}
+			const prNumber = Number(rawNumber);
+			const files = await app.fetchFiles(app.repoSlug, prNumber);
+			return { output: app.categorizeFiles(files) };
+		}
+
 		case undefined:
 			return { launchTui: true };
 
 		default:
 			return {
-				error: `Unknown command: ${command}\n\nUsage: legit [detect|auth|config|prs|pr <number>]`,
+				error: `Unknown command: ${command}\n\nUsage: legit [detect|auth|config|prs|pr <number>|files <number>]`,
 			};
 	}
 }
