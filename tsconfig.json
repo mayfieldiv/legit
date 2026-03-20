@@ -6,6 +6,5 @@
 		"jsxImportSource": "@opentui/solid",
 		"lib": ["ESNext", "DOM", "DOM.Iterable"],
 		"types": []
-	},
-	"exclude": ["node_modules/@opentui/solid/scripts"]
+	}
 }

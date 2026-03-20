@@ -38,15 +38,17 @@ export interface LegitOptions {
 
 export function parseRemoteUrl(url: string): RepoInfo {
 	// SSH: git@github.com:owner/repo.git  (repo may contain dots, e.g. angular.js)
-	const sshMatch = url.match(/git@github\.com:([^/]+)\/(.+?)(?:\.git)?$/);
-	if (sshMatch?.[1] && sshMatch[2]) {
-		return { owner: sshMatch[1], repo: sshMatch[2] };
+	const sshMatch = url.match(/git@github\.com:(?<owner>[^/]+)\/(?<repo>.+?)(?:\.git)?$/);
+	if (sshMatch?.groups?.owner && sshMatch.groups.repo) {
+		return { owner: sshMatch.groups.owner, repo: sshMatch.groups.repo };
 	}
 
 	// HTTPS: https://github.com/owner/repo.git  (repo may contain dots)
-	const httpsMatch = url.match(/https?:\/\/github\.com\/([^/]+)\/(.+?)(?:\.git)?$/);
-	if (httpsMatch?.[1] && httpsMatch[2]) {
-		return { owner: httpsMatch[1], repo: httpsMatch[2] };
+	const httpsMatch = url.match(
+		/https?:\/\/github\.com\/(?<owner>[^/]+)\/(?<repo>.+?)(?:\.git)?$/,
+	);
+	if (httpsMatch?.groups?.owner && httpsMatch.groups.repo) {
+		return { owner: httpsMatch.groups.owner, repo: httpsMatch.groups.repo };
 	}
 
 	throw new Error(`Cannot parse GitHub remote URL: ${url}`);
