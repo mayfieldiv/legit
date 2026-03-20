@@ -159,7 +159,7 @@ export function makeSampleRestPR(n: number) {
 export function mockHttpFetch(restPRs: unknown[] = []): HttpFetch {
 	const { fetch } = createMockFetch([
 		{
-			url: /\/pulls/,
+			url: /\/pulls\?/,
 			response: { status: 200, body: restPRs },
 		},
 		{

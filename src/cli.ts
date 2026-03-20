@@ -9,6 +9,7 @@
  *   config   — print current config as JSON
  *   prs      — fetch and print open PRs as JSON
  *   pr <n>   — fetch and print single PR detail as JSON
+ *   files <n> — fetch and print file categorization as JSON
  */
 
 import { Legit } from "./lib/legit";
