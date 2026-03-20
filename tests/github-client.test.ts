@@ -1,11 +1,6 @@
 import { describe, test, expect } from "bun:test";
-import { createGitHubClient, type GitHubClient, type HttpFetch } from "../src/lib/github-client";
-import {
-	createMockFetch,
-	SAMPLE_REST_PR,
-	SAMPLE_GQL_META,
-	makeGraphQLResponse,
-} from "./helpers";
+import { createGitHubClient } from "../src/lib/github-client";
+import { createMockFetch, SAMPLE_REST_PR, SAMPLE_GQL_META, makeGraphQLResponse } from "./helpers";
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 

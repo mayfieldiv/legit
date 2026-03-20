@@ -1,9 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import {
-	formatAge,
-	formatSize,
-	formatReviewDecision,
-} from "../src/lib/format";
+import { formatAge, formatSize, formatReviewDecision } from "../src/lib/format";
 
 describe("formatAge", () => {
 	test("returns 'today' for dates less than a day ago", () => {
@@ -12,23 +8,17 @@ describe("formatAge", () => {
 	});
 
 	test("returns '1d' for yesterday", () => {
-		const yesterday = new Date(
-			Date.now() - 1 * 24 * 60 * 60 * 1000,
-		).toISOString();
+		const yesterday = new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString();
 		expect(formatAge(yesterday)).toBe("1d");
 	});
 
 	test("returns days for < 30 days", () => {
-		const fifteenDaysAgo = new Date(
-			Date.now() - 15 * 24 * 60 * 60 * 1000,
-		).toISOString();
+		const fifteenDaysAgo = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString();
 		expect(formatAge(fifteenDaysAgo)).toBe("15d");
 	});
 
 	test("returns months for 30-365 days", () => {
-		const ninetyDaysAgo = new Date(
-			Date.now() - 90 * 24 * 60 * 60 * 1000,
-		).toISOString();
+		const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
 		expect(formatAge(ninetyDaysAgo)).toBe("3mo");
 	});
 
@@ -40,9 +30,7 @@ describe("formatAge", () => {
 	});
 
 	test("returns years only when no remainder months", () => {
-		const twoYearsAgo = new Date(
-			Date.now() - 24 * 30 * 24 * 60 * 60 * 1000,
-		).toISOString();
+		const twoYearsAgo = new Date(Date.now() - 24 * 30 * 24 * 60 * 60 * 1000).toISOString();
 		expect(formatAge(twoYearsAgo)).toBe("2y");
 	});
 });
@@ -63,9 +51,7 @@ describe("formatReviewDecision", () => {
 	});
 
 	test("formats CHANGES_REQUESTED", () => {
-		expect(formatReviewDecision("CHANGES_REQUESTED")).toBe(
-			"changes requested",
-		);
+		expect(formatReviewDecision("CHANGES_REQUESTED")).toBe("changes requested");
 	});
 
 	test("formats REVIEW_REQUIRED", () => {

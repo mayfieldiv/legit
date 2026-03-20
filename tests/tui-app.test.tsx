@@ -6,14 +6,7 @@ import { makePR } from "./helpers";
 describe("AppShell", () => {
 	test("shows loading state when loading is true", async () => {
 		const { renderOnce, captureCharFrame } = await testRender(
-			() => (
-				<AppShell
-					prs={[]}
-					loading={true}
-					repoSlug="acme/widgets"
-					onRefresh={() => {}}
-				/>
-			),
+			() => <AppShell prs={[]} loading={true} repoSlug="acme/widgets" onRefresh={() => {}} />,
 			{ width: 120, height: 20 },
 		);
 
@@ -30,12 +23,7 @@ describe("AppShell", () => {
 
 		const { renderOnce, captureCharFrame } = await testRender(
 			() => (
-				<AppShell
-					prs={prs}
-					loading={false}
-					repoSlug="acme/widgets"
-					onRefresh={() => {}}
-				/>
+				<AppShell prs={prs} loading={false} repoSlug="acme/widgets" onRefresh={() => {}} />
 			),
 			{ width: 120, height: 20 },
 		);
@@ -49,12 +37,7 @@ describe("AppShell", () => {
 	test("shows repo name in header", async () => {
 		const { renderOnce, captureCharFrame } = await testRender(
 			() => (
-				<AppShell
-					prs={[]}
-					loading={false}
-					repoSlug="acme/widgets"
-					onRefresh={() => {}}
-				/>
+				<AppShell prs={[]} loading={false} repoSlug="acme/widgets" onRefresh={() => {}} />
 			),
 			{ width: 120, height: 20 },
 		);
@@ -92,12 +75,7 @@ describe("AppShell", () => {
 
 		const { renderOnce, captureCharFrame } = await testRender(
 			() => (
-				<AppShell
-					prs={prs}
-					loading={false}
-					repoSlug="acme/widgets"
-					onRefresh={() => {}}
-				/>
+				<AppShell prs={prs} loading={false} repoSlug="acme/widgets" onRefresh={() => {}} />
 			),
 			{ width: 120, height: 20 },
 		);

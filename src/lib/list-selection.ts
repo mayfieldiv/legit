@@ -15,9 +15,7 @@ export interface ListSelection {
  * The index accessor always returns a clamped value — if the list shrinks,
  * the index is automatically adjusted on read.
  */
-export function createListSelection(
-	listLength: Accessor<number>,
-): ListSelection {
+export function createListSelection(listLength: Accessor<number>): ListSelection {
 	const [rawIndex, setRawIndex] = createSignal(0);
 
 	// Always-clamped index accessor

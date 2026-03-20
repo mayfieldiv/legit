@@ -23,10 +23,7 @@ export interface CommandResult {
  * Execute a CLI subcommand. Returns structured result for testability.
  * The thin entry point below handles printing and process.exit.
  */
-export async function runCommand(
-	args: string[],
-	app: Legit,
-): Promise<CommandResult> {
+export async function runCommand(args: string[], app: Legit): Promise<CommandResult> {
 	const command = args[0];
 
 	switch (command) {

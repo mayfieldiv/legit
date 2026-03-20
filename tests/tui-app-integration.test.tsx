@@ -13,16 +13,18 @@ afterAll(cleanupTmpDirs);
 
 describe("App integration", () => {
 	test("renders loading state then PR list after fetch", async () => {
-		const app = createTestLegit({ httpFetch: mockHttpFetch([makeSampleRestPR(1), makeSampleRestPR(2)]) });
+		const app = createTestLegit({
+			httpFetch: mockHttpFetch([makeSampleRestPR(1), makeSampleRestPR(2)]),
+		});
 
-		const { renderOnce, captureCharFrame } = await testRender(
-			() => <App app={app} />,
-			{ width: 120, height: 20 },
-		);
+		const { renderOnce, captureCharFrame } = await testRender(() => <App app={app} />, {
+			width: 120,
+			height: 20,
+		});
 
 		// First render — resource is pending
 		await renderOnce();
-		const loadingFrame = captureCharFrame();
+		const _loadingFrame = captureCharFrame();
 		// May show loading or may have already resolved (microtask)
 		// Either way, rendering should not throw
 
@@ -39,10 +41,10 @@ describe("App integration", () => {
 	test("shows repo slug in header", async () => {
 		const app = createTestLegit();
 
-		const { renderOnce, captureCharFrame } = await testRender(
-			() => <App app={app} />,
-			{ width: 120, height: 20 },
-		);
+		const { renderOnce, captureCharFrame } = await testRender(() => <App app={app} />, {
+			width: 120,
+			height: 20,
+		});
 
 		await new Promise((r) => setTimeout(r, 50));
 		await renderOnce();
@@ -64,10 +66,10 @@ describe("App integration", () => {
 		};
 		const app = createTestLegit({ httpFetch: delayedFetch });
 
-		const { renderOnce, captureCharFrame } = await testRender(
-			() => <App app={app} />,
-			{ width: 120, height: 20 },
-		);
+		const { renderOnce, captureCharFrame } = await testRender(() => <App app={app} />, {
+			width: 120,
+			height: 20,
+		});
 
 		await renderOnce();
 		const frame = captureCharFrame();
@@ -85,10 +87,10 @@ describe("App integration", () => {
 
 		const app = createTestLegit({ httpFetch: fetch });
 
-		const { renderOnce, captureCharFrame } = await testRender(
-			() => <App app={app} />,
-			{ width: 120, height: 20 },
-		);
+		const { renderOnce, captureCharFrame } = await testRender(() => <App app={app} />, {
+			width: 120,
+			height: 20,
+		});
 
 		// Wait for error to propagate
 		await new Promise((r) => setTimeout(r, 50));
@@ -105,10 +107,10 @@ describe("App integration", () => {
 
 		const app = createTestLegit({ httpFetch: fetch });
 
-		const { renderOnce, mockInput } = await testRender(
-			() => <App app={app} />,
-			{ width: 120, height: 20 },
-		);
+		const { renderOnce, mockInput } = await testRender(() => <App app={app} />, {
+			width: 120,
+			height: 20,
+		});
 
 		// Wait for initial fetch
 		await new Promise((r) => setTimeout(r, 50));

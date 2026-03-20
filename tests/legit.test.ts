@@ -119,9 +119,7 @@ describe("parseRemoteUrl", () => {
 	});
 
 	test("throws on non-GitHub URL", () => {
-		expect(() => parseRemoteUrl("git@gitlab.com:owner/repo.git")).toThrow(
-			/Cannot parse/,
-		);
+		expect(() => parseRemoteUrl("git@gitlab.com:owner/repo.git")).toThrow(/Cannot parse/);
 	});
 
 	test("throws on malformed URL", () => {
@@ -251,12 +249,18 @@ describe("Legit.fetchPR", () => {
 		const { fetch } = createMockFetch([
 			{
 				url: /\/pulls\/99$/,
-				response: { status: 200, body: { ...makeSampleRestPR(99), body: "## Fix\n\nDoes the thing." } },
+				response: {
+					status: 200,
+					body: { ...makeSampleRestPR(99), body: "## Fix\n\nDoes the thing." },
+				},
 			},
 			{
 				url: /\/graphql/,
 				method: "POST",
-				response: { status: 200, body: makeGraphQLResponse([{ ...SAMPLE_GQL_META, number: 99 }]) },
+				response: {
+					status: 200,
+					body: makeGraphQLResponse([{ ...SAMPLE_GQL_META, number: 99 }]),
+				},
 			},
 		]);
 		const app = createTestLegit({ httpFetch: fetch });

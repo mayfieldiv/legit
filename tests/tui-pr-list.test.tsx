@@ -43,7 +43,7 @@ describe("PRList", () => {
 		);
 
 		await renderOnce();
-		const spans = captureSpans();
+		const _spans = captureSpans();
 
 		// The selected row should have a different style — we check that
 		// the second PR's row has some differentiation in the span data.
@@ -105,8 +105,7 @@ describe("PRList", () => {
 	});
 
 	test("shows age relative to now", async () => {
-		const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000)
-			.toISOString();
+		const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
 		const prs = [makePR({ createdAt: twoDaysAgo })];
 
 		const { renderOnce, captureCharFrame } = await testRender(
@@ -124,8 +123,7 @@ describe("PRList", () => {
 			makePR({
 				number: 1,
 				author: "alice",
-				title:
-					"This is a very long PR title that should not bleed into author or other columns when rendered in a constrained terminal width",
+				title: "This is a very long PR title that should not bleed into author or other columns when rendered in a constrained terminal width",
 			}),
 		];
 

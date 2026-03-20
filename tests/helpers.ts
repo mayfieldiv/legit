@@ -81,9 +81,7 @@ export function createMockFetch(routes: MockRoute[]): MockFetch {
 
 		for (const route of routes) {
 			const urlMatch =
-				typeof route.url === "string"
-					? url === route.url
-					: route.url.test(url);
+				typeof route.url === "string" ? url === route.url : route.url.test(url);
 			const methodMatch = !route.method || route.method === method;
 
 			if (urlMatch && methodMatch) {
@@ -128,9 +126,7 @@ export const SAMPLE_GQL_META = {
 };
 
 /** Build a sample GraphQL response for a set of PR metadata objects. */
-export function makeGraphQLResponse(
-	prMetas: Array<{ number: number } & Record<string, unknown>>,
-) {
+export function makeGraphQLResponse(prMetas: Array<{ number: number } & Record<string, unknown>>) {
 	const repository: Record<string, unknown> = {};
 	prMetas.forEach((meta, i) => {
 		repository[`pr${i}`] = meta;
@@ -168,7 +164,7 @@ export function mockHttpFetch(restPRs: unknown[] = []): HttpFetch {
 			response: {
 				status: 200,
 				body: makeGraphQLResponse(
-					restPRs.map((pr: any, i: number) => ({
+					restPRs.map((pr: any, _i: number) => ({
 						...SAMPLE_GQL_META,
 						number: pr.number,
 					})),

@@ -40,7 +40,9 @@ export function ListView(props: ListViewProps) {
 		<box flexDirection="column" flexGrow={1} width="100%">
 			<PRListHeader />
 			<scrollbox
-				ref={(el: ScrollBoxRenderable) => { scrollRef = el; }}
+				ref={(el: ScrollBoxRenderable) => {
+					scrollRef = el;
+				}}
 				flexGrow={1}
 				width="100%"
 			>
