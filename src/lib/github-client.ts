@@ -172,7 +172,8 @@ export function createGitHubClient(
 
 	function parseOwnerRepo(repo: string): [string, string] {
 		const parts = repo.split("/");
-		if (parts.length !== 2) throw new Error(`Invalid repo format: ${repo}`);
+		if (parts.length !== 2 || !parts[0] || !parts[1])
+			throw new Error(`Invalid repo format: ${repo}`);
 		return [parts[0], parts[1]];
 	}
 

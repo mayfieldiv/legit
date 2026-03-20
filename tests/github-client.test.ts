@@ -27,7 +27,7 @@ describe("GitHubClient", () => {
 			const prs = await client.fetchOpenPRs("acme/widgets");
 
 			expect(prs).toHaveLength(1);
-			const pr = prs[0];
+			const pr = prs[0]!;
 			expect(pr.number).toBe(42);
 			expect(pr.title).toBe("Fix the thing");
 			expect(pr.author).toBe("alice");
@@ -95,7 +95,7 @@ describe("GitHubClient", () => {
 			await client.fetchOpenPRs("acme/widgets");
 
 			expect(calls.length).toBeGreaterThan(0);
-			const authHeader = (calls[0].init?.headers as Record<string, string>)?.[
+			const authHeader = (calls[0]!.init?.headers as Record<string, string>)?.[
 				"Authorization"
 			];
 			expect(authHeader).toBe("Bearer my-secret-token");
@@ -134,7 +134,7 @@ describe("GitHubClient", () => {
 			const client = createGitHubClient("fake-token", fetch);
 			const prs = await client.fetchOpenPRs("acme/widgets");
 			expect(prs).toHaveLength(1);
-			expect(prs[0].author).toBe("ghost");
+			expect(prs[0]!.author).toBe("ghost");
 		});
 
 		test("throws on API error", async () => {

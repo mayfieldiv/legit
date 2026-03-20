@@ -39,13 +39,13 @@ export interface LegitOptions {
 export function parseRemoteUrl(url: string): RepoInfo {
 	// SSH: git@github.com:owner/repo.git  (repo may contain dots, e.g. angular.js)
 	const sshMatch = url.match(/git@github\.com:([^/]+)\/(.+?)(?:\.git)?$/);
-	if (sshMatch) {
+	if (sshMatch?.[1] && sshMatch[2]) {
 		return { owner: sshMatch[1], repo: sshMatch[2] };
 	}
 
 	// HTTPS: https://github.com/owner/repo.git  (repo may contain dots)
 	const httpsMatch = url.match(/https?:\/\/github\.com\/([^/]+)\/(.+?)(?:\.git)?$/);
-	if (httpsMatch) {
+	if (httpsMatch?.[1] && httpsMatch[2]) {
 		return { owner: httpsMatch[1], repo: httpsMatch[2] };
 	}
 

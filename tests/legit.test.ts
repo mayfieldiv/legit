@@ -217,10 +217,10 @@ describe("Legit.fetchPRs", () => {
 		const app = createTestLegit();
 		const prs = await app.fetchPRs();
 		expect(prs).toHaveLength(1);
-		expect(prs[0].number).toBe(42);
-		expect(prs[0].title).toBe("PR #42");
-		expect(prs[0].additions).toBe(50);
-		expect(prs[0].reviewDecision).toBe("APPROVED");
+		expect(prs[0]!.number).toBe(42);
+		expect(prs[0]!.title).toBe("PR #42");
+		expect(prs[0]!.additions).toBe(50);
+		expect(prs[0]!.reviewDecision).toBe("APPROVED");
 	});
 
 	test("auto-adds detected repo to config", async () => {
