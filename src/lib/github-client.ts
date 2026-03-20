@@ -98,7 +98,7 @@ export function createGitHubClient(
 		return {
 			number: raw.number,
 			title: raw.title,
-			author: raw.user.login,
+			author: raw.user?.login ?? "ghost",
 			createdAt: raw.created_at,
 			updatedAt: raw.updated_at,
 			additions: raw.additions ?? 0,

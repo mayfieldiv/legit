@@ -1,6 +1,6 @@
 {
 	"name": "legit",
-	"module": "index.ts",
+	"module": "src/cli.ts",
 	"type": "module",
 	"private": true,
 	"bin": {

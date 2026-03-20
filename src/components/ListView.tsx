@@ -19,11 +19,13 @@ export function ListView(props: ListViewProps) {
 		const name = event.name;
 
 		if (name === "j" || name === "down") {
+			const prev = selection.index();
 			selection.moveDown();
-			scrollRef?.scrollBy(1);
+			if (selection.index() !== prev) scrollRef?.scrollBy(1);
 		} else if (name === "k" || name === "up") {
+			const prev = selection.index();
 			selection.moveUp();
-			scrollRef?.scrollBy(-1);
+			if (selection.index() !== prev) scrollRef?.scrollBy(-1);
 		} else if (name === "r") {
 			props.onRefresh();
 		} else if (name === "return") {

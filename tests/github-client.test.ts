@@ -119,6 +119,29 @@ describe("GitHubClient", () => {
 			expect(prs).toEqual([]);
 		});
 
+		test("handles deleted user (null user) gracefully", async () => {
+			const ghostPR = {
+				...SAMPLE_REST_PR,
+				user: null,
+			};
+			const { fetch } = createMockFetch([
+				{
+					url: /pulls.*state=open/,
+					response: { status: 200, body: [ghostPR] },
+				},
+				{
+					url: "https://api.github.com/graphql",
+					method: "POST",
+					response: { status: 200, body: GRAPHQL_RESPONSE },
+				},
+			]);
+
+			const client = createGitHubClient("fake-token", fetch);
+			const prs = await client.fetchOpenPRs("acme/widgets");
+			expect(prs).toHaveLength(1);
+			expect(prs[0].author).toBe("ghost");
+		});
+
 		test("throws on API error", async () => {
 			const { fetch } = createMockFetch([
 				{
