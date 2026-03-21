@@ -1,5 +1,5 @@
 import { Show, For } from "solid-js";
-import type { PR, PRSummary, CheckRun } from "../lib/types";
+import type { PR, PRSummary, CheckRun, FileCategory } from "../lib/types";
 import { formatAge, formatSize, formatReviewState, sortCheckRuns } from "../lib/format";
 
 interface SummaryPanelProps {
@@ -7,133 +7,141 @@ interface SummaryPanelProps {
 	pr: PR | undefined;
 }
 
-function CheckIcon(props: { check: CheckRun }) {
-	if (props.check.status !== "completed") {
-		return <span style={{ fg: "yellow" }}>●</span>;
+function checkIcon(check: CheckRun): { icon: string; fg: string } {
+	if (check.status !== "completed") {
+		return { icon: "●", fg: "yellow" };
 	}
-	switch (props.check.conclusion) {
+	switch (check.conclusion) {
 		case "success":
-			return <span style={{ fg: "green" }}>✓</span>;
+			return { icon: "✓", fg: "green" };
 		case "failure":
 		case "timed_out":
 		case "cancelled":
-			return <span style={{ fg: "red" }}>✗</span>;
+			return { icon: "✗", fg: "red" };
 		case "action_required":
-			return <span style={{ fg: "yellow" }}>✗</span>;
+			return { icon: "✗", fg: "yellow" };
 		case "neutral":
-			return <span>–</span>;
+			return { icon: "–", fg: "white" };
 		default:
-			return <span>?</span>;
+			return { icon: "?", fg: "white" };
 	}
 }
 
-function ReviewIcon(props: { state: string }) {
-	switch (props.state) {
+function reviewIcon(state: string): { icon: string; fg: string } {
+	switch (state) {
 		case "APPROVED":
-			return <span style={{ fg: "green" }}>✓</span>;
+			return { icon: "✓", fg: "green" };
 		case "CHANGES_REQUESTED":
-			return <span style={{ fg: "red" }}>✗</span>;
+			return { icon: "✗", fg: "red" };
 		case "COMMENTED":
-			return <span style={{ fg: "cyan" }}>●</span>;
+			return { icon: "●", fg: "cyan" };
 		case "DISMISSED":
-			return <span style={{ fg: "gray" }}>–</span>;
+			return { icon: "–", fg: "gray" };
 		default:
-			return <span>?</span>;
+			return { icon: "?", fg: "white" };
 	}
-}
-
-function Section(props: { label: string; children: any }) {
-	return (
-		<box flexDirection="column" width="100%">
-			<text>
-				<span style={{ fg: "gray" }}>{props.label}</span>
-			</text>
-			{props.children}
-		</box>
-	);
 }
 
 export function SummaryPanel(props: SummaryPanelProps) {
 	const pr = () => props.summary ?? props.pr;
 	const summary = () => props.summary;
 
+	const sizeCategories = (): FileCategory[] => {
+		const s = summary();
+		if (!s || s.files.breakdown.total.files === 0) return [];
+		return (["code", "test", "generated", "docs", "config"] as const).filter(
+			(cat) => s.files.breakdown[cat].files > 0,
+		);
+	};
+
 	return (
-		<box flexDirection="column" width="100%" height="100%" paddingLeft={1} paddingRight={1}>
+		<box flexDirection="column" width="100%" height="100%" paddingLeft={1}>
 			<Show
 				when={pr()}
 				fallback={
-					<text>
-						<span style={{ fg: "gray" }}>No PR selected</span>
-					</text>
+					<box height={1}>
+						<text>
+							<span style={{ fg: "gray" }}>No PR selected</span>
+						</text>
+					</box>
 				}
 			>
-				{/* Title */}
-				<text wrapMode="word">
-					<b>{pr()!.title}</b>
-				</text>
+				{/* Title — truncate to fit, no word wrap */}
+				<box height={1} width="100%">
+					<text truncate={true}>
+						<b>{pr()!.title}</b>
+					</text>
+				</box>
 
 				{/* Meta */}
-				<text>
-					<span style={{ fg: "green" }}>{pr()!.author}</span>
-					<span> #{pr()!.number}</span>
-					<Show when={pr()!.isDraft}>
-						<span style={{ fg: "yellow" }}> draft</span>
-					</Show>
-				</text>
+				<box height={1} width="100%">
+					<text truncate={true}>
+						<span style={{ fg: "green" }}>{pr()!.author}</span>
+						<span> #{pr()!.number}</span>
+						<Show when={pr()!.isDraft}>
+							<span style={{ fg: "yellow" }}> draft</span>
+						</Show>
+					</text>
+				</box>
 
 				{/* Dates */}
-				<text>
-					<span style={{ fg: "gray" }}>created </span>
-					<span>{formatAge(pr()!.createdAt)}</span>
-					<span style={{ fg: "gray" }}> updated </span>
-					<span>{formatAge(pr()!.updatedAt)}</span>
-				</text>
+				<box height={1} width="100%">
+					<text truncate={true}>
+						<span style={{ fg: "gray" }}>created </span>
+						<span>{formatAge(pr()!.createdAt)}</span>
+						<span style={{ fg: "gray" }}> updated </span>
+						<span>{formatAge(pr()!.updatedAt)}</span>
+					</text>
+				</box>
 
 				{/* Merge status */}
-				<Show when={pr()!.mergeable === "CONFLICTING"}>
+				<box height={1} width="100%">
 					<text>
-						<span style={{ fg: "red" }}>⚠ conflict</span>
+						<Show when={pr()!.mergeable === "CONFLICTING"}>
+							<span style={{ fg: "red" }}>⚠ conflict</span>
+						</Show>
+						<Show when={pr()!.mergeable === "MERGEABLE"}>
+							<span style={{ fg: "green" }}>✓ mergeable</span>
+						</Show>
+						<Show when={pr()!.mergeable === "UNKNOWN"}>
+							<span style={{ fg: "gray" }}>? merge unknown</span>
+						</Show>
 					</text>
-				</Show>
-				<Show when={pr()!.mergeable === "MERGEABLE"}>
-					<text>
-						<span style={{ fg: "green" }}>✓ mergeable</span>
-					</text>
-				</Show>
-				<Show when={pr()!.mergeable === "UNKNOWN"}>
-					<text>
-						<span style={{ fg: "gray" }}>? merge unknown</span>
-					</text>
-				</Show>
+				</box>
 
 				{/* Labels */}
 				<Show when={pr()!.labels.length > 0}>
-					<text>
-						<span style={{ fg: "gray" }}>labels: </span>
-						<span>{pr()!.labels.join(", ")}</span>
-					</text>
+					<box height={1} width="100%">
+						<text truncate={true}>
+							<span style={{ fg: "gray" }}>labels: </span>
+							<span>{pr()!.labels.join(", ")}</span>
+						</text>
+					</box>
 				</Show>
 
 				{/* Assignees */}
 				<Show when={pr()!.assignees.length > 0}>
-					<text>
-						<span style={{ fg: "gray" }}>assignees: </span>
-						<span>{pr()!.assignees.join(", ")}</span>
-					</text>
+					<box height={1} width="100%">
+						<text truncate={true}>
+							<span style={{ fg: "gray" }}>assignees: </span>
+							<span>{pr()!.assignees.join(", ")}</span>
+						</text>
+					</box>
 				</Show>
 
 				{/* --- Extended fields (only when summary loaded) --- */}
 				<Show when={summary()}>
 					{/* Size breakdown */}
-					<Show when={summary()!.files.breakdown.total.files > 0}>
-						<Section label="size">
-							<For
-								each={(
-									["code", "test", "generated", "docs", "config"] as const
-								).filter((cat) => summary()!.files.breakdown[cat].files > 0)}
-							>
-								{(cat) => (
-									<text>
+					<Show when={sizeCategories().length > 0}>
+						<box height={1} width="100%">
+							<text>
+								<span style={{ fg: "gray" }}>size</span>
+							</text>
+						</box>
+						<For each={sizeCategories()}>
+							{(cat) => (
+								<box height={1} width="100%">
+									<text truncate={true}>
 										<span>
 											{"  "}
 											{cat}:{" "}
@@ -145,82 +153,108 @@ export function SummaryPanel(props: SummaryPanelProps) {
 											)}
 										</span>
 									</text>
-								)}
-							</For>
-						</Section>
+								</box>
+							)}
+						</For>
 					</Show>
 
 					{/* Reviewers */}
 					<Show when={summary()!.reviews.length > 0}>
-						<Section label="reviewers">
-							<For each={summary()!.reviews}>
-								{(review) => (
-									<text>
-										<span>{"  "}</span>
-										<ReviewIcon state={review.state} />
-										<span> {review.user} </span>
-										<span style={{ fg: "gray" }}>
-											{formatReviewState(review.state)}
-										</span>
-									</text>
-								)}
-							</For>
-						</Section>
+						<box height={1} width="100%">
+							<text>
+								<span style={{ fg: "gray" }}>reviewers</span>
+							</text>
+						</box>
+						<For each={summary()!.reviews}>
+							{(review) => {
+								const ri = reviewIcon(review.state);
+								return (
+									<box height={1} width="100%">
+										<text truncate={true}>
+											<span>{"  "}</span>
+											<span style={{ fg: ri.fg }}>{ri.icon}</span>
+											<span> {review.user} </span>
+											<span style={{ fg: "gray" }}>
+												{formatReviewState(review.state)}
+											</span>
+										</text>
+									</box>
+								);
+							}}
+						</For>
 					</Show>
 
 					{/* Requested reviewers (not yet reviewed) */}
 					<Show when={pr()!.requestedReviewers.length > 0}>
-						<Section label="requested">
-							<For each={pr()!.requestedReviewers}>
-								{(reviewer) => (
-									<text>
+						<box height={1} width="100%">
+							<text>
+								<span style={{ fg: "gray" }}>requested</span>
+							</text>
+						</box>
+						<For each={pr()!.requestedReviewers}>
+							{(reviewer) => (
+								<box height={1} width="100%">
+									<text truncate={true}>
 										<span>{"  "}</span>
 										<span style={{ fg: "yellow" }}>○</span>
 										<span> {reviewer} </span>
 										<span style={{ fg: "gray" }}>pending</span>
 									</text>
-								)}
-							</For>
-						</Section>
+								</box>
+							)}
+						</For>
 					</Show>
 
 					{/* Comments */}
 					<Show when={summary()!.comments.total > 0}>
-						<text>
-							<span style={{ fg: "gray" }}>comments: </span>
-							<span>{summary()!.comments.unresolved} unresolved</span>
-							<span style={{ fg: "gray" }}>
-								{" "}
-								({summary()!.comments.human} human, {summary()!.comments.bot} bot)
-							</span>
-						</text>
+						<box height={1} width="100%">
+							<text truncate={true}>
+								<span style={{ fg: "gray" }}>comments: </span>
+								<span>{summary()!.comments.unresolved} unresolved</span>
+								<span style={{ fg: "gray" }}>
+									{" "}
+									({summary()!.comments.human} human, {summary()!.comments.bot}{" "}
+									bot)
+								</span>
+							</text>
+						</box>
 					</Show>
 
 					{/* CI Checks */}
 					<Show when={summary()!.checks.length > 0}>
-						<Section label="checks">
-							<scrollbox flexGrow={1} width="100%">
-								<box flexDirection="column" width="100%">
-									<For each={sortCheckRuns(summary()!.checks)}>
-										{(check) => (
-											<text>
-												<span>{"  "}</span>
-												<CheckIcon check={check} />
-												<span> {check.name}</span>
-											</text>
-										)}
-									</For>
-								</box>
-							</scrollbox>
-						</Section>
+						<box height={1} width="100%">
+							<text>
+								<span style={{ fg: "gray" }}>checks</span>
+							</text>
+						</box>
+						<scrollbox flexGrow={1} width="100%">
+							<box flexDirection="column" width="100%">
+								<For each={sortCheckRuns(summary()!.checks)}>
+									{(check) => {
+										const ci = checkIcon(check);
+										return (
+											<box height={1} width="100%">
+												<text truncate={true}>
+													<span>{"  "}</span>
+													<span style={{ fg: ci.fg }}>{ci.icon}</span>
+													<span> {check.name}</span>
+												</text>
+											</box>
+										);
+									}}
+								</For>
+							</box>
+						</scrollbox>
 					</Show>
 				</Show>
 
 				{/* Loading indicator when summary not yet loaded */}
 				<Show when={!summary() && pr()}>
-					<text>
-						<span style={{ fg: "gray" }}>Loading details...</span>
-					</text>
+					<box height={1} width="100%">
+						<text>
+							<span style={{ fg: "gray" }}>Loading details...</span>
+						</text>
+					</box>
 				</Show>
 			</Show>
 		</box>
