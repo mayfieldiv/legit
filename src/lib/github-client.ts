@@ -45,6 +45,7 @@ export interface ReviewStatus {
 	reviewDecision: string;
 	mergeable: string;
 	lastCommitDate: string | null;
+	headCommitSha: string | null;
 }
 
 // ── Pure parsing functions ──────────────────────────────────────────────────
@@ -66,12 +67,14 @@ export function parseRestPR(raw: RawRestPR): RestPR {
 }
 
 export function parseReviewStatus(raw: RawPRReviewStatus): ReviewStatus {
+	const commitNode = raw.commits.nodes[0]?.commit;
 	return {
 		additions: raw.additions ?? 0,
 		deletions: raw.deletions ?? 0,
 		reviewDecision: raw.reviewDecision ?? "",
 		mergeable: raw.mergeable ?? "UNKNOWN",
-		lastCommitDate: raw.commits.nodes[0]?.commit?.committedDate ?? null,
+		lastCommitDate: commitNode?.committedDate ?? null,
+		headCommitSha: commitNode?.oid ?? null,
 	};
 }
 
@@ -91,6 +94,7 @@ export function mergePR(rest: RestPR, status?: ReviewStatus): PR {
 		reviewDecision: status?.reviewDecision ?? "",
 		mergeable: status?.mergeable ?? "UNKNOWN",
 		lastCommitDate: status?.lastCommitDate ?? null,
+		headCommitSha: status?.headCommitSha ?? null,
 	};
 }
 

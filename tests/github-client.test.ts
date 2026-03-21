@@ -102,14 +102,18 @@ describe("parsing", () => {
 	});
 
 	describe("parseReviewStatus", () => {
-		test("extracts last commit date from nested structure", () => {
+		test("extracts last commit date and headCommitSha from nested structure", () => {
 			const raw: RawPRReviewStatus = {
 				prNumber: 42,
 				additions: 50,
 				deletions: 10,
 				reviewDecision: "APPROVED",
 				mergeable: "MERGEABLE",
-				commits: { nodes: [{ commit: { committedDate: "2026-03-14T00:00:00Z" } }] },
+				commits: {
+					nodes: [
+						{ commit: { committedDate: "2026-03-14T00:00:00Z", oid: "abc123def456" } },
+					],
+				},
 			};
 			const parsed = parseReviewStatus(raw);
 			expect(parsed).toEqual({
@@ -118,7 +122,20 @@ describe("parsing", () => {
 				reviewDecision: "APPROVED",
 				mergeable: "MERGEABLE",
 				lastCommitDate: "2026-03-14T00:00:00Z",
+				headCommitSha: "abc123def456",
 			});
+		});
+
+		test("empty commits array maps headCommitSha to null", () => {
+			const raw: RawPRReviewStatus = {
+				prNumber: 1,
+				additions: 0,
+				deletions: 0,
+				reviewDecision: null,
+				mergeable: "UNKNOWN",
+				commits: { nodes: [] },
+			};
+			expect(parseReviewStatus(raw).headCommitSha).toBeNull();
 		});
 
 		test("null reviewDecision maps to empty string", () => {
@@ -178,6 +195,7 @@ describe("parsing", () => {
 				reviewDecision: "APPROVED",
 				mergeable: "MERGEABLE",
 				lastCommitDate: "2026-03-14T00:00:00Z",
+				headCommitSha: "abc123def456",
 			};
 			const merged = mergePR(rest, status);
 			expect(merged.additions).toBe(50);

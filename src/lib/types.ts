@@ -23,6 +23,7 @@ export interface PR {
 	reviewDecision: string;
 	mergeable: string;
 	lastCommitDate: string | null;
+	headCommitSha: string | null;
 }
 
 export interface PRDetail extends PR {

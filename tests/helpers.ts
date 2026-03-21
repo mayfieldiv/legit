@@ -181,7 +181,9 @@ export const SAMPLE_GQL_META = {
 	deletions: 10,
 	reviewDecision: "APPROVED",
 	mergeable: "MERGEABLE",
-	commits: { nodes: [{ commit: { committedDate: "2026-03-14T00:00:00Z" } }] },
+	commits: {
+		nodes: [{ commit: { committedDate: "2026-03-14T00:00:00Z", oid: "abc123def456" } }],
+	},
 };
 
 /** Build a sample GraphQL response for a set of PR metadata objects. */
@@ -278,6 +280,7 @@ export function makePR(overrides: Partial<PR> = {}): PR {
 		reviewDecision: "",
 		mergeable: "MERGEABLE",
 		lastCommitDate: "2026-03-14T00:00:00Z",
+		headCommitSha: "abc123def456",
 		...overrides,
 	};
 }

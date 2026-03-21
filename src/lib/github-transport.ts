@@ -28,7 +28,7 @@ export interface RawPRReviewStatus {
 	deletions: number;
 	reviewDecision: string | null;
 	mergeable: string;
-	commits: { nodes: Array<{ commit: { committedDate: string } }> };
+	commits: { nodes: Array<{ commit: { committedDate: string; oid?: string } }> };
 }
 
 export interface RawFileChange {
@@ -144,7 +144,7 @@ export function createGitHubTransport(
 				const aliases = batch
 					.map(
 						(n, idx) =>
-							`pr${idx}: pullRequest(number: ${n}) { number additions deletions reviewDecision mergeable commits(last: 1) { nodes { commit { committedDate } } } }`,
+							`pr${idx}: pullRequest(number: ${n}) { number additions deletions reviewDecision mergeable commits(last: 1) { nodes { commit { committedDate oid } } } }`,
 					)
 					.join(" ");
 
