@@ -2,6 +2,8 @@
  * Pure formatting helpers — no side effects, easily testable.
  */
 
+import type { CheckRun, ReviewState } from "./types";
+
 /**
  * Format a date string as relative age (e.g. "2d", "3mo", "1y2mo").
  */
@@ -43,4 +45,38 @@ export function formatReviewDecision(decision: string): string {
 		default:
 			return decision ? decision.toLowerCase() : "";
 	}
+}
+
+export function formatReviewState(state: ReviewState): string {
+	switch (state) {
+		case "APPROVED":
+			return "approved";
+		case "CHANGES_REQUESTED":
+			return "changes requested";
+		case "COMMENTED":
+			return "commented";
+		case "DISMISSED":
+			return "dismissed";
+	}
+}
+
+export function checkSortGroup(check: CheckRun): number {
+	if (check.status !== "completed") return 1;
+	switch (check.conclusion) {
+		case "failure":
+		case "timed_out":
+		case "cancelled":
+		case "action_required":
+			return 0;
+		default:
+			return 2;
+	}
+}
+
+export function sortCheckRuns(checks: CheckRun[]): CheckRun[] {
+	return [...checks].sort((a, b) => {
+		const groupDiff = checkSortGroup(a) - checkSortGroup(b);
+		if (groupDiff !== 0) return groupDiff;
+		return a.name.localeCompare(b.name);
+	});
 }
