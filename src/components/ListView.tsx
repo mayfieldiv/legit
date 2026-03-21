@@ -9,6 +9,7 @@ interface ListViewProps {
 	prs: PR[];
 	onRefresh: () => void;
 	onNavigate: (target: ViewTarget) => void;
+	onSelectionChange?: (pr: PR) => void;
 }
 
 export function ListView(props: ListViewProps) {
@@ -21,11 +22,19 @@ export function ListView(props: ListViewProps) {
 		if (name === "j" || name === "down") {
 			const prev = selection.index();
 			selection.moveDown();
-			if (selection.index() !== prev) scrollRef?.scrollBy(1);
+			if (selection.index() !== prev) {
+				scrollRef?.scrollBy(1);
+				const pr = selection.selectedItem(props.prs);
+				if (pr) props.onSelectionChange?.(pr);
+			}
 		} else if (name === "k" || name === "up") {
 			const prev = selection.index();
 			selection.moveUp();
-			if (selection.index() !== prev) scrollRef?.scrollBy(-1);
+			if (selection.index() !== prev) {
+				scrollRef?.scrollBy(-1);
+				const pr = selection.selectedItem(props.prs);
+				if (pr) props.onSelectionChange?.(pr);
+			}
 		} else if (name === "r") {
 			props.onRefresh();
 		} else if (name === "return") {

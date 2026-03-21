@@ -138,4 +138,30 @@ describe("ListView", () => {
 		const frame = captureCharFrame();
 		expect(frame).toContain("No open pull requests");
 	});
+
+	test("fires onSelectionChange when navigating", async () => {
+		const prs = [
+			makePR({ number: 1, title: "First PR" }),
+			makePR({ number: 2, title: "Second PR" }),
+		];
+		const selections: number[] = [];
+
+		const { renderOnce, mockInput } = await testRender(
+			() => (
+				<ListView
+					prs={prs}
+					onRefresh={() => {}}
+					onNavigate={() => {}}
+					onSelectionChange={(pr) => selections.push(pr.number)}
+				/>
+			),
+			{ width: 120, height: 20 },
+		);
+
+		await renderOnce();
+		mockInput.pressKey("j");
+		await renderOnce();
+
+		expect(selections).toEqual([2]);
+	});
 });
