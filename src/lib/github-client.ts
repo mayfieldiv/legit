@@ -9,7 +9,7 @@ import type {
 	RawFileChange,
 	GitHubTransport,
 } from "./github-transport";
-import type { PR, PRDetail, FileChange, CheckRun, Review } from "./types";
+import type { PR, PRDetail, FileChange, CheckRun, Review, CommentCounts } from "./types";
 
 // Re-export transport types that callers may need
 export type {
@@ -22,7 +22,7 @@ export type {
 } from "./github-transport";
 
 // Re-export domain types for backward compatibility
-export type { PR, PRDetail, FileChange, CheckRun, Review } from "./types";
+export type { PR, PRDetail, FileChange, CheckRun, Review, CommentCounts } from "./types";
 
 // ── Intermediate parsed types ───────────────────────────────────────────────
 
@@ -107,6 +107,12 @@ export interface GitHubClient {
 	fetchFiles(repo: string, prNumber: number, signal?: AbortSignal): AsyncIterable<FileChange[]>;
 	fetchCheckRuns(repo: string, commitSha: string, signal?: AbortSignal): Promise<CheckRun[]>;
 	fetchReviews(repo: string, prNumber: number, signal?: AbortSignal): Promise<Review[]>;
+	fetchReviewComments(
+		repo: string,
+		prNumber: number,
+		botLogins: string[],
+		signal?: AbortSignal,
+	): Promise<CommentCounts>;
 }
 
 function parseOwnerRepo(repo: string): [string, string] {
@@ -207,6 +213,40 @@ export function createGitHubClient(transport: GitHubTransport): GitHubClient {
 				user,
 				state: r.state as Review["state"],
 			}));
+		},
+
+		async fetchReviewComments(
+			repo: string,
+			prNumber: number,
+			botLogins: string[],
+			signal?: AbortSignal,
+		): Promise<CommentCounts> {
+			const [owner, repoName] = parseOwnerRepo(repo);
+			const botSet = new Set(botLogins);
+			let total = 0;
+			let unresolved = 0;
+			let human = 0;
+			let bot = 0;
+
+			for await (const thread of transport.fetchReviewThreads(
+				owner,
+				repoName,
+				prNumber,
+				signal,
+			)) {
+				total++;
+				if (!thread.isResolved) {
+					unresolved++;
+					const author = thread.comments.nodes[0]?.author?.login;
+					if (author && botSet.has(author)) {
+						bot++;
+					} else {
+						human++;
+					}
+				}
+			}
+
+			return { total, unresolved, human, bot };
 		},
 
 		async fetchCheckRuns(

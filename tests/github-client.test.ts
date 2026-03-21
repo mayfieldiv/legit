@@ -422,4 +422,56 @@ describe("GitHubClient", () => {
 			expect(reviews).toEqual([]);
 		});
 	});
+
+	describe("fetchReviewComments", () => {
+		test("counts total, unresolved, human, and bot threads", async () => {
+			const transport = createMockTransport({
+				async *fetchReviewThreads() {
+					yield {
+						isResolved: false,
+						comments: { nodes: [{ author: { login: "alice" } }] },
+					};
+					yield {
+						isResolved: true,
+						comments: { nodes: [{ author: { login: "bob" } }] },
+					};
+					yield {
+						isResolved: false,
+						comments: { nodes: [{ author: { login: "app/copilot-swe-agent" } }] },
+					};
+				},
+			});
+			const client = createGitHubClient(transport);
+			const counts = await client.fetchReviewComments("acme/widgets", 42, [
+				"app/copilot-swe-agent",
+			]);
+			expect(counts).toEqual({
+				total: 3,
+				unresolved: 2,
+				human: 1,
+				bot: 1,
+			});
+		});
+
+		test("returns zeroes when no threads", async () => {
+			const transport = createMockTransport({
+				async *fetchReviewThreads() {},
+			});
+			const client = createGitHubClient(transport);
+			const counts = await client.fetchReviewComments("acme/widgets", 42, []);
+			expect(counts).toEqual({ total: 0, unresolved: 0, human: 0, bot: 0 });
+		});
+
+		test("thread with no author counts as human", async () => {
+			const transport = createMockTransport({
+				async *fetchReviewThreads() {
+					yield { isResolved: false, comments: { nodes: [] } };
+				},
+			});
+			const client = createGitHubClient(transport);
+			const counts = await client.fetchReviewComments("acme/widgets", 42, []);
+			expect(counts.human).toBe(1);
+			expect(counts.bot).toBe(0);
+		});
+	});
 });

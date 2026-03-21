@@ -55,6 +55,15 @@ export interface Review {
 	state: ReviewState;
 }
 
+// ── Comment counts ──────────────────────────────────────────────────────────
+
+export interface CommentCounts {
+	total: number;
+	unresolved: number;
+	human: number;
+	bot: number;
+}
+
 // ── File categorization ─────────────────────────────────────────────────────
 
 export interface FileChange {

@@ -49,6 +49,11 @@ export interface RawReview {
 	submitted_at: string;
 }
 
+export interface RawReviewThread {
+	isResolved: boolean;
+	comments: { nodes: Array<{ author: { login: string } | null }> };
+}
+
 // ── Transport interface ─────────────────────────────────────────────────────
 
 export interface GitHubTransport {
@@ -78,6 +83,12 @@ export interface GitHubTransport {
 		prNumber: number,
 		signal?: AbortSignal,
 	): AsyncIterable<RawReview>;
+	fetchReviewThreads(
+		owner: string,
+		repo: string,
+		prNumber: number,
+		signal?: AbortSignal,
+	): AsyncIterable<RawReviewThread>;
 }
 
 // ── Implementation ──────────────────────────────────────────────────────────
@@ -202,6 +213,51 @@ export function createGitHubTransport(
 				signal,
 			)) {
 				yield item as RawReview;
+			}
+		},
+
+		async *fetchReviewThreads(owner, repo, prNumber, signal?) {
+			let cursor: string | null = null;
+			while (true) {
+				const afterClause = cursor ? `, after: "${cursor}"` : "";
+				const query = `query($owner: String!, $repo: String!, $number: Int!) {
+					repository(owner: $owner, name: $repo) {
+						pullRequest(number: $number) {
+							reviewThreads(first: 100${afterClause}) {
+								pageInfo { hasNextPage endCursor }
+								nodes {
+									isResolved
+									comments(first: 1) {
+										nodes { author { login } }
+									}
+								}
+							}
+						}
+					}
+				}`;
+				const result = (await graphql(
+					query,
+					{ owner, repo, number: prNumber },
+					signal,
+				)) as {
+					data?: {
+						repository?: {
+							pullRequest?: {
+								reviewThreads?: {
+									pageInfo: { hasNextPage: boolean; endCursor: string | null };
+									nodes: RawReviewThread[];
+								};
+							};
+						};
+					};
+				};
+				const threads = result.data?.repository?.pullRequest?.reviewThreads;
+				if (!threads) break;
+				for (const thread of threads.nodes) {
+					yield thread;
+				}
+				if (!threads.pageInfo.hasNextPage) break;
+				cursor = threads.pageInfo.endCursor;
 			}
 		},
 

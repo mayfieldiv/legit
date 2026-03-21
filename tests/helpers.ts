@@ -133,6 +133,7 @@ export function createMockTransport(overrides: Partial<GitHubTransport> = {}): G
 		async *fetchReviewStatus() {},
 		async *listCheckRuns() {},
 		async *listReviews() {},
+		async *fetchReviewThreads() {},
 		...overrides,
 	};
 }
