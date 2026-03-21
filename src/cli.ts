@@ -13,6 +13,7 @@
  */
 
 import { Legit } from "./lib/legit";
+import type { PR, FileChange } from "./lib/types";
 
 export interface CommandResult {
 	output?: unknown;
@@ -39,8 +40,13 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
 		case "config":
 			return { output: app.config };
 
-		case "prs":
-			return { output: await app.fetchPRs() };
+		case "prs": {
+			let prs: PR[] = [];
+			for await (const snapshot of app.fetchPRs()) {
+				prs = snapshot;
+			}
+			return { output: prs };
+		}
 
 		case "pr": {
 			const rawNumber = args[1];
@@ -57,7 +63,10 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
 				return { error: "Usage: legit files <number>" };
 			}
 			const prNumber = Number(rawNumber);
-			const files = await app.fetchFiles(app.repoSlug, prNumber);
+			let files: FileChange[] = [];
+			for await (const snapshot of app.fetchFiles(app.repoSlug, prNumber)) {
+				files = snapshot;
+			}
 			return { output: app.categorizeFiles(files) };
 		}
 

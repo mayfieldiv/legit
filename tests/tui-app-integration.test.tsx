@@ -74,7 +74,6 @@ describe("App integration", () => {
 		await renderOnce();
 		const frame = captureCharFrame();
 		expect(frame).toContain("Loading pull requests");
-		expect(frame).toContain("page 1");
 	});
 
 	test("shows error when fetch fails", async () => {

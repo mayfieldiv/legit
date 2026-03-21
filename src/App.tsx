@@ -1,4 +1,4 @@
-import { createResource, createSignal } from "solid-js";
+import { createSignal, onMount, onCleanup } from "solid-js";
 import { AppShell } from "./components/AppShell";
 import type { Legit } from "./lib/legit";
 import type { PR } from "./lib/types";
@@ -9,30 +9,50 @@ export interface AppProps {
 
 export function App(props: AppProps) {
 	const [error, setError] = createSignal("");
-	const [loadingMessage, setLoadingMessage] = createSignal("Loading pull requests...");
+	const [prs, setPrs] = createSignal<PR[]>([]);
+	const [loading, setLoading] = createSignal(true);
 
-	const [prs, { refetch }] = createResource<PR[]>(
-		async () => {
-			try {
-				setError("");
-				setLoadingMessage("Loading pull requests...");
-				return await props.app.fetchPRs(undefined, setLoadingMessage);
-			} catch (err: any) {
-				setError(err.message ?? String(err));
-				return [];
+	let controller: AbortController | undefined;
+
+	async function loadPRs() {
+		controller?.abort();
+		const ac = new AbortController();
+		controller = ac;
+		setPrs([]);
+		setLoading(true);
+		setError("");
+		try {
+			for await (const snapshot of props.app.fetchPRs(undefined, ac.signal)) {
+				setPrs(snapshot);
 			}
-		},
-		{ initialValue: [] },
-	);
+		} catch (err: any) {
+			if (!ac.signal.aborted) {
+				setError(err.message ?? String(err));
+			}
+		} finally {
+			if (!ac.signal.aborted) {
+				setLoading(false);
+			}
+		}
+	}
+
+	onMount(loadPRs);
+
+	onCleanup(() => {
+		controller?.abort();
+	});
+
+	function handleRefresh() {
+		loadPRs();
+	}
 
 	return (
 		<AppShell
 			prs={prs()}
-			loading={prs.loading}
-			loadingMessage={loadingMessage()}
+			loading={loading()}
 			repoSlug={props.app.repoSlug}
 			error={error()}
-			onRefresh={refetch}
+			onRefresh={handleRefresh}
 		/>
 	);
 }

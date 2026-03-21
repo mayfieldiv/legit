@@ -5,7 +5,7 @@ import { tmpdir } from "os";
 import type { PR } from "../src/lib/types";
 import type { AuthExecutor, LegitOptions } from "../src/lib/legit";
 import { Legit } from "../src/lib/legit";
-import type { HttpFetch } from "../src/lib/github-client";
+import type { HttpFetch, GitHubTransport, RawRestPR } from "../src/lib/github-client";
 
 // ── Temp directory management ───────────────────────────────────────────────
 
@@ -102,6 +102,61 @@ export function createMockFetch(routes: MockRoute[]): MockFetch {
 	};
 
 	return { fetch, calls };
+}
+
+// ── Async iterable utilities ────────────────────────────────────────────────
+
+/** Collect all items from an async iterable into an array. */
+export async function collect<T>(iter: AsyncIterable<T>): Promise<T[]> {
+	const items: T[] = [];
+	for await (const item of iter) items.push(item);
+	return items;
+}
+
+/** Collect only the last value from an async iterable. */
+export async function collectLast<T>(iter: AsyncIterable<T>): Promise<T | undefined> {
+	let last: T | undefined;
+	for await (const item of iter) last = item;
+	return last;
+}
+
+// ── Transport mock ──────────────────────────────────────────────────────────
+
+/** Create a mock GitHubTransport with async generators. */
+export function createMockTransport(overrides: Partial<GitHubTransport> = {}): GitHubTransport {
+	return {
+		async *listOpenPRs() {},
+		async getPR() {
+			return SAMPLE_REST_PR as any;
+		},
+		async *listPRFiles() {},
+		async *fetchReviewStatus() {},
+		...overrides,
+	};
+}
+
+/**
+ * Convenience mock: returns the given REST PRs from transport.listOpenPRs,
+ * and matching GraphQL metadata from transport.fetchReviewStatus.
+ */
+export function mockTransport(restPRs: RawRestPR[] = []): GitHubTransport {
+	return createMockTransport({
+		async *listOpenPRs() {
+			for (const pr of restPRs) yield pr;
+		},
+		async *fetchReviewStatus(_owner, _repo, prNumbers) {
+			for (const n of prNumbers) {
+				yield {
+					prNumber: n,
+					additions: SAMPLE_GQL_META.additions,
+					deletions: SAMPLE_GQL_META.deletions,
+					reviewDecision: SAMPLE_GQL_META.reviewDecision,
+					mergeable: SAMPLE_GQL_META.mergeable,
+					commits: SAMPLE_GQL_META.commits,
+				};
+			}
+		},
+	});
 }
 
 // ── Sample GitHub API data ──────────────────────────────────────────────────
