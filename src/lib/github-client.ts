@@ -18,6 +18,109 @@ export interface GitHubClient {
 	fetchFiles(repo: string, number: number): Promise<FileChange[]>;
 }
 
+// ── Raw API shapes (will move to github-transport.ts) ───────────────────
+
+export interface RawRestPR {
+	number: number;
+	title: string;
+	user: { login: string } | null;
+	created_at: string;
+	updated_at: string;
+	draft: boolean;
+	body?: string;
+	additions?: number;
+	deletions?: number;
+	labels: Array<{ name: string }>;
+	requested_reviewers: Array<{ login: string }>;
+	assignees: Array<{ login: string }>;
+}
+
+export interface RawPRReviewStatus {
+	prNumber: number;
+	additions: number;
+	deletions: number;
+	reviewDecision: string | null;
+	mergeable: string;
+	commits: { nodes: Array<{ commit: { committedDate: string } }> };
+}
+
+export interface RawFileChange {
+	filename: string;
+	additions: number;
+	deletions: number;
+}
+
+// ── Intermediate parsed types ───────────────────────────────────────────
+
+export interface RestPR {
+	number: number;
+	title: string;
+	author: string;
+	createdAt: string;
+	updatedAt: string;
+	additions: number;
+	deletions: number;
+	isDraft: boolean;
+	labels: string[];
+	requestedReviewers: string[];
+	assignees: string[];
+}
+
+export interface ReviewStatus {
+	additions: number;
+	deletions: number;
+	reviewDecision: string;
+	mergeable: string;
+	lastCommitDate: string;
+}
+
+// ── Pure parsing functions ───────────────────────────────────────────────
+
+export function parseRestPR(raw: RawRestPR): RestPR {
+	return {
+		number: raw.number,
+		title: raw.title,
+		author: raw.user?.login ?? "ghost",
+		createdAt: raw.created_at,
+		updatedAt: raw.updated_at,
+		additions: raw.additions ?? 0,
+		deletions: raw.deletions ?? 0,
+		isDraft: raw.draft ?? false,
+		labels: (raw.labels ?? []).map((l) => l.name),
+		requestedReviewers: (raw.requested_reviewers ?? []).map((r) => r.login),
+		assignees: (raw.assignees ?? []).map((a) => a.login),
+	};
+}
+
+export function parseReviewStatus(raw: RawPRReviewStatus): ReviewStatus {
+	return {
+		additions: raw.additions ?? 0,
+		deletions: raw.deletions ?? 0,
+		reviewDecision: raw.reviewDecision ?? "",
+		mergeable: raw.mergeable ?? "UNKNOWN",
+		lastCommitDate: raw.commits.nodes[0]?.commit?.committedDate ?? "",
+	};
+}
+
+export function parseFileChange(raw: RawFileChange): FileChange {
+	return {
+		path: raw.filename,
+		additions: raw.additions ?? 0,
+		deletions: raw.deletions ?? 0,
+	};
+}
+
+export function mergePR(rest: RestPR, status?: ReviewStatus): PR {
+	return {
+		...rest,
+		additions: status?.additions ?? rest.additions,
+		deletions: status?.deletions ?? rest.deletions,
+		reviewDecision: status?.reviewDecision ?? "",
+		mergeable: status?.mergeable ?? "UNKNOWN",
+		lastCommitDate: status?.lastCommitDate ?? "",
+	};
+}
+
 const GITHUB_API = "https://api.github.com";
 const PER_PAGE = 100;
 const GRAPHQL_BATCH_SIZE = 50;
@@ -72,55 +175,15 @@ export function createGitHubClient(
 		return results;
 	}
 
-	// ── REST parsing ────────────────────────────────────────────────────
-
-	interface RestPR {
-		number: number;
-		title: string;
-		author: string;
-		createdAt: string;
-		updatedAt: string;
-		additions: number;
-		deletions: number;
-		isDraft: boolean;
-		labels: string[];
-		requestedReviewers: string[];
-		assignees: string[];
-	}
-
-	function parseRestPR(raw: any): RestPR {
-		return {
-			number: raw.number,
-			title: raw.title,
-			author: raw.user?.login ?? "ghost",
-			createdAt: raw.created_at,
-			updatedAt: raw.updated_at,
-			additions: raw.additions ?? 0,
-			deletions: raw.deletions ?? 0,
-			isDraft: raw.draft ?? false,
-			labels: (raw.labels ?? []).map((l: any) => l.name),
-			requestedReviewers: (raw.requested_reviewers ?? []).map((r: any) => r.login),
-			assignees: (raw.assignees ?? []).map((a: any) => a.login),
-		};
-	}
-
 	// ── GraphQL metadata ────────────────────────────────────────────────
-
-	interface GraphQLMeta {
-		additions: number;
-		deletions: number;
-		reviewDecision: string;
-		mergeable: string;
-		lastCommitDate: string;
-	}
 
 	async function fetchGraphQLMeta(
 		owner: string,
 		repo: string,
 		numbers: number[],
 		onProgress?: ProgressReporter,
-	): Promise<Map<number, GraphQLMeta>> {
-		const meta = new Map<number, GraphQLMeta>();
+	): Promise<Map<number, ReviewStatus>> {
+		const meta = new Map<number, ReviewStatus>();
 		if (numbers.length === 0) return meta;
 		const totalBatches = Math.ceil(numbers.length / GRAPHQL_BATCH_SIZE);
 
@@ -145,31 +208,22 @@ export function createGitHubClient(
 			for (let idx = 0; idx < batch.length; idx++) {
 				const pr = repoData[`pr${idx}`];
 				if (pr) {
-					meta.set(pr.number, {
-						additions: pr.additions ?? 0,
-						deletions: pr.deletions ?? 0,
-						reviewDecision: pr.reviewDecision ?? "",
-						mergeable: pr.mergeable ?? "UNKNOWN",
-						lastCommitDate: pr.commits.nodes[0]?.commit?.committedDate ?? "",
-					});
+					meta.set(
+						pr.number,
+						parseReviewStatus({
+							prNumber: pr.number,
+							additions: pr.additions,
+							deletions: pr.deletions,
+							reviewDecision: pr.reviewDecision,
+							mergeable: pr.mergeable,
+							commits: pr.commits,
+						}),
+					);
 				}
 			}
 		}
 
 		return meta;
-	}
-
-	// ── Merge REST + GraphQL ────────────────────────────────────────────
-
-	function mergePR(rest: RestPR, meta?: GraphQLMeta): PR {
-		return {
-			...rest,
-			additions: meta?.additions ?? rest.additions,
-			deletions: meta?.deletions ?? rest.deletions,
-			reviewDecision: meta?.reviewDecision ?? "",
-			mergeable: meta?.mergeable ?? "UNKNOWN",
-			lastCommitDate: meta?.lastCommitDate ?? "",
-		};
 	}
 
 	function parseOwnerRepo(repo: string): [string, string] {
@@ -191,7 +245,7 @@ export function createGitHubClient(
 			);
 			if (rawPRs.length === 0) return [];
 
-			const restPRs = rawPRs.map(parseRestPR);
+			const restPRs = rawPRs.map((r) => parseRestPR(r as RawRestPR));
 			const meta = await fetchGraphQLMeta(
 				owner,
 				repoName,
@@ -207,11 +261,7 @@ export function createGitHubClient(
 			const rawFiles = await paginateRest(
 				`${GITHUB_API}/repos/${owner}/${repoName}/pulls/${number}/files`,
 			);
-			return rawFiles.map((f: any) => ({
-				path: f.filename,
-				additions: f.additions ?? 0,
-				deletions: f.deletions ?? 0,
-			}));
+			return rawFiles.map((f: any) => parseFileChange(f as RawFileChange));
 		},
 
 		async fetchPR(repo: string, number: number): Promise<PRDetail> {
