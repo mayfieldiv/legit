@@ -125,4 +125,22 @@ describe("App integration", () => {
 		const newCount = calls.filter((c) => c.url.includes("/pulls")).length;
 		expect(newCount).toBeGreaterThan(initialCount);
 	});
+
+	test("split layout renders list and summary panel separator", async () => {
+		const app = createTestLegit({
+			httpFetch: mockHttpFetch([makeSampleRestPR(1)]),
+		});
+
+		const { renderOnce, captureCharFrame } = await testRender(() => <App app={app} />, {
+			width: 120,
+			height: 20,
+		});
+
+		await new Promise((r) => setTimeout(r, 50));
+		await renderOnce();
+
+		const frame = captureCharFrame();
+		expect(frame).toContain("PR #1");
+		expect(frame).toContain("│");
+	});
 });
