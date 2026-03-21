@@ -64,6 +64,15 @@ export interface CommentCounts {
 	bot: number;
 }
 
+// ── PR Summary ──────────────────────────────────────────────────────────────
+
+export interface PRSummary extends PRDetail {
+	checks: CheckRun[];
+	reviews: Review[];
+	comments: CommentCounts;
+	files: FileCategorization;
+}
+
 // ── File categorization ─────────────────────────────────────────────────────
 
 export interface FileChange {
