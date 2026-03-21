@@ -1,11 +1,7 @@
 import { execFileSync } from "child_process";
 import { loadConfig, saveConfig, addRepo, type LegitConfig } from "./config";
-import {
-	createGitHubClient,
-	type GitHubClient,
-	type HttpFetch,
-	type ProgressReporter,
-} from "./github-client";
+import { createGitHubTransport, type HttpFetch } from "./github-transport";
+import { createGitHubClient, type GitHubClient } from "./github-client";
 import { categorizeFiles as _categorizeFiles } from "./file-categorizer";
 import type { PR, PRDetail, FileChange, FileCategorization } from "./types";
 
@@ -168,7 +164,8 @@ export class Legit {
 
 	get client(): GitHubClient {
 		if (!this._client) {
-			this._client = createGitHubClient(this.auth.token, this._options.httpFetch);
+			const transport = createGitHubTransport(this.auth.token, this._options.httpFetch);
+			this._client = createGitHubClient(transport);
 		}
 		return this._client;
 	}
@@ -181,7 +178,7 @@ export class Legit {
 	 * Fetch open PRs. Defaults to the detected repo.
 	 * Auto-adds repo to config if not already tracked.
 	 */
-	async fetchPRs(repo?: string, onProgress?: ProgressReporter): Promise<PR[]> {
+	fetchPRs(repo?: string): AsyncIterable<PR[]> {
 		const slug = repo ?? this.repoSlug;
 
 		// Auto-add repo to config if not tracked (non-fatal if save fails)
@@ -195,7 +192,7 @@ export class Legit {
 			}
 		}
 
-		return this.client.fetchOpenPRs(slug, onProgress);
+		return this.client.fetchOpenPRs(slug);
 	}
 
 	/**
@@ -205,7 +202,7 @@ export class Legit {
 		return this.client.fetchPR(repo, number);
 	}
 
-	async fetchFiles(repo: string, number: number): Promise<FileChange[]> {
+	fetchFiles(repo: string, number: number): AsyncIterable<FileChange[]> {
 		return this.client.fetchFiles(repo, number);
 	}
 

@@ -1,4 +1,4 @@
-import { createResource, createSignal } from "solid-js";
+import { createSignal, createEffect, onCleanup } from "solid-js";
 import { AppShell } from "./components/AppShell";
 import type { Legit } from "./lib/legit";
 import type { PR } from "./lib/types";
@@ -9,30 +9,49 @@ export interface AppProps {
 
 export function App(props: AppProps) {
 	const [error, setError] = createSignal("");
-	const [loadingMessage, setLoadingMessage] = createSignal("Loading pull requests...");
+	const [prs, setPrs] = createSignal<PR[]>([]);
+	const [loading, setLoading] = createSignal(true);
 
-	const [prs, { refetch }] = createResource<PR[]>(
-		async () => {
-			try {
-				setError("");
-				setLoadingMessage("Loading pull requests...");
-				return await props.app.fetchPRs(undefined, setLoadingMessage);
-			} catch (err: any) {
-				setError(err.message ?? String(err));
-				return [];
+	let aborted = false;
+
+	async function loadPRs() {
+		setPrs([]);
+		setLoading(true);
+		setError("");
+		aborted = false;
+		try {
+			for await (const snapshot of props.app.fetchPRs()) {
+				if (aborted) break;
+				setPrs(snapshot);
 			}
-		},
-		{ initialValue: [] },
-	);
+		} catch (err: any) {
+			if (!aborted) {
+				setError(err.message ?? String(err));
+			}
+		} finally {
+			setLoading(false);
+		}
+	}
+
+	createEffect(() => {
+		loadPRs();
+	});
+
+	onCleanup(() => {
+		aborted = true;
+	});
+
+	function handleRefresh() {
+		loadPRs();
+	}
 
 	return (
 		<AppShell
 			prs={prs()}
-			loading={prs.loading}
-			loadingMessage={loadingMessage()}
+			loading={loading()}
 			repoSlug={props.app.repoSlug}
 			error={error()}
-			onRefresh={refetch}
+			onRefresh={handleRefresh}
 		/>
 	);
 }

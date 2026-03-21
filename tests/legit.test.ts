@@ -1,5 +1,6 @@
 import { describe, test, expect, afterAll } from "bun:test";
 import { Legit, type AuthExecutor, parseRemoteUrl } from "../src/lib/legit";
+import type { PR } from "../src/lib/types";
 import {
 	cleanupTmpDirs,
 	makeTmpGitRepo,
@@ -215,7 +216,10 @@ describe("Legit.config", () => {
 describe("Legit.fetchPRs", () => {
 	test("returns PR data end-to-end", async () => {
 		const app = createTestLegit();
-		const prs = await app.fetchPRs();
+		let prs: PR[] = [];
+		for await (const snapshot of app.fetchPRs()) {
+			prs = snapshot;
+		}
 		expect(prs).toHaveLength(1);
 		expect(prs[0]!.number).toBe(42);
 		expect(prs[0]!.title).toBe("PR #42");
@@ -226,7 +230,9 @@ describe("Legit.fetchPRs", () => {
 	test("auto-adds detected repo to config", async () => {
 		const configPath = tmpConfigPath();
 		const app = createTestLegit({ configPath });
-		await app.fetchPRs();
+		for await (const _snapshot of app.fetchPRs()) {
+			// consume the iterable
+		}
 
 		const { readFileSync } = require("fs");
 		const saved = JSON.parse(readFileSync(configPath, "utf-8"));
@@ -238,7 +244,9 @@ describe("Legit.fetchPRs", () => {
 			{ url: /\/pulls/, response: { status: 200, body: [] } },
 		]);
 		const app = createTestLegit({ httpFetch: fetch });
-		await app.fetchPRs("other/repo");
+		for await (const _snapshot of app.fetchPRs("other/repo")) {
+			// consume the iterable
+		}
 		const pullsCall = calls.find((c) => c.url.includes("/pulls"));
 		expect(pullsCall?.url).toContain("other/repo");
 	});

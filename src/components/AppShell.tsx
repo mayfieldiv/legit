@@ -7,7 +7,6 @@ export type ViewTarget = { view: "list" } | { view: "detail"; pr: PR };
 interface AppShellProps {
 	prs: PR[];
 	loading: boolean;
-	loadingMessage?: string;
 	repoSlug: string;
 	error?: string;
 	onRefresh: () => void;
@@ -37,13 +36,11 @@ export function AppShell(props: AppShellProps) {
 
 			{/* Content — hide when error with no data (first-load failure) */}
 			<Show
-				when={!props.loading && !(props.error && props.prs.length === 0)}
+				when={props.prs.length > 0 || (!props.loading && !props.error)}
 				fallback={
 					<Show when={props.loading}>
 						<text>
-							<span style={{ fg: "yellow" }}>
-								{props.loadingMessage ?? "Loading pull requests..."}
-							</span>
+							<span style={{ fg: "yellow" }}>Loading pull requests...</span>
 						</text>
 					</Show>
 				}

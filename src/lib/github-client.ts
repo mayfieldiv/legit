@@ -1,56 +1,29 @@
 /**
- * GitHub API Client — direct HTTP to REST + GraphQL.
- * HTTP transport is injected for testability.
+ * GitHub Client — pure parsing + orchestration over a GitHubTransport.
+ * Parsing functions are exported for direct testing.
  */
 
+import type {
+	RawRestPR,
+	RawPRReviewStatus,
+	RawFileChange,
+	GitHubTransport,
+} from "./github-transport";
 import type { PR, PRDetail, FileChange } from "./types";
+
+// Re-export transport types that callers may need
+export type {
+	HttpFetch,
+	GitHubTransport,
+	RawRestPR,
+	RawPRReviewStatus,
+	RawFileChange,
+} from "./github-transport";
 
 // Re-export domain types for backward compatibility
 export type { PR, PRDetail, FileChange } from "./types";
 
-export type HttpFetch = (url: string, init?: RequestInit) => Promise<Response>;
-
-export type ProgressReporter = (message: string) => void;
-
-export interface GitHubClient {
-	fetchOpenPRs(repo: string, onProgress?: ProgressReporter): Promise<PR[]>;
-	fetchPR(repo: string, number: number): Promise<PRDetail>;
-	fetchFiles(repo: string, number: number): Promise<FileChange[]>;
-}
-
-// ── Raw API shapes (will move to github-transport.ts) ───────────────────
-
-export interface RawRestPR {
-	number: number;
-	title: string;
-	user: { login: string } | null;
-	created_at: string;
-	updated_at: string;
-	draft: boolean;
-	body?: string;
-	additions?: number;
-	deletions?: number;
-	labels: Array<{ name: string }>;
-	requested_reviewers: Array<{ login: string }>;
-	assignees: Array<{ login: string }>;
-}
-
-export interface RawPRReviewStatus {
-	prNumber: number;
-	additions: number;
-	deletions: number;
-	reviewDecision: string | null;
-	mergeable: string;
-	commits: { nodes: Array<{ commit: { committedDate: string } }> };
-}
-
-export interface RawFileChange {
-	filename: string;
-	additions: number;
-	deletions: number;
-}
-
-// ── Intermediate parsed types ───────────────────────────────────────────
+// ── Intermediate parsed types ───────────────────────────────────────────────
 
 export interface RestPR {
 	number: number;
@@ -74,7 +47,7 @@ export interface ReviewStatus {
 	lastCommitDate: string;
 }
 
-// ── Pure parsing functions ───────────────────────────────────────────────
+// ── Pure parsing functions ──────────────────────────────────────────────────
 
 export function parseRestPR(raw: RawRestPR): RestPR {
 	return {
@@ -121,163 +94,80 @@ export function mergePR(rest: RestPR, status?: ReviewStatus): PR {
 	};
 }
 
-const GITHUB_API = "https://api.github.com";
-const PER_PAGE = 100;
-const GRAPHQL_BATCH_SIZE = 50;
+// ── Client interface ────────────────────────────────────────────────────────
 
-export function createGitHubClient(
-	token: string,
-	httpFetch: HttpFetch = globalThis.fetch,
-): GitHubClient {
-	const headers: Record<string, string> = {
-		Authorization: `Bearer ${token}`,
-		Accept: "application/vnd.github+json",
-		"X-GitHub-Api-Version": "2022-11-28",
-	};
+export interface GitHubClient {
+	fetchOpenPRs(repo: string): AsyncIterable<PR[]>;
+	fetchPR(repo: string, prNumber: number): Promise<PRDetail>;
+	fetchFiles(repo: string, prNumber: number): AsyncIterable<FileChange[]>;
+}
 
-	// ── Transport ───────────────────────────────────────────────────────
+function parseOwnerRepo(repo: string): [string, string] {
+	const parts = repo.split("/");
+	if (parts.length !== 2 || !parts[0] || !parts[1])
+		throw new Error(`Invalid repo format: ${repo}`);
+	return [parts[0], parts[1]];
+}
 
-	async function apiGet(url: string): Promise<unknown> {
-		const res = await httpFetch(url, { headers });
-		if (!res.ok) {
-			throw new Error(`GitHub API error: ${res.status} ${res.statusText}`);
-		}
-		return res.json();
-	}
-
-	async function graphql(query: string, variables?: Record<string, unknown>): Promise<unknown> {
-		const res = await httpFetch(`${GITHUB_API}/graphql`, {
-			method: "POST",
-			headers: { ...headers, "Content-Type": "application/json" },
-			body: JSON.stringify({ query, variables }),
-		});
-		if (!res.ok) {
-			throw new Error(`GitHub GraphQL error: ${res.status} ${res.statusText}`);
-		}
-		return res.json();
-	}
-
-	async function paginateRest(
-		baseUrl: string,
-		onProgress?: ProgressReporter,
-		label = "pull requests",
-	): Promise<unknown[]> {
-		const results: unknown[] = [];
-		let page = 1;
-		while (true) {
-			onProgress?.(`Loading ${label}… page ${page}`);
-			const url = `${baseUrl}${baseUrl.includes("?") ? "&" : "?"}per_page=${PER_PAGE}&page=${page}`;
-			const data = (await apiGet(url)) as unknown[];
-			results.push(...data);
-			if (data.length < PER_PAGE) break;
-			page++;
-		}
-		return results;
-	}
-
-	// ── GraphQL metadata ────────────────────────────────────────────────
-
-	async function fetchGraphQLMeta(
-		owner: string,
-		repo: string,
-		numbers: number[],
-		onProgress?: ProgressReporter,
-	): Promise<Map<number, ReviewStatus>> {
-		const meta = new Map<number, ReviewStatus>();
-		if (numbers.length === 0) return meta;
-		const totalBatches = Math.ceil(numbers.length / GRAPHQL_BATCH_SIZE);
-
-		for (let i = 0; i < numbers.length; i += GRAPHQL_BATCH_SIZE) {
-			const batch = numbers.slice(i, i + GRAPHQL_BATCH_SIZE);
-			const batchNumber = Math.floor(i / GRAPHQL_BATCH_SIZE) + 1;
-			onProgress?.(`Loading PR metadata… batch ${batchNumber}/${totalBatches}`);
-			const aliases = batch
-				.map(
-					(n, idx) =>
-						`pr${idx}: pullRequest(number: ${n}) { number additions deletions reviewDecision mergeable commits(last: 1) { nodes { commit { committedDate } } } }`,
-				)
-				.join(" ");
-
-			const query = `query($owner: String!, $repo: String!) { repository(owner: $owner, name: $repo) { ${aliases} } }`;
-			const result = (await graphql(query, { owner, repo })) as {
-				data?: { repository?: Record<string, any> };
-			};
-
-			const repoData = result.data?.repository;
-			if (!repoData) continue;
-			for (let idx = 0; idx < batch.length; idx++) {
-				const pr = repoData[`pr${idx}`];
-				if (pr) {
-					meta.set(
-						pr.number,
-						parseReviewStatus({
-							prNumber: pr.number,
-							additions: pr.additions,
-							deletions: pr.deletions,
-							reviewDecision: pr.reviewDecision,
-							mergeable: pr.mergeable,
-							commits: pr.commits,
-						}),
-					);
-				}
-			}
-		}
-
-		return meta;
-	}
-
-	function parseOwnerRepo(repo: string): [string, string] {
-		const parts = repo.split("/");
-		if (parts.length !== 2 || !parts[0] || !parts[1])
-			throw new Error(`Invalid repo format: ${repo}`);
-		return [parts[0], parts[1]];
-	}
-
-	// ── Public API ──────────────────────────────────────────────────────
-
+export function createGitHubClient(transport: GitHubTransport): GitHubClient {
 	return {
-		async fetchOpenPRs(repo: string, onProgress?: ProgressReporter): Promise<PR[]> {
+		async *fetchOpenPRs(repo: string) {
 			const [owner, repoName] = parseOwnerRepo(repo);
 
-			const rawPRs = await paginateRest(
-				`${GITHUB_API}/repos/${owner}/${repoName}/pulls?state=open`,
-				onProgress,
-			);
-			if (rawPRs.length === 0) return [];
+			// Phase 1: yield PRs as they stream in from REST (no review status yet)
+			const restPRs: RestPR[] = [];
+			const prs: PR[] = [];
 
-			const restPRs = rawPRs.map((r) => parseRestPR(r as RawRestPR));
-			const meta = await fetchGraphQLMeta(
+			for await (const raw of transport.listOpenPRs(owner, repoName)) {
+				const rest = parseRestPR(raw);
+				restPRs.push(rest);
+				prs.push(mergePR(rest));
+				yield [...prs];
+			}
+
+			if (prs.length === 0) return;
+
+			// Phase 2: enrich with review status as it streams in
+			for await (const rawStatus of transport.fetchReviewStatus(
 				owner,
 				repoName,
-				restPRs.map((pr) => pr.number),
-				onProgress,
-			);
-
-			return restPRs.map((pr) => mergePR(pr, meta.get(pr.number)));
+				restPRs.map((r) => r.number),
+			)) {
+				const status = parseReviewStatus(rawStatus);
+				const idx = restPRs.findIndex((r) => r.number === rawStatus.prNumber);
+				if (idx !== -1) {
+					prs[idx] = mergePR(restPRs[idx]!, status);
+					yield [...prs];
+				}
+			}
 		},
 
-		async fetchFiles(repo: string, number: number): Promise<FileChange[]> {
-			const [owner, repoName] = parseOwnerRepo(repo);
-			const rawFiles = await paginateRest(
-				`${GITHUB_API}/repos/${owner}/${repoName}/pulls/${number}/files`,
-			);
-			return rawFiles.map((f: any) => parseFileChange(f as RawFileChange));
-		},
-
-		async fetchPR(repo: string, number: number): Promise<PRDetail> {
+		async fetchPR(repo: string, prNumber: number): Promise<PRDetail> {
 			const [owner, repoName] = parseOwnerRepo(repo);
 
-			const raw = (await apiGet(
-				`${GITHUB_API}/repos/${owner}/${repoName}/pulls/${number}`,
-			)) as any;
+			const raw = await transport.getPR(owner, repoName, prNumber);
+			const rest = parseRestPR(raw);
 
-			const restPR = parseRestPR(raw);
-			const meta = await fetchGraphQLMeta(owner, repoName, [number]);
+			let status: ReviewStatus | undefined;
+			for await (const rawStatus of transport.fetchReviewStatus(owner, repoName, [
+				prNumber,
+			])) {
+				status = parseReviewStatus(rawStatus);
+			}
 
 			return {
-				...mergePR(restPR, meta.get(number)),
+				...mergePR(rest, status),
 				body: raw.body ?? "",
 			};
+		},
+
+		async *fetchFiles(repo: string, prNumber: number) {
+			const [owner, repoName] = parseOwnerRepo(repo);
+			const files: FileChange[] = [];
+			for await (const raw of transport.listPRFiles(owner, repoName, prNumber)) {
+				files.push(parseFileChange(raw));
+				yield [...files];
+			}
 		},
 	};
 }
