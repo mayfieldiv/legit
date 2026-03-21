@@ -12,24 +12,26 @@ export function App(props: AppProps) {
 	const [prs, setPrs] = createSignal<PR[]>([]);
 	const [loading, setLoading] = createSignal(true);
 
-	let aborted = false;
+	let loadId = 0;
 
 	async function loadPRs() {
+		const myId = ++loadId;
 		setPrs([]);
 		setLoading(true);
 		setError("");
-		aborted = false;
 		try {
 			for await (const snapshot of props.app.fetchPRs()) {
-				if (aborted) break;
+				if (myId !== loadId) return;
 				setPrs(snapshot);
 			}
 		} catch (err: any) {
-			if (!aborted) {
+			if (myId === loadId) {
 				setError(err.message ?? String(err));
 			}
 		} finally {
-			setLoading(false);
+			if (myId === loadId) {
+				setLoading(false);
+			}
 		}
 	}
 
@@ -38,7 +40,7 @@ export function App(props: AppProps) {
 	});
 
 	onCleanup(() => {
-		aborted = true;
+		loadId++;
 	});
 
 	function handleRefresh() {
