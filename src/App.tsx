@@ -1,4 +1,4 @@
-import { createSignal, createEffect, onCleanup } from "solid-js";
+import { createSignal, onMount, onCleanup } from "solid-js";
 import { AppShell } from "./components/AppShell";
 import type { Legit } from "./lib/legit";
 import type { PR } from "./lib/types";
@@ -35,9 +35,7 @@ export function App(props: AppProps) {
 		}
 	}
 
-	createEffect(() => {
-		loadPRs();
-	});
+	onMount(loadPRs);
 
 	onCleanup(() => {
 		loadId++;
