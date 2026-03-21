@@ -22,7 +22,7 @@ export interface PR {
 	assignees: string[];
 	reviewDecision: string;
 	mergeable: string;
-	lastCommitDate: string;
+	lastCommitDate: string | null;
 }
 
 export interface PRDetail extends PR {

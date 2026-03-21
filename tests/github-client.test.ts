@@ -133,7 +133,7 @@ describe("parsing", () => {
 			expect(parseReviewStatus(raw).reviewDecision).toBe("");
 		});
 
-		test("empty commits array maps to empty lastCommitDate", () => {
+		test("empty commits array maps lastCommitDate to null", () => {
 			const raw: RawPRReviewStatus = {
 				prNumber: 1,
 				additions: 0,
@@ -142,7 +142,7 @@ describe("parsing", () => {
 				mergeable: "UNKNOWN",
 				commits: { nodes: [] },
 			};
-			expect(parseReviewStatus(raw).lastCommitDate).toBe("");
+			expect(parseReviewStatus(raw).lastCommitDate).toBeNull();
 		});
 	});
 
@@ -203,7 +203,7 @@ describe("parsing", () => {
 			expect(merged.deletions).toBe(2);
 			expect(merged.reviewDecision).toBe("");
 			expect(merged.mergeable).toBe("UNKNOWN");
-			expect(merged.lastCommitDate).toBe("");
+			expect(merged.lastCommitDate).toBeNull();
 		});
 	});
 });
