@@ -1,7 +1,7 @@
 import { createSignal, onMount, onCleanup } from "solid-js";
 import { AppShell } from "./components/AppShell";
 import type { Legit } from "./lib/legit";
-import type { PR } from "./lib/types";
+import type { PR, PRSummary } from "./lib/types";
 
 export interface AppProps {
 	app: Legit;
@@ -11,8 +11,17 @@ export function App(props: AppProps) {
 	const [error, setError] = createSignal("");
 	const [prs, setPrs] = createSignal<PR[]>([]);
 	const [loading, setLoading] = createSignal(true);
+	const [selectedPr, setSelectedPr] = createSignal<PR | undefined>();
+	const [summary, setSummary] = createSignal<PRSummary | undefined>();
 
 	let controller: AbortController | undefined;
+	let summaryController: AbortController | undefined;
+	let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+	const summaryCache = new Map<string, PRSummary>();
+
+	function cacheKey(pr: PR): string {
+		return `${props.app.repoSlug}#${pr.number}`;
+	}
 
 	async function loadPRs() {
 		controller?.abort();
@@ -21,9 +30,17 @@ export function App(props: AppProps) {
 		setPrs([]);
 		setLoading(true);
 		setError("");
+		summaryCache.clear();
+		setSummary(undefined);
+		setSelectedPr(undefined);
 		try {
+			let first = true;
 			for await (const snapshot of props.app.fetchPRs(undefined, ac.signal)) {
 				setPrs(snapshot);
+				if (first && snapshot.length > 0) {
+					first = false;
+					handleSelectionChange(snapshot[0]!);
+				}
 			}
 		} catch (err: any) {
 			if (!ac.signal.aborted) {
@@ -36,19 +53,59 @@ export function App(props: AppProps) {
 		}
 	}
 
-	onMount(loadPRs);
+	async function fetchSummary(pr: PR) {
+		summaryController?.abort();
+		const ac = new AbortController();
+		summaryController = ac;
 
-	onCleanup(() => {
-		controller?.abort();
-	});
+		const key = cacheKey(pr);
+		try {
+			const result = await props.app.fetchPRSummary(props.app.repoSlug, pr.number, ac.signal);
+			if (ac.signal.aborted) return;
+			summaryCache.set(key, result);
+			if (selectedPr()?.number === pr.number) {
+				setSummary(result);
+			}
+		} catch {
+			// Non-fatal — summary just won't load (includes abort)
+		}
+	}
+
+	function handleSelectionChange(pr: PR) {
+		setSelectedPr(pr);
+		clearTimeout(debounceTimer);
+
+		const key = cacheKey(pr);
+		const cached = summaryCache.get(key);
+		if (cached) {
+			setSummary(cached);
+			return;
+		}
+
+		setSummary(undefined);
+		debounceTimer = setTimeout(() => fetchSummary(pr), 300);
+	}
 
 	function handleRefreshSelected() {
-		// Summary panel cache invalidation will be wired in Task 11
+		const pr = selectedPr();
+		if (!pr) return;
+		summaryCache.delete(cacheKey(pr));
+		setSummary(undefined);
+		fetchSummary(pr);
 	}
 
 	function handleRefreshAll() {
+		clearTimeout(debounceTimer);
+		summaryController?.abort();
 		loadPRs();
 	}
+
+	onMount(loadPRs);
+	onCleanup(() => {
+		controller?.abort();
+		summaryController?.abort();
+		clearTimeout(debounceTimer);
+	});
 
 	return (
 		<AppShell
@@ -58,14 +115,13 @@ export function App(props: AppProps) {
 			error={error()}
 			onRefreshSelected={handleRefreshSelected}
 			onRefreshAll={handleRefreshAll}
+			onSelectionChange={handleSelectionChange}
+			selectedPr={selectedPr()}
+			summary={summary()}
 		/>
 	);
 }
 
-/**
- * Create a render-ready App component bound to a Legit instance.
- * Used by cli.ts (which is .ts, not .tsx) to avoid JSX in the entry point.
- */
 export function createApp(app: Legit) {
 	return () => <App app={app} />;
 }

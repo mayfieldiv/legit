@@ -1,6 +1,7 @@
 import { createSignal, Show, Switch, Match } from "solid-js";
 import { ListView } from "./ListView";
-import type { PR } from "../lib/types";
+import { SummaryPanel } from "./SummaryPanel";
+import type { PR, PRSummary } from "../lib/types";
 
 export type ViewTarget = { view: "list" } | { view: "detail"; pr: PR };
 
@@ -11,6 +12,9 @@ interface AppShellProps {
 	error?: string;
 	onRefreshSelected: () => void;
 	onRefreshAll: () => void;
+	onSelectionChange?: (pr: PR) => void;
+	selectedPr?: PR;
+	summary?: PRSummary;
 }
 
 export function AppShell(props: AppShellProps) {
@@ -48,12 +52,21 @@ export function AppShell(props: AppShellProps) {
 			>
 				<Switch>
 					<Match when={view().view === "list"}>
-						<ListView
-							prs={props.prs}
-							onRefreshSelected={props.onRefreshSelected}
-							onRefreshAll={props.onRefreshAll}
-							onNavigate={setView}
-						/>
+						<box flexDirection="row" flexGrow={1} width="100%">
+							<ListView
+								prs={props.prs}
+								onRefreshSelected={props.onRefreshSelected}
+								onRefreshAll={props.onRefreshAll}
+								onNavigate={setView}
+								onSelectionChange={props.onSelectionChange}
+							/>
+							<box width={1} height="100%">
+								<text>│</text>
+							</box>
+							<box width={40}>
+								<SummaryPanel summary={props.summary} pr={props.selectedPr} />
+							</box>
+						</box>
 					</Match>
 					<Match when={view().view === "detail"}>
 						{/* DetailView placeholder — slice #7 */}
