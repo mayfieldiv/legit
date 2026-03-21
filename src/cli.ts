@@ -54,7 +54,7 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
 				return { error: "Usage: legit pr <number>" };
 			}
 			const prNumber = Number(rawNumber);
-			return { output: await app.fetchPR(app.repoSlug, prNumber) };
+			return { output: await app.fetchPRSummary(app.repoSlug, prNumber) };
 		}
 
 		case "files": {
