@@ -37,6 +37,12 @@ export interface RawFileChange {
 	deletions: number;
 }
 
+export interface RawCheckRun {
+	name: string;
+	status: string;
+	conclusion: string | null;
+}
+
 // ── Transport interface ─────────────────────────────────────────────────────
 
 export interface GitHubTransport {
@@ -54,6 +60,12 @@ export interface GitHubTransport {
 		prNumbers: number[],
 		signal?: AbortSignal,
 	): AsyncIterable<RawPRReviewStatus>;
+	listCheckRuns(
+		owner: string,
+		repo: string,
+		commitSha: string,
+		signal?: AbortSignal,
+	): AsyncIterable<RawCheckRun>;
 }
 
 // ── Implementation ──────────────────────────────────────────────────────────
@@ -169,6 +181,21 @@ export function createGitHubTransport(
 						} as RawPRReviewStatus;
 					}
 				}
+			}
+		},
+
+		async *listCheckRuns(owner, repo, commitSha, signal?) {
+			let page = 1;
+			while (true) {
+				const url = `${GITHUB_API}/repos/${owner}/${repo}/commits/${commitSha}/check-runs?per_page=${PER_PAGE}&page=${page}`;
+				const data = (await apiGet(url, signal)) as {
+					check_runs: RawCheckRun[];
+				};
+				for (const item of data.check_runs) {
+					yield item;
+				}
+				if (data.check_runs.length < PER_PAGE) break;
+				page++;
 			}
 		},
 	};

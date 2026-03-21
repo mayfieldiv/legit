@@ -30,6 +30,22 @@ export interface PRDetail extends PR {
 	body: string;
 }
 
+// ── Check runs ──────────────────────────────────────────────────────────────
+
+export type CheckConclusion =
+	| "success"
+	| "failure"
+	| "neutral"
+	| "cancelled"
+	| "timed_out"
+	| "action_required";
+
+export interface CheckRun {
+	name: string;
+	status: "completed" | "in_progress" | "queued";
+	conclusion: CheckConclusion | null;
+}
+
 // ── File categorization ─────────────────────────────────────────────────────
 
 export interface FileChange {

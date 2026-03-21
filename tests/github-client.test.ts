@@ -334,4 +334,32 @@ describe("GitHubClient", () => {
 			expect(snapshots).toEqual([]);
 		});
 	});
+
+	describe("fetchCheckRuns", () => {
+		test("parses check runs from transport", async () => {
+			const transport = createMockTransport({
+				async *listCheckRuns() {
+					yield { name: "build", status: "completed", conclusion: "success" };
+					yield { name: "lint", status: "completed", conclusion: "failure" };
+					yield { name: "deploy", status: "in_progress", conclusion: null };
+				},
+			});
+			const client = createGitHubClient(transport);
+			const checks = await client.fetchCheckRuns("acme/widgets", "abc123");
+			expect(checks).toEqual([
+				{ name: "build", status: "completed", conclusion: "success" },
+				{ name: "lint", status: "completed", conclusion: "failure" },
+				{ name: "deploy", status: "in_progress", conclusion: null },
+			]);
+		});
+
+		test("returns empty array when no check runs", async () => {
+			const transport = createMockTransport({
+				async *listCheckRuns() {},
+			});
+			const client = createGitHubClient(transport);
+			const checks = await client.fetchCheckRuns("acme/widgets", "abc123");
+			expect(checks).toEqual([]);
+		});
+	});
 });

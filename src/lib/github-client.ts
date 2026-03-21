@@ -9,7 +9,7 @@ import type {
 	RawFileChange,
 	GitHubTransport,
 } from "./github-transport";
-import type { PR, PRDetail, FileChange } from "./types";
+import type { PR, PRDetail, FileChange, CheckRun } from "./types";
 
 // Re-export transport types that callers may need
 export type {
@@ -18,10 +18,11 @@ export type {
 	RawRestPR,
 	RawPRReviewStatus,
 	RawFileChange,
+	RawCheckRun,
 } from "./github-transport";
 
 // Re-export domain types for backward compatibility
-export type { PR, PRDetail, FileChange } from "./types";
+export type { PR, PRDetail, FileChange, CheckRun } from "./types";
 
 // ── Intermediate parsed types ───────────────────────────────────────────────
 
@@ -104,6 +105,7 @@ export interface GitHubClient {
 	fetchOpenPRs(repo: string, signal?: AbortSignal): AsyncIterable<PR[]>;
 	fetchPR(repo: string, prNumber: number, signal?: AbortSignal): Promise<PRDetail>;
 	fetchFiles(repo: string, prNumber: number, signal?: AbortSignal): AsyncIterable<FileChange[]>;
+	fetchCheckRuns(repo: string, commitSha: string, signal?: AbortSignal): Promise<CheckRun[]>;
 }
 
 function parseOwnerRepo(repo: string): [string, string] {
@@ -176,6 +178,23 @@ export function createGitHubClient(transport: GitHubTransport): GitHubClient {
 				files.push(parseFileChange(raw));
 				yield [...files];
 			}
+		},
+
+		async fetchCheckRuns(
+			repo: string,
+			commitSha: string,
+			signal?: AbortSignal,
+		): Promise<CheckRun[]> {
+			const [owner, repoName] = parseOwnerRepo(repo);
+			const checks: CheckRun[] = [];
+			for await (const raw of transport.listCheckRuns(owner, repoName, commitSha, signal)) {
+				checks.push({
+					name: raw.name,
+					status: raw.status as CheckRun["status"],
+					conclusion: raw.conclusion as CheckRun["conclusion"],
+				});
+			}
+			return checks;
 		},
 	};
 }
