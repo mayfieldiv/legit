@@ -46,6 +46,15 @@ export interface CheckRun {
 	conclusion: CheckConclusion | null;
 }
 
+// ── Reviews ─────────────────────────────────────────────────────────────────
+
+export type ReviewState = "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED";
+
+export interface Review {
+	user: string;
+	state: ReviewState;
+}
+
 // ── File categorization ─────────────────────────────────────────────────────
 
 export interface FileChange {

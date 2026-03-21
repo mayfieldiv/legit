@@ -9,7 +9,7 @@ import type {
 	RawFileChange,
 	GitHubTransport,
 } from "./github-transport";
-import type { PR, PRDetail, FileChange, CheckRun } from "./types";
+import type { PR, PRDetail, FileChange, CheckRun, Review } from "./types";
 
 // Re-export transport types that callers may need
 export type {
@@ -22,7 +22,7 @@ export type {
 } from "./github-transport";
 
 // Re-export domain types for backward compatibility
-export type { PR, PRDetail, FileChange, CheckRun } from "./types";
+export type { PR, PRDetail, FileChange, CheckRun, Review } from "./types";
 
 // ── Intermediate parsed types ───────────────────────────────────────────────
 
@@ -106,6 +106,7 @@ export interface GitHubClient {
 	fetchPR(repo: string, prNumber: number, signal?: AbortSignal): Promise<PRDetail>;
 	fetchFiles(repo: string, prNumber: number, signal?: AbortSignal): AsyncIterable<FileChange[]>;
 	fetchCheckRuns(repo: string, commitSha: string, signal?: AbortSignal): Promise<CheckRun[]>;
+	fetchReviews(repo: string, prNumber: number, signal?: AbortSignal): Promise<Review[]>;
 }
 
 function parseOwnerRepo(repo: string): [string, string] {
@@ -178,6 +179,34 @@ export function createGitHubClient(transport: GitHubTransport): GitHubClient {
 				files.push(parseFileChange(raw));
 				yield [...files];
 			}
+		},
+
+		async fetchReviews(
+			repo: string,
+			prNumber: number,
+			signal?: AbortSignal,
+		): Promise<Review[]> {
+			const [owner, repoName] = parseOwnerRepo(repo);
+			const rawReviews: Array<{ user: string; state: string; submitted_at: string }> = [];
+			for await (const raw of transport.listReviews(owner, repoName, prNumber, signal)) {
+				if (raw.state === "PENDING") continue;
+				rawReviews.push({
+					user: raw.user.login,
+					state: raw.state,
+					submitted_at: raw.submitted_at,
+				});
+			}
+			const byUser = new Map<string, { state: string; submitted_at: string }>();
+			for (const r of rawReviews) {
+				const existing = byUser.get(r.user);
+				if (!existing || r.submitted_at > existing.submitted_at) {
+					byUser.set(r.user, r);
+				}
+			}
+			return Array.from(byUser.entries()).map(([user, r]) => ({
+				user,
+				state: r.state as Review["state"],
+			}));
 		},
 
 		async fetchCheckRuns(

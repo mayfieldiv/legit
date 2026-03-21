@@ -43,6 +43,12 @@ export interface RawCheckRun {
 	conclusion: string | null;
 }
 
+export interface RawReview {
+	user: { login: string };
+	state: string;
+	submitted_at: string;
+}
+
 // ── Transport interface ─────────────────────────────────────────────────────
 
 export interface GitHubTransport {
@@ -66,6 +72,12 @@ export interface GitHubTransport {
 		commitSha: string,
 		signal?: AbortSignal,
 	): AsyncIterable<RawCheckRun>;
+	listReviews(
+		owner: string,
+		repo: string,
+		prNumber: number,
+		signal?: AbortSignal,
+	): AsyncIterable<RawReview>;
 }
 
 // ── Implementation ──────────────────────────────────────────────────────────
@@ -181,6 +193,15 @@ export function createGitHubTransport(
 						} as RawPRReviewStatus;
 					}
 				}
+			}
+		},
+
+		async *listReviews(owner, repo, prNumber, signal?) {
+			for await (const item of paginateRest(
+				`${GITHUB_API}/repos/${owner}/${repo}/pulls/${prNumber}/reviews`,
+				signal,
+			)) {
+				yield item as RawReview;
 			}
 		},
 

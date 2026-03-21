@@ -362,4 +362,64 @@ describe("GitHubClient", () => {
 			expect(checks).toEqual([]);
 		});
 	});
+
+	describe("fetchReviews", () => {
+		test("deduplicates to latest review per user", async () => {
+			const transport = createMockTransport({
+				async *listReviews() {
+					yield {
+						user: { login: "alice" },
+						state: "CHANGES_REQUESTED",
+						submitted_at: "2026-03-01T00:00:00Z",
+					};
+					yield {
+						user: { login: "alice" },
+						state: "APPROVED",
+						submitted_at: "2026-03-02T00:00:00Z",
+					};
+					yield {
+						user: { login: "bob" },
+						state: "COMMENTED",
+						submitted_at: "2026-03-01T00:00:00Z",
+					};
+				},
+			});
+			const client = createGitHubClient(transport);
+			const reviews = await client.fetchReviews("acme/widgets", 42);
+			expect(reviews).toEqual([
+				{ user: "alice", state: "APPROVED" },
+				{ user: "bob", state: "COMMENTED" },
+			]);
+		});
+
+		test("filters out PENDING reviews", async () => {
+			const transport = createMockTransport({
+				async *listReviews() {
+					yield {
+						user: { login: "alice" },
+						state: "APPROVED",
+						submitted_at: "2026-03-01T00:00:00Z",
+					};
+					yield {
+						user: { login: "bob" },
+						state: "PENDING",
+						submitted_at: "2026-03-01T00:00:00Z",
+					};
+				},
+			});
+			const client = createGitHubClient(transport);
+			const reviews = await client.fetchReviews("acme/widgets", 42);
+			expect(reviews).toHaveLength(1);
+			expect(reviews[0]!.user).toBe("alice");
+		});
+
+		test("returns empty array when no reviews", async () => {
+			const transport = createMockTransport({
+				async *listReviews() {},
+			});
+			const client = createGitHubClient(transport);
+			const reviews = await client.fetchReviews("acme/widgets", 42);
+			expect(reviews).toEqual([]);
+		});
+	});
 });

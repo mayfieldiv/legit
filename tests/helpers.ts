@@ -132,6 +132,7 @@ export function createMockTransport(overrides: Partial<GitHubTransport> = {}): G
 		async *listPRFiles() {},
 		async *fetchReviewStatus() {},
 		async *listCheckRuns() {},
+		async *listReviews() {},
 		...overrides,
 	};
 }
