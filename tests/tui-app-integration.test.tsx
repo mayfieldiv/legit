@@ -99,7 +99,7 @@ describe("App integration", () => {
 		expect(frame).toContain("500");
 	});
 
-	test("r key triggers refetch", async () => {
+	test("R key triggers full refetch", async () => {
 		const { fetch, calls } = createMockFetch([
 			{ url: /pulls/, response: { status: 200, body: [] } },
 		]);
@@ -117,8 +117,8 @@ describe("App integration", () => {
 
 		const initialCount = calls.filter((c) => c.url.includes("/pulls")).length;
 
-		// Press r to refetch
-		mockInput.pressKey("r");
+		// Press R (shift+R) to refetch all
+		mockInput.pressKey("r", { shift: true });
 		await new Promise((r) => setTimeout(r, 50));
 		await renderOnce();
 

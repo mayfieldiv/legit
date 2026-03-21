@@ -11,7 +11,14 @@ describe("ListView", () => {
 		];
 
 		const { renderOnce, captureCharFrame } = await testRender(
-			() => <ListView prs={prs} onRefresh={() => {}} onNavigate={() => {}} />,
+			() => (
+				<ListView
+					prs={prs}
+					onRefreshSelected={() => {}}
+					onRefreshAll={() => {}}
+					onNavigate={() => {}}
+				/>
+			),
 			{ width: 120, height: 20 },
 		);
 
@@ -29,7 +36,14 @@ describe("ListView", () => {
 		];
 
 		const { renderOnce, captureCharFrame, mockInput } = await testRender(
-			() => <ListView prs={prs} onRefresh={() => {}} onNavigate={() => {}} />,
+			() => (
+				<ListView
+					prs={prs}
+					onRefreshSelected={() => {}}
+					onRefreshAll={() => {}}
+					onNavigate={() => {}}
+				/>
+			),
 			{ width: 120, height: 20 },
 		);
 
@@ -56,7 +70,14 @@ describe("ListView", () => {
 		];
 
 		const { renderOnce, mockInput } = await testRender(
-			() => <ListView prs={prs} onRefresh={() => {}} onNavigate={() => {}} />,
+			() => (
+				<ListView
+					prs={prs}
+					onRefreshSelected={() => {}}
+					onRefreshAll={() => {}}
+					onNavigate={() => {}}
+				/>
+			),
 			{ width: 120, height: 20 },
 		);
 
@@ -66,16 +87,17 @@ describe("ListView", () => {
 		// No crash = pass
 	});
 
-	test("r key triggers onRefresh", async () => {
-		let refreshed = false;
+	test("r key triggers onRefreshSelected", async () => {
+		let refreshedSelected = false;
 
 		const { renderOnce, mockInput } = await testRender(
 			() => (
 				<ListView
 					prs={[makePR()]}
-					onRefresh={() => {
-						refreshed = true;
+					onRefreshSelected={() => {
+						refreshedSelected = true;
 					}}
+					onRefreshAll={() => {}}
 					onNavigate={() => {}}
 				/>
 			),
@@ -86,7 +108,31 @@ describe("ListView", () => {
 		mockInput.pressKey("r");
 		await renderOnce();
 
-		expect(refreshed).toBe(true);
+		expect(refreshedSelected).toBe(true);
+	});
+
+	test("R key triggers onRefreshAll", async () => {
+		let refreshedAll = false;
+
+		const { renderOnce, mockInput } = await testRender(
+			() => (
+				<ListView
+					prs={[makePR()]}
+					onRefreshSelected={() => {}}
+					onRefreshAll={() => {
+						refreshedAll = true;
+					}}
+					onNavigate={() => {}}
+				/>
+			),
+			{ width: 120, height: 20 },
+		);
+
+		await renderOnce();
+		mockInput.pressKey("r", { shift: true });
+		await renderOnce();
+
+		expect(refreshedAll).toBe(true);
 	});
 
 	test("Enter key triggers onNavigate with detail view", async () => {
@@ -97,7 +143,8 @@ describe("ListView", () => {
 			() => (
 				<ListView
 					prs={[pr]}
-					onRefresh={() => {}}
+					onRefreshSelected={() => {}}
+					onRefreshAll={() => {}}
 					onNavigate={(target) => {
 						navigated = target;
 					}}
@@ -115,7 +162,14 @@ describe("ListView", () => {
 
 	test("shows empty state when no PRs", async () => {
 		const { renderOnce, captureCharFrame } = await testRender(
-			() => <ListView prs={[]} onRefresh={() => {}} onNavigate={() => {}} />,
+			() => (
+				<ListView
+					prs={[]}
+					onRefreshSelected={() => {}}
+					onRefreshAll={() => {}}
+					onNavigate={() => {}}
+				/>
+			),
 			{ width: 120, height: 20 },
 		);
 
@@ -126,7 +180,14 @@ describe("ListView", () => {
 
 	test("j/k does nothing on empty list", async () => {
 		const { renderOnce, captureCharFrame, mockInput } = await testRender(
-			() => <ListView prs={[]} onRefresh={() => {}} onNavigate={() => {}} />,
+			() => (
+				<ListView
+					prs={[]}
+					onRefreshSelected={() => {}}
+					onRefreshAll={() => {}}
+					onNavigate={() => {}}
+				/>
+			),
 			{ width: 120, height: 20 },
 		);
 
@@ -150,7 +211,8 @@ describe("ListView", () => {
 			() => (
 				<ListView
 					prs={prs}
-					onRefresh={() => {}}
+					onRefreshSelected={() => {}}
+					onRefreshAll={() => {}}
 					onNavigate={() => {}}
 					onSelectionChange={(pr) => selections.push(pr.number)}
 				/>

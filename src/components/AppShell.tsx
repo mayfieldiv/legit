@@ -9,7 +9,8 @@ interface AppShellProps {
 	loading: boolean;
 	repoSlug: string;
 	error?: string;
-	onRefresh: () => void;
+	onRefreshSelected: () => void;
+	onRefreshAll: () => void;
 }
 
 export function AppShell(props: AppShellProps) {
@@ -49,7 +50,8 @@ export function AppShell(props: AppShellProps) {
 					<Match when={view().view === "list"}>
 						<ListView
 							prs={props.prs}
-							onRefresh={props.onRefresh}
+							onRefreshSelected={props.onRefreshSelected}
+							onRefreshAll={props.onRefreshAll}
 							onNavigate={setView}
 						/>
 					</Match>

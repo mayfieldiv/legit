@@ -42,7 +42,11 @@ export function App(props: AppProps) {
 		controller?.abort();
 	});
 
-	function handleRefresh() {
+	function handleRefreshSelected() {
+		// Summary panel cache invalidation will be wired in Task 11
+	}
+
+	function handleRefreshAll() {
 		loadPRs();
 	}
 
@@ -52,7 +56,8 @@ export function App(props: AppProps) {
 			loading={loading()}
 			repoSlug={props.app.repoSlug}
 			error={error()}
-			onRefresh={handleRefresh}
+			onRefreshSelected={handleRefreshSelected}
+			onRefreshAll={handleRefreshAll}
 		/>
 	);
 }

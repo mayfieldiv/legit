@@ -7,7 +7,8 @@ import type { ScrollBoxRenderable } from "@opentui/core";
 
 interface ListViewProps {
 	prs: PR[];
-	onRefresh: () => void;
+	onRefreshSelected: () => void;
+	onRefreshAll: () => void;
 	onNavigate: (target: ViewTarget) => void;
 	onSelectionChange?: (pr: PR) => void;
 }
@@ -35,8 +36,10 @@ export function ListView(props: ListViewProps) {
 				const pr = selection.selectedItem(props.prs);
 				if (pr) props.onSelectionChange?.(pr);
 			}
-		} else if (name === "r") {
-			props.onRefresh();
+		} else if (name === "r" && !event.shift) {
+			props.onRefreshSelected();
+		} else if ((name === "r" && event.shift) || name === "R") {
+			props.onRefreshAll();
 		} else if (name === "return") {
 			const pr = selection.selectedItem(props.prs);
 			if (pr) {
