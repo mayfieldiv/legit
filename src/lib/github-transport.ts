@@ -40,13 +40,19 @@ export interface RawFileChange {
 // ── Transport interface ─────────────────────────────────────────────────────
 
 export interface GitHubTransport {
-	listOpenPRs(owner: string, repo: string): AsyncIterable<RawRestPR>;
-	getPR(owner: string, repo: string, prNumber: number): Promise<RawRestPR>;
-	listPRFiles(owner: string, repo: string, prNumber: number): AsyncIterable<RawFileChange>;
+	listOpenPRs(owner: string, repo: string, signal?: AbortSignal): AsyncIterable<RawRestPR>;
+	getPR(owner: string, repo: string, prNumber: number, signal?: AbortSignal): Promise<RawRestPR>;
+	listPRFiles(
+		owner: string,
+		repo: string,
+		prNumber: number,
+		signal?: AbortSignal,
+	): AsyncIterable<RawFileChange>;
 	fetchReviewStatus(
 		owner: string,
 		repo: string,
 		prNumbers: number[],
+		signal?: AbortSignal,
 	): AsyncIterable<RawPRReviewStatus>;
 }
 
@@ -66,19 +72,24 @@ export function createGitHubTransport(
 		"X-GitHub-Api-Version": "2022-11-28",
 	};
 
-	async function apiGet(url: string): Promise<unknown> {
-		const res = await httpFetch(url, { headers });
+	async function apiGet(url: string, signal?: AbortSignal): Promise<unknown> {
+		const res = await httpFetch(url, { headers, signal });
 		if (!res.ok) {
 			throw new Error(`GitHub API error: ${res.status} ${res.statusText}`);
 		}
 		return res.json();
 	}
 
-	async function graphql(query: string, variables?: Record<string, unknown>): Promise<unknown> {
+	async function graphql(
+		query: string,
+		variables?: Record<string, unknown>,
+		signal?: AbortSignal,
+	): Promise<unknown> {
 		const res = await httpFetch(`${GITHUB_API}/graphql`, {
 			method: "POST",
 			headers: { ...headers, "Content-Type": "application/json" },
 			body: JSON.stringify({ query, variables }),
+			signal,
 		});
 		if (!res.ok) {
 			throw new Error(`GitHub GraphQL error: ${res.status} ${res.statusText}`);
@@ -86,11 +97,11 @@ export function createGitHubTransport(
 		return res.json();
 	}
 
-	async function* paginateRest(baseUrl: string) {
+	async function* paginateRest(baseUrl: string, signal?: AbortSignal) {
 		let page = 1;
 		while (true) {
 			const url = `${baseUrl}${baseUrl.includes("?") ? "&" : "?"}per_page=${PER_PAGE}&page=${page}`;
-			const data = (await apiGet(url)) as unknown[];
+			const data = (await apiGet(url, signal)) as unknown[];
 			for (const item of data) {
 				yield item;
 			}
@@ -100,29 +111,32 @@ export function createGitHubTransport(
 	}
 
 	return {
-		async *listOpenPRs(owner, repo) {
+		async *listOpenPRs(owner, repo, signal?) {
 			for await (const item of paginateRest(
 				`${GITHUB_API}/repos/${owner}/${repo}/pulls?state=open`,
+				signal,
 			)) {
 				yield item as RawRestPR;
 			}
 		},
 
-		async getPR(owner, repo, prNumber) {
+		async getPR(owner, repo, prNumber, signal?) {
 			return (await apiGet(
 				`${GITHUB_API}/repos/${owner}/${repo}/pulls/${prNumber}`,
+				signal,
 			)) as RawRestPR;
 		},
 
-		async *listPRFiles(owner, repo, prNumber) {
+		async *listPRFiles(owner, repo, prNumber, signal?) {
 			for await (const item of paginateRest(
 				`${GITHUB_API}/repos/${owner}/${repo}/pulls/${prNumber}/files`,
+				signal,
 			)) {
 				yield item as RawFileChange;
 			}
 		},
 
-		async *fetchReviewStatus(owner, repo, prNumbers) {
+		async *fetchReviewStatus(owner, repo, prNumbers, signal?) {
 			if (prNumbers.length === 0) return;
 
 			for (let i = 0; i < prNumbers.length; i += GRAPHQL_BATCH_SIZE) {
@@ -135,7 +149,7 @@ export function createGitHubTransport(
 					.join(" ");
 
 				const query = `query($owner: String!, $repo: String!) { repository(owner: $owner, name: $repo) { ${aliases} } }`;
-				const result = (await graphql(query, { owner, repo })) as {
+				const result = (await graphql(query, { owner, repo }, signal)) as {
 					data?: { repository?: Record<string, any> };
 				};
 

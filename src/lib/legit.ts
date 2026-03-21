@@ -178,7 +178,7 @@ export class Legit {
 	 * Fetch open PRs. Defaults to the detected repo.
 	 * Auto-adds repo to config if not already tracked.
 	 */
-	fetchPRs(repo?: string): AsyncIterable<PR[]> {
+	fetchPRs(repo?: string, signal?: AbortSignal): AsyncIterable<PR[]> {
 		const slug = repo ?? this.repoSlug;
 
 		// Auto-add repo to config if not tracked (non-fatal if save fails)
@@ -192,18 +192,18 @@ export class Legit {
 			}
 		}
 
-		return this.client.fetchOpenPRs(slug);
+		return this.client.fetchOpenPRs(slug, signal);
 	}
 
 	/**
 	 * Fetch a single PR detail.
 	 */
-	async fetchPR(repo: string, number: number): Promise<PRDetail> {
-		return this.client.fetchPR(repo, number);
+	async fetchPR(repo: string, number: number, signal?: AbortSignal): Promise<PRDetail> {
+		return this.client.fetchPR(repo, number, signal);
 	}
 
-	fetchFiles(repo: string, number: number): AsyncIterable<FileChange[]> {
-		return this.client.fetchFiles(repo, number);
+	fetchFiles(repo: string, number: number, signal?: AbortSignal): AsyncIterable<FileChange[]> {
+		return this.client.fetchFiles(repo, number, signal);
 	}
 
 	categorizeFiles(files: FileChange[]): FileCategorization {

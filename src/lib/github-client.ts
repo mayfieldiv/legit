@@ -97,9 +97,9 @@ export function mergePR(rest: RestPR, status?: ReviewStatus): PR {
 // ── Client interface ────────────────────────────────────────────────────────
 
 export interface GitHubClient {
-	fetchOpenPRs(repo: string): AsyncIterable<PR[]>;
-	fetchPR(repo: string, prNumber: number): Promise<PRDetail>;
-	fetchFiles(repo: string, prNumber: number): AsyncIterable<FileChange[]>;
+	fetchOpenPRs(repo: string, signal?: AbortSignal): AsyncIterable<PR[]>;
+	fetchPR(repo: string, prNumber: number, signal?: AbortSignal): Promise<PRDetail>;
+	fetchFiles(repo: string, prNumber: number, signal?: AbortSignal): AsyncIterable<FileChange[]>;
 }
 
 function parseOwnerRepo(repo: string): [string, string] {
@@ -111,14 +111,14 @@ function parseOwnerRepo(repo: string): [string, string] {
 
 export function createGitHubClient(transport: GitHubTransport): GitHubClient {
 	return {
-		async *fetchOpenPRs(repo: string) {
+		async *fetchOpenPRs(repo: string, signal?: AbortSignal) {
 			const [owner, repoName] = parseOwnerRepo(repo);
 
 			// Phase 1: yield PRs as they stream in from REST (no review status yet)
 			const restPRs: RestPR[] = [];
 			const prs: PR[] = [];
 
-			for await (const raw of transport.listOpenPRs(owner, repoName)) {
+			for await (const raw of transport.listOpenPRs(owner, repoName, signal)) {
 				const rest = parseRestPR(raw);
 				restPRs.push(rest);
 				prs.push(mergePR(rest));
@@ -132,6 +132,7 @@ export function createGitHubClient(transport: GitHubTransport): GitHubClient {
 				owner,
 				repoName,
 				restPRs.map((r) => r.number),
+				signal,
 			)) {
 				const status = parseReviewStatus(rawStatus);
 				const idx = restPRs.findIndex((r) => r.number === rawStatus.prNumber);
@@ -142,16 +143,19 @@ export function createGitHubClient(transport: GitHubTransport): GitHubClient {
 			}
 		},
 
-		async fetchPR(repo: string, prNumber: number): Promise<PRDetail> {
+		async fetchPR(repo: string, prNumber: number, signal?: AbortSignal): Promise<PRDetail> {
 			const [owner, repoName] = parseOwnerRepo(repo);
 
-			const raw = await transport.getPR(owner, repoName, prNumber);
+			const raw = await transport.getPR(owner, repoName, prNumber, signal);
 			const rest = parseRestPR(raw);
 
 			let status: ReviewStatus | undefined;
-			for await (const rawStatus of transport.fetchReviewStatus(owner, repoName, [
-				prNumber,
-			])) {
+			for await (const rawStatus of transport.fetchReviewStatus(
+				owner,
+				repoName,
+				[prNumber],
+				signal,
+			)) {
 				status = parseReviewStatus(rawStatus);
 			}
 
@@ -161,10 +165,10 @@ export function createGitHubClient(transport: GitHubTransport): GitHubClient {
 			};
 		},
 
-		async *fetchFiles(repo: string, prNumber: number) {
+		async *fetchFiles(repo: string, prNumber: number, signal?: AbortSignal) {
 			const [owner, repoName] = parseOwnerRepo(repo);
 			const files: FileChange[] = [];
-			for await (const raw of transport.listPRFiles(owner, repoName, prNumber)) {
+			for await (const raw of transport.listPRFiles(owner, repoName, prNumber, signal)) {
 				files.push(parseFileChange(raw));
 				yield [...files];
 			}
