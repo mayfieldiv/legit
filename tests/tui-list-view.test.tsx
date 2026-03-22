@@ -135,6 +135,30 @@ describe("ListView", () => {
 		expect(refreshedAll).toBe(true);
 	});
 
+	test("uppercase R triggers onRefreshAll", async () => {
+		let refreshedAll = false;
+
+		const { renderOnce, mockInput } = await testRender(
+			() => (
+				<ListView
+					prs={[makePR()]}
+					onRefreshSelected={() => {}}
+					onRefreshAll={() => {
+						refreshedAll = true;
+					}}
+					onNavigate={() => {}}
+				/>
+			),
+			{ width: 120, height: 20 },
+		);
+
+		await renderOnce();
+		mockInput.pressKey("R");
+		await renderOnce();
+
+		expect(refreshedAll).toBe(true);
+	});
+
 	test("Enter key triggers onNavigate with detail view", async () => {
 		let navigated: unknown = null;
 		const pr = makePR({ number: 42, title: "Test PR" });
