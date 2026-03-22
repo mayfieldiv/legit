@@ -1,10 +1,12 @@
 import { For, Show } from "solid-js";
 import type { PR } from "../lib/types";
+import type { MouseEvent } from "@opentui/core";
 import { formatAge, formatSize, formatReviewDecision } from "../lib/format";
 
 interface PRListProps {
 	prs: PR[];
 	selectedIndex: number;
+	onSelect?: (index: number) => void;
 }
 
 // Column widths — fixed columns; title gets remaining space via flexGrow
@@ -31,7 +33,12 @@ function Cell(props: { width?: number; flexGrow?: number; paddingRight?: number;
 	);
 }
 
-function PRRow(props: { pr: PR; selected: boolean; id: string }) {
+function PRRow(props: {
+	pr: PR;
+	selected: boolean;
+	id: string;
+	onMouseDown?: (e: MouseEvent) => void;
+}) {
 	const fg = () => (props.selected ? "white" : undefined);
 	return (
 		<box
@@ -40,6 +47,7 @@ function PRRow(props: { pr: PR; selected: boolean; id: string }) {
 			width="100%"
 			height={1}
 			backgroundColor={props.selected ? "blue" : undefined}
+			onMouseDown={props.onMouseDown}
 		>
 			<Cell width={COL.pr} paddingRight={1}>
 				<span style={{ fg: props.selected ? "white" : "cyan" }}>#{props.pr.number}</span>
@@ -103,6 +111,10 @@ export function PRList(props: PRListProps) {
 							id={`pr-row-${index()}`}
 							pr={pr}
 							selected={index() === props.selectedIndex}
+							onMouseDown={(e: MouseEvent) => {
+								e.preventDefault();
+								props.onSelect?.(index());
+							}}
 						/>
 					)}
 				</For>

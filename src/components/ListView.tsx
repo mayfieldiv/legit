@@ -82,6 +82,12 @@ export function ListView(props: ListViewProps) {
 		}
 	}
 
+	function selectIndex(index: number) {
+		selection.select(index);
+		const pr = selection.selectedItem(props.prs);
+		if (pr) props.onSelectionChange?.(pr);
+	}
+
 	useKeyboard((event) => {
 		const name = event.name;
 
@@ -111,7 +117,7 @@ export function ListView(props: ListViewProps) {
 				flexGrow={1}
 				width="100%"
 			>
-				<PRList prs={props.prs} selectedIndex={selection.index()} />
+				<PRList prs={props.prs} selectedIndex={selection.index()} onSelect={selectIndex} />
 			</scrollbox>
 		</box>
 	);
