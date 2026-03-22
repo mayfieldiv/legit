@@ -17,6 +17,7 @@ export function App(props: AppProps) {
 	let controller: AbortController | undefined;
 	let summaryController: AbortController | undefined;
 	let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+	/** Session cache (not keyed by commit); cleared on refresh. */
 	const summaryCache = new Map<string, PRSummary>();
 
 	function cacheKey(pr: PR): string {
@@ -78,6 +79,7 @@ export function App(props: AppProps) {
 		const key = cacheKey(pr);
 		const cached = summaryCache.get(key);
 		if (cached) {
+			summaryController?.abort();
 			setSummary(cached);
 			return;
 		}
@@ -89,6 +91,7 @@ export function App(props: AppProps) {
 	function handleRefreshSelected() {
 		const pr = selectedPr();
 		if (!pr) return;
+		clearTimeout(debounceTimer);
 		summaryCache.delete(cacheKey(pr));
 		setSummary(undefined);
 		fetchSummary(pr);
