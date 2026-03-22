@@ -74,7 +74,7 @@ export function checkSortGroup(check: CheckRun): number {
 }
 
 export function sortCheckRuns(checks: CheckRun[]): CheckRun[] {
-	return [...checks].sort((a, b) => {
+	return checks.toSorted((a, b) => {
 		const groupDiff = checkSortGroup(a) - checkSortGroup(b);
 		if (groupDiff !== 0) return groupDiff;
 		return a.name.localeCompare(b.name);
