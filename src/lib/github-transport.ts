@@ -219,11 +219,10 @@ export function createGitHubTransport(
 		async *fetchReviewThreads(owner, repo, prNumber, signal?) {
 			let cursor: string | null = null;
 			while (true) {
-				const afterClause = cursor ? `, after: "${cursor}"` : "";
-				const query = `query($owner: String!, $repo: String!, $number: Int!) {
+				const query = `query($owner: String!, $repo: String!, $number: Int!, $after: String) {
 					repository(owner: $owner, name: $repo) {
 						pullRequest(number: $number) {
-							reviewThreads(first: 100${afterClause}) {
+							reviewThreads(first: 100, after: $after) {
 								pageInfo { hasNextPage endCursor }
 								nodes {
 									isResolved
@@ -237,7 +236,7 @@ export function createGitHubTransport(
 				}`;
 				const result = (await graphql(
 					query,
-					{ owner, repo, number: prNumber },
+					{ owner, repo, number: prNumber, after: cursor },
 					signal,
 				)) as {
 					data?: {
