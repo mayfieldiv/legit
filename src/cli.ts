@@ -8,7 +8,7 @@
  *   auth     — print auth info as JSON (no token)
  *   config   — print current config as JSON
  *   prs      — fetch and print open PRs as JSON
- *   pr <n>   — fetch and print single PR detail as JSON
+ *   pr <n>   — fetch and print PR summary as JSON (PR detail plus checks, reviews, comment threads, files)
  *   files <n> — fetch and print file categorization as JSON
  */
 
