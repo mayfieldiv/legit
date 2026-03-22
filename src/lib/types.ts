@@ -60,8 +60,8 @@ export interface Review {
 export interface CommentCounts {
 	total: number;
 	unresolved: number;
-	human: number;
-	bot: number;
+	unresolvedHuman: number;
+	unresolvedBot: number;
 }
 
 // ── PR Summary ──────────────────────────────────────────────────────────────

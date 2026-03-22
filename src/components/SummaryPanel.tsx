@@ -213,8 +213,8 @@ export function SummaryPanel(props: SummaryPanelProps) {
 								<span>{summary()!.comments.unresolved} unresolved</span>
 								<span style={{ fg: "gray" }}>
 									{" "}
-									({summary()!.comments.human} human, {summary()!.comments.bot}{" "}
-									bot)
+									({summary()!.comments.unresolvedHuman} human,{" "}
+									{summary()!.comments.unresolvedBot} bot)
 								</span>
 							</text>
 						</box>

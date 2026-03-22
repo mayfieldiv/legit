@@ -10,7 +10,7 @@ function makeSummary(overrides: Partial<PRSummary> = {}): PRSummary {
 		body: "",
 		checks: [],
 		reviews: [],
-		comments: { total: 0, unresolved: 0, human: 0, bot: 0 },
+		comments: { total: 0, unresolved: 0, unresolvedHuman: 0, unresolvedBot: 0 },
 		files: {
 			files: [],
 			breakdown: {
@@ -105,7 +105,7 @@ describe("SummaryPanel", () => {
 
 	test("shows comment counts", async () => {
 		const summary = makeSummary({
-			comments: { total: 5, unresolved: 3, human: 2, bot: 1 },
+			comments: { total: 5, unresolved: 3, unresolvedHuman: 2, unresolvedBot: 1 },
 		});
 		const { renderOnce, captureCharFrame } = await testRender(
 			() => <SummaryPanel summary={summary} pr={makePR()} />,

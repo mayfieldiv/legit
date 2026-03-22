@@ -128,7 +128,12 @@ describe("runCommand", () => {
 			{ name: "build", status: "completed", conclusion: "success" },
 		]);
 		expect(output.reviews).toEqual([{ user: "bob", state: "APPROVED" }]);
-		expect(output.comments).toEqual({ total: 0, unresolved: 0, human: 0, bot: 0 });
+		expect(output.comments).toEqual({
+			total: 0,
+			unresolved: 0,
+			unresolvedHuman: 0,
+			unresolvedBot: 0,
+		});
 		expect(output.files).toBeDefined();
 	});
 

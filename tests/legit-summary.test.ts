@@ -111,7 +111,7 @@ describe("Legit.fetchPRSummary", () => {
 		expect(summary.reviews).toEqual([{ user: "bob", state: "APPROVED" }]);
 		expect(summary.comments.total).toBe(1);
 		expect(summary.comments.unresolved).toBe(1);
-		expect(summary.comments.human).toBe(1);
+		expect(summary.comments.unresolvedHuman).toBe(1);
 		expect(summary.files.files).toHaveLength(1);
 		expect(summary.files.files[0]!.category).toBe("code");
 	});

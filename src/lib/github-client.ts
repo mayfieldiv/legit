@@ -225,8 +225,8 @@ export function createGitHubClient(transport: GitHubTransport): GitHubClient {
 			const botSet = new Set(botLogins);
 			let total = 0;
 			let unresolved = 0;
-			let human = 0;
-			let bot = 0;
+			let unresolvedHuman = 0;
+			let unresolvedBot = 0;
 
 			for await (const thread of transport.fetchReviewThreads(
 				owner,
@@ -239,14 +239,14 @@ export function createGitHubClient(transport: GitHubTransport): GitHubClient {
 					unresolved++;
 					const author = thread.comments.nodes[0]?.author?.login;
 					if (author && botSet.has(author)) {
-						bot++;
+						unresolvedBot++;
 					} else {
-						human++;
+						unresolvedHuman++;
 					}
 				}
 			}
 
-			return { total, unresolved, human, bot };
+			return { total, unresolved, unresolvedHuman, unresolvedBot };
 		},
 
 		async fetchCheckRuns(
