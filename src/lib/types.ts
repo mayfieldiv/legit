@@ -37,6 +37,8 @@ export type CheckConclusion =
 	| "failure"
 	| "neutral"
 	| "cancelled"
+	| "skipped"
+	| "stale"
 	| "timed_out"
 	| "action_required";
 

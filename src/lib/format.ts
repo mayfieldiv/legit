@@ -68,6 +68,11 @@ export function checkSortGroup(check: CheckRun): number {
 		case "cancelled":
 		case "action_required":
 			return 0;
+		case "skipped":
+		case "stale":
+		case "success":
+		case "neutral":
+			return 2;
 		default:
 			return 2;
 	}

@@ -243,7 +243,16 @@ describe("GitHubClient", () => {
 						deletions: 10,
 						reviewDecision: "APPROVED",
 						mergeable: "MERGEABLE",
-						commits: { nodes: [{ commit: { committedDate: "2026-03-14T00:00:00Z" } }] },
+						commits: {
+							nodes: [
+								{
+									commit: {
+										oid: "abc123def456",
+										committedDate: "2026-03-14T00:00:00Z",
+									},
+								},
+							],
+						},
 					};
 				},
 			});
@@ -299,7 +308,16 @@ describe("GitHubClient", () => {
 						deletions: 10,
 						reviewDecision: "REVIEW_REQUIRED",
 						mergeable: "MERGEABLE",
-						commits: { nodes: [{ commit: { committedDate: "2026-03-14T00:00:00Z" } }] },
+						commits: {
+							nodes: [
+								{
+									commit: {
+										oid: "abc123def456",
+										committedDate: "2026-03-14T00:00:00Z",
+									},
+								},
+							],
+						},
 					};
 				},
 			});

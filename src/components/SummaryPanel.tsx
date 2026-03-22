@@ -22,6 +22,10 @@ function checkIcon(check: CheckRun): { icon: string; fg: string } {
 			return { icon: "✗", fg: "yellow" };
 		case "neutral":
 			return { icon: "–", fg: "white" };
+		case "skipped":
+			return { icon: "⊘", fg: "gray" };
+		case "stale":
+			return { icon: "⟳", fg: "yellow" };
 		default:
 			return { icon: "?", fg: "white" };
 	}
