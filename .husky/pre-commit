@@ -1,7 +1,5 @@
 #!/bin/sh
 
-STAGED_FILES=$(git diff --cached --name-only)
-
 # Save unstaged changes so checks run against exactly what's being committed.
 # Uses a patch file instead of git stash --keep-index (which conflicts on pop).
 UNSTAGED_PATCH=$(mktemp)
@@ -14,11 +12,14 @@ fi
 
 restore_unstaged() {
 	if [ "$HAS_UNSTAGED" -eq 1 ]; then
-		git apply "$UNSTAGED_PATCH" 2>/dev/null || true
-		rm -f "$UNSTAGED_PATCH"
-	else
-		rm -f "$UNSTAGED_PATCH"
+		if ! git apply "$UNSTAGED_PATCH" 2>/dev/null; then
+			if ! git apply --3way "$UNSTAGED_PATCH" 2>/dev/null; then
+				echo "⚠️  Could not restore unstaged changes. Patch saved at: $UNSTAGED_PATCH"
+				return
+			fi
+		fi
 	fi
+	rm -f "$UNSTAGED_PATCH"
 }
 
 echo "Running formatting, linting, and type checking..."
@@ -29,7 +30,7 @@ if [ $? -ne 0 ]; then
 	exit 1
 fi
 
-for file in $STAGED_FILES; do
+git diff --cached --name-only -z | while IFS= read -r -d '' file; do
 	if [ -f "$file" ]; then
 		git add "$file"
 	fi
