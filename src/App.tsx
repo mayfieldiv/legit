@@ -36,9 +36,9 @@ export function App(props: AppProps) {
 		return ["All", ...repoTabs()];
 	}
 
-	function updateDisplayedPRs() {
+	function visiblePRsForTab(tabIndex = activeTab()): PR[] {
 		const byRepo = prsByRepo();
-		if (activeTab() === 0) {
+		if (tabIndex === 0) {
 			const merged: PR[] = [];
 			for (const repo of repoTabs()) {
 				const repoPrs = byRepo[repo] ?? [];
@@ -46,11 +46,14 @@ export function App(props: AppProps) {
 					merged.push({ ...pr, repoSlug: repo });
 				}
 			}
-			setPrs(merged);
-			return;
+			return merged;
 		}
-		const repo = currentRepoSlug();
-		setPrs((repo ? byRepo[repo] : []) ?? []);
+		const repo = repoTabs()[tabIndex - 1];
+		return (repo ? byRepo[repo] : []) ?? [];
+	}
+
+	function updateDisplayedPRs() {
+		setPrs(visiblePRsForTab());
 	}
 
 	function setRepoLoading(repo: string, value: boolean) {
@@ -188,9 +191,14 @@ export function App(props: AppProps) {
 			activeTab={activeTab()}
 			onTabChange={(index) => {
 				setActiveTab(index);
-				setSelectedPr(undefined);
-				setSummary(undefined);
 				updateDisplayedPRs();
+				const first = visiblePRsForTab(index)[0];
+				if (first) {
+					handleSelectionChange(first);
+				} else {
+					setSelectedPr(undefined);
+					setSummary(undefined);
+				}
 			}}
 		/>
 	);

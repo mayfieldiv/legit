@@ -195,4 +195,53 @@ describe("App integration", () => {
 		expect(frame).toContain("PR #1");
 		expect(frame).toContain("PR #2");
 	});
+
+	test("switching tabs keeps a PR selected for summary panel", async () => {
+		const { fetch } = createMockFetch([
+			{
+				url: /\/repos\/acme\/widgets\/pulls\?/,
+				response: { status: 200, body: [makeSampleRestPR(1)] },
+			},
+			{
+				url: /\/graphql/,
+				method: "POST",
+				response: {
+					status: 200,
+					body: makeGraphQLResponse([{ ...SAMPLE_GQL_META, number: 1 }]),
+				},
+			},
+			{
+				url: /\/repos\/acme\/gadgets\/pulls\?/,
+				response: { status: 200, body: [makeSampleRestPR(2)] },
+			},
+			{
+				url: /\/graphql/,
+				method: "POST",
+				response: {
+					status: 200,
+					body: makeGraphQLResponse([{ ...SAMPLE_GQL_META, number: 2 }]),
+				},
+			},
+		]);
+		const app = createTestLegit({ httpFetch: fetch });
+		app.config.repos = ["acme/widgets", "acme/gadgets"];
+
+		const { renderOnce, captureCharFrame, mockInput } = await testRender(
+			() => <App app={app} />,
+			{
+				width: 120,
+				height: 20,
+			},
+		);
+
+		await new Promise((r) => setTimeout(r, 120));
+		await renderOnce();
+		mockInput.pressKey("3");
+		await new Promise((r) => setTimeout(r, 50));
+		await renderOnce();
+
+		const frame = captureCharFrame();
+		expect(frame).toContain("PR #2");
+		expect(frame).not.toContain("No PR selected");
+	});
 });
