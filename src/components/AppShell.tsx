@@ -1,4 +1,5 @@
 import { createSignal, Show, Switch, Match } from "solid-js";
+import { useKeyboard } from "@opentui/solid";
 import { ListView } from "./ListView";
 import { SummaryPanel } from "./SummaryPanel";
 import type { PR, PRSummary } from "../lib/types";
@@ -15,10 +16,36 @@ interface AppShellProps {
 	onSelectionChange?: (pr: PR) => void;
 	selectedPr?: PR;
 	summary?: PRSummary;
+	tabs?: string[];
+	activeTab?: number;
+	onTabChange?: (index: number) => void;
 }
 
 export function AppShell(props: AppShellProps) {
 	const [view, setView] = createSignal<ViewTarget>({ view: "list" });
+	const tabCount = () => props.tabs?.length ?? 0;
+
+	useKeyboard((event) => {
+		if (!props.onTabChange || tabCount() === 0) return;
+		const current = props.activeTab ?? 0;
+		const name = event.name;
+
+		if (name === "l" || name === "right") {
+			props.onTabChange(Math.min(tabCount() - 1, current + 1));
+			return;
+		}
+		if (name === "h" || name === "left") {
+			props.onTabChange(Math.max(0, current - 1));
+			return;
+		}
+
+		if (/^[1-9]$/.test(name)) {
+			const index = Number(name) - 1;
+			if (index < tabCount()) {
+				props.onTabChange(index);
+			}
+		}
+	});
 
 	return (
 		<box flexDirection="column" width="100%" height="100%">
@@ -31,6 +58,17 @@ export function AppShell(props: AppShellProps) {
 					<span> — {props.prs.length} open PRs</span>
 				</text>
 			</box>
+
+			<Show when={tabCount() > 0}>
+				<box flexDirection="row" width="100%" height={1}>
+					<text>
+						{props.tabs!.map((tab, i) => {
+							const selected = i === (props.activeTab ?? 0);
+							return `${selected ? "[" : " "}${tab}${selected ? "]" : " "} `;
+						})}
+					</text>
+				</box>
+			</Show>
 
 			{/* Error */}
 			<Show when={props.error}>

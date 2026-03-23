@@ -111,4 +111,58 @@ describe("AppShell", () => {
 		const frame = captureCharFrame();
 		expect(frame).toContain("2 open PRs");
 	});
+
+	test("renders tab bar with All and repo tabs", async () => {
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => (
+				<AppShell
+					prs={[]}
+					loading={false}
+					repoSlug="acme/widgets"
+					tabs={["All", "acme/widgets", "acme/gadgets"]}
+					activeTab={0}
+					onTabChange={() => {}}
+					onRefreshSelected={() => {}}
+					onRefreshAll={() => {}}
+				/>
+			),
+			{ width: 120, height: 20 },
+		);
+
+		await renderOnce();
+		const frame = captureCharFrame();
+		expect(frame).toContain("All");
+		expect(frame).toContain("acme/widgets");
+		expect(frame).toContain("acme/gadgets");
+	});
+
+	test("tab keybindings switch tabs", async () => {
+		const calls: number[] = [];
+		const { renderOnce, mockInput } = await testRender(
+			() => (
+				<AppShell
+					prs={[]}
+					loading={false}
+					repoSlug="acme/widgets"
+					tabs={["All", "acme/widgets", "acme/gadgets"]}
+					activeTab={1}
+					onTabChange={(index) => calls.push(index)}
+					onRefreshSelected={() => {}}
+					onRefreshAll={() => {}}
+				/>
+			),
+			{ width: 120, height: 20 },
+		);
+
+		await renderOnce();
+		mockInput.pressKey("l");
+		mockInput.pressKey("h");
+		mockInput.pressKey("right");
+		mockInput.pressKey("left");
+		mockInput.pressKey("3");
+		await renderOnce();
+
+		expect(calls).toContain(2);
+		expect(calls).toContain(0);
+	});
 });

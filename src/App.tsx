@@ -9,38 +9,74 @@ export interface AppProps {
 
 export function App(props: AppProps) {
 	const [error, setError] = createSignal("");
+	const [repoTabs, setRepoTabs] = createSignal<string[]>([]);
+	const [activeTab, setActiveTab] = createSignal(0);
+	const [prsByRepo, setPrsByRepo] = createSignal<Record<string, PR[]>>({});
 	const [prs, setPrs] = createSignal<PR[]>([]);
 	const [loading, setLoading] = createSignal(true);
 	const [selectedPr, setSelectedPr] = createSignal<PR | undefined>();
 	const [summary, setSummary] = createSignal<PRSummary | undefined>();
 
-	let controller: AbortController | undefined;
+	const repoControllers = new Map<string, AbortController>();
 	let summaryController: AbortController | undefined;
 	let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 	/** Session cache (not keyed by commit); cleared on refresh. */
 	const summaryCache = new Map<string, PRSummary>();
 
-	function cacheKey(pr: PR): string {
-		return `${props.app.repoSlug}#${pr.number}`;
+	function currentRepoSlug(): string | undefined {
+		if (activeTab() === 0) return undefined;
+		return repoTabs()[activeTab() - 1];
 	}
 
-	async function loadPRs() {
-		controller?.abort();
+	function cacheKey(pr: PR): string {
+		return `${pr.repoSlug ?? currentRepoSlug() ?? props.app.repoSlug}#${pr.number}`;
+	}
+
+	function tabs(): string[] {
+		return ["All", ...repoTabs()];
+	}
+
+	function updateDisplayedPRs() {
+		const byRepo = prsByRepo();
+		if (activeTab() === 0) {
+			const merged: PR[] = [];
+			for (const repo of repoTabs()) {
+				const repoPrs = byRepo[repo] ?? [];
+				for (const pr of repoPrs) {
+					merged.push({ ...pr, repoSlug: repo });
+				}
+			}
+			setPrs(merged);
+			return;
+		}
+		const repo = currentRepoSlug();
+		setPrs((repo ? byRepo[repo] : []) ?? []);
+	}
+
+	function setRepoLoading(repo: string, value: boolean) {
+		setLoading((prev) => {
+			if (activeTab() === 0) {
+				return value || prev;
+			}
+			if (currentRepoSlug() === repo) return value;
+			return prev;
+		});
+	}
+
+	async function loadRepo(repo: string) {
+		repoControllers.get(repo)?.abort();
 		const ac = new AbortController();
-		controller = ac;
-		setPrs([]);
-		setLoading(true);
+		repoControllers.set(repo, ac);
+		setRepoLoading(repo, true);
 		setError("");
-		summaryCache.clear();
-		setSummary(undefined);
-		setSelectedPr(undefined);
+		setPrsByRepo((prev) => ({ ...prev, [repo]: [] }));
+		updateDisplayedPRs();
 		try {
-			let first = true;
-			for await (const snapshot of props.app.fetchPRs(undefined, ac.signal)) {
-				setPrs(snapshot);
-				if (first && snapshot.length > 0) {
-					first = false;
-					handleSelectionChange(snapshot[0]!);
+			for await (const snapshot of props.app.fetchPRs(repo, ac.signal)) {
+				setPrsByRepo((prev) => ({ ...prev, [repo]: snapshot }));
+				updateDisplayedPRs();
+				if (!selectedPr() && snapshot.length > 0 && activeTab() === 0) {
+					handleSelectionChange({ ...snapshot[0]!, repoSlug: repo });
 				}
 			}
 		} catch (err: any) {
@@ -49,9 +85,31 @@ export function App(props: AppProps) {
 			}
 		} finally {
 			if (!ac.signal.aborted) {
-				setLoading(false);
+				setRepoLoading(repo, false);
 			}
 		}
+	}
+
+	function discoverRepos(): string[] {
+		const repos = new Set<string>(props.app.config.repos);
+		repos.add(props.app.repoSlug);
+		return [...repos];
+	}
+
+	async function loadPRs() {
+		for (const c of repoControllers.values()) c.abort();
+		repoControllers.clear();
+		setPrsByRepo({});
+		setPrs([]);
+		setLoading(true);
+		setError("");
+		summaryCache.clear();
+		setSummary(undefined);
+		setSelectedPr(undefined);
+		const repos = discoverRepos();
+		setRepoTabs(repos);
+		await Promise.all(repos.map((repo) => loadRepo(repo)));
+		setLoading(false);
 	}
 
 	async function fetchSummary(pr: PR) {
@@ -61,7 +119,8 @@ export function App(props: AppProps) {
 
 		const key = cacheKey(pr);
 		try {
-			const result = await props.app.fetchPRSummary(props.app.repoSlug, pr.number, ac.signal);
+			const repo = pr.repoSlug ?? currentRepoSlug() ?? props.app.repoSlug;
+			const result = await props.app.fetchPRSummary(repo, pr.number, ac.signal);
 			if (ac.signal.aborted) return;
 			summaryCache.set(key, result);
 			if (selectedPr()?.number === pr.number) {
@@ -89,12 +148,16 @@ export function App(props: AppProps) {
 	}
 
 	function handleRefreshSelected() {
-		const pr = selectedPr();
-		if (!pr) return;
+		const repo = currentRepoSlug();
 		clearTimeout(debounceTimer);
-		summaryCache.delete(cacheKey(pr));
+		summaryController?.abort();
+		if (!repo) {
+			loadPRs();
+			return;
+		}
+		summaryCache.clear();
 		setSummary(undefined);
-		fetchSummary(pr);
+		loadRepo(repo);
 	}
 
 	function handleRefreshAll() {
@@ -105,7 +168,7 @@ export function App(props: AppProps) {
 
 	onMount(loadPRs);
 	onCleanup(() => {
-		controller?.abort();
+		for (const c of repoControllers.values()) c.abort();
 		summaryController?.abort();
 		clearTimeout(debounceTimer);
 	});
@@ -114,13 +177,21 @@ export function App(props: AppProps) {
 		<AppShell
 			prs={prs()}
 			loading={loading()}
-			repoSlug={props.app.repoSlug}
+			repoSlug={currentRepoSlug() ?? "All repos"}
 			error={error()}
 			onRefreshSelected={handleRefreshSelected}
 			onRefreshAll={handleRefreshAll}
 			onSelectionChange={handleSelectionChange}
 			selectedPr={selectedPr()}
 			summary={summary()}
+			tabs={tabs()}
+			activeTab={activeTab()}
+			onTabChange={(index) => {
+				setActiveTab(index);
+				setSelectedPr(undefined);
+				setSummary(undefined);
+				updateDisplayedPRs();
+			}}
 		/>
 	);
 }
