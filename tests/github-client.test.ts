@@ -102,14 +102,18 @@ describe("parsing", () => {
 	});
 
 	describe("parseReviewStatus", () => {
-		test("extracts last commit date from nested structure", () => {
+		test("extracts last commit date and headCommitSha from nested structure", () => {
 			const raw: RawPRReviewStatus = {
 				prNumber: 42,
 				additions: 50,
 				deletions: 10,
 				reviewDecision: "APPROVED",
 				mergeable: "MERGEABLE",
-				commits: { nodes: [{ commit: { committedDate: "2026-03-14T00:00:00Z" } }] },
+				commits: {
+					nodes: [
+						{ commit: { committedDate: "2026-03-14T00:00:00Z", oid: "abc123def456" } },
+					],
+				},
 			};
 			const parsed = parseReviewStatus(raw);
 			expect(parsed).toEqual({
@@ -118,7 +122,20 @@ describe("parsing", () => {
 				reviewDecision: "APPROVED",
 				mergeable: "MERGEABLE",
 				lastCommitDate: "2026-03-14T00:00:00Z",
+				headCommitSha: "abc123def456",
 			});
+		});
+
+		test("empty commits array maps headCommitSha to null", () => {
+			const raw: RawPRReviewStatus = {
+				prNumber: 1,
+				additions: 0,
+				deletions: 0,
+				reviewDecision: null,
+				mergeable: "UNKNOWN",
+				commits: { nodes: [] },
+			};
+			expect(parseReviewStatus(raw).headCommitSha).toBeNull();
 		});
 
 		test("null reviewDecision maps to empty string", () => {
@@ -133,7 +150,7 @@ describe("parsing", () => {
 			expect(parseReviewStatus(raw).reviewDecision).toBe("");
 		});
 
-		test("empty commits array maps to empty lastCommitDate", () => {
+		test("empty commits array maps lastCommitDate to null", () => {
 			const raw: RawPRReviewStatus = {
 				prNumber: 1,
 				additions: 0,
@@ -142,7 +159,7 @@ describe("parsing", () => {
 				mergeable: "UNKNOWN",
 				commits: { nodes: [] },
 			};
-			expect(parseReviewStatus(raw).lastCommitDate).toBe("");
+			expect(parseReviewStatus(raw).lastCommitDate).toBeNull();
 		});
 	});
 
@@ -178,6 +195,7 @@ describe("parsing", () => {
 				reviewDecision: "APPROVED",
 				mergeable: "MERGEABLE",
 				lastCommitDate: "2026-03-14T00:00:00Z",
+				headCommitSha: "abc123def456",
 			};
 			const merged = mergePR(rest, status);
 			expect(merged.additions).toBe(50);
@@ -203,7 +221,7 @@ describe("parsing", () => {
 			expect(merged.deletions).toBe(2);
 			expect(merged.reviewDecision).toBe("");
 			expect(merged.mergeable).toBe("UNKNOWN");
-			expect(merged.lastCommitDate).toBe("");
+			expect(merged.lastCommitDate).toBeNull();
 		});
 	});
 });
@@ -225,7 +243,16 @@ describe("GitHubClient", () => {
 						deletions: 10,
 						reviewDecision: "APPROVED",
 						mergeable: "MERGEABLE",
-						commits: { nodes: [{ commit: { committedDate: "2026-03-14T00:00:00Z" } }] },
+						commits: {
+							nodes: [
+								{
+									commit: {
+										oid: "abc123def456",
+										committedDate: "2026-03-14T00:00:00Z",
+									},
+								},
+							],
+						},
 					};
 				},
 			});
@@ -281,7 +308,16 @@ describe("GitHubClient", () => {
 						deletions: 10,
 						reviewDecision: "REVIEW_REQUIRED",
 						mergeable: "MERGEABLE",
-						commits: { nodes: [{ commit: { committedDate: "2026-03-14T00:00:00Z" } }] },
+						commits: {
+							nodes: [
+								{
+									commit: {
+										oid: "abc123def456",
+										committedDate: "2026-03-14T00:00:00Z",
+									},
+								},
+							],
+						},
 					};
 				},
 			});
@@ -314,6 +350,151 @@ describe("GitHubClient", () => {
 			const client = createGitHubClient(transport);
 			const snapshots = await collectAll(client.fetchFiles("acme/widgets", 42));
 			expect(snapshots).toEqual([]);
+		});
+	});
+
+	describe("fetchCheckRuns", () => {
+		test("parses check runs from transport", async () => {
+			const transport = createMockTransport({
+				async *listCheckRuns() {
+					yield { name: "build", status: "completed", conclusion: "success" };
+					yield { name: "lint", status: "completed", conclusion: "failure" };
+					yield { name: "deploy", status: "in_progress", conclusion: null };
+				},
+			});
+			const client = createGitHubClient(transport);
+			const checks = await client.fetchCheckRuns("acme/widgets", "abc123");
+			expect(checks).toEqual([
+				{ name: "build", status: "completed", conclusion: "success" },
+				{ name: "lint", status: "completed", conclusion: "failure" },
+				{ name: "deploy", status: "in_progress", conclusion: null },
+			]);
+		});
+
+		test("returns empty array when no check runs", async () => {
+			const transport = createMockTransport({
+				async *listCheckRuns() {},
+			});
+			const client = createGitHubClient(transport);
+			const checks = await client.fetchCheckRuns("acme/widgets", "abc123");
+			expect(checks).toEqual([]);
+		});
+	});
+
+	describe("fetchReviews", () => {
+		test("deduplicates to latest review per user", async () => {
+			const transport = createMockTransport({
+				async *listReviews() {
+					yield {
+						user: { login: "alice" },
+						state: "CHANGES_REQUESTED",
+						submitted_at: "2026-03-01T00:00:00Z",
+					};
+					yield {
+						user: { login: "alice" },
+						state: "APPROVED",
+						submitted_at: "2026-03-02T00:00:00Z",
+					};
+					yield {
+						user: { login: "bob" },
+						state: "COMMENTED",
+						submitted_at: "2026-03-01T00:00:00Z",
+					};
+				},
+			});
+			const client = createGitHubClient(transport);
+			const reviews = await client.fetchReviews("acme/widgets", 42);
+			expect(reviews).toEqual([
+				{ user: "alice", state: "APPROVED" },
+				{ user: "bob", state: "COMMENTED" },
+			]);
+		});
+
+		test("filters out PENDING reviews", async () => {
+			const transport = createMockTransport({
+				async *listReviews() {
+					yield {
+						user: { login: "alice" },
+						state: "APPROVED",
+						submitted_at: "2026-03-01T00:00:00Z",
+					};
+					yield {
+						user: { login: "bob" },
+						state: "PENDING",
+						submitted_at: "2026-03-01T00:00:00Z",
+					};
+				},
+			});
+			const client = createGitHubClient(transport);
+			const reviews = await client.fetchReviews("acme/widgets", 42);
+			expect(reviews).toHaveLength(1);
+			expect(reviews[0]!.user).toBe("alice");
+		});
+
+		test("returns empty array when no reviews", async () => {
+			const transport = createMockTransport({
+				async *listReviews() {},
+			});
+			const client = createGitHubClient(transport);
+			const reviews = await client.fetchReviews("acme/widgets", 42);
+			expect(reviews).toEqual([]);
+		});
+	});
+
+	describe("fetchReviewComments", () => {
+		test("counts total, unresolved, unresolvedHuman, and unresolvedBot threads", async () => {
+			const transport = createMockTransport({
+				async *fetchReviewThreads() {
+					yield {
+						isResolved: false,
+						comments: { nodes: [{ author: { login: "alice" } }] },
+					};
+					yield {
+						isResolved: true,
+						comments: { nodes: [{ author: { login: "bob" } }] },
+					};
+					yield {
+						isResolved: false,
+						comments: { nodes: [{ author: { login: "app/copilot-swe-agent" } }] },
+					};
+				},
+			});
+			const client = createGitHubClient(transport);
+			const counts = await client.fetchReviewComments("acme/widgets", 42, [
+				"app/copilot-swe-agent",
+			]);
+			expect(counts).toEqual({
+				total: 3,
+				unresolved: 2,
+				unresolvedHuman: 1,
+				unresolvedBot: 1,
+			});
+		});
+
+		test("returns zeroes when no threads", async () => {
+			const transport = createMockTransport({
+				async *fetchReviewThreads() {},
+			});
+			const client = createGitHubClient(transport);
+			const counts = await client.fetchReviewComments("acme/widgets", 42, []);
+			expect(counts).toEqual({
+				total: 0,
+				unresolved: 0,
+				unresolvedHuman: 0,
+				unresolvedBot: 0,
+			});
+		});
+
+		test("thread with no author counts as unresolvedHuman", async () => {
+			const transport = createMockTransport({
+				async *fetchReviewThreads() {
+					yield { isResolved: false, comments: { nodes: [] } };
+				},
+			});
+			const client = createGitHubClient(transport);
+			const counts = await client.fetchReviewComments("acme/widgets", 42, []);
+			expect(counts.unresolvedHuman).toBe(1);
+			expect(counts.unresolvedBot).toBe(0);
 		});
 	});
 });

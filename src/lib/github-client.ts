@@ -9,7 +9,7 @@ import type {
 	RawFileChange,
 	GitHubTransport,
 } from "./github-transport";
-import type { PR, PRDetail, FileChange } from "./types";
+import type { PR, PRDetail, FileChange, CheckRun, Review, CommentCounts } from "./types";
 
 // Re-export transport types that callers may need
 export type {
@@ -18,10 +18,11 @@ export type {
 	RawRestPR,
 	RawPRReviewStatus,
 	RawFileChange,
+	RawCheckRun,
 } from "./github-transport";
 
 // Re-export domain types for backward compatibility
-export type { PR, PRDetail, FileChange } from "./types";
+export type { PR, PRDetail, FileChange, CheckRun, Review, CommentCounts } from "./types";
 
 // ── Intermediate parsed types ───────────────────────────────────────────────
 
@@ -44,7 +45,8 @@ export interface ReviewStatus {
 	deletions: number;
 	reviewDecision: string;
 	mergeable: string;
-	lastCommitDate: string;
+	lastCommitDate: string | null;
+	headCommitSha: string | null;
 }
 
 // ── Pure parsing functions ──────────────────────────────────────────────────
@@ -66,12 +68,14 @@ export function parseRestPR(raw: RawRestPR): RestPR {
 }
 
 export function parseReviewStatus(raw: RawPRReviewStatus): ReviewStatus {
+	const commitNode = raw.commits.nodes[0]?.commit;
 	return {
 		additions: raw.additions ?? 0,
 		deletions: raw.deletions ?? 0,
 		reviewDecision: raw.reviewDecision ?? "",
 		mergeable: raw.mergeable ?? "UNKNOWN",
-		lastCommitDate: raw.commits.nodes[0]?.commit?.committedDate ?? "",
+		lastCommitDate: commitNode?.committedDate ?? null,
+		headCommitSha: commitNode?.oid ?? null,
 	};
 }
 
@@ -90,7 +94,8 @@ export function mergePR(rest: RestPR, status?: ReviewStatus): PR {
 		deletions: status?.deletions ?? rest.deletions,
 		reviewDecision: status?.reviewDecision ?? "",
 		mergeable: status?.mergeable ?? "UNKNOWN",
-		lastCommitDate: status?.lastCommitDate ?? "",
+		lastCommitDate: status?.lastCommitDate ?? null,
+		headCommitSha: status?.headCommitSha ?? null,
 	};
 }
 
@@ -100,6 +105,14 @@ export interface GitHubClient {
 	fetchOpenPRs(repo: string, signal?: AbortSignal): AsyncIterable<PR[]>;
 	fetchPR(repo: string, prNumber: number, signal?: AbortSignal): Promise<PRDetail>;
 	fetchFiles(repo: string, prNumber: number, signal?: AbortSignal): AsyncIterable<FileChange[]>;
+	fetchCheckRuns(repo: string, commitSha: string, signal?: AbortSignal): Promise<CheckRun[]>;
+	fetchReviews(repo: string, prNumber: number, signal?: AbortSignal): Promise<Review[]>;
+	fetchReviewComments(
+		repo: string,
+		prNumber: number,
+		botLogins: string[],
+		signal?: AbortSignal,
+	): Promise<CommentCounts>;
 }
 
 function parseOwnerRepo(repo: string): [string, string] {
@@ -172,6 +185,87 @@ export function createGitHubClient(transport: GitHubTransport): GitHubClient {
 				files.push(parseFileChange(raw));
 				yield [...files];
 			}
+		},
+
+		async fetchReviews(
+			repo: string,
+			prNumber: number,
+			signal?: AbortSignal,
+		): Promise<Review[]> {
+			const [owner, repoName] = parseOwnerRepo(repo);
+			const rawReviews: Array<{ user: string; state: string; submitted_at: string }> = [];
+			for await (const raw of transport.listReviews(owner, repoName, prNumber, signal)) {
+				if (raw.state === "PENDING") continue;
+				const login = raw.user?.login;
+				if (!login) continue;
+				rawReviews.push({
+					user: login,
+					state: raw.state,
+					submitted_at: raw.submitted_at,
+				});
+			}
+			const byUser = new Map<string, { state: string; submitted_at: string }>();
+			for (const r of rawReviews) {
+				const existing = byUser.get(r.user);
+				if (!existing || r.submitted_at > existing.submitted_at) {
+					byUser.set(r.user, r);
+				}
+			}
+			return Array.from(byUser.entries()).map(([user, r]) => ({
+				user,
+				state: r.state as Review["state"],
+			}));
+		},
+
+		async fetchReviewComments(
+			repo: string,
+			prNumber: number,
+			botLogins: string[],
+			signal?: AbortSignal,
+		): Promise<CommentCounts> {
+			const [owner, repoName] = parseOwnerRepo(repo);
+			const botSet = new Set(botLogins);
+			let total = 0;
+			let unresolved = 0;
+			let unresolvedHuman = 0;
+			let unresolvedBot = 0;
+
+			for await (const thread of transport.fetchReviewThreads(
+				owner,
+				repoName,
+				prNumber,
+				signal,
+			)) {
+				total++;
+				if (!thread.isResolved) {
+					unresolved++;
+					const author = thread.comments.nodes[0]?.author?.login;
+					if (author && botSet.has(author)) {
+						unresolvedBot++;
+					} else {
+						unresolvedHuman++;
+					}
+				}
+			}
+
+			return { total, unresolved, unresolvedHuman, unresolvedBot };
+		},
+
+		async fetchCheckRuns(
+			repo: string,
+			commitSha: string,
+			signal?: AbortSignal,
+		): Promise<CheckRun[]> {
+			const [owner, repoName] = parseOwnerRepo(repo);
+			const checks: CheckRun[] = [];
+			for await (const raw of transport.listCheckRuns(owner, repoName, commitSha, signal)) {
+				checks.push({
+					name: raw.name,
+					status: raw.status as CheckRun["status"],
+					conclusion: raw.conclusion as CheckRun["conclusion"],
+				});
+			}
+			return checks;
 		},
 	};
 }

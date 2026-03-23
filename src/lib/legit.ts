@@ -3,7 +3,7 @@ import { loadConfig, saveConfig, addRepo, type LegitConfig } from "./config";
 import { createGitHubTransport, type HttpFetch } from "./github-transport";
 import { createGitHubClient, type GitHubClient } from "./github-client";
 import { categorizeFiles as _categorizeFiles } from "./file-categorizer";
-import type { PR, PRDetail, FileChange, FileCategorization } from "./types";
+import type { PR, PRDetail, FileChange, FileCategorization, PRSummary } from "./types";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -209,4 +209,33 @@ export class Legit {
 	categorizeFiles(files: FileChange[]): FileCategorization {
 		return _categorizeFiles(files, this.config.fileRules);
 	}
+
+	async fetchPRSummary(repo: string, number: number, signal?: AbortSignal): Promise<PRSummary> {
+		// Phase 1: fetch PR detail (need headCommitSha for check runs)
+		const detail = await this.client.fetchPR(repo, number, signal);
+
+		// Phase 2: fetch enrichments in parallel
+		const [checks, reviews, comments, files] = await Promise.all([
+			detail.headCommitSha
+				? this.client.fetchCheckRuns(repo, detail.headCommitSha, signal)
+				: Promise.resolve([]),
+			this.client.fetchReviews(repo, number, signal),
+			this.client.fetchReviewComments(repo, number, this.config.botLogins, signal),
+			collectFiles(this.client.fetchFiles(repo, number, signal)),
+		]);
+
+		return {
+			...detail,
+			checks,
+			reviews,
+			comments,
+			files: this.categorizeFiles(files),
+		};
+	}
+}
+
+async function collectFiles(iter: AsyncIterable<FileChange[]>): Promise<FileChange[]> {
+	let last: FileChange[] = [];
+	for await (const snapshot of iter) last = snapshot;
+	return last;
 }

@@ -49,12 +49,17 @@ describe("runCommand", () => {
 		expect(output[0].number).toBe(42);
 	});
 
-	test("pr <number> returns PR detail", async () => {
+	test("pr <number> returns PR summary with checks, reviews, comments, and files", async () => {
 		const { fetch } = createMockFetch([
+			// fetchPR: REST detail
 			{
 				url: /\/pulls\/42$/,
-				response: { status: 200, body: { ...makeSampleRestPR(42), body: "Detail body" } },
+				response: {
+					status: 200,
+					body: { ...makeSampleRestPR(42), body: "Detail body" },
+				},
 			},
+			// fetchPR: GraphQL review status
 			{
 				url: /\/graphql/,
 				method: "POST",
@@ -63,12 +68,73 @@ describe("runCommand", () => {
 					body: makeGraphQLResponse([{ ...SAMPLE_GQL_META, number: 42 }]),
 				},
 			},
+			// fetchCheckRuns
+			{
+				url: /\/check-runs/,
+				response: {
+					status: 200,
+					body: {
+						total_count: 1,
+						check_runs: [{ name: "build", status: "completed", conclusion: "success" }],
+					},
+				},
+			},
+			// fetchReviews
+			{
+				url: /\/reviews/,
+				response: {
+					status: 200,
+					body: [
+						{
+							user: { login: "bob" },
+							state: "APPROVED",
+							submitted_at: "2026-03-01T00:00:00Z",
+						},
+					],
+				},
+			},
+			// fetchReviewComments (GraphQL)
+			{
+				url: /\/graphql/,
+				method: "POST",
+				response: {
+					status: 200,
+					body: {
+						data: {
+							repository: {
+								pullRequest: {
+									reviewThreads: {
+										pageInfo: { hasNextPage: false, endCursor: null },
+										nodes: [],
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			// fetchFiles
+			{
+				url: /\/files/,
+				response: { status: 200, body: [] },
+			},
 		]);
 		const app = createTestLegit({ httpFetch: fetch });
 		const result = await runCommand(["pr", "42"], app);
 		const output = result.output as any;
 		expect(output.number).toBe(42);
 		expect(output.body).toBe("Detail body");
+		expect(output.checks).toEqual([
+			{ name: "build", status: "completed", conclusion: "success" },
+		]);
+		expect(output.reviews).toEqual([{ user: "bob", state: "APPROVED" }]);
+		expect(output.comments).toEqual({
+			total: 0,
+			unresolved: 0,
+			unresolvedHuman: 0,
+			unresolvedBot: 0,
+		});
+		expect(output.files).toBeDefined();
 	});
 
 	test("pr without number returns error", async () => {

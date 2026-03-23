@@ -22,11 +22,57 @@ export interface PR {
 	assignees: string[];
 	reviewDecision: string;
 	mergeable: string;
-	lastCommitDate: string;
+	lastCommitDate: string | null;
+	headCommitSha: string | null;
 }
 
 export interface PRDetail extends PR {
 	body: string;
+}
+
+// ── Check runs ──────────────────────────────────────────────────────────────
+
+export type CheckConclusion =
+	| "success"
+	| "failure"
+	| "neutral"
+	| "cancelled"
+	| "skipped"
+	| "stale"
+	| "timed_out"
+	| "action_required";
+
+export interface CheckRun {
+	name: string;
+	status: "completed" | "in_progress" | "queued";
+	conclusion: CheckConclusion | null;
+}
+
+// ── Reviews ─────────────────────────────────────────────────────────────────
+
+export type ReviewState = "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED";
+
+export interface Review {
+	user: string;
+	state: ReviewState;
+}
+
+// ── Comment counts ──────────────────────────────────────────────────────────
+
+export interface CommentCounts {
+	total: number;
+	unresolved: number;
+	unresolvedHuman: number;
+	unresolvedBot: number;
+}
+
+// ── PR Summary ──────────────────────────────────────────────────────────────
+
+export interface PRSummary extends PRDetail {
+	checks: CheckRun[];
+	reviews: Review[];
+	comments: CommentCounts;
+	files: FileCategorization;
 }
 
 // ── File categorization ─────────────────────────────────────────────────────

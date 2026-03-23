@@ -8,7 +8,7 @@
  *   auth     — print auth info as JSON (no token)
  *   config   — print current config as JSON
  *   prs      — fetch and print open PRs as JSON
- *   pr <n>   — fetch and print single PR detail as JSON
+ *   pr <n>   — fetch and print PR summary as JSON (PR detail plus checks, reviews, comment threads, files)
  *   files <n> — fetch and print file categorization as JSON
  */
 
@@ -54,7 +54,7 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
 				return { error: "Usage: legit pr <number>" };
 			}
 			const prNumber = Number(rawNumber);
-			return { output: await app.fetchPR(app.repoSlug, prNumber) };
+			return { output: await app.fetchPRSummary(app.repoSlug, prNumber) };
 		}
 
 		case "files": {
