@@ -160,9 +160,38 @@ describe("AppShell", () => {
 		mockInput.pressKey("right");
 		mockInput.pressKey("left");
 		mockInput.pressKey("3");
+		mockInput.pressKey("0");
+		mockInput.pressKey("[");
+		mockInput.pressKey("]");
 		await renderOnce();
 
 		expect(calls).toContain(2);
 		expect(calls).toContain(0);
+	});
+
+	test("number keys map 0 to All and 1 to first repo", async () => {
+		const calls: number[] = [];
+		const { renderOnce, mockInput } = await testRender(
+			() => (
+				<AppShell
+					prs={[]}
+					loading={false}
+					repoSlug="acme/widgets"
+					tabs={["All", "acme/widgets", "acme/gadgets"]}
+					activeTab={2}
+					onTabChange={(index) => calls.push(index)}
+					onRefreshSelected={() => {}}
+					onRefreshAll={() => {}}
+				/>
+			),
+			{ width: 120, height: 20 },
+		);
+
+		await renderOnce();
+		mockInput.pressKey("0");
+		mockInput.pressKey("1");
+		await renderOnce();
+
+		expect(calls).toEqual([0, 1]);
 	});
 });

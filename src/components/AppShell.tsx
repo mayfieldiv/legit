@@ -30,17 +30,21 @@ export function AppShell(props: AppShellProps) {
 		const current = props.activeTab ?? 0;
 		const name = event.name;
 
-		if (name === "l" || name === "right") {
+		if (name === "l" || name === "right" || name === "]") {
 			props.onTabChange(Math.min(tabCount() - 1, current + 1));
 			return;
 		}
-		if (name === "h" || name === "left") {
+		if (name === "h" || name === "left" || name === "[") {
 			props.onTabChange(Math.max(0, current - 1));
 			return;
 		}
 
+		if (name === "0") {
+			props.onTabChange(0);
+			return;
+		}
 		if (/^[1-9]$/.test(name)) {
-			const index = Number(name) - 1;
+			const index = Number(name);
 			if (index < tabCount()) {
 				props.onTabChange(index);
 			}
