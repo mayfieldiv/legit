@@ -44,7 +44,7 @@ export interface RawCheckRun {
 }
 
 export interface RawReview {
-	user: { login: string };
+	user: { login: string } | null;
 	state: string;
 	submitted_at: string;
 }

@@ -196,8 +196,10 @@ export function createGitHubClient(transport: GitHubTransport): GitHubClient {
 			const rawReviews: Array<{ user: string; state: string; submitted_at: string }> = [];
 			for await (const raw of transport.listReviews(owner, repoName, prNumber, signal)) {
 				if (raw.state === "PENDING") continue;
+				const login = raw.user?.login;
+				if (!login) continue;
 				rawReviews.push({
-					user: raw.user.login,
+					user: login,
 					state: raw.state,
 					submitted_at: raw.submitted_at,
 				});
