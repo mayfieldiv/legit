@@ -64,9 +64,6 @@ function PRRow(props: {
 			</Show>
 			<Cell flexGrow={1} paddingRight={props.showRepo ? 1 : 3}>
 				<span style={{ fg: fg() }}>{props.pr.title}</span>
-				<Show when={props.pr.isDraft}>
-					<span style={{ fg: "yellow" }}> draft</span>
-				</Show>
 			</Cell>
 			<Cell width={COL.author} paddingRight={1}>
 				<span style={{ fg: props.selected ? "white" : "green" }}>{props.pr.author}</span>
@@ -80,6 +77,9 @@ function PRRow(props: {
 				<span style={{ fg: fg() }}>{formatAge(props.pr.createdAt)}</span>
 			</Cell>
 			<Cell width={COL.review}>
+				<Show when={props.pr.isDraft}>
+					<span style={{ fg: props.selected ? "white" : "yellow" }}>draft </span>
+				</Show>
 				<span style={{ fg: fg() }}>{formatReviewDecision(props.pr.reviewDecision)}</span>
 			</Cell>
 		</box>

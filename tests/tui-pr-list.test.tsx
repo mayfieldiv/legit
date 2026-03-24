@@ -53,8 +53,10 @@ describe("PRList", () => {
 		expect(frame).toBeDefined();
 	});
 
-	test("shows draft indicator for draft PRs", async () => {
-		const prs = [makePR({ number: 1, title: "WIP thing", isDraft: true })];
+	test("shows draft indicator in review column for draft PRs", async () => {
+		const prs = [
+			makePR({ number: 1, title: "WIP thing", isDraft: true, reviewDecision: "APPROVED" }),
+		];
 
 		const { renderOnce, captureCharFrame } = await testRender(
 			() => <PRList prs={prs} selectedIndex={0} />,
@@ -63,7 +65,11 @@ describe("PRList", () => {
 
 		await renderOnce();
 		const frame = captureCharFrame();
+		// Draft indicator should appear in the review column alongside the decision
 		expect(frame).toContain("draft");
+		expect(frame).toContain("approved");
+		// Title should NOT contain the draft suffix
+		expect(frame).not.toContain("WIP thing draft");
 	});
 
 	test("shows size as additions/deletions", async () => {
