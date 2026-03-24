@@ -62,7 +62,7 @@ function PRRow(props: {
 					</span>
 				</Cell>
 			</Show>
-			<Cell flexGrow={1} paddingRight={props.showRepo ? 1 : 3}>
+			<Cell flexGrow={1} paddingRight={props.showRepo ? 2 : 3}>
 				<span style={{ fg: fg() }}>{props.pr.title}</span>
 			</Cell>
 			<Cell width={COL.author} paddingRight={1}>
