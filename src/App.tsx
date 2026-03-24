@@ -158,6 +158,7 @@ export function App(props: AppProps) {
 		clearTimeout(debounceTimer);
 		summaryController?.abort();
 		if (!repo) {
+			props.app.reloadConfig();
 			loadPRs();
 			return;
 		}
@@ -169,6 +170,7 @@ export function App(props: AppProps) {
 	function handleRefreshAll() {
 		clearTimeout(debounceTimer);
 		summaryController?.abort();
+		props.app.reloadConfig();
 		loadPRs();
 	}
 

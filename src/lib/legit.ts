@@ -162,6 +162,12 @@ export class Legit {
 		return this._config;
 	}
 
+	/** Re-read config from disk, clearing the in-memory cache. */
+	reloadConfig(): LegitConfig {
+		this._config = undefined;
+		return this.config;
+	}
+
 	get client(): GitHubClient {
 		if (!this._client) {
 			const transport = createGitHubTransport(this.auth.token, this._options.httpFetch);
