@@ -101,7 +101,9 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
 }
 
 function trackedRepos(app: Legit): string[] {
-	return [...new Set(app.config.repos)];
+	const repos = new Set(app.config.repos);
+	repos.add(app.repoSlug);
+	return [...repos];
 }
 
 function parsePrsArgs(args: string[]): { repo?: string; all: boolean; error?: string } {

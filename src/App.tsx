@@ -18,6 +18,7 @@ export function App(props: AppProps) {
 	const [summary, setSummary] = createSignal<PRSummary | undefined>();
 
 	const repoControllers = new Map<string, AbortController>();
+	const [_loadingRepos, setLoadingRepos] = createSignal(new Set<string>());
 	let summaryController: AbortController | undefined;
 	let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 	/** Session cache (not keyed by commit); cleared on refresh. */
@@ -60,12 +61,13 @@ export function App(props: AppProps) {
 	}
 
 	function setRepoLoading(repo: string, value: boolean) {
-		setLoading((prev) => {
-			if (activeTab() === 0) {
-				return value || prev;
-			}
-			if (currentRepoSlug() === repo) return value;
-			return prev;
+		setLoadingRepos((prev) => {
+			const next = new Set(prev);
+			if (value) next.add(repo);
+			else next.delete(repo);
+			// Derive global loading: true if any repo is still loading
+			setLoading(next.size > 0);
+			return next;
 		});
 	}
 
@@ -105,6 +107,7 @@ export function App(props: AppProps) {
 	async function loadPRs() {
 		for (const c of repoControllers.values()) c.abort();
 		repoControllers.clear();
+		setLoadingRepos(new Set<string>());
 		setPrsByRepo({});
 		setPrs([]);
 		setLoading(true);
@@ -114,8 +117,15 @@ export function App(props: AppProps) {
 		setSelectedPr(undefined);
 		const repos = discoverRepos();
 		setRepoTabs(repos);
-		await Promise.all(repos.map((repo) => loadRepo(repo)));
-		setLoading(false);
+		// Start all repo fetches, then snapshot the controllers so we can
+		// detect if a newer loadPRs call superseded this one.
+		const pending = repos.map((repo) => loadRepo(repo));
+		const controllers = repos.map((repo) => repoControllers.get(repo)!);
+		await Promise.all(pending);
+		const stale = controllers.some((c) => c.signal.aborted);
+		if (!stale) {
+			setLoading(false);
+		}
 	}
 
 	async function fetchSummary(pr: PR) {
