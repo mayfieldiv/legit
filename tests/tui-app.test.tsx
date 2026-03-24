@@ -15,7 +15,7 @@ describe("AppShell", () => {
 					onRefreshAll={() => {}}
 				/>
 			),
-			{ width: 120, height: 20 },
+			{ width: 130, height: 20 },
 		);
 
 		await renderOnce();
@@ -39,7 +39,7 @@ describe("AppShell", () => {
 					onRefreshAll={() => {}}
 				/>
 			),
-			{ width: 120, height: 20 },
+			{ width: 130, height: 20 },
 		);
 
 		await renderOnce();
@@ -59,7 +59,7 @@ describe("AppShell", () => {
 					onRefreshAll={() => {}}
 				/>
 			),
-			{ width: 120, height: 20 },
+			{ width: 130, height: 20 },
 		);
 
 		await renderOnce();
@@ -79,7 +79,7 @@ describe("AppShell", () => {
 					onRefreshAll={() => {}}
 				/>
 			),
-			{ width: 120, height: 20 },
+			{ width: 130, height: 20 },
 		);
 
 		await renderOnce();
@@ -104,7 +104,7 @@ describe("AppShell", () => {
 					onRefreshAll={() => {}}
 				/>
 			),
-			{ width: 120, height: 20 },
+			{ width: 130, height: 20 },
 		);
 
 		await renderOnce();
@@ -126,7 +126,7 @@ describe("AppShell", () => {
 					onRefreshAll={() => {}}
 				/>
 			),
-			{ width: 120, height: 20 },
+			{ width: 130, height: 20 },
 		);
 
 		await renderOnce();
@@ -151,7 +151,7 @@ describe("AppShell", () => {
 					onRefreshAll={() => {}}
 				/>
 			),
-			{ width: 120, height: 20 },
+			{ width: 130, height: 20 },
 		);
 
 		await renderOnce();
@@ -184,7 +184,7 @@ describe("AppShell", () => {
 					onRefreshAll={() => {}}
 				/>
 			),
-			{ width: 120, height: 20 },
+			{ width: 130, height: 20 },
 		);
 
 		await renderOnce();

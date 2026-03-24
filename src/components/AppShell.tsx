@@ -109,7 +109,7 @@ export function AppShell(props: AppShellProps) {
 							<box width={1} height="100%">
 								<text>│</text>
 							</box>
-							<box width={40}>
+							<box width={50}>
 								<SummaryPanel summary={props.summary} pr={props.selectedPr} />
 							</box>
 						</box>
