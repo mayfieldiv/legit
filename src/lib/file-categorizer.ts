@@ -14,6 +14,9 @@ const BUILT_IN_RULES: Array<{ glob: Bun.Glob; category: FileCategory }> = [
 	{ glob: new Bun.Glob("**/*-lock.json"), category: "generated" },
 	{ glob: new Bun.Glob("**/*.snap"), category: "generated" },
 	{ glob: new Bun.Glob("**/*.generated.*"), category: "generated" },
+	{ glob: new Bun.Glob("**/generated/**"), category: "generated" },
+	{ glob: new Bun.Glob("**/*.Designer.cs"), category: "generated" },
+	{ glob: new Bun.Glob("**/*ModelSnapshot.cs"), category: "generated" },
 	// test
 	{ glob: new Bun.Glob("**/test/**"), category: "test" },
 	{ glob: new Bun.Glob("**/tests/**"), category: "test" },
