@@ -1,6 +1,9 @@
-import { Show, For } from "solid-js";
+import { Show, For, createMemo } from "solid-js";
 import type { PR, PRSummary, CheckRun, FileCategory } from "../lib/types";
 import { formatAge, formatSize, formatReviewState, sortCheckRuns } from "../lib/format";
+
+/** Max number of individual check lines to show before collapsing. */
+const MAX_VISIBLE_CHECKS = 6;
 
 interface SummaryPanelProps {
 	summary: PRSummary | undefined;
@@ -70,9 +73,9 @@ export function SummaryPanel(props: SummaryPanelProps) {
 					</box>
 				}
 			>
-				{/* Title — truncate to fit, no word wrap */}
-				<box height={1} width="100%">
-					<text truncate={true}>
+				{/* Title — wraps naturally */}
+				<box width="100%">
+					<text>
 						<b>{pr()!.title}</b>
 					</text>
 				</box>
@@ -226,29 +229,85 @@ export function SummaryPanel(props: SummaryPanelProps) {
 
 					{/* CI Checks */}
 					<Show when={summary()!.checks.length > 0}>
-						<box height={1} width="100%">
-							<text>
-								<span style={{ fg: "gray" }}>checks</span>
-							</text>
-						</box>
-						<scrollbox flexGrow={1} width="100%">
-							<box flexDirection="column" width="100%">
-								<For each={sortCheckRuns(summary()!.checks)}>
-									{(check) => {
-										const ci = checkIcon(check);
-										return (
-											<box height={1} width="100%">
-												<text truncate={true}>
-													<span>{"  "}</span>
-													<span style={{ fg: ci.fg }}>{ci.icon}</span>
-													<span> {check.name}</span>
-												</text>
-											</box>
-										);
-									}}
-								</For>
-							</box>
-						</scrollbox>
+						{(() => {
+							const sorted = createMemo(() => sortCheckRuns(summary()!.checks));
+							const total = createMemo(() => sorted().length);
+							const passed = createMemo(
+								() =>
+									sorted().filter(
+										(c) =>
+											c.status === "completed" && c.conclusion === "success",
+									).length,
+							);
+							const failed = createMemo(
+								() =>
+									sorted().filter(
+										(c) =>
+											c.status === "completed" &&
+											(c.conclusion === "failure" ||
+												c.conclusion === "timed_out" ||
+												c.conclusion === "cancelled"),
+									).length,
+							);
+							const pending = createMemo(
+								() => sorted().filter((c) => c.status !== "completed").length,
+							);
+							const visible = createMemo(() => sorted().slice(0, MAX_VISIBLE_CHECKS));
+							const overflow = createMemo(() =>
+								Math.max(0, total() - MAX_VISIBLE_CHECKS),
+							);
+
+							return (
+								<>
+									<box height={1} width="100%">
+										<text>
+											<span style={{ fg: "gray" }}>checks </span>
+											<Show when={failed() > 0}>
+												<span style={{ fg: "red" }}>
+													{failed()} failed{" "}
+												</span>
+											</Show>
+											<Show when={pending() > 0}>
+												<span style={{ fg: "yellow" }}>
+													{pending()} pending{" "}
+												</span>
+											</Show>
+											<span
+												style={{
+													fg: passed() === total() ? "green" : "gray",
+												}}
+											>
+												{passed()}/{total()} passed
+											</span>
+										</text>
+									</box>
+									<For each={visible()}>
+										{(check) => {
+											const ci = checkIcon(check);
+											return (
+												<box height={1} width="100%">
+													<text truncate={true}>
+														<span>{"  "}</span>
+														<span style={{ fg: ci.fg }}>{ci.icon}</span>
+														<span> {check.name}</span>
+													</text>
+												</box>
+											);
+										}}
+									</For>
+									<Show when={overflow() > 0}>
+										<box height={1} width="100%">
+											<text>
+												<span style={{ fg: "gray" }}>
+													{" "}
+													+{overflow()} more
+												</span>
+											</text>
+										</box>
+									</Show>
+								</>
+							);
+						})()}
 					</Show>
 				</Show>
 
