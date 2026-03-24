@@ -139,7 +139,8 @@ export function App(props: AppProps) {
 			const result = await props.app.fetchPRSummary(repo, pr.number, ac.signal);
 			if (ac.signal.aborted) return;
 			summaryCache.set(key, result);
-			if (selectedPr()?.number === pr.number) {
+			const selected = selectedPr();
+			if (selected && cacheKey(selected) === key) {
 				setSummary(result);
 			}
 		} catch {
