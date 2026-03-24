@@ -165,17 +165,13 @@ export function App(props: AppProps) {
 	}
 
 	function handleRefreshSelected() {
-		const repo = currentRepoSlug();
+		const pr = selectedPr();
+		if (!pr) return;
 		clearTimeout(debounceTimer);
 		summaryController?.abort();
-		if (!repo) {
-			props.app.reloadConfig();
-			loadPRs();
-			return;
-		}
-		summaryCache.clear();
+		summaryCache.delete(cacheKey(pr));
 		setSummary(undefined);
-		loadRepo(repo);
+		fetchSummary(pr);
 	}
 
 	function handleRefreshAll() {
