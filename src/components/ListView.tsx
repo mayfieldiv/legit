@@ -7,6 +7,7 @@ import type { ScrollBoxRenderable } from "@opentui/core";
 
 interface ListViewProps {
 	prs: PR[];
+	showRepo?: boolean;
 	onRefreshSelected: () => void;
 	onRefreshAll: () => void;
 	onNavigate: (target: ViewTarget) => void;
@@ -109,7 +110,7 @@ export function ListView(props: ListViewProps) {
 
 	return (
 		<box flexDirection="column" flexGrow={1} width="100%">
-			<PRListHeader />
+			<PRListHeader showRepo={props.showRepo} />
 			<scrollbox
 				ref={(el: ScrollBoxRenderable) => {
 					scrollRef = el;
@@ -117,7 +118,12 @@ export function ListView(props: ListViewProps) {
 				flexGrow={1}
 				width="100%"
 			>
-				<PRList prs={props.prs} selectedIndex={selection.index()} onSelect={selectIndex} />
+				<PRList
+					prs={props.prs}
+					selectedIndex={selection.index()}
+					showRepo={props.showRepo}
+					onSelect={selectIndex}
+				/>
 			</scrollbox>
 		</box>
 	);

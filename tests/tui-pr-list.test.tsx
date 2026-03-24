@@ -142,6 +142,38 @@ describe("PRList", () => {
 		expect(frame).not.toContain("author or other columns");
 	});
 
+	test("shows repo column when showRepo is true", async () => {
+		const prs = [
+			makePR({ number: 1, title: "First PR", repoSlug: "acme/widgets" }),
+			makePR({ number: 2, title: "Second PR", repoSlug: "acme/gadgets" }),
+		];
+
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => <PRList prs={prs} selectedIndex={0} showRepo={true} />,
+			{ width: 120, height: 20 },
+		);
+
+		await renderOnce();
+		const frame = captureCharFrame();
+
+		expect(frame).toContain("widgets");
+		expect(frame).toContain("gadgets");
+	});
+
+	test("hides repo column when showRepo is false", async () => {
+		const prs = [makePR({ number: 1, title: "First PR", repoSlug: "acme/widgets" })];
+
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => <PRList prs={prs} selectedIndex={0} showRepo={false} />,
+			{ width: 120, height: 20 },
+		);
+
+		await renderOnce();
+		const frame = captureCharFrame();
+
+		expect(frame).not.toContain("widgets");
+	});
+
 	test("keeps a visible gap before the author column when title is truncated", async () => {
 		const prs = [
 			makePR({

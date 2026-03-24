@@ -10,6 +10,7 @@ interface AppShellProps {
 	prs: PR[];
 	loading: boolean;
 	repoSlug: string;
+	showRepo?: boolean;
 	error?: string;
 	onRefreshSelected: () => void;
 	onRefreshAll: () => void;
@@ -97,6 +98,7 @@ export function AppShell(props: AppShellProps) {
 						<box flexDirection="row" flexGrow={1} width="100%">
 							<ListView
 								prs={props.prs}
+								showRepo={props.showRepo}
 								onRefreshSelected={props.onRefreshSelected}
 								onRefreshAll={props.onRefreshAll}
 								onNavigate={setView}

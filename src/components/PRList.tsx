@@ -1,19 +1,21 @@
 import { For, Show } from "solid-js";
 import type { PR } from "../lib/types";
 import type { MouseEvent } from "@opentui/core";
-import { formatAge, formatSize, formatReviewDecision } from "../lib/format";
+import { formatAge, formatSize, formatReviewDecision, formatRepoShort } from "../lib/format";
 
 interface PRListProps {
 	prs: PR[];
 	selectedIndex: number;
+	showRepo?: boolean;
 	onSelect?: (index: number) => void;
 }
 
 // Column widths — fixed columns; title gets remaining space via flexGrow
 const COL = {
 	pr: 7,
+	repo: 14,
 	author: 14,
-	size: 18,
+	size: 14,
 	age: 6,
 	review: 18,
 } as const;
@@ -36,6 +38,7 @@ function Cell(props: { width?: number; flexGrow?: number; paddingRight?: number;
 function PRRow(props: {
 	pr: PR;
 	selected: boolean;
+	showRepo?: boolean;
 	id: string;
 	onMouseDown?: (e: MouseEvent) => void;
 }) {
@@ -52,7 +55,14 @@ function PRRow(props: {
 			<Cell width={COL.pr} paddingRight={1}>
 				<span style={{ fg: props.selected ? "white" : "cyan" }}>#{props.pr.number}</span>
 			</Cell>
-			<Cell flexGrow={1} paddingRight={3}>
+			<Show when={props.showRepo}>
+				<Cell width={COL.repo} paddingRight={1}>
+					<span style={{ fg: props.selected ? "white" : "magenta" }}>
+						{formatRepoShort(props.pr.repoSlug)}
+					</span>
+				</Cell>
+			</Show>
+			<Cell flexGrow={1} paddingRight={props.showRepo ? 1 : 3}>
 				<span style={{ fg: fg() }}>{props.pr.title}</span>
 				<Show when={props.pr.isDraft}>
 					<span style={{ fg: "yellow" }}> draft</span>
@@ -76,12 +86,17 @@ function PRRow(props: {
 	);
 }
 
-export function PRListHeader() {
+export function PRListHeader(props: { showRepo?: boolean }) {
 	return (
 		<box flexDirection="row" width="100%" height={1}>
 			<Cell width={COL.pr} paddingRight={1}>
 				<b>PR</b>
 			</Cell>
+			<Show when={props.showRepo}>
+				<Cell width={COL.repo} paddingRight={1}>
+					<b>Repo</b>
+				</Cell>
+			</Show>
 			<Cell flexGrow={1} paddingRight={3}>
 				<b>Title</b>
 			</Cell>
@@ -111,6 +126,7 @@ export function PRList(props: PRListProps) {
 							id={`pr-row-${index()}`}
 							pr={pr}
 							selected={index() === props.selectedIndex}
+							showRepo={props.showRepo}
 							onMouseDown={(e: MouseEvent) => {
 								e.preventDefault();
 								props.onSelect?.(index());

@@ -181,6 +181,7 @@ export function App(props: AppProps) {
 			prs={prs()}
 			loading={loading()}
 			repoSlug={currentRepoSlug() ?? "All repos"}
+			showRepo={activeTab() === 0 && repoTabs().length > 1}
 			error={error()}
 			onRefreshSelected={handleRefreshSelected}
 			onRefreshAll={handleRefreshAll}

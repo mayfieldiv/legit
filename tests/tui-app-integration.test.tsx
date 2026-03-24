@@ -181,7 +181,7 @@ describe("App integration", () => {
 		app.config.repos = ["acme/widgets", "acme/gadgets"];
 
 		const { renderOnce, captureCharFrame } = await testRender(() => <App app={app} />, {
-			width: 120,
+			width: 150,
 			height: 20,
 		});
 
@@ -194,6 +194,10 @@ describe("App integration", () => {
 		expect(frame).toContain("acme/gadgets");
 		expect(frame).toContain("PR #1");
 		expect(frame).toContain("PR #2");
+		// Repo column should show short repo names
+		expect(frame).toContain("widgets");
+		expect(frame).toContain("gadgets");
+		expect(frame).toContain("Repo");
 	});
 
 	test("switching tabs keeps a PR selected for summary panel", async () => {
@@ -229,7 +233,7 @@ describe("App integration", () => {
 		const { renderOnce, captureCharFrame, mockInput } = await testRender(
 			() => <App app={app} />,
 			{
-				width: 120,
+				width: 150,
 				height: 20,
 			},
 		);

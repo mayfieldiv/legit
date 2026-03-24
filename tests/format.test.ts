@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { formatAge, formatSize, formatReviewDecision } from "../src/lib/format";
+import { formatAge, formatSize, formatReviewDecision, formatRepoShort } from "../src/lib/format";
 
 describe("formatAge", () => {
 	test("returns 'today' for dates less than a day ago", () => {
@@ -42,6 +42,24 @@ describe("formatSize", () => {
 
 	test("handles zero", () => {
 		expect(formatSize(0, 0)).toBe("+0/-0");
+	});
+});
+
+describe("formatRepoShort", () => {
+	test("returns repo name from owner/repo slug", () => {
+		expect(formatRepoShort("acme/widgets")).toBe("widgets");
+	});
+
+	test("returns empty string for undefined", () => {
+		expect(formatRepoShort(undefined)).toBe("");
+	});
+
+	test("returns empty string for no argument", () => {
+		expect(formatRepoShort()).toBe("");
+	});
+
+	test("returns the slug itself when no slash", () => {
+		expect(formatRepoShort("widgets")).toBe("widgets");
 	});
 });
 

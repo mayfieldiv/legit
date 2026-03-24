@@ -32,6 +32,16 @@ export function formatSize(additions: number, deletions: number): string {
 }
 
 /**
+ * Format a repo slug for compact display.
+ * "owner/repo" → "repo", undefined → "".
+ */
+export function formatRepoShort(slug?: string): string {
+	if (!slug) return "";
+	const parts = slug.split("/");
+	return parts[parts.length - 1] ?? slug;
+}
+
+/**
  * Format review decision for display.
  */
 export function formatReviewDecision(decision: string): string {
