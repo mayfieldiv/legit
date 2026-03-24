@@ -11,6 +11,7 @@ interface AppShellProps {
 	loading: boolean;
 	repoSlug: string;
 	showRepo?: boolean;
+	resetKey?: number | string;
 	error?: string;
 	onRefreshSelected: () => void;
 	onRefreshAll: () => void;
@@ -99,6 +100,7 @@ export function AppShell(props: AppShellProps) {
 							<ListView
 								prs={props.prs}
 								showRepo={props.showRepo}
+								resetKey={props.resetKey}
 								onRefreshSelected={props.onRefreshSelected}
 								onRefreshAll={props.onRefreshAll}
 								onNavigate={setView}

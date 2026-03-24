@@ -1,4 +1,5 @@
 import { useKeyboard } from "@opentui/solid";
+import { createEffect, on } from "solid-js";
 import { PRList, PRListHeader } from "./PRList";
 import { createListSelection } from "../lib/list-selection";
 import type { PR } from "../lib/types";
@@ -8,6 +9,8 @@ import type { ScrollBoxRenderable } from "@opentui/core";
 interface ListViewProps {
 	prs: PR[];
 	showRepo?: boolean;
+	/** When this value changes, the selection resets to index 0. */
+	resetKey?: number | string;
 	onRefreshSelected: () => void;
 	onRefreshAll: () => void;
 	onNavigate: (target: ViewTarget) => void;
@@ -58,6 +61,18 @@ export function computeScrollTarget({
 export function ListView(props: ListViewProps) {
 	const selection = createListSelection(() => props.prs.length);
 	let scrollRef: ScrollBoxRenderable | undefined;
+
+	// Reset selection to 0 when the tab/dataset changes
+	createEffect(
+		on(
+			() => props.resetKey,
+			() => {
+				selection.select(0);
+				scrollRef?.scrollTo(0);
+			},
+			{ defer: true },
+		),
+	);
 
 	function ensureVisible(direction: "up" | "down") {
 		if (!scrollRef) return;
