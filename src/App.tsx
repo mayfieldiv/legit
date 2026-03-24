@@ -46,6 +46,9 @@ export function App(props: AppProps) {
 					merged.push({ ...pr, repoSlug: repo });
 				}
 			}
+			merged.sort(
+				(a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+			);
 			return merged;
 		}
 		const repo = repoTabs()[tabIndex - 1];
