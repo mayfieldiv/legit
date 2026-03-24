@@ -12,7 +12,7 @@
 - **Wait for TUI output** instead of using `sleep`. Use the tmux skill's `wait-for-text.sh`:
     ```bash
     SOCKET=${TMPDIR:-/tmp}/claude-tmux-sockets/claude.sock
-    /Users/mayfield/vendor/mitsupi/skills/tmux/scripts/wait-for-text.sh \
+    .agents/skills/tmux/scripts/wait-for-text.sh \
       -S "$SOCKET" -t legit-test:0.0 -p "open PRs" -T 10
     ```
 - Prefer testing the real TUI in `tmux`, not only snapshot tests.
