@@ -17,6 +17,7 @@ interface AppShellProps {
 	onRefreshSelected: () => void;
 	onRefreshAll: () => void;
 	onSelectionChange?: (pr: PR) => void;
+	onOpenInBrowser?: (pr: PR) => void;
 	selectedPr?: PR;
 	summary?: PRSummary;
 	tabs?: string[];
@@ -107,6 +108,7 @@ export function AppShell(props: AppShellProps) {
 								onRefreshAll={props.onRefreshAll}
 								onNavigate={setView}
 								onSelectionChange={props.onSelectionChange}
+								onOpenInBrowser={props.onOpenInBrowser}
 							/>
 							<box width={1} height="100%">
 								<text>│</text>

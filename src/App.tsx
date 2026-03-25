@@ -1,7 +1,13 @@
 import { createSignal, onMount, onCleanup } from "solid-js";
+import { execFile } from "child_process";
 import { AppShell } from "./components/AppShell";
 import type { Legit } from "./lib/legit";
 import type { PR, PRSummary } from "./lib/types";
+
+/** Build a GitHub PR URL from a repo slug and PR number. */
+export function prUrl(repoSlug: string, number: number): string {
+	return `https://github.com/${repoSlug}/pull/${number}`;
+}
 
 export interface AppProps {
 	app: Legit;
@@ -173,6 +179,14 @@ export function App(props: AppProps) {
 		fetchSummary(pr);
 	}
 
+	function handleOpenInBrowser(pr: PR) {
+		const slug = pr.repoSlug ?? props.app.repoSlug;
+		const url = prUrl(slug, pr.number);
+		execFile("open", [url], (err) => {
+			if (err) setError(`Failed to open browser: ${err.message}`);
+		});
+	}
+
 	function handleRefreshAll() {
 		clearTimeout(debounceTimer);
 		summaryController?.abort();
@@ -199,6 +213,7 @@ export function App(props: AppProps) {
 			onRefreshSelected={handleRefreshSelected}
 			onRefreshAll={handleRefreshAll}
 			onSelectionChange={handleSelectionChange}
+			onOpenInBrowser={handleOpenInBrowser}
 			selectedPr={selectedPr()}
 			summary={summary()}
 			tabs={tabs()}

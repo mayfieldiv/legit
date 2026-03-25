@@ -16,6 +16,7 @@ interface ListViewProps {
 	onRefreshAll: () => void;
 	onNavigate: (target: ViewTarget) => void;
 	onSelectionChange?: (pr: PR) => void;
+	onOpenInBrowser?: (pr: PR) => void;
 }
 
 /**
@@ -121,6 +122,9 @@ export function ListView(props: ListViewProps) {
 			if (pr) {
 				props.onNavigate({ view: "detail", pr });
 			}
+		} else if (name === "o") {
+			const pr = selection.selectedItem(props.prs);
+			if (pr) props.onOpenInBrowser?.(pr);
 		}
 	});
 
