@@ -73,7 +73,7 @@ describe("formatReviewDecision", () => {
 	});
 
 	test("formats REVIEW_REQUIRED", () => {
-		expect(formatReviewDecision("REVIEW_REQUIRED")).toBe("review required");
+		expect(formatReviewDecision("REVIEW_REQUIRED")).toBe("");
 	});
 
 	test("lowercases unknown decisions", () => {

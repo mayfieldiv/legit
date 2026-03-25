@@ -51,7 +51,7 @@ export function formatReviewDecision(decision: string): string {
 		case "CHANGES_REQUESTED":
 			return "changes requested";
 		case "REVIEW_REQUIRED":
-			return "review required";
+			return "";
 		default:
 			return decision ? decision.toLowerCase() : "";
 	}
