@@ -214,6 +214,86 @@ describe("computeBlocker — precedence ordering", () => {
 	});
 });
 
+// ── Draft PRs ─────────────────────────────────────────────────────────────────
+
+describe("computeBlocker — draft PRs", () => {
+	test("draft PR → waiting-on-author, blocker is author", () => {
+		const pr = makePR({ author: AUTHOR, isDraft: true });
+		const result = computeBlocker(pr, ME);
+		expect(result.tier).toBe("waiting-on-author");
+		expect(result.blocker).toBe(AUTHOR);
+	});
+
+	test("draft reason mentions draft", () => {
+		const pr = makePR({ author: AUTHOR, isDraft: true });
+		const result = computeBlocker(pr, ME);
+		expect(result.reason.toLowerCase()).toContain("draft");
+	});
+
+	test("draft overrides me-blocking (don't review a draft)", () => {
+		const pr = makePR({ author: AUTHOR, isDraft: true, requestedReviewers: [ME] });
+		const result = computeBlocker(pr, ME);
+		expect(result.tier).toBe("waiting-on-author");
+	});
+
+	test("non-draft PR with same data is not waiting-on-author due to draft", () => {
+		const pr = makePR({ author: AUTHOR, isDraft: false });
+		const result = computeBlocker(pr, ME);
+		expect(result.tier).toBe("needs-review");
+	});
+
+	test("draft PR where current user is author → waiting-on-author (blocker = self)", () => {
+		const pr = makePR({ author: ME, isDraft: true });
+		const result = computeBlocker(pr, ME);
+		expect(result.tier).toBe("waiting-on-author");
+		expect(result.blocker).toBe(ME);
+	});
+});
+
+// ── Merge conflicts ───────────────────────────────────────────────────────────
+
+describe("computeBlocker — merge conflicts", () => {
+	test("CONFLICTING → waiting-on-author, blocker is author", () => {
+		const pr = makePR({ author: AUTHOR, mergeable: "CONFLICTING" });
+		const result = computeBlocker(pr, ME);
+		expect(result.tier).toBe("waiting-on-author");
+		expect(result.blocker).toBe(AUTHOR);
+	});
+
+	test("conflict reason mentions conflict", () => {
+		const pr = makePR({ author: AUTHOR, mergeable: "CONFLICTING" });
+		const result = computeBlocker(pr, ME);
+		expect(result.reason.toLowerCase()).toContain("conflict");
+	});
+
+	test("conflict overrides me-blocking", () => {
+		const pr = makePR({ author: AUTHOR, mergeable: "CONFLICTING", requestedReviewers: [ME] });
+		const result = computeBlocker(pr, ME);
+		expect(result.tier).toBe("waiting-on-author");
+	});
+
+	test("MERGEABLE → not conflict-blocked", () => {
+		const pr = makePR({ author: AUTHOR, mergeable: "MERGEABLE" });
+		const result = computeBlocker(pr, ME);
+		expect(result.tier).toBe("needs-review");
+	});
+
+	test("UNKNOWN mergeable → not conflict-blocked", () => {
+		const pr = makePR({ author: AUTHOR, mergeable: "UNKNOWN" });
+		const result = computeBlocker(pr, ME);
+		expect(result.tier).toBe("needs-review");
+	});
+
+	test("CI failing + conflict: CI reason takes precedence", () => {
+		const pr = makePR({ author: AUTHOR, mergeable: "CONFLICTING" });
+		const result = computeBlocker(pr, ME, {
+			checks: [{ name: "ci", status: "completed", conclusion: "failure" }],
+		});
+		expect(result.tier).toBe("waiting-on-author");
+		expect(result.reason.toLowerCase()).toContain("ci");
+	});
+});
+
 // ── Edge cases ────────────────────────────────────────────────────────────────
 
 describe("computeBlocker — edge cases", () => {

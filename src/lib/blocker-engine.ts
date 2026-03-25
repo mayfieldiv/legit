@@ -52,11 +52,13 @@ function isCiFailing(checks: CheckRun[]): boolean {
  *
  * Decision order (first matching rule wins):
  *  1. CI failing          → waiting-on-author (fix CI before reviewing)
- *  2. Current user is a requested reviewer → me-blocking
- *  3. Changes requested (via reviewDecision or individual reviews)
+ *  2. Draft               → waiting-on-author (not ready for review)
+ *  3. Merge conflict      → waiting-on-author (author must rebase)
+ *  4. Current user is a requested reviewer → me-blocking
+ *  5. Changes requested (via reviewDecision or individual reviews)
  *                         → waiting-on-author
- *  4. Another reviewer requested → waiting-on-other
- *  5. Default             → needs-review
+ *  6. Another reviewer requested → waiting-on-other
+ *  7. Default             → needs-review
  */
 export function computeBlocker(pr: PR, currentUser: string, opts?: BlockerOptions): BlockerResult {
 	const checks = opts?.checks ?? [];
@@ -71,7 +73,25 @@ export function computeBlocker(pr: PR, currentUser: string, opts?: BlockerOption
 		};
 	}
 
-	// 2. Current user is a requested reviewer → me-blocking
+	// 2. Draft → waiting-on-author (author isn't ready for review)
+	if (pr.isDraft) {
+		return {
+			blocker: pr.author,
+			tier: "waiting-on-author",
+			reason: "Draft — not ready for review",
+		};
+	}
+
+	// 3. Merge conflict → waiting-on-author (author must rebase)
+	if (pr.mergeable === "CONFLICTING") {
+		return {
+			blocker: pr.author,
+			tier: "waiting-on-author",
+			reason: "Merge conflict",
+		};
+	}
+
+	// 4. Current user is a requested reviewer → me-blocking
 	if (pr.requestedReviewers.includes(currentUser)) {
 		return {
 			blocker: currentUser,
