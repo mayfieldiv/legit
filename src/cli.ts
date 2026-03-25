@@ -59,7 +59,7 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
 						prs = snapshot;
 					}
 					if (options.withBlockers) {
-						const currentUser = app.config.user ?? app.auth.user;
+						const currentUser = app.currentUser;
 						byRepo[repo] = prs.map((pr) => ({
 							...pr,
 							...computeBlocker(pr, currentUser),
@@ -76,7 +76,7 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
 				prs = snapshot;
 			}
 			if (options.withBlockers) {
-				const currentUser = app.config.user ?? app.auth.user;
+				const currentUser = app.currentUser;
 				return {
 					output: prs.map((pr) => ({ ...pr, ...computeBlocker(pr, currentUser) })),
 				};
@@ -113,7 +113,7 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
 			}
 			const prNumber = Number(rawNumber);
 			const summary = await app.fetchPRSummary(app.repoSlug, prNumber);
-			const currentUser = app.config.user ?? app.auth.user;
+			const currentUser = app.currentUser;
 			return {
 				output: computeBlocker(summary, currentUser, {
 					checks: summary.checks,

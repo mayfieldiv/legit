@@ -100,7 +100,7 @@ export function computeBlocker(pr: PR, currentUser: string, opts?: BlockerOption
 		};
 	}
 
-	// 3. Changes requested — via reviewDecision field OR individual reviews
+	// 5. Changes requested — via reviewDecision field OR individual reviews
 	const changesRequestedByReview = reviews.some((r) => r.state === "CHANGES_REQUESTED");
 	const changesRequestedByDecision = pr.reviewDecision === "CHANGES_REQUESTED";
 	if (changesRequestedByDecision || changesRequestedByReview) {
@@ -111,7 +111,7 @@ export function computeBlocker(pr: PR, currentUser: string, opts?: BlockerOption
 		};
 	}
 
-	// 4. Another (non-current-user) reviewer is requested → waiting-on-other
+	// 6. Another (non-current-user) reviewer is requested → waiting-on-other
 	const otherReviewers = pr.requestedReviewers.filter((r) => r !== currentUser);
 	if (otherReviewers.length > 0) {
 		return {
@@ -121,7 +121,7 @@ export function computeBlocker(pr: PR, currentUser: string, opts?: BlockerOption
 		};
 	}
 
-	// 5. Default — no specific blocker identified
+	// 7. Default — no specific blocker identified
 	return {
 		blocker: "",
 		tier: "needs-review",

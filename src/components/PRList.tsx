@@ -44,7 +44,7 @@ function blockerDisplay(
 	tier: Tier,
 	blocker: string,
 	currentUser: string,
-): { text: string; fg: string } {
+): { text: string; fg: string } | null {
 	const isMe = blocker === currentUser;
 	switch (tier) {
 		case "me-blocking":
@@ -54,7 +54,7 @@ function blockerDisplay(
 		case "waiting-on-other":
 			return { text: blocker, fg: "gray" };
 		case "needs-review":
-			return { text: "", fg: "gray" };
+			return null;
 	}
 }
 
@@ -82,8 +82,11 @@ function PRRow(props: {
 	onMouseDown?: (e: MouseEvent) => void;
 }) {
 	const fg = () => (props.selected ? "white" : undefined);
-	const blocker = () => (props.currentUser ? computeBlocker(props.pr, props.currentUser) : null);
-	const currentUser = () => props.currentUser ?? "";
+	const blockerCell = () => {
+		if (!props.currentUser) return null;
+		const b = computeBlocker(props.pr, props.currentUser);
+		return blockerDisplay(b.tier, b.blocker, props.currentUser);
+	};
 	return (
 		<box
 			id={props.id}
@@ -122,17 +125,14 @@ function PRRow(props: {
 					{reviewCellText(props.pr)}
 				</span>
 			</Cell>
-			<Show when={blocker()}>
-				{(b) => {
-					const display = blockerDisplay(b().tier, b().blocker, currentUser());
-					return (
-						<Cell width={COL.blocker}>
-							<span style={{ fg: props.selected ? "white" : display.fg }}>
-								{display.text}
-							</span>
-						</Cell>
-					);
-				}}
+			<Show when={blockerCell()}>
+				{(display) => (
+					<Cell width={COL.blocker}>
+						<span style={{ fg: props.selected ? "white" : display().fg }}>
+							{display().text}
+						</span>
+					</Cell>
+				)}
 			</Show>
 		</box>
 	);

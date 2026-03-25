@@ -193,7 +193,7 @@ export function App(props: AppProps) {
 			loading={loading()}
 			repoSlug={currentRepoSlug() ?? "All repos"}
 			showRepo={activeTab() === 0 && repoTabs().length > 1}
-			currentUser={props.app.config.user}
+			currentUser={props.app.currentUser}
 			resetKey={activeTab()}
 			error={error()}
 			onRefreshSelected={handleRefreshSelected}

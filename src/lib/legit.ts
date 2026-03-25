@@ -180,6 +180,11 @@ export class Legit {
 		return `${this.repo.owner}/${this.repo.repo}`;
 	}
 
+	/** Current user login — prefers config, falls back to gh auth. */
+	get currentUser(): string {
+		return this.config.user || this.auth.user;
+	}
+
 	/** All tracked repos (from config + current repo), deduplicated. */
 	trackedRepos(): string[] {
 		const repos = new Set<string>(this.config.repos);
