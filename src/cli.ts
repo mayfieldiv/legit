@@ -10,9 +10,11 @@
  *   prs      — fetch and print open PRs as JSON
  *   pr <n>   — fetch and print PR summary as JSON (PR detail plus checks, reviews, comment threads, files)
  *   files <n> — fetch and print file categorization as JSON
+ *   blocker <n> — compute and print blocker/tier/reason as JSON
  */
 
 import { Legit } from "./lib/legit";
+import { computeBlocker } from "./lib/blocker-engine";
 import type { PR, FileChange } from "./lib/types";
 
 export interface CommandResult {
@@ -48,6 +50,7 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
 			if (options.error) {
 				return { error: options.error };
 			}
+
 			if (options.all) {
 				const repos = trackedRepos(app);
 				const byRepo: Record<string, PR[]> = {};
@@ -56,7 +59,15 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
 					for await (const snapshot of app.fetchPRs(repo)) {
 						prs = snapshot;
 					}
-					byRepo[repo] = prs;
+					if (options.withBlockers) {
+						const currentUser = app.currentUser;
+						byRepo[repo] = prs.map((pr) => ({
+							...pr,
+							...computeBlocker(pr, currentUser),
+						}));
+					} else {
+						byRepo[repo] = prs;
+					}
 				}
 				return { output: byRepo };
 			}
@@ -64,6 +75,12 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
 			let prs: PR[] = [];
 			for await (const snapshot of app.fetchPRs(options.repo)) {
 				prs = snapshot;
+			}
+			if (options.withBlockers) {
+				const currentUser = app.currentUser;
+				return {
+					output: prs.map((pr) => ({ ...pr, ...computeBlocker(pr, currentUser) })),
+				};
 			}
 			return { output: prs };
 		}
@@ -90,12 +107,28 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
 			return { output: app.categorizeFiles(files) };
 		}
 
+		case "blocker": {
+			const rawNumber = args[1];
+			if (!rawNumber || !/^[1-9]\d*$/.test(rawNumber)) {
+				return { error: "Usage: legit blocker <number>" };
+			}
+			const prNumber = Number(rawNumber);
+			const summary = await app.fetchPRSummary(app.repoSlug, prNumber);
+			const currentUser = app.currentUser;
+			return {
+				output: computeBlocker(summary, currentUser, {
+					checks: summary.checks,
+					reviews: summary.reviews,
+				}),
+			};
+		}
+
 		case undefined:
 			return { launchTui: true };
 
 		default:
 			return {
-				error: `Unknown command: ${command}\n\nUsage: legit [detect|auth|config|repos|prs [--repo=<owner/repo>|--all]|pr <number>|files <number>]`,
+				error: `Unknown command: ${command}\n\nUsage: legit [detect|auth|config|repos|prs [--repo=<owner/repo>|--all]|pr <number>|files <number>|blocker <number>]`,
 			};
 	}
 }
@@ -104,25 +137,38 @@ function trackedRepos(app: Legit): string[] {
 	return app.trackedRepos();
 }
 
-function parsePrsArgs(args: string[]): { repo?: string; all: boolean; error?: string } {
+function parsePrsArgs(args: string[]): {
+	repo?: string;
+	all: boolean;
+	withBlockers: boolean;
+	error?: string;
+} {
 	let repo: string | undefined;
 	let all = false;
+	let withBlockers = false;
 	for (const arg of args) {
 		if (arg === "--all") {
 			all = true;
+		} else if (arg === "--with-blockers") {
+			withBlockers = true;
 		} else if (arg.startsWith("--repo=")) {
 			repo = arg.slice("--repo=".length);
 		} else {
-			return { all: false, error: "Usage: legit prs [--repo=<owner/repo>|--all]" };
+			return {
+				all: false,
+				withBlockers: false,
+				error: "Usage: legit prs [--repo=<owner/repo>|--all] [--with-blockers]",
+			};
 		}
 	}
 	if (all && repo) {
 		return {
 			all: false,
-			error: "Usage: legit prs [--repo=<owner/repo>|--all]",
+			withBlockers: false,
+			error: "Usage: legit prs [--repo=<owner/repo>|--all] [--with-blockers]",
 		};
 	}
-	return { repo, all };
+	return { repo, all, withBlockers };
 }
 
 // ── Entry point ─────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { testRender } from "@opentui/solid";
-import { PRList } from "../src/components/PRList";
+import { PRList, PRListHeader } from "../src/components/PRList";
 import { makePR } from "./helpers";
 
 describe("PRList", () => {
@@ -198,5 +198,124 @@ describe("PRList", () => {
 		const line = captureCharFrame().split("\n")[0] ?? "";
 
 		expect(line).toMatch(/\salice\s+/);
+	});
+
+	test("shows conflict indicator ! in review column for conflicting PRs", async () => {
+		const prs = [makePR({ number: 1, mergeable: "CONFLICTING" })];
+
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => <PRList prs={prs} selectedIndex={0} />,
+			{ width: 120, height: 8 },
+		);
+
+		await renderOnce();
+		const frame = captureCharFrame();
+		expect(frame).toContain("!");
+	});
+
+	test("does not show conflict indicator for mergeable PRs", async () => {
+		const prs = [makePR({ number: 1, mergeable: "MERGEABLE" })];
+
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => <PRList prs={prs} selectedIndex={0} />,
+			{ width: 120, height: 8 },
+		);
+
+		await renderOnce();
+		const frame = captureCharFrame();
+		expect(frame).not.toContain("! ");
+	});
+
+	test("shows conflict indicator alongside approved status", async () => {
+		const prs = [makePR({ number: 1, mergeable: "CONFLICTING", reviewDecision: "APPROVED" })];
+
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => <PRList prs={prs} selectedIndex={0} />,
+			{ width: 120, height: 8 },
+		);
+
+		await renderOnce();
+		const frame = captureCharFrame();
+		expect(frame).toContain("!");
+		expect(frame).toContain("approved");
+	});
+
+	test("shows blocker column with 'you' when current user is requested reviewer", async () => {
+		const prs = [makePR({ number: 1, requestedReviewers: ["alice"] })];
+
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => <PRList prs={prs} selectedIndex={0} currentUser="alice" />,
+			{ width: 140, height: 8 },
+		);
+
+		await renderOnce();
+		const frame = captureCharFrame();
+		expect(frame).toContain("you");
+	});
+
+	test("shows 'you' when current user is the author of a draft (waiting-on-author self)", async () => {
+		const prs = [makePR({ number: 1, author: "alice", isDraft: true })];
+
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => <PRList prs={prs} selectedIndex={0} currentUser="alice" />,
+			{ width: 140, height: 8 },
+		);
+
+		await renderOnce();
+		const frame = captureCharFrame();
+		// Blocker column shows "you" not the raw login
+		expect(frame).toContain("you");
+		// "you" should appear once (in the blocker column), not duplicated as a username
+		const youCount = (frame.match(/\byou\b/g) ?? []).length;
+		expect(youCount).toBeGreaterThanOrEqual(1);
+	});
+
+	test("shows blocker column with reviewer name for waiting-on-other", async () => {
+		const prs = [makePR({ number: 1, requestedReviewers: ["bob"] })];
+
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => <PRList prs={prs} selectedIndex={0} currentUser="alice" />,
+			{ width: 140, height: 8 },
+		);
+
+		await renderOnce();
+		const frame = captureCharFrame();
+		expect(frame).toContain("bob");
+	});
+
+	test("shows blocker header when currentUser is provided", async () => {
+		const prs = [makePR({ number: 1 })];
+
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => (
+				<box flexDirection="column">
+					<PRListHeader currentUser="alice" />
+					<PRList prs={prs} selectedIndex={0} currentUser="alice" />
+				</box>
+			),
+			{ width: 140, height: 8 },
+		);
+
+		await renderOnce();
+		const frame = captureCharFrame();
+		expect(frame).toMatch(/[Bb]locker/);
+	});
+
+	test("does not show blocker column when currentUser is not provided", async () => {
+		const prs = [makePR({ number: 1, requestedReviewers: ["alice"] })];
+
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => (
+				<box flexDirection="column">
+					<PRListHeader />
+					<PRList prs={prs} selectedIndex={0} />
+				</box>
+			),
+			{ width: 140, height: 8 },
+		);
+
+		await renderOnce();
+		const frame = captureCharFrame();
+		expect(frame).not.toMatch(/[Bb]locker/);
 	});
 });

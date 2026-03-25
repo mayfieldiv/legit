@@ -5,15 +5,22 @@
 import type { CheckRun, ReviewState } from "./types";
 
 /**
- * Format a date string as relative age (e.g. "2d", "3mo", "1y2mo").
+ * Format a date string as relative age (e.g. "15m", "3h", "2d", "3mo", "1y2mo").
  */
 export function formatAge(dateStr: string): string {
 	const now = Date.now();
 	const then = new Date(dateStr).getTime();
-	const days = Math.floor((now - then) / (1000 * 60 * 60 * 24));
+	const seconds = Math.floor((now - then) / 1000);
 
-	if (days === 0) return "today";
-	if (days === 1) return "1d";
+	if (seconds < 60) return "now";
+
+	const minutes = Math.floor(seconds / 60);
+	if (minutes < 60) return `${minutes}m`;
+
+	const hours = Math.floor(minutes / 60);
+	if (hours < 24) return `${hours}h`;
+
+	const days = Math.floor(hours / 24);
 	if (days < 30) return `${days}d`;
 
 	const months = Math.floor(days / 30);
@@ -51,7 +58,7 @@ export function formatReviewDecision(decision: string): string {
 		case "CHANGES_REQUESTED":
 			return "changes requested";
 		case "REVIEW_REQUIRED":
-			return "review required";
+			return "";
 		default:
 			return decision ? decision.toLowerCase() : "";
 	}

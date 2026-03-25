@@ -250,6 +250,52 @@ describe("ListView", () => {
 
 		expect(selections).toEqual([2]);
 	});
+
+	test("o key triggers onOpenInBrowser with selected PR", async () => {
+		let openedPr: any = null;
+		const pr = makePR({ number: 42 });
+
+		const { renderOnce, mockInput } = await testRender(
+			() => (
+				<ListView
+					prs={[pr]}
+					onRefreshSelected={() => {}}
+					onRefreshAll={() => {}}
+					onNavigate={() => {}}
+					onOpenInBrowser={(p) => {
+						openedPr = p;
+					}}
+				/>
+			),
+			{ width: 120, height: 20 },
+		);
+
+		await renderOnce();
+		mockInput.pressKey("o");
+		await renderOnce();
+
+		expect(openedPr).not.toBeNull();
+		expect(openedPr.number).toBe(42);
+	});
+
+	test("o key does nothing when no onOpenInBrowser handler", async () => {
+		const { renderOnce, mockInput } = await testRender(
+			() => (
+				<ListView
+					prs={[makePR()]}
+					onRefreshSelected={() => {}}
+					onRefreshAll={() => {}}
+					onNavigate={() => {}}
+				/>
+			),
+			{ width: 120, height: 20 },
+		);
+
+		await renderOnce();
+		// Should not throw
+		mockInput.pressKey("o");
+		await renderOnce();
+	});
 });
 
 // ── Scroll logic (pure function tests) ──────────────────────────────────────

@@ -2,9 +2,29 @@ import { describe, test, expect } from "bun:test";
 import { formatAge, formatSize, formatReviewDecision, formatRepoShort } from "../src/lib/format";
 
 describe("formatAge", () => {
-	test("returns 'today' for dates less than a day ago", () => {
+	test("returns 'now' for dates less than a minute ago", () => {
 		const now = new Date().toISOString();
-		expect(formatAge(now)).toBe("today");
+		expect(formatAge(now)).toBe("now");
+	});
+
+	test("returns minutes for < 1 hour", () => {
+		const fifteenMinAgo = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+		expect(formatAge(fifteenMinAgo)).toBe("15m");
+	});
+
+	test("returns '1m' for one minute ago", () => {
+		const oneMinAgo = new Date(Date.now() - 60 * 1000).toISOString();
+		expect(formatAge(oneMinAgo)).toBe("1m");
+	});
+
+	test("returns hours for < 1 day", () => {
+		const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+		expect(formatAge(threeHoursAgo)).toBe("3h");
+	});
+
+	test("returns '1h' for one hour ago", () => {
+		const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+		expect(formatAge(oneHourAgo)).toBe("1h");
 	});
 
 	test("returns '1d' for yesterday", () => {
@@ -73,7 +93,7 @@ describe("formatReviewDecision", () => {
 	});
 
 	test("formats REVIEW_REQUIRED", () => {
-		expect(formatReviewDecision("REVIEW_REQUIRED")).toBe("review required");
+		expect(formatReviewDecision("REVIEW_REQUIRED")).toBe("");
 	});
 
 	test("lowercases unknown decisions", () => {

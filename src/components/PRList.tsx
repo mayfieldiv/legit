@@ -2,11 +2,14 @@ import { For, Show } from "solid-js";
 import type { PR } from "../lib/types";
 import type { MouseEvent } from "@opentui/core";
 import { formatAge, formatSize, formatReviewDecision, formatRepoShort } from "../lib/format";
+import { computeBlocker } from "../lib/blocker-engine";
+import type { Tier } from "../lib/blocker-engine";
 
 interface PRListProps {
 	prs: PR[];
 	selectedIndex: number;
 	showRepo?: boolean;
+	currentUser?: string;
 	onSelect?: (index: number) => void;
 }
 
@@ -18,7 +21,42 @@ const COL = {
 	size: 14,
 	age: 6,
 	review: 18,
+	blocker: 14,
 } as const;
+
+/** Compute the text content of the review column. */
+function reviewCellText(pr: PR): string {
+	const conflict = pr.mergeable === "CONFLICTING" ? "! " : "";
+	const draft = pr.isDraft ? "draft " : "";
+	const decision = formatReviewDecision(pr.reviewDecision);
+	return conflict + draft + decision;
+}
+
+/** Compute the fg color for the review column (priority: conflict > draft > default). */
+function reviewCellFg(pr: PR, selected: boolean): string | undefined {
+	if (selected) return "white";
+	if (pr.mergeable === "CONFLICTING") return "red";
+	if (pr.isDraft) return "yellow";
+	return undefined;
+}
+
+function blockerDisplay(
+	tier: Tier,
+	blocker: string,
+	currentUser: string,
+): { text: string; fg: string } | null {
+	const isMe = blocker === currentUser;
+	switch (tier) {
+		case "me-blocking":
+			return { text: "you", fg: "magenta" };
+		case "waiting-on-author":
+			return { text: isMe ? "you" : blocker || "author", fg: isMe ? "magenta" : "yellow" };
+		case "waiting-on-other":
+			return { text: blocker, fg: "gray" };
+		case "needs-review":
+			return null;
+	}
+}
 
 function Cell(props: { width?: number; flexGrow?: number; paddingRight?: number; children: any }) {
 	return (
@@ -39,10 +77,16 @@ function PRRow(props: {
 	pr: PR;
 	selected: boolean;
 	showRepo?: boolean;
+	currentUser?: string;
 	id: string;
 	onMouseDown?: (e: MouseEvent) => void;
 }) {
 	const fg = () => (props.selected ? "white" : undefined);
+	const blockerCell = () => {
+		if (!props.currentUser) return null;
+		const b = computeBlocker(props.pr, props.currentUser);
+		return blockerDisplay(b.tier, b.blocker, props.currentUser);
+	};
 	return (
 		<box
 			id={props.id}
@@ -76,17 +120,27 @@ function PRRow(props: {
 			<Cell width={COL.age} paddingRight={1}>
 				<span style={{ fg: fg() }}>{formatAge(props.pr.createdAt)}</span>
 			</Cell>
-			<Cell width={COL.review}>
-				<Show when={props.pr.isDraft}>
-					<span style={{ fg: props.selected ? "white" : "yellow" }}>draft </span>
-				</Show>
-				<span style={{ fg: fg() }}>{formatReviewDecision(props.pr.reviewDecision)}</span>
+			<Cell width={COL.review} paddingRight={props.currentUser ? 1 : 0}>
+				<span style={{ fg: reviewCellFg(props.pr, props.selected) }}>
+					{reviewCellText(props.pr)}
+				</span>
 			</Cell>
+			<Show when={props.currentUser}>
+				<Cell width={COL.blocker}>
+					<Show when={blockerCell()}>
+						{(display) => (
+							<span style={{ fg: props.selected ? "white" : display().fg }}>
+								{display().text}
+							</span>
+						)}
+					</Show>
+				</Cell>
+			</Show>
 		</box>
 	);
 }
 
-export function PRListHeader(props: { showRepo?: boolean }) {
+export function PRListHeader(props: { showRepo?: boolean; currentUser?: string }) {
 	return (
 		<box flexDirection="row" width="100%" height={1}>
 			<Cell width={COL.pr} paddingRight={1}>
@@ -109,9 +163,14 @@ export function PRListHeader(props: { showRepo?: boolean }) {
 			<Cell width={COL.age} paddingRight={1}>
 				<b>Age</b>
 			</Cell>
-			<Cell width={COL.review}>
+			<Cell width={COL.review} paddingRight={props.currentUser ? 1 : 0}>
 				<b>Review</b>
 			</Cell>
+			<Show when={props.currentUser}>
+				<Cell width={COL.blocker}>
+					<b>Blocker</b>
+				</Cell>
+			</Show>
 		</box>
 	);
 }
@@ -127,6 +186,7 @@ export function PRList(props: PRListProps) {
 							pr={pr}
 							selected={index() === props.selectedIndex}
 							showRepo={props.showRepo}
+							currentUser={props.currentUser}
 							onMouseDown={(e: MouseEvent) => {
 								e.preventDefault();
 								props.onSelect?.(index());

@@ -138,4 +138,44 @@ describe("SummaryPanel", () => {
 		expect(frame).toContain("Loading test");
 		expect(frame).toContain("#77");
 	});
+
+	test("shows blocker tier when currentUser is provided and summary is loaded", async () => {
+		const summary = makeSummary({
+			author: "charlie",
+			requestedReviewers: ["alice"],
+		});
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => <SummaryPanel summary={summary} pr={makePR()} currentUser="alice" />,
+			{ width: 50, height: 30 },
+		);
+		await renderOnce();
+		const frame = captureCharFrame();
+		// me-blocking tier should be shown
+		expect(frame).toMatch(/me.blocking|you/i);
+	});
+
+	test("shows waiting-on-author when CI is failing", async () => {
+		const summary = makeSummary({
+			author: "charlie",
+			checks: [{ name: "build", status: "completed", conclusion: "failure" }],
+		});
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => <SummaryPanel summary={summary} pr={makePR()} currentUser="alice" />,
+			{ width: 50, height: 30 },
+		);
+		await renderOnce();
+		const frame = captureCharFrame();
+		expect(frame).toMatch(/waiting.on.author|charlie/i);
+	});
+
+	test("does not show blocker section when currentUser is not provided", async () => {
+		const summary = makeSummary({ requestedReviewers: ["alice"] });
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => <SummaryPanel summary={summary} pr={makePR()} />,
+			{ width: 50, height: 30 },
+		);
+		await renderOnce();
+		const frame = captureCharFrame();
+		expect(frame).not.toMatch(/me.blocking/i);
+	});
 });

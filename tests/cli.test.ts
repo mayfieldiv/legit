@@ -240,6 +240,100 @@ describe("runCommand", () => {
 			"acme/widgets": [expect.objectContaining({ number: 42 })],
 		});
 	});
+
+	test("blocker <number> returns blocker result as JSON", async () => {
+		const { fetch } = createMockFetch([
+			// fetchPR: REST detail
+			{
+				url: /\/pulls\/42$/,
+				response: {
+					status: 200,
+					body: {
+						...makeSampleRestPR(42),
+						body: "Detail body",
+						requested_reviewers: [{ login: "testuser" }],
+					},
+				},
+			},
+			// fetchPR: GraphQL review status
+			{
+				url: /\/graphql/,
+				method: "POST",
+				response: {
+					status: 200,
+					body: makeGraphQLResponse([{ ...SAMPLE_GQL_META, number: 42 }]),
+				},
+			},
+			// fetchCheckRuns
+			{
+				url: /\/check-runs/,
+				response: {
+					status: 200,
+					body: { total_count: 0, check_runs: [] },
+				},
+			},
+			// fetchReviews
+			{
+				url: /\/reviews/,
+				response: { status: 200, body: [] },
+			},
+			// fetchReviewComments (GraphQL)
+			{
+				url: /\/graphql/,
+				method: "POST",
+				response: {
+					status: 200,
+					body: {
+						data: {
+							repository: {
+								pullRequest: {
+									reviewThreads: {
+										pageInfo: { hasNextPage: false, endCursor: null },
+										nodes: [],
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			// fetchFiles
+			{
+				url: /\/files/,
+				response: { status: 200, body: [] },
+			},
+		]);
+		const app = createTestLegit({ httpFetch: fetch });
+		const result = await runCommand(["blocker", "42"], app);
+		const output = result.output as any;
+		expect(output.tier).toBe("me-blocking");
+		expect(output.blocker).toBe("testuser");
+		expect(typeof output.reason).toBe("string");
+	});
+
+	test("blocker without number returns error", async () => {
+		const app = createTestLegit();
+		const result = await runCommand(["blocker"], app);
+		expect(result.error).toContain("Usage");
+	});
+
+	test("blocker rejects zero", async () => {
+		const app = createTestLegit();
+		const result = await runCommand(["blocker", "0"], app);
+		expect(result.error).toContain("Usage");
+	});
+
+	test("prs --with-blockers includes tier and blocker for each PR", async () => {
+		const app = createTestLegit();
+		const result = await runCommand(["prs", "--with-blockers"], app);
+		const output = result.output as any[];
+		expect(output).toHaveLength(1);
+		const pr = output[0];
+		expect(pr.number).toBe(42);
+		expect(pr).toHaveProperty("tier");
+		expect(pr).toHaveProperty("blocker");
+		expect(pr).toHaveProperty("reason");
+	});
 });
 
 // ── Subprocess smoke test (one test to verify the entry point works) ────────

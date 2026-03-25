@@ -9,12 +9,14 @@ import type { ScrollBoxRenderable } from "@opentui/core";
 interface ListViewProps {
 	prs: PR[];
 	showRepo?: boolean;
+	currentUser?: string;
 	/** When this value changes, the selection resets to index 0. */
 	resetKey?: number | string;
 	onRefreshSelected: () => void;
 	onRefreshAll: () => void;
 	onNavigate: (target: ViewTarget) => void;
 	onSelectionChange?: (pr: PR) => void;
+	onOpenInBrowser?: (pr: PR) => void;
 }
 
 /**
@@ -120,12 +122,15 @@ export function ListView(props: ListViewProps) {
 			if (pr) {
 				props.onNavigate({ view: "detail", pr });
 			}
+		} else if (name === "o") {
+			const pr = selection.selectedItem(props.prs);
+			if (pr) props.onOpenInBrowser?.(pr);
 		}
 	});
 
 	return (
 		<box flexDirection="column" flexGrow={1} width="100%">
-			<PRListHeader showRepo={props.showRepo} />
+			<PRListHeader showRepo={props.showRepo} currentUser={props.currentUser} />
 			<scrollbox
 				ref={(el: ScrollBoxRenderable) => {
 					scrollRef = el;
@@ -137,6 +142,7 @@ export function ListView(props: ListViewProps) {
 					prs={props.prs}
 					selectedIndex={selection.index()}
 					showRepo={props.showRepo}
+					currentUser={props.currentUser}
 					onSelect={selectIndex}
 				/>
 			</scrollbox>

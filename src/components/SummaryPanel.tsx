@@ -1,6 +1,7 @@
 import { Show, For, createMemo } from "solid-js";
 import type { PR, PRSummary, CheckRun, FileCategory } from "../lib/types";
 import { formatAge, formatSize, formatReviewState, sortCheckRuns } from "../lib/format";
+import { computeBlocker, tierLabel } from "../lib/blocker-engine";
 
 /** Max number of individual check lines to show before collapsing. */
 const MAX_VISIBLE_CHECKS = 6;
@@ -8,6 +9,7 @@ const MAX_VISIBLE_CHECKS = 6;
 interface SummaryPanelProps {
 	summary: PRSummary | undefined;
 	pr: PR | undefined;
+	currentUser?: string;
 }
 
 function checkIcon(check: CheckRun): { icon: string; fg: string } {
@@ -52,6 +54,14 @@ function reviewIcon(state: string): { icon: string; fg: string } {
 export function SummaryPanel(props: SummaryPanelProps) {
 	const pr = () => props.summary ?? props.pr;
 	const summary = () => props.summary;
+
+	/** Blocker result — null when summary not loaded or currentUser absent. */
+	const blockerResult = createMemo(() => {
+		const s = summary();
+		const u = props.currentUser;
+		if (!s || !u) return null;
+		return computeBlocker(s, u, { checks: s.checks, reviews: s.reviews });
+	});
 
 	const sizeCategories = (): FileCategory[] => {
 		const s = summary();
@@ -104,15 +114,22 @@ export function SummaryPanel(props: SummaryPanelProps) {
 				{/* Merge status */}
 				<box height={1} width="100%">
 					<text>
-						<Show when={pr()!.mergeable === "CONFLICTING"}>
-							<span style={{ fg: "red" }}>⚠ conflict</span>
-						</Show>
-						<Show when={pr()!.mergeable === "MERGEABLE"}>
-							<span style={{ fg: "green" }}>✓ mergeable</span>
-						</Show>
-						<Show when={pr()!.mergeable === "UNKNOWN"}>
-							<span style={{ fg: "gray" }}>? merge unknown</span>
-						</Show>
+						<span
+							style={{
+								fg:
+									pr()!.mergeable === "CONFLICTING"
+										? "red"
+										: pr()!.mergeable === "MERGEABLE"
+											? "green"
+											: "gray",
+							}}
+						>
+							{pr()!.mergeable === "CONFLICTING"
+								? "! conflict"
+								: pr()!.mergeable === "MERGEABLE"
+									? "✓ mergeable"
+									: "? merge unknown"}
+						</span>
 					</text>
 				</box>
 
@@ -136,7 +153,32 @@ export function SummaryPanel(props: SummaryPanelProps) {
 					</box>
 				</Show>
 
-				{/* --- Extended fields (only when summary loaded) --- */}
+				{/* --- Blocker (only when summary loaded and currentUser known) --- */}
+				<Show when={blockerResult()}>
+					{(b) => (
+						<box height={1} width="100%">
+							<text truncate={true}>
+								<span style={{ fg: "gray" }}>blocker: </span>
+								<span
+									style={{
+										fg:
+											b().tier === "me-blocking"
+												? "magenta"
+												: b().tier === "waiting-on-author"
+													? "yellow"
+													: "gray",
+									}}
+								>
+									{tierLabel(b().tier)}
+								</span>
+								<Show when={b().blocker}>
+									<span style={{ fg: "gray" }}> ({b().blocker})</span>
+								</Show>
+							</text>
+						</box>
+					)}
+				</Show>
+
 				<Show when={summary()}>
 					{/* Size breakdown */}
 					<Show when={sizeCategories().length > 0}>

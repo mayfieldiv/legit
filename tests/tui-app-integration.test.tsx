@@ -1,6 +1,6 @@
 import { describe, test, expect, afterAll } from "bun:test";
 import { testRender } from "@opentui/solid";
-import { App } from "../src/App";
+import { App, prUrl } from "../src/App";
 import {
 	cleanupTmpDirs,
 	makeSampleRestPR,
@@ -20,7 +20,7 @@ describe("App integration", () => {
 		});
 
 		const { renderOnce, captureCharFrame } = await testRender(() => <App app={app} />, {
-			width: 120,
+			width: 160,
 			height: 20,
 		});
 
@@ -44,7 +44,7 @@ describe("App integration", () => {
 		const app = createTestLegit();
 
 		const { renderOnce, captureCharFrame } = await testRender(() => <App app={app} />, {
-			width: 120,
+			width: 160,
 			height: 20,
 		});
 
@@ -69,7 +69,7 @@ describe("App integration", () => {
 		const app = createTestLegit({ httpFetch: delayedFetch });
 
 		const { renderOnce, captureCharFrame } = await testRender(() => <App app={app} />, {
-			width: 120,
+			width: 160,
 			height: 20,
 		});
 
@@ -89,7 +89,7 @@ describe("App integration", () => {
 		const app = createTestLegit({ httpFetch: fetch });
 
 		const { renderOnce, captureCharFrame } = await testRender(() => <App app={app} />, {
-			width: 120,
+			width: 160,
 			height: 20,
 		});
 
@@ -109,7 +109,7 @@ describe("App integration", () => {
 		const app = createTestLegit({ httpFetch: fetch });
 
 		const { renderOnce, mockInput } = await testRender(() => <App app={app} />, {
-			width: 120,
+			width: 160,
 			height: 20,
 		});
 
@@ -134,7 +134,7 @@ describe("App integration", () => {
 		});
 
 		const { renderOnce, captureCharFrame } = await testRender(() => <App app={app} />, {
-			width: 120,
+			width: 160,
 			height: 20,
 		});
 
@@ -333,5 +333,11 @@ describe("App integration", () => {
 		expect(firstDataRow).not.toContain("#3");
 		// Summary panel should show PR #1
 		expect(frame).toContain("PR #1");
+	});
+});
+
+describe("prUrl", () => {
+	test("builds correct GitHub PR URL", () => {
+		expect(prUrl("acme/widgets", 42)).toBe("https://github.com/acme/widgets/pull/42");
 	});
 });

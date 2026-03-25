@@ -11,11 +11,13 @@ interface AppShellProps {
 	loading: boolean;
 	repoSlug: string;
 	showRepo?: boolean;
+	currentUser?: string;
 	resetKey?: number | string;
 	error?: string;
 	onRefreshSelected: () => void;
 	onRefreshAll: () => void;
 	onSelectionChange?: (pr: PR) => void;
+	onOpenInBrowser?: (pr: PR) => void;
 	selectedPr?: PR;
 	summary?: PRSummary;
 	tabs?: string[];
@@ -100,17 +102,23 @@ export function AppShell(props: AppShellProps) {
 							<ListView
 								prs={props.prs}
 								showRepo={props.showRepo}
+								currentUser={props.currentUser}
 								resetKey={props.resetKey}
 								onRefreshSelected={props.onRefreshSelected}
 								onRefreshAll={props.onRefreshAll}
 								onNavigate={setView}
 								onSelectionChange={props.onSelectionChange}
+								onOpenInBrowser={props.onOpenInBrowser}
 							/>
 							<box width={1} height="100%">
 								<text>│</text>
 							</box>
 							<box width={50}>
-								<SummaryPanel summary={props.summary} pr={props.selectedPr} />
+								<SummaryPanel
+									summary={props.summary}
+									pr={props.selectedPr}
+									currentUser={props.currentUser}
+								/>
 							</box>
 						</box>
 					</Match>
