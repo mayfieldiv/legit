@@ -200,7 +200,7 @@ describe("PRList", () => {
 		expect(line).toMatch(/\salice\s+/);
 	});
 
-	test("shows conflict indicator ⚠ in review column for conflicting PRs", async () => {
+	test("shows conflict indicator ! in review column for conflicting PRs", async () => {
 		const prs = [makePR({ number: 1, mergeable: "CONFLICTING" })];
 
 		const { renderOnce, captureCharFrame } = await testRender(
@@ -210,7 +210,7 @@ describe("PRList", () => {
 
 		await renderOnce();
 		const frame = captureCharFrame();
-		expect(frame).toContain("⚠");
+		expect(frame).toContain("!");
 	});
 
 	test("does not show conflict indicator for mergeable PRs", async () => {
@@ -223,7 +223,7 @@ describe("PRList", () => {
 
 		await renderOnce();
 		const frame = captureCharFrame();
-		expect(frame).not.toContain("⚠");
+		expect(frame).not.toContain("! ");
 	});
 
 	test("shows conflict indicator alongside approved status", async () => {
@@ -236,7 +236,7 @@ describe("PRList", () => {
 
 		await renderOnce();
 		const frame = captureCharFrame();
-		expect(frame).toContain("⚠");
+		expect(frame).toContain("!");
 		expect(frame).toContain("approved");
 	});
 

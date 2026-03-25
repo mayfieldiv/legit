@@ -24,6 +24,22 @@ const COL = {
 	blocker: 14,
 } as const;
 
+/** Compute the text content of the review column. */
+function reviewCellText(pr: PR): string {
+	const conflict = pr.mergeable === "CONFLICTING" ? "! " : "";
+	const draft = pr.isDraft ? "draft " : "";
+	const decision = formatReviewDecision(pr.reviewDecision);
+	return conflict + draft + decision;
+}
+
+/** Compute the fg color for the review column (priority: conflict > draft > default). */
+function reviewCellFg(pr: PR, selected: boolean): string | undefined {
+	if (selected) return "white";
+	if (pr.mergeable === "CONFLICTING") return "red";
+	if (pr.isDraft) return "yellow";
+	return undefined;
+}
+
 function blockerDisplay(
 	tier: Tier,
 	blocker: string,
@@ -102,13 +118,9 @@ function PRRow(props: {
 				<span style={{ fg: fg() }}>{formatAge(props.pr.createdAt)}</span>
 			</Cell>
 			<Cell width={COL.review} paddingRight={props.currentUser ? 1 : 0}>
-				<Show when={props.pr.mergeable === "CONFLICTING"}>
-					<span style={{ fg: props.selected ? "white" : "red" }}>⚠ </span>
-				</Show>
-				<Show when={props.pr.isDraft}>
-					<span style={{ fg: props.selected ? "white" : "yellow" }}>draft </span>
-				</Show>
-				<span style={{ fg: fg() }}>{formatReviewDecision(props.pr.reviewDecision)}</span>
+				<span style={{ fg: reviewCellFg(props.pr, props.selected) }}>
+					{reviewCellText(props.pr)}
+				</span>
 			</Cell>
 			<Show when={blocker()}>
 				{(b) => {
