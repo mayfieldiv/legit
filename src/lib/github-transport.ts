@@ -95,7 +95,7 @@ export interface GitHubTransport {
 
 const GITHUB_API = "https://api.github.com";
 const PER_PAGE = 100;
-const GRAPHQL_BATCH_SIZE = 50;
+const GRAPHQL_BATCH_SIZE = 25;
 
 export function createGitHubTransport(
 	token: string,
@@ -120,16 +120,28 @@ export function createGitHubTransport(
 		variables?: Record<string, unknown>,
 		signal?: AbortSignal,
 	): Promise<unknown> {
-		const res = await httpFetch(`${GITHUB_API}/graphql`, {
-			method: "POST",
-			headers: { ...headers, "Content-Type": "application/json" },
-			body: JSON.stringify({ query, variables }),
-			signal,
-		});
-		if (!res.ok) {
-			throw new Error(`GitHub GraphQL error: ${res.status} ${res.statusText}`);
+		const MAX_RETRIES = 2;
+		let lastError: Error | undefined;
+		for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+			if (attempt > 0) {
+				// Exponential backoff: 500ms, 1500ms
+				await new Promise((r) => setTimeout(r, 500 * 2 ** (attempt - 1)));
+			}
+			signal?.throwIfAborted();
+			const res = await httpFetch(`${GITHUB_API}/graphql`, {
+				method: "POST",
+				headers: { ...headers, "Content-Type": "application/json" },
+				body: JSON.stringify({ query, variables }),
+				signal,
+			});
+			if (res.ok) {
+				return res.json();
+			}
+			lastError = new Error(`GitHub GraphQL error: ${res.status} ${res.statusText}`);
+			// Only retry on server errors (5xx)
+			if (res.status < 500) throw lastError;
 		}
-		return res.json();
+		throw lastError!;
 	}
 
 	async function* paginateRest(baseUrl: string, signal?: AbortSignal) {
@@ -175,6 +187,7 @@ export function createGitHubTransport(
 			if (prNumbers.length === 0) return;
 
 			for (let i = 0; i < prNumbers.length; i += GRAPHQL_BATCH_SIZE) {
+				signal?.throwIfAborted();
 				const batch = prNumbers.slice(i, i + GRAPHQL_BATCH_SIZE);
 				const aliases = batch
 					.map(
@@ -184,9 +197,14 @@ export function createGitHubTransport(
 					.join(" ");
 
 				const query = `query($owner: String!, $repo: String!) { repository(owner: $owner, name: $repo) { ${aliases} } }`;
-				const result = (await graphql(query, { owner, repo }, signal)) as {
-					data?: { repository?: Record<string, any> };
-				};
+				let result: { data?: { repository?: Record<string, any> } };
+				try {
+					result = (await graphql(query, { owner, repo }, signal)) as typeof result;
+				} catch (err: any) {
+					// Skip this batch on server error — PRs will keep REST-only data
+					if (signal?.aborted) throw err;
+					continue;
+				}
 
 				const repoData = result.data?.repository;
 				if (!repoData) continue;

@@ -150,11 +150,11 @@ describe("GitHubTransport", () => {
 			expect(statuses[0]!.additions).toBe(50);
 		});
 
-		test("batches into groups of 50", async () => {
-			const prNumbers = Array.from({ length: 101 }, (_, i) => i + 1);
-			const batch1 = prNumbers.slice(0, 50).map((n) => ({ ...SAMPLE_GQL_META, number: n }));
-			const batch2 = prNumbers.slice(50, 100).map((n) => ({ ...SAMPLE_GQL_META, number: n }));
-			const batch3 = [{ ...SAMPLE_GQL_META, number: 101 }];
+		test("batches into groups of 25", async () => {
+			const prNumbers = Array.from({ length: 51 }, (_, i) => i + 1);
+			const batch1 = prNumbers.slice(0, 25).map((n) => ({ ...SAMPLE_GQL_META, number: n }));
+			const batch2 = prNumbers.slice(25, 50).map((n) => ({ ...SAMPLE_GQL_META, number: n }));
+			const batch3 = [{ ...SAMPLE_GQL_META, number: 51 }];
 
 			const { fetch, calls } = createMockFetch([
 				{
@@ -177,9 +177,73 @@ describe("GitHubTransport", () => {
 			const statuses = await collect(
 				transport.fetchReviewStatus("acme", "widgets", prNumbers),
 			);
-			expect(statuses).toHaveLength(101);
+			expect(statuses).toHaveLength(51);
 			const gqlCalls = calls.filter((c) => c.url.includes("graphql"));
 			expect(gqlCalls).toHaveLength(3);
+		});
+
+		test("skips failed batches gracefully", async () => {
+			// Two batches: first succeeds, second returns 502 (after retries)
+			const prNumbers = Array.from({ length: 30 }, (_, i) => i + 1);
+			const batch1 = prNumbers.slice(0, 25).map((n) => ({ ...SAMPLE_GQL_META, number: n }));
+
+			const { fetch } = createMockFetch([
+				{
+					url: "https://api.github.com/graphql",
+					method: "POST",
+					response: { status: 200, body: makeGraphQLResponse(batch1) },
+				},
+				// 3 attempts for batch 2 (initial + 2 retries), all fail with 502
+				{
+					url: "https://api.github.com/graphql",
+					method: "POST",
+					response: { status: 502, body: "Bad Gateway" },
+				},
+				{
+					url: "https://api.github.com/graphql",
+					method: "POST",
+					response: { status: 502, body: "Bad Gateway" },
+				},
+				{
+					url: "https://api.github.com/graphql",
+					method: "POST",
+					response: { status: 502, body: "Bad Gateway" },
+				},
+			]);
+			const transport = createGitHubTransport("fake-token", fetch);
+			const statuses = await collect(
+				transport.fetchReviewStatus("acme", "widgets", prNumbers),
+			);
+			// Only batch 1 (25 PRs) succeeded; batch 2 was skipped
+			expect(statuses).toHaveLength(25);
+		});
+
+		test("retries 5xx errors and succeeds on retry", async () => {
+			const prNumbers = [42];
+			const batch1 = [{ ...SAMPLE_GQL_META, number: 42 }];
+
+			const { fetch, calls } = createMockFetch([
+				// First attempt: 502
+				{
+					url: "https://api.github.com/graphql",
+					method: "POST",
+					response: { status: 502, body: "Bad Gateway" },
+				},
+				// Second attempt: success
+				{
+					url: "https://api.github.com/graphql",
+					method: "POST",
+					response: { status: 200, body: makeGraphQLResponse(batch1) },
+				},
+			]);
+			const transport = createGitHubTransport("fake-token", fetch);
+			const statuses = await collect(
+				transport.fetchReviewStatus("acme", "widgets", prNumbers),
+			);
+			expect(statuses).toHaveLength(1);
+			expect(statuses[0]!.prNumber).toBe(42);
+			const gqlCalls = calls.filter((c) => c.url.includes("graphql"));
+			expect(gqlCalls).toHaveLength(2);
 		});
 
 		test("yields nothing for empty prNumbers", async () => {
