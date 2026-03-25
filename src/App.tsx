@@ -210,6 +210,8 @@ export function App(props: AppProps) {
 				if (first) {
 					handleSelectionChange(first);
 				} else {
+					clearTimeout(debounceTimer);
+					summaryController?.abort();
 					setSelectedPr(undefined);
 					setSummary(undefined);
 				}
