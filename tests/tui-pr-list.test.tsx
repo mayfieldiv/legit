@@ -200,6 +200,46 @@ describe("PRList", () => {
 		expect(line).toMatch(/\salice\s+/);
 	});
 
+	test("shows conflict indicator ⚠ in review column for conflicting PRs", async () => {
+		const prs = [makePR({ number: 1, mergeable: "CONFLICTING" })];
+
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => <PRList prs={prs} selectedIndex={0} />,
+			{ width: 120, height: 8 },
+		);
+
+		await renderOnce();
+		const frame = captureCharFrame();
+		expect(frame).toContain("⚠");
+	});
+
+	test("does not show conflict indicator for mergeable PRs", async () => {
+		const prs = [makePR({ number: 1, mergeable: "MERGEABLE" })];
+
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => <PRList prs={prs} selectedIndex={0} />,
+			{ width: 120, height: 8 },
+		);
+
+		await renderOnce();
+		const frame = captureCharFrame();
+		expect(frame).not.toContain("⚠");
+	});
+
+	test("shows conflict indicator alongside approved status", async () => {
+		const prs = [makePR({ number: 1, mergeable: "CONFLICTING", reviewDecision: "APPROVED" })];
+
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => <PRList prs={prs} selectedIndex={0} />,
+			{ width: 120, height: 8 },
+		);
+
+		await renderOnce();
+		const frame = captureCharFrame();
+		expect(frame).toContain("⚠");
+		expect(frame).toContain("approved");
+	});
+
 	test("shows blocker column with 'you' when current user is requested reviewer", async () => {
 		const prs = [makePR({ number: 1, requestedReviewers: ["alice"] })];
 

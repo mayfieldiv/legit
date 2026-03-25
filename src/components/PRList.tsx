@@ -96,6 +96,9 @@ function PRRow(props: {
 				<span style={{ fg: fg() }}>{formatAge(props.pr.createdAt)}</span>
 			</Cell>
 			<Cell width={COL.review} paddingRight={props.currentUser ? 1 : 0}>
+				<Show when={props.pr.mergeable === "CONFLICTING"}>
+					<span style={{ fg: props.selected ? "white" : "red" }}>⚠ </span>
+				</Show>
 				<Show when={props.pr.isDraft}>
 					<span style={{ fg: props.selected ? "white" : "yellow" }}>draft </span>
 				</Show>
