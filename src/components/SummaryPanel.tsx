@@ -55,6 +55,14 @@ export function SummaryPanel(props: SummaryPanelProps) {
 	const pr = () => props.summary ?? props.pr;
 	const summary = () => props.summary;
 
+	/** Blocker result — null when summary not loaded or currentUser absent. */
+	const blockerResult = createMemo(() => {
+		const s = summary();
+		const u = props.currentUser;
+		if (!s || !u) return null;
+		return computeBlocker(s, u, { checks: s.checks, reviews: s.reviews });
+	});
+
 	const sizeCategories = (): FileCategory[] => {
 		const s = summary();
 		if (!s || s.files.breakdown.total.files === 0) return [];
@@ -138,38 +146,30 @@ export function SummaryPanel(props: SummaryPanelProps) {
 					</box>
 				</Show>
 
-				{/* --- Extended fields (only when summary loaded) --- */}
-				<Show when={summary() && props.currentUser}>
-					{(() => {
-						const b = createMemo(() =>
-							computeBlocker(summary()!, props.currentUser!, {
-								checks: summary()!.checks,
-								reviews: summary()!.reviews,
-							}),
-						);
-						return (
-							<box height={1} width="100%">
-								<text truncate={true}>
-									<span style={{ fg: "gray" }}>blocker: </span>
-									<span
-										style={{
-											fg:
-												b().tier === "me-blocking"
-													? "magenta"
-													: b().tier === "waiting-on-author"
-														? "yellow"
-														: "gray",
-										}}
-									>
-										{tierLabel(b().tier)}
-									</span>
-									<Show when={b().blocker}>
-										<span style={{ fg: "gray" }}> ({b().blocker})</span>
-									</Show>
-								</text>
-							</box>
-						);
-					})()}
+				{/* --- Blocker (only when summary loaded and currentUser known) --- */}
+				<Show when={blockerResult()}>
+					{(b) => (
+						<box height={1} width="100%">
+							<text truncate={true}>
+								<span style={{ fg: "gray" }}>blocker: </span>
+								<span
+									style={{
+										fg:
+											b().tier === "me-blocking"
+												? "magenta"
+												: b().tier === "waiting-on-author"
+													? "yellow"
+													: "gray",
+									}}
+								>
+									{tierLabel(b().tier)}
+								</span>
+								<Show when={b().blocker}>
+									<span style={{ fg: "gray" }}> ({b().blocker})</span>
+								</Show>
+							</text>
+						</box>
+					)}
 				</Show>
 
 				<Show when={summary()}>

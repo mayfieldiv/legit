@@ -49,7 +49,6 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
 			if (options.error) {
 				return { error: options.error };
 			}
-			const currentUser = app.config.user ?? app.auth.user;
 
 			if (options.all) {
 				const repos = trackedRepos(app);
@@ -59,9 +58,15 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
 					for await (const snapshot of app.fetchPRs(repo)) {
 						prs = snapshot;
 					}
-					byRepo[repo] = options.withBlockers
-						? prs.map((pr) => ({ ...pr, ...computeBlocker(pr, currentUser) }))
-						: prs;
+					if (options.withBlockers) {
+						const currentUser = app.config.user ?? app.auth.user;
+						byRepo[repo] = prs.map((pr) => ({
+							...pr,
+							...computeBlocker(pr, currentUser),
+						}));
+					} else {
+						byRepo[repo] = prs;
+					}
 				}
 				return { output: byRepo };
 			}
@@ -71,6 +76,7 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
 				prs = snapshot;
 			}
 			if (options.withBlockers) {
+				const currentUser = app.config.user ?? app.auth.user;
 				return {
 					output: prs.map((pr) => ({ ...pr, ...computeBlocker(pr, currentUser) })),
 				};
