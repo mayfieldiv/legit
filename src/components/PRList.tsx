@@ -2,11 +2,14 @@ import { For, Show } from "solid-js";
 import type { PR } from "../lib/types";
 import type { MouseEvent } from "@opentui/core";
 import { formatAge, formatSize, formatReviewDecision, formatRepoShort } from "../lib/format";
+import { computeBlocker } from "../lib/blocker-engine";
+import type { Tier } from "../lib/blocker-engine";
 
 interface PRListProps {
 	prs: PR[];
 	selectedIndex: number;
 	showRepo?: boolean;
+	currentUser?: string;
 	onSelect?: (index: number) => void;
 }
 
@@ -18,7 +21,21 @@ const COL = {
 	size: 14,
 	age: 6,
 	review: 18,
+	blocker: 14,
 } as const;
+
+function blockerDisplay(tier: Tier, blocker: string): { text: string; fg: string } {
+	switch (tier) {
+		case "me-blocking":
+			return { text: "you", fg: "magenta" };
+		case "waiting-on-author":
+			return { text: blocker || "author", fg: "yellow" };
+		case "waiting-on-other":
+			return { text: blocker, fg: "gray" };
+		case "needs-review":
+			return { text: "", fg: "gray" };
+	}
+}
 
 function Cell(props: { width?: number; flexGrow?: number; paddingRight?: number; children: any }) {
 	return (
@@ -39,10 +56,12 @@ function PRRow(props: {
 	pr: PR;
 	selected: boolean;
 	showRepo?: boolean;
+	currentUser?: string;
 	id: string;
 	onMouseDown?: (e: MouseEvent) => void;
 }) {
 	const fg = () => (props.selected ? "white" : undefined);
+	const blocker = () => (props.currentUser ? computeBlocker(props.pr, props.currentUser) : null);
 	return (
 		<box
 			id={props.id}
@@ -76,17 +95,29 @@ function PRRow(props: {
 			<Cell width={COL.age} paddingRight={1}>
 				<span style={{ fg: fg() }}>{formatAge(props.pr.createdAt)}</span>
 			</Cell>
-			<Cell width={COL.review}>
+			<Cell width={COL.review} paddingRight={props.currentUser ? 1 : 0}>
 				<Show when={props.pr.isDraft}>
 					<span style={{ fg: props.selected ? "white" : "yellow" }}>draft </span>
 				</Show>
 				<span style={{ fg: fg() }}>{formatReviewDecision(props.pr.reviewDecision)}</span>
 			</Cell>
+			<Show when={blocker()}>
+				{(b) => {
+					const display = blockerDisplay(b().tier, b().blocker);
+					return (
+						<Cell width={COL.blocker}>
+							<span style={{ fg: props.selected ? "white" : display.fg }}>
+								{display.text}
+							</span>
+						</Cell>
+					);
+				}}
+			</Show>
 		</box>
 	);
 }
 
-export function PRListHeader(props: { showRepo?: boolean }) {
+export function PRListHeader(props: { showRepo?: boolean; currentUser?: string }) {
 	return (
 		<box flexDirection="row" width="100%" height={1}>
 			<Cell width={COL.pr} paddingRight={1}>
@@ -109,9 +140,14 @@ export function PRListHeader(props: { showRepo?: boolean }) {
 			<Cell width={COL.age} paddingRight={1}>
 				<b>Age</b>
 			</Cell>
-			<Cell width={COL.review}>
+			<Cell width={COL.review} paddingRight={props.currentUser ? 1 : 0}>
 				<b>Review</b>
 			</Cell>
+			<Show when={props.currentUser}>
+				<Cell width={COL.blocker}>
+					<b>Blocker</b>
+				</Cell>
+			</Show>
 		</box>
 	);
 }
@@ -127,6 +163,7 @@ export function PRList(props: PRListProps) {
 							pr={pr}
 							selected={index() === props.selectedIndex}
 							showRepo={props.showRepo}
+							currentUser={props.currentUser}
 							onMouseDown={(e: MouseEvent) => {
 								e.preventDefault();
 								props.onSelect?.(index());

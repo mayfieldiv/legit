@@ -11,6 +11,7 @@ interface AppShellProps {
 	loading: boolean;
 	repoSlug: string;
 	showRepo?: boolean;
+	currentUser?: string;
 	resetKey?: number | string;
 	error?: string;
 	onRefreshSelected: () => void;
@@ -100,6 +101,7 @@ export function AppShell(props: AppShellProps) {
 							<ListView
 								prs={props.prs}
 								showRepo={props.showRepo}
+								currentUser={props.currentUser}
 								resetKey={props.resetKey}
 								onRefreshSelected={props.onRefreshSelected}
 								onRefreshAll={props.onRefreshAll}
@@ -110,7 +112,11 @@ export function AppShell(props: AppShellProps) {
 								<text>│</text>
 							</box>
 							<box width={50}>
-								<SummaryPanel summary={props.summary} pr={props.selectedPr} />
+								<SummaryPanel
+									summary={props.summary}
+									pr={props.selectedPr}
+									currentUser={props.currentUser}
+								/>
 							</box>
 						</box>
 					</Match>

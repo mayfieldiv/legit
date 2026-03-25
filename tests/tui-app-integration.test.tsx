@@ -20,7 +20,7 @@ describe("App integration", () => {
 		});
 
 		const { renderOnce, captureCharFrame } = await testRender(() => <App app={app} />, {
-			width: 120,
+			width: 160,
 			height: 20,
 		});
 
@@ -44,7 +44,7 @@ describe("App integration", () => {
 		const app = createTestLegit();
 
 		const { renderOnce, captureCharFrame } = await testRender(() => <App app={app} />, {
-			width: 120,
+			width: 160,
 			height: 20,
 		});
 
@@ -69,7 +69,7 @@ describe("App integration", () => {
 		const app = createTestLegit({ httpFetch: delayedFetch });
 
 		const { renderOnce, captureCharFrame } = await testRender(() => <App app={app} />, {
-			width: 120,
+			width: 160,
 			height: 20,
 		});
 
@@ -89,7 +89,7 @@ describe("App integration", () => {
 		const app = createTestLegit({ httpFetch: fetch });
 
 		const { renderOnce, captureCharFrame } = await testRender(() => <App app={app} />, {
-			width: 120,
+			width: 160,
 			height: 20,
 		});
 
@@ -109,7 +109,7 @@ describe("App integration", () => {
 		const app = createTestLegit({ httpFetch: fetch });
 
 		const { renderOnce, mockInput } = await testRender(() => <App app={app} />, {
-			width: 120,
+			width: 160,
 			height: 20,
 		});
 
@@ -134,7 +134,7 @@ describe("App integration", () => {
 		});
 
 		const { renderOnce, captureCharFrame } = await testRender(() => <App app={app} />, {
-			width: 120,
+			width: 160,
 			height: 20,
 		});
 

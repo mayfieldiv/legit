@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { testRender } from "@opentui/solid";
-import { PRList } from "../src/components/PRList";
+import { PRList, PRListHeader } from "../src/components/PRList";
 import { makePR } from "./helpers";
 
 describe("PRList", () => {
@@ -198,5 +198,67 @@ describe("PRList", () => {
 		const line = captureCharFrame().split("\n")[0] ?? "";
 
 		expect(line).toMatch(/\salice\s+/);
+	});
+
+	test("shows blocker column with 'you' when current user is requested reviewer", async () => {
+		const prs = [makePR({ number: 1, requestedReviewers: ["alice"] })];
+
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => <PRList prs={prs} selectedIndex={0} currentUser="alice" />,
+			{ width: 140, height: 8 },
+		);
+
+		await renderOnce();
+		const frame = captureCharFrame();
+		expect(frame).toContain("you");
+	});
+
+	test("shows blocker column with reviewer name for waiting-on-other", async () => {
+		const prs = [makePR({ number: 1, requestedReviewers: ["bob"] })];
+
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => <PRList prs={prs} selectedIndex={0} currentUser="alice" />,
+			{ width: 140, height: 8 },
+		);
+
+		await renderOnce();
+		const frame = captureCharFrame();
+		expect(frame).toContain("bob");
+	});
+
+	test("shows blocker header when currentUser is provided", async () => {
+		const prs = [makePR({ number: 1 })];
+
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => (
+				<box flexDirection="column">
+					<PRListHeader currentUser="alice" />
+					<PRList prs={prs} selectedIndex={0} currentUser="alice" />
+				</box>
+			),
+			{ width: 140, height: 8 },
+		);
+
+		await renderOnce();
+		const frame = captureCharFrame();
+		expect(frame).toMatch(/[Bb]locker/);
+	});
+
+	test("does not show blocker column when currentUser is not provided", async () => {
+		const prs = [makePR({ number: 1, requestedReviewers: ["alice"] })];
+
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => (
+				<box flexDirection="column">
+					<PRListHeader />
+					<PRList prs={prs} selectedIndex={0} />
+				</box>
+			),
+			{ width: 140, height: 8 },
+		);
+
+		await renderOnce();
+		const frame = captureCharFrame();
+		expect(frame).not.toMatch(/[Bb]locker/);
 	});
 });

@@ -1,6 +1,7 @@
 import { Show, For, createMemo } from "solid-js";
 import type { PR, PRSummary, CheckRun, FileCategory } from "../lib/types";
 import { formatAge, formatSize, formatReviewState, sortCheckRuns } from "../lib/format";
+import { computeBlocker, tierLabel } from "../lib/blocker-engine";
 
 /** Max number of individual check lines to show before collapsing. */
 const MAX_VISIBLE_CHECKS = 6;
@@ -8,6 +9,7 @@ const MAX_VISIBLE_CHECKS = 6;
 interface SummaryPanelProps {
 	summary: PRSummary | undefined;
 	pr: PR | undefined;
+	currentUser?: string;
 }
 
 function checkIcon(check: CheckRun): { icon: string; fg: string } {
@@ -137,6 +139,39 @@ export function SummaryPanel(props: SummaryPanelProps) {
 				</Show>
 
 				{/* --- Extended fields (only when summary loaded) --- */}
+				<Show when={summary() && props.currentUser}>
+					{(() => {
+						const b = createMemo(() =>
+							computeBlocker(summary()!, props.currentUser!, {
+								checks: summary()!.checks,
+								reviews: summary()!.reviews,
+							}),
+						);
+						return (
+							<box height={1} width="100%">
+								<text truncate={true}>
+									<span style={{ fg: "gray" }}>blocker: </span>
+									<span
+										style={{
+											fg:
+												b().tier === "me-blocking"
+													? "magenta"
+													: b().tier === "waiting-on-author"
+														? "yellow"
+														: "gray",
+										}}
+									>
+										{tierLabel(b().tier)}
+									</span>
+									<Show when={b().blocker}>
+										<span style={{ fg: "gray" }}> ({b().blocker})</span>
+									</Show>
+								</text>
+							</box>
+						);
+					})()}
+				</Show>
+
 				<Show when={summary()}>
 					{/* Size breakdown */}
 					<Show when={sizeCategories().length > 0}>

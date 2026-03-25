@@ -2,6 +2,7 @@ import { createSignal, onMount, onCleanup } from "solid-js";
 import { AppShell } from "./components/AppShell";
 import type { Legit } from "./lib/legit";
 import type { PR, PRSummary } from "./lib/types";
+import { computeBlocker } from "./lib/blocker-engine";
 
 export interface AppProps {
 	app: Legit;
@@ -37,6 +38,19 @@ export function App(props: AppProps) {
 		return ["All", ...repoTabs()];
 	}
 
+	/**
+	 * Filter out waiting-on-author PRs unless the current user is the author.
+	 * This keeps the default view focused on actionable PRs.
+	 */
+	function filterByVisibility(input: PR[]): PR[] {
+		const currentUser = props.app.config.user;
+		if (!currentUser) return input;
+		return input.filter((pr) => {
+			const { tier } = computeBlocker(pr, currentUser);
+			return tier !== "waiting-on-author" || pr.author === currentUser;
+		});
+	}
+
 	function visiblePRsForTab(tabIndex = activeTab()): PR[] {
 		const byRepo = prsByRepo();
 		if (tabIndex === 0) {
@@ -50,11 +64,14 @@ export function App(props: AppProps) {
 			merged.sort(
 				(a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
 			);
-			return merged;
+			return filterByVisibility(merged);
 		}
 		const repo = repoTabs()[tabIndex - 1];
 		if (!repo) return [];
-		return (byRepo[repo] ?? []).map((pr) => (pr.repoSlug ? pr : { ...pr, repoSlug: repo }));
+		const repoPrs = (byRepo[repo] ?? []).map((pr) =>
+			pr.repoSlug ? pr : { ...pr, repoSlug: repo },
+		);
+		return filterByVisibility(repoPrs);
 	}
 
 	function updateDisplayedPRs() {
@@ -193,6 +210,7 @@ export function App(props: AppProps) {
 			loading={loading()}
 			repoSlug={currentRepoSlug() ?? "All repos"}
 			showRepo={activeTab() === 0 && repoTabs().length > 1}
+			currentUser={props.app.config.user}
 			resetKey={activeTab()}
 			error={error()}
 			onRefreshSelected={handleRefreshSelected}
