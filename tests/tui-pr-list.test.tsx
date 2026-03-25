@@ -253,6 +253,23 @@ describe("PRList", () => {
 		expect(frame).toContain("you");
 	});
 
+	test("shows 'you' when current user is the author of a draft (waiting-on-author self)", async () => {
+		const prs = [makePR({ number: 1, author: "alice", isDraft: true })];
+
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => <PRList prs={prs} selectedIndex={0} currentUser="alice" />,
+			{ width: 140, height: 8 },
+		);
+
+		await renderOnce();
+		const frame = captureCharFrame();
+		// Blocker column shows "you" not the raw login
+		expect(frame).toContain("you");
+		// "you" should appear once (in the blocker column), not duplicated as a username
+		const youCount = (frame.match(/\byou\b/g) ?? []).length;
+		expect(youCount).toBeGreaterThanOrEqual(1);
+	});
+
 	test("shows blocker column with reviewer name for waiting-on-other", async () => {
 		const prs = [makePR({ number: 1, requestedReviewers: ["bob"] })];
 

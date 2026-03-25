@@ -24,12 +24,17 @@ const COL = {
 	blocker: 14,
 } as const;
 
-function blockerDisplay(tier: Tier, blocker: string): { text: string; fg: string } {
+function blockerDisplay(
+	tier: Tier,
+	blocker: string,
+	currentUser: string,
+): { text: string; fg: string } {
+	const isMe = blocker === currentUser;
 	switch (tier) {
 		case "me-blocking":
 			return { text: "you", fg: "magenta" };
 		case "waiting-on-author":
-			return { text: blocker || "author", fg: "yellow" };
+			return { text: isMe ? "you" : blocker || "author", fg: isMe ? "magenta" : "yellow" };
 		case "waiting-on-other":
 			return { text: blocker, fg: "gray" };
 		case "needs-review":
@@ -62,6 +67,7 @@ function PRRow(props: {
 }) {
 	const fg = () => (props.selected ? "white" : undefined);
 	const blocker = () => (props.currentUser ? computeBlocker(props.pr, props.currentUser) : null);
+	const currentUser = () => props.currentUser ?? "";
 	return (
 		<box
 			id={props.id}
@@ -106,7 +112,7 @@ function PRRow(props: {
 			</Cell>
 			<Show when={blocker()}>
 				{(b) => {
-					const display = blockerDisplay(b().tier, b().blocker);
+					const display = blockerDisplay(b().tier, b().blocker, currentUser());
 					return (
 						<Cell width={COL.blocker}>
 							<span style={{ fg: props.selected ? "white" : display.fg }}>
