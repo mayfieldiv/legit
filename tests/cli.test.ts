@@ -215,6 +215,31 @@ describe("runCommand", () => {
 		const result = await runCommand(["files", "0"], app);
 		expect(result.error).toContain("Usage");
 	});
+
+	test("repos returns tracked repos from config", async () => {
+		const app = createTestLegit();
+		app.config.repos = ["acme/widgets"];
+		const result = await runCommand(["repos"], app);
+		expect(result.output).toEqual(["acme/widgets"]);
+	});
+
+	test("prs --repo=<slug> fetches PRs for explicit repo", async () => {
+		const app = createTestLegit();
+		const result = await runCommand(["prs", "--repo=acme/gadgets"], app);
+		const output = result.output as any[];
+		expect(output).toHaveLength(1);
+		expect(output[0].number).toBe(42);
+	});
+
+	test("prs --all fetches PRs for all tracked repos", async () => {
+		const app = createTestLegit();
+		app.config.repos = ["acme/widgets"];
+		const result = await runCommand(["prs", "--all"], app);
+		const output = result.output as any;
+		expect(output).toEqual({
+			"acme/widgets": [expect.objectContaining({ number: 42 })],
+		});
+	});
 });
 
 // ── Subprocess smoke test (one test to verify the entry point works) ────────

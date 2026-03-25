@@ -10,6 +10,7 @@
 
 export interface PR {
 	number: number;
+	repoSlug?: string;
 	title: string;
 	author: string;
 	createdAt: string;

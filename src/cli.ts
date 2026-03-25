@@ -40,9 +40,29 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
 		case "config":
 			return { output: app.config };
 
+		case "repos":
+			return { output: app.config.repos };
+
 		case "prs": {
+			const options = parsePrsArgs(args.slice(1));
+			if (options.error) {
+				return { error: options.error };
+			}
+			if (options.all) {
+				const repos = trackedRepos(app);
+				const byRepo: Record<string, PR[]> = {};
+				for (const repo of repos) {
+					let prs: PR[] = [];
+					for await (const snapshot of app.fetchPRs(repo)) {
+						prs = snapshot;
+					}
+					byRepo[repo] = prs;
+				}
+				return { output: byRepo };
+			}
+
 			let prs: PR[] = [];
-			for await (const snapshot of app.fetchPRs()) {
+			for await (const snapshot of app.fetchPRs(options.repo)) {
 				prs = snapshot;
 			}
 			return { output: prs };
@@ -75,9 +95,34 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
 
 		default:
 			return {
-				error: `Unknown command: ${command}\n\nUsage: legit [detect|auth|config|prs|pr <number>|files <number>]`,
+				error: `Unknown command: ${command}\n\nUsage: legit [detect|auth|config|repos|prs [--repo=<owner/repo>|--all]|pr <number>|files <number>]`,
 			};
 	}
+}
+
+function trackedRepos(app: Legit): string[] {
+	return app.trackedRepos();
+}
+
+function parsePrsArgs(args: string[]): { repo?: string; all: boolean; error?: string } {
+	let repo: string | undefined;
+	let all = false;
+	for (const arg of args) {
+		if (arg === "--all") {
+			all = true;
+		} else if (arg.startsWith("--repo=")) {
+			repo = arg.slice("--repo=".length);
+		} else {
+			return { all: false, error: "Usage: legit prs [--repo=<owner/repo>|--all]" };
+		}
+	}
+	if (all && repo) {
+		return {
+			all: false,
+			error: "Usage: legit prs [--repo=<owner/repo>|--all]",
+		};
+	}
+	return { repo, all };
 }
 
 // ── Entry point ─────────────────────────────────────────────────────────────

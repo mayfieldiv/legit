@@ -30,6 +30,26 @@ describe("categorizeFiles", () => {
 			expect(result.files[0]!.category).toBe("generated");
 		});
 
+		test("categorizes files under generated/ directories as generated", () => {
+			const result = categorizeFiles([
+				file("frontend/src/api/backend/generated/interfaces.ts"),
+				file("frontend/src/api/backend/generated/responses.ts"),
+			]);
+			for (const f of result.files) {
+				expect(f.category).toBe("generated");
+			}
+		});
+
+		test("categorizes EF Core Designer.cs and ModelSnapshot.cs as generated", () => {
+			const result = categorizeFiles([
+				file("backend/Persistence/Migrations/20260321_AddFoo.Designer.cs"),
+				file("backend/Persistence/Migrations/MyDbContextModelSnapshot.cs"),
+			]);
+			for (const f of result.files) {
+				expect(f.category).toBe("generated");
+			}
+		});
+
 		test("categorizes test files as test", () => {
 			const result = categorizeFiles([
 				file("src/lib/foo.test.ts"),

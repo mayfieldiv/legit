@@ -15,7 +15,7 @@ describe("AppShell", () => {
 					onRefreshAll={() => {}}
 				/>
 			),
-			{ width: 120, height: 20 },
+			{ width: 130, height: 20 },
 		);
 
 		await renderOnce();
@@ -39,7 +39,7 @@ describe("AppShell", () => {
 					onRefreshAll={() => {}}
 				/>
 			),
-			{ width: 120, height: 20 },
+			{ width: 130, height: 20 },
 		);
 
 		await renderOnce();
@@ -59,7 +59,7 @@ describe("AppShell", () => {
 					onRefreshAll={() => {}}
 				/>
 			),
-			{ width: 120, height: 20 },
+			{ width: 130, height: 20 },
 		);
 
 		await renderOnce();
@@ -79,7 +79,7 @@ describe("AppShell", () => {
 					onRefreshAll={() => {}}
 				/>
 			),
-			{ width: 120, height: 20 },
+			{ width: 130, height: 20 },
 		);
 
 		await renderOnce();
@@ -104,11 +104,94 @@ describe("AppShell", () => {
 					onRefreshAll={() => {}}
 				/>
 			),
-			{ width: 120, height: 20 },
+			{ width: 130, height: 20 },
 		);
 
 		await renderOnce();
 		const frame = captureCharFrame();
 		expect(frame).toContain("2 open PRs");
+	});
+
+	test("renders tab bar with All and repo tabs", async () => {
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => (
+				<AppShell
+					prs={[]}
+					loading={false}
+					repoSlug="acme/widgets"
+					tabs={["All", "acme/widgets", "acme/gadgets"]}
+					activeTab={0}
+					onTabChange={() => {}}
+					onRefreshSelected={() => {}}
+					onRefreshAll={() => {}}
+				/>
+			),
+			{ width: 130, height: 20 },
+		);
+
+		await renderOnce();
+		const frame = captureCharFrame();
+		expect(frame).toContain("All");
+		expect(frame).toContain("acme/widgets");
+		expect(frame).toContain("acme/gadgets");
+	});
+
+	test("tab keybindings switch tabs", async () => {
+		const calls: number[] = [];
+		const { renderOnce, mockInput } = await testRender(
+			() => (
+				<AppShell
+					prs={[]}
+					loading={false}
+					repoSlug="acme/widgets"
+					tabs={["All", "acme/widgets", "acme/gadgets"]}
+					activeTab={1}
+					onTabChange={(index) => calls.push(index)}
+					onRefreshSelected={() => {}}
+					onRefreshAll={() => {}}
+				/>
+			),
+			{ width: 130, height: 20 },
+		);
+
+		await renderOnce();
+		mockInput.pressKey("l");
+		mockInput.pressKey("h");
+		mockInput.pressKey("right");
+		mockInput.pressKey("left");
+		mockInput.pressKey("3");
+		mockInput.pressKey("0");
+		mockInput.pressKey("[");
+		mockInput.pressKey("]");
+		await renderOnce();
+
+		expect(calls).toContain(2);
+		expect(calls).toContain(0);
+	});
+
+	test("number keys map 0 to All and 1 to first repo", async () => {
+		const calls: number[] = [];
+		const { renderOnce, mockInput } = await testRender(
+			() => (
+				<AppShell
+					prs={[]}
+					loading={false}
+					repoSlug="acme/widgets"
+					tabs={["All", "acme/widgets", "acme/gadgets"]}
+					activeTab={2}
+					onTabChange={(index) => calls.push(index)}
+					onRefreshSelected={() => {}}
+					onRefreshAll={() => {}}
+				/>
+			),
+			{ width: 130, height: 20 },
+		);
+
+		await renderOnce();
+		mockInput.pressKey("0");
+		mockInput.pressKey("1");
+		await renderOnce();
+
+		expect(calls).toEqual([0, 1]);
 	});
 });

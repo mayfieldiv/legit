@@ -53,8 +53,10 @@ describe("PRList", () => {
 		expect(frame).toBeDefined();
 	});
 
-	test("shows draft indicator for draft PRs", async () => {
-		const prs = [makePR({ number: 1, title: "WIP thing", isDraft: true })];
+	test("shows draft indicator in review column for draft PRs", async () => {
+		const prs = [
+			makePR({ number: 1, title: "WIP thing", isDraft: true, reviewDecision: "APPROVED" }),
+		];
 
 		const { renderOnce, captureCharFrame } = await testRender(
 			() => <PRList prs={prs} selectedIndex={0} />,
@@ -63,7 +65,11 @@ describe("PRList", () => {
 
 		await renderOnce();
 		const frame = captureCharFrame();
+		// Draft indicator should appear in the review column alongside the decision
 		expect(frame).toContain("draft");
+		expect(frame).toContain("approved");
+		// Title should NOT contain the draft suffix
+		expect(frame).not.toContain("WIP thing draft");
 	});
 
 	test("shows size as additions/deletions", async () => {
@@ -140,6 +146,38 @@ describe("PRList", () => {
 		expect(lines[0]).toContain("alice");
 		expect(nonEmptyLines).toHaveLength(1);
 		expect(frame).not.toContain("author or other columns");
+	});
+
+	test("shows repo column when showRepo is true", async () => {
+		const prs = [
+			makePR({ number: 1, title: "First PR", repoSlug: "acme/widgets" }),
+			makePR({ number: 2, title: "Second PR", repoSlug: "acme/gadgets" }),
+		];
+
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => <PRList prs={prs} selectedIndex={0} showRepo={true} />,
+			{ width: 120, height: 20 },
+		);
+
+		await renderOnce();
+		const frame = captureCharFrame();
+
+		expect(frame).toContain("widgets");
+		expect(frame).toContain("gadgets");
+	});
+
+	test("hides repo column when showRepo is false", async () => {
+		const prs = [makePR({ number: 1, title: "First PR", repoSlug: "acme/widgets" })];
+
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => <PRList prs={prs} selectedIndex={0} showRepo={false} />,
+			{ width: 120, height: 20 },
+		);
+
+		await renderOnce();
+		const frame = captureCharFrame();
+
+		expect(frame).not.toContain("widgets");
 	});
 
 	test("keeps a visible gap before the author column when title is truncated", async () => {
