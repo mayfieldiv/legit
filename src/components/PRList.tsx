@@ -125,14 +125,16 @@ function PRRow(props: {
 					{reviewCellText(props.pr)}
 				</span>
 			</Cell>
-			<Show when={blockerCell()}>
-				{(display) => (
-					<Cell width={COL.blocker}>
-						<span style={{ fg: props.selected ? "white" : display().fg }}>
-							{display().text}
-						</span>
-					</Cell>
-				)}
+			<Show when={props.currentUser}>
+				<Cell width={COL.blocker}>
+					<Show when={blockerCell()}>
+						{(display) => (
+							<span style={{ fg: props.selected ? "white" : display().fg }}>
+								{display().text}
+							</span>
+						)}
+					</Show>
+				</Cell>
 			</Show>
 		</box>
 	);
