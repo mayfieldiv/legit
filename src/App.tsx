@@ -30,7 +30,7 @@ export function App(props: AppProps) {
 	}
 
 	function cacheKey(pr: PR): string {
-		return `${pr.repoSlug ?? currentRepoSlug() ?? props.app.repoSlug}#${pr.number}`;
+		return `${pr.repoSlug ?? props.app.repoSlug}#${pr.number}`;
 	}
 
 	function tabs(): string[] {
@@ -53,7 +53,8 @@ export function App(props: AppProps) {
 			return merged;
 		}
 		const repo = repoTabs()[tabIndex - 1];
-		return (repo ? byRepo[repo] : []) ?? [];
+		if (!repo) return [];
+		return (byRepo[repo] ?? []).map((pr) => (pr.repoSlug ? pr : { ...pr, repoSlug: repo }));
 	}
 
 	function updateDisplayedPRs() {
@@ -99,9 +100,7 @@ export function App(props: AppProps) {
 	}
 
 	function discoverRepos(): string[] {
-		const repos = new Set<string>(props.app.config.repos);
-		repos.add(props.app.repoSlug);
-		return [...repos];
+		return props.app.trackedRepos();
 	}
 
 	async function loadPRs() {
@@ -135,7 +134,7 @@ export function App(props: AppProps) {
 
 		const key = cacheKey(pr);
 		try {
-			const repo = pr.repoSlug ?? currentRepoSlug() ?? props.app.repoSlug;
+			const repo = pr.repoSlug ?? props.app.repoSlug;
 			const result = await props.app.fetchPRSummary(repo, pr.number, ac.signal);
 			if (ac.signal.aborted) return;
 			summaryCache.set(key, result);
@@ -151,11 +150,11 @@ export function App(props: AppProps) {
 	function handleSelectionChange(pr: PR) {
 		setSelectedPr(pr);
 		clearTimeout(debounceTimer);
+		summaryController?.abort();
 
 		const key = cacheKey(pr);
 		const cached = summaryCache.get(key);
 		if (cached) {
-			summaryController?.abort();
 			setSummary(cached);
 			return;
 		}

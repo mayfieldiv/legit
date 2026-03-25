@@ -180,6 +180,13 @@ export class Legit {
 		return `${this.repo.owner}/${this.repo.repo}`;
 	}
 
+	/** All tracked repos (from config + current repo), deduplicated. */
+	trackedRepos(): string[] {
+		const repos = new Set<string>(this.config.repos);
+		repos.add(this.repoSlug);
+		return [...repos];
+	}
+
 	/**
 	 * Fetch open PRs. Defaults to the detected repo.
 	 * Auto-adds repo to config if not already tracked.
