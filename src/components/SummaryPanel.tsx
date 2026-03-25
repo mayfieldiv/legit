@@ -114,15 +114,22 @@ export function SummaryPanel(props: SummaryPanelProps) {
 				{/* Merge status */}
 				<box height={1} width="100%">
 					<text>
-						<Show when={pr()!.mergeable === "CONFLICTING"}>
-							<span style={{ fg: "red" }}>⚠ conflict</span>
-						</Show>
-						<Show when={pr()!.mergeable === "MERGEABLE"}>
-							<span style={{ fg: "green" }}>✓ mergeable</span>
-						</Show>
-						<Show when={pr()!.mergeable === "UNKNOWN"}>
-							<span style={{ fg: "gray" }}>? merge unknown</span>
-						</Show>
+						<span
+							style={{
+								fg:
+									pr()!.mergeable === "CONFLICTING"
+										? "red"
+										: pr()!.mergeable === "MERGEABLE"
+											? "green"
+											: "gray",
+							}}
+						>
+							{pr()!.mergeable === "CONFLICTING"
+								? "! conflict"
+								: pr()!.mergeable === "MERGEABLE"
+									? "✓ mergeable"
+									: "? merge unknown"}
+						</span>
 					</text>
 				</box>
 
