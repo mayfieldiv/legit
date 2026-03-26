@@ -3,6 +3,7 @@ import { useKeyboard } from "@opentui/solid";
 import { ListView } from "./ListView";
 import { SummaryPanel } from "./SummaryPanel";
 import type { PR, PRSummary } from "../lib/types";
+import type { GroupByKey } from "../lib/group-filter-engine";
 
 export type ViewTarget = { view: "list" } | { view: "detail"; pr: PR };
 
@@ -12,6 +13,8 @@ interface AppShellProps {
 	repoSlug: string;
 	showRepo?: boolean;
 	currentUser?: string;
+	/** Initial grouping key for the list view. Default: "smart-status". */
+	groupBy?: GroupByKey;
 	resetKey?: number | string;
 	error?: string;
 	onRefreshSelected: () => void;
@@ -103,6 +106,7 @@ export function AppShell(props: AppShellProps) {
 								prs={props.prs}
 								showRepo={props.showRepo}
 								currentUser={props.currentUser}
+								groupBy={props.groupBy ?? "smart-status"}
 								resetKey={props.resetKey}
 								onRefreshSelected={props.onRefreshSelected}
 								onRefreshAll={props.onRefreshAll}
