@@ -402,6 +402,24 @@ describe("runCommand", () => {
 		expect(result.error).toContain("--with-blockers");
 	});
 
+	test("prs --all and --group-by cannot be combined", async () => {
+		const app = createTestLegit();
+		const result = await runCommand(["prs", "--all", "--group-by=author"], app);
+		expect(result.error).toContain("--all");
+	});
+
+	test("prs --all and --sort-by cannot be combined", async () => {
+		const app = createTestLegit();
+		const result = await runCommand(["prs", "--all", "--sort-by=size"], app);
+		expect(result.error).toContain("--all");
+	});
+
+	test("prs --all and --filter cannot be combined", async () => {
+		const app = createTestLegit();
+		const result = await runCommand(["prs", "--all", "--filter=fix"], app);
+		expect(result.error).toContain("--all");
+	});
+
 	test("prs --sort-by with invalid value returns error", async () => {
 		const app = createTestLegit();
 		const result = await runCommand(["prs", "--sort-by=invalid"], app);

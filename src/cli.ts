@@ -248,6 +248,14 @@ function parsePrsArgs(args: string[]): {
 		return { all: false, withBlockers: false, error: USAGE_PRS };
 	}
 
+	if (all && (groupBy ?? sortBy ?? filter) !== undefined) {
+		return {
+			all: false,
+			withBlockers: false,
+			error: "--all cannot be combined with --group-by, --sort-by, or --filter",
+		};
+	}
+
 	if (withBlockers && (groupBy ?? sortBy ?? filter) !== undefined) {
 		return {
 			all: false,
