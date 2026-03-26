@@ -86,10 +86,30 @@ export function App(props: AppProps) {
 		setError("");
 		setPrsByRepo((prev) => ({ ...prev, [repo]: [] }));
 		updateDisplayedPRs();
+
+		// Render coalescing: many snapshots can arrive in a single microtask burst
+		// (e.g. 25 status updates from one GraphQL batch). We collapse them into
+		// one DOM update per macrotask boundary so the event loop stays free to
+		// process keyboard input between network round-trips.
+		let latestSnapshot: PR[] = [];
+		let pendingRender: ReturnType<typeof setTimeout> | undefined;
+
+		function flush() {
+			clearTimeout(pendingRender);
+			pendingRender = undefined;
+			if (ac.signal.aborted) return;
+			setPrsByRepo((prev) => ({ ...prev, [repo]: latestSnapshot }));
+			updateDisplayedPRs();
+		}
+
+		function scheduleFlush(snapshot: PR[]) {
+			latestSnapshot = snapshot;
+			pendingRender ??= setTimeout(flush, 0);
+		}
+
 		try {
 			for await (const snapshot of props.app.fetchPRs(repo, ac.signal)) {
-				setPrsByRepo((prev) => ({ ...prev, [repo]: snapshot }));
-				updateDisplayedPRs();
+				scheduleFlush(snapshot);
 				if (!selectedPr() && snapshot.length > 0 && activeTab() === 0) {
 					handleSelectionChange({ ...snapshot[0]!, repoSlug: repo });
 				}
@@ -99,6 +119,9 @@ export function App(props: AppProps) {
 				setError(err.message ?? String(err));
 			}
 		} finally {
+			// Apply final state immediately; clears any pending scheduled render.
+			// finally runs as a microtask, so it always beats the pending setTimeout.
+			flush();
 			if (!ac.signal.aborted) {
 				setRepoLoading(repo, false);
 			}
