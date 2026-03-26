@@ -431,6 +431,12 @@ describe("runCommand", () => {
 		const result = await runCommand(["prs", "--group-by=invalid"], app);
 		expect(result.error).toBeDefined();
 	});
+
+	test("prs --sort-dir without --sort-by returns error", async () => {
+		const app = createTestLegit();
+		const result = await runCommand(["prs", "--sort-dir=asc"], app);
+		expect(result.error).toContain("--sort-dir requires --sort-by");
+	});
 });
 
 // ── Subprocess smoke test (one test to verify the entry point works) ────────

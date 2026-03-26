@@ -244,6 +244,14 @@ function parsePrsArgs(args: string[]): {
 		}
 	}
 
+	if (sortDir && !sortBy) {
+		return {
+			all: false,
+			withBlockers: false,
+			error: "--sort-dir requires --sort-by",
+		};
+	}
+
 	if (all && repo) {
 		return { all: false, withBlockers: false, error: USAGE_PRS };
 	}

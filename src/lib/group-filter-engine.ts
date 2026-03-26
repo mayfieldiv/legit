@@ -155,6 +155,8 @@ function groupByKey(prs: PR[], key: GroupByKey, currentUser?: string): PRGroup[]
 		}
 
 		case "label": {
+			// Groups by the first label only — a PR with multiple labels
+			// appears under its first label, not duplicated across groups.
 			const labeled = new Map<string, PR[]>();
 			const unlabeled: PR[] = [];
 			for (const pr of prs) {
