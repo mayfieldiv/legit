@@ -54,9 +54,10 @@ function isCiFailing(checks: CheckRun[]): boolean {
  *  1. CI failing          → waiting-on-author (fix CI before reviewing)
  *  2. Draft               → waiting-on-author (not ready for review)
  *  3. Merge conflict      → waiting-on-author (author must rebase)
- *  4. Current user is a requested reviewer → me-blocking
- *  5. Changes requested (via reviewDecision or individual reviews)
- *                         → waiting-on-author
+ *  4. Changes requested (via reviewDecision or individual reviews)
+ *                         → waiting-on-author (author must respond before
+ *                           pending reviewers need to act)
+ *  5. Current user is a requested reviewer → me-blocking
  *  6. Another reviewer requested → waiting-on-other
  *  7. Default             → needs-review
  */
@@ -91,16 +92,10 @@ export function computeBlocker(pr: PR, currentUser: string, opts?: BlockerOption
 		};
 	}
 
-	// 4. Current user is a requested reviewer → me-blocking
-	if (pr.requestedReviewers.includes(currentUser)) {
-		return {
-			blocker: currentUser,
-			tier: "me-blocking",
-			reason: "You are a requested reviewer",
-		};
-	}
-
-	// 5. Changes requested — via reviewDecision field OR individual reviews
+	// 4. Changes requested — via reviewDecision field OR individual reviews.
+	//    Checked before "me-blocking" so that an existing change-request from
+	//    another reviewer takes precedence over our pending review: the author
+	//    must address the feedback before we need to re-review.
 	const changesRequestedByReview = reviews.some((r) => r.state === "CHANGES_REQUESTED");
 	const changesRequestedByDecision = pr.reviewDecision === "CHANGES_REQUESTED";
 	if (changesRequestedByDecision || changesRequestedByReview) {
@@ -108,6 +103,15 @@ export function computeBlocker(pr: PR, currentUser: string, opts?: BlockerOption
 			blocker: pr.author,
 			tier: "waiting-on-author",
 			reason: "Changes requested",
+		};
+	}
+
+	// 5. Current user is a requested reviewer → me-blocking
+	if (pr.requestedReviewers.includes(currentUser)) {
+		return {
+			blocker: currentUser,
+			tier: "me-blocking",
+			reason: "You are a requested reviewer",
 		};
 	}
 

@@ -212,6 +212,17 @@ describe("computeBlocker — precedence ordering", () => {
 		const result = computeBlocker(pr, ME);
 		expect(result.tier).toBe("me-blocking");
 	});
+
+	test("CHANGES_REQUESTED by other beats me-blocking (author must respond first)", () => {
+		// Current user is a pending reviewer but another reviewer already requested
+		// changes — the author must respond before we need to re-review.
+		const pr = makePR({ author: AUTHOR, requestedReviewers: [ME] });
+		const result = computeBlocker(pr, ME, {
+			reviews: [review(OTHER, "CHANGES_REQUESTED")],
+		});
+		expect(result.tier).toBe("waiting-on-author");
+		expect(result.blocker).toBe(AUTHOR);
+	});
 });
 
 // ── Draft PRs ─────────────────────────────────────────────────────────────────
