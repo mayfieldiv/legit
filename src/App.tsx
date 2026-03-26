@@ -9,6 +9,32 @@ export function prUrl(repoSlug: string, number: number): string {
 	return `https://github.com/${repoSlug}/pull/${number}`;
 }
 
+/**
+ * Coalesces rapid successive values into one callback invocation per macrotask
+ * boundary. Values arriving in the same microtask burst are collapsed to the
+ * latest; the callback fires on the next macrotask (setTimeout 0).
+ *
+ * Call flush() in a finally block to apply the last value synchronously and
+ * cancel any pending macrotask — finally runs before macrotasks, so this is safe.
+ */
+function makeCoalescer<T>(apply: (v: T) => void, signal?: AbortSignal) {
+	let latest: T | undefined;
+	let pending: ReturnType<typeof setTimeout> | undefined;
+
+	const flush = () => {
+		clearTimeout(pending);
+		pending = undefined;
+		if (latest !== undefined && !signal?.aborted) apply(latest);
+	};
+
+	const schedule = (v: T) => {
+		latest = v;
+		pending ??= setTimeout(flush, 0);
+	};
+
+	return { schedule, flush };
+}
+
 export interface AppProps {
 	app: Legit;
 }
@@ -87,29 +113,14 @@ export function App(props: AppProps) {
 		setPrsByRepo((prev) => ({ ...prev, [repo]: [] }));
 		updateDisplayedPRs();
 
-		// Render coalescing: many snapshots can arrive in a single microtask burst
-		// (e.g. 25 status updates from one GraphQL batch). We collapse them into
-		// one DOM update per macrotask boundary so the event loop stays free to
-		// process keyboard input between network round-trips.
-		let latestSnapshot: PR[] = [];
-		let pendingRender: ReturnType<typeof setTimeout> | undefined;
-
-		function flush() {
-			clearTimeout(pendingRender);
-			pendingRender = undefined;
-			if (ac.signal.aborted) return;
-			setPrsByRepo((prev) => ({ ...prev, [repo]: latestSnapshot }));
+		const { schedule, flush } = makeCoalescer<PR[]>((snapshot) => {
+			setPrsByRepo((prev) => ({ ...prev, [repo]: snapshot }));
 			updateDisplayedPRs();
-		}
-
-		function scheduleFlush(snapshot: PR[]) {
-			latestSnapshot = snapshot;
-			pendingRender ??= setTimeout(flush, 0);
-		}
+		}, ac.signal);
 
 		try {
 			for await (const snapshot of props.app.fetchPRs(repo, ac.signal)) {
-				scheduleFlush(snapshot);
+				schedule(snapshot);
 				if (!selectedPr() && snapshot.length > 0 && activeTab() === 0) {
 					handleSelectionChange({ ...snapshot[0]!, repoSlug: repo });
 				}
@@ -119,8 +130,6 @@ export function App(props: AppProps) {
 				setError(err.message ?? String(err));
 			}
 		} finally {
-			// Apply final state immediately; clears any pending scheduled render.
-			// finally runs as a microtask, so it always beats the pending setTimeout.
 			flush();
 			if (!ac.signal.aborted) {
 				setRepoLoading(repo, false);
