@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import type { PR } from "../lib/types";
 import type { MouseEvent } from "@opentui/core";
 import { formatAge, formatSize, formatReviewDecision, formatRepoShort } from "../lib/format";
@@ -229,10 +229,10 @@ export function PRListHeader(props: { showRepo?: boolean; currentUser?: string }
 
 export function PRList(props: PRListProps) {
 	// Resolve flat items — prefer `items` prop; fall back to converting `prs`
-	const resolvedItems = (): FlatItem[] => {
+	const resolvedItems = createMemo((): FlatItem[] => {
 		if (props.items) return props.items;
 		return (props.prs ?? []).map((pr, i) => ({ kind: "pr", pr, prIndex: i }));
-	};
+	});
 
 	const hasPRs = () => resolvedItems().some((item) => item.kind === "pr");
 

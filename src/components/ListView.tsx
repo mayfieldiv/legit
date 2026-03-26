@@ -193,13 +193,13 @@ export function ListView(props: ListViewProps) {
 			return;
 		}
 
-		// Filter mode: navigation still works; chars/backspace go to filter
+		// Filter mode: navigation via arrow keys only; j/k fall through to text input
 		if (filterMode()) {
-			if (name === "j" || name === "down") {
+			if (name === "down") {
 				navigate("down");
 				return;
 			}
-			if (name === "k" || name === "up") {
+			if (name === "up") {
 				navigate("up");
 				return;
 			}
