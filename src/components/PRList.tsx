@@ -5,8 +5,50 @@ import { formatAge, formatSize, formatReviewDecision, formatRepoShort } from "..
 import { computeBlocker } from "../lib/blocker-engine";
 import type { Tier } from "../lib/blocker-engine";
 
+// ── Flat item type (group headers + PR rows) ─────────────────────────────────
+
+/** A single display item in the PR list: either a group header or a PR row. */
+export type FlatItem = { kind: "header"; label: string } | { kind: "pr"; pr: PR; prIndex: number };
+
+/**
+ * Build a flat display list from groups (including headers).
+ * Groups with empty labels (i.e. "none" grouping) produce no header row.
+ */
+export function buildFlatItems(groups: Array<{ label: string; prs: PR[] }>): FlatItem[] {
+	const items: FlatItem[] = [];
+	let prIndex = 0;
+	for (const group of groups) {
+		if (group.label) {
+			items.push({ kind: "header", label: group.label });
+		}
+		for (const pr of group.prs) {
+			items.push({ kind: "pr", pr, prIndex: prIndex++ });
+		}
+	}
+	return items;
+}
+
+/**
+ * Map a PR selection index to its row position in a flat items list.
+ * Used to compute the scroll target when groups are present.
+ */
+export function prIndexToDisplayRow(items: FlatItem[], prIndex: number): number {
+	let prCount = 0;
+	for (let i = 0; i < items.length; i++) {
+		const item = items[i]!;
+		if (item.kind === "pr") {
+			if (prCount === prIndex) return i;
+			prCount++;
+		}
+	}
+	return prIndex; // fallback: flat list
+}
+
 interface PRListProps {
-	prs: PR[];
+	/** Flat list of PRs (backward compat — used when `items` is not provided). */
+	prs?: PR[];
+	/** Pre-built flat items list (with optional group headers). Overrides `prs`. */
+	items?: FlatItem[];
 	selectedIndex: number;
 	showRepo?: boolean;
 	currentUser?: string;
@@ -56,6 +98,16 @@ function blockerDisplay(
 		case "needs-review":
 			return null;
 	}
+}
+
+function GroupHeaderRow(props: { label: string }) {
+	return (
+		<box height={1} width="100%">
+			<text wrapMode="none" truncate={true}>
+				<span style={{ fg: "cyan" }}>── {props.label} </span>
+			</text>
+		</box>
+	);
 }
 
 function Cell(props: { width?: number; flexGrow?: number; paddingRight?: number; children: any }) {
@@ -176,23 +228,36 @@ export function PRListHeader(props: { showRepo?: boolean; currentUser?: string }
 }
 
 export function PRList(props: PRListProps) {
+	// Resolve flat items — prefer `items` prop; fall back to converting `prs`
+	const resolvedItems = (): FlatItem[] => {
+		if (props.items) return props.items;
+		return (props.prs ?? []).map((pr, i) => ({ kind: "pr", pr, prIndex: i }));
+	};
+
+	const hasPRs = () => resolvedItems().some((item) => item.kind === "pr");
+
 	return (
 		<box flexDirection="column" width="100%">
-			<Show when={props.prs.length > 0} fallback={<text>No open pull requests</text>}>
-				<For each={props.prs}>
-					{(pr, index) => (
-						<PRRow
-							id={`pr-row-${index()}`}
-							pr={pr}
-							selected={index() === props.selectedIndex}
-							showRepo={props.showRepo}
-							currentUser={props.currentUser}
-							onMouseDown={(e: MouseEvent) => {
-								e.preventDefault();
-								props.onSelect?.(index());
-							}}
-						/>
-					)}
+			<Show when={hasPRs()} fallback={<text>No open pull requests</text>}>
+				<For each={resolvedItems()}>
+					{(item) => {
+						if (item.kind === "header") {
+							return <GroupHeaderRow label={item.label} />;
+						}
+						return (
+							<PRRow
+								id={`pr-row-${item.prIndex}`}
+								pr={item.pr}
+								selected={item.prIndex === props.selectedIndex}
+								showRepo={props.showRepo}
+								currentUser={props.currentUser}
+								onMouseDown={(e: MouseEvent) => {
+									e.preventDefault();
+									props.onSelect?.(item.prIndex);
+								}}
+							/>
+						);
+					}}
 				</For>
 			</Show>
 		</box>

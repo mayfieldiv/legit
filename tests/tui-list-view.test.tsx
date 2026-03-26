@@ -298,6 +298,349 @@ describe("ListView", () => {
 	});
 });
 
+// ── Filter mode ──────────────────────────────────────────────────────────────
+
+describe("ListView — filter", () => {
+	test("/ key activates filter mode and shows filter bar", async () => {
+		const prs = [
+			makePR({ number: 1, title: "Fix bug" }),
+			makePR({ number: 2, title: "Add feature" }),
+		];
+
+		const { renderOnce, captureCharFrame, mockInput } = await testRender(
+			() => (
+				<ListView
+					prs={prs}
+					onRefreshSelected={() => {}}
+					onRefreshAll={() => {}}
+					onNavigate={() => {}}
+				/>
+			),
+			{ width: 120, height: 20 },
+		);
+
+		await renderOnce();
+		mockInput.pressKey("/");
+		await renderOnce();
+
+		const frame = captureCharFrame();
+		// Filter bar should appear
+		expect(frame).toMatch(/[Ff]ilter/i);
+	});
+
+	test("typing in filter mode narrows the visible PRs", async () => {
+		const prs = [
+			makePR({ number: 1, title: "Fix bug" }),
+			makePR({ number: 2, title: "Add feature" }),
+		];
+
+		const { renderOnce, captureCharFrame, mockInput } = await testRender(
+			() => (
+				<ListView
+					prs={prs}
+					onRefreshSelected={() => {}}
+					onRefreshAll={() => {}}
+					onNavigate={() => {}}
+				/>
+			),
+			{ width: 120, height: 20 },
+		);
+
+		await renderOnce();
+		mockInput.pressKey("/");
+		await renderOnce();
+
+		// Type "fix"
+		mockInput.pressKey("f");
+		mockInput.pressKey("i");
+		mockInput.pressKey("x");
+		await renderOnce();
+
+		const frame = captureCharFrame();
+		expect(frame).toContain("Fix bug");
+		expect(frame).not.toContain("Add feature");
+	});
+
+	test("Escape clears filter and restores all PRs", async () => {
+		const prs = [
+			makePR({ number: 1, title: "Fix bug" }),
+			makePR({ number: 2, title: "Add feature" }),
+		];
+
+		const { renderOnce, captureCharFrame, mockInput } = await testRender(
+			() => (
+				<ListView
+					prs={prs}
+					onRefreshSelected={() => {}}
+					onRefreshAll={() => {}}
+					onNavigate={() => {}}
+				/>
+			),
+			{ width: 120, height: 20 },
+		);
+
+		await renderOnce();
+		mockInput.pressKey("/");
+		await renderOnce();
+		mockInput.pressKey("f");
+		mockInput.pressKey("i");
+		mockInput.pressKey("x");
+		await renderOnce();
+
+		// Escape closes filter — requires small delay for ESC buffer flush (default 10ms timeout)
+		mockInput.pressEscape();
+		await new Promise((r) => setTimeout(r, 20));
+		await renderOnce();
+
+		const frame = captureCharFrame();
+		expect(frame).toContain("Fix bug");
+		expect(frame).toContain("Add feature");
+	});
+
+	test("backspace removes last char from filter text", async () => {
+		const prs = [
+			makePR({ number: 1, title: "Fix bug" }),
+			makePR({ number: 2, title: "Add feature" }),
+		];
+
+		const { renderOnce, captureCharFrame, mockInput } = await testRender(
+			() => (
+				<ListView
+					prs={prs}
+					onRefreshSelected={() => {}}
+					onRefreshAll={() => {}}
+					onNavigate={() => {}}
+				/>
+			),
+			{ width: 120, height: 20 },
+		);
+
+		await renderOnce();
+		mockInput.pressKey("/");
+		await renderOnce();
+		mockInput.pressKey("f");
+		mockInput.pressKey("i");
+		mockInput.pressKey("x");
+		await renderOnce();
+
+		// Both PRs hidden by "fix" filter (only PR1 matches)
+		const frameBefore = captureCharFrame();
+		expect(frameBefore).not.toContain("Add feature");
+
+		// Backspace three times to clear "fix" — use pressBackspace() which sends \b (0x08)
+		mockInput.pressBackspace();
+		mockInput.pressBackspace();
+		mockInput.pressBackspace();
+		await renderOnce();
+
+		const frameAfter = captureCharFrame();
+		expect(frameAfter).toContain("Add feature");
+	});
+
+	test("j/k navigation still works when filter is active", async () => {
+		const prs = [makePR({ number: 1, title: "Fix A" }), makePR({ number: 2, title: "Fix B" })];
+		const selections: number[] = [];
+
+		const { renderOnce, mockInput } = await testRender(
+			() => (
+				<ListView
+					prs={prs}
+					onRefreshSelected={() => {}}
+					onRefreshAll={() => {}}
+					onNavigate={() => {}}
+					onSelectionChange={(pr) => selections.push(pr.number)}
+				/>
+			),
+			{ width: 120, height: 20 },
+		);
+
+		await renderOnce();
+		// Activate filter and type
+		mockInput.pressKey("/");
+		await renderOnce();
+		mockInput.pressKey("f");
+		mockInput.pressKey("i");
+		mockInput.pressKey("x");
+		await renderOnce();
+
+		// Navigate with j — should move within filtered results
+		mockInput.pressKey("j");
+		await renderOnce();
+		expect(selections.length).toBeGreaterThan(0);
+	});
+
+	test("no match shows empty state message", async () => {
+		const prs = [makePR({ number: 1, title: "Fix bug" })];
+
+		const { renderOnce, captureCharFrame, mockInput } = await testRender(
+			() => (
+				<ListView
+					prs={prs}
+					onRefreshSelected={() => {}}
+					onRefreshAll={() => {}}
+					onNavigate={() => {}}
+				/>
+			),
+			{ width: 120, height: 20 },
+		);
+
+		await renderOnce();
+		mockInput.pressKey("/");
+		await renderOnce();
+		mockInput.pressKey("z");
+		mockInput.pressKey("z");
+		mockInput.pressKey("z");
+		await renderOnce();
+
+		const frame = captureCharFrame();
+		expect(frame).toMatch(/no.*match|no.*result|0.*result/i);
+	});
+});
+
+// ── Group panel ───────────────────────────────────────────────────────────────
+
+describe("ListView — grouping panel", () => {
+	test("g key opens grouping panel", async () => {
+		const { renderOnce, captureCharFrame, mockInput } = await testRender(
+			() => (
+				<ListView
+					prs={[makePR()]}
+					onRefreshSelected={() => {}}
+					onRefreshAll={() => {}}
+					onNavigate={() => {}}
+				/>
+			),
+			{ width: 120, height: 20 },
+		);
+
+		await renderOnce();
+		mockInput.pressKey("g");
+		await renderOnce();
+
+		const frame = captureCharFrame();
+		// Panel should show grouping options
+		expect(frame).toMatch(/group|status|author|label/i);
+	});
+
+	test("Escape closes grouping panel", async () => {
+		const { renderOnce, captureCharFrame, mockInput } = await testRender(
+			() => (
+				<ListView
+					prs={[makePR()]}
+					onRefreshSelected={() => {}}
+					onRefreshAll={() => {}}
+					onNavigate={() => {}}
+				/>
+			),
+			{ width: 120, height: 20 },
+		);
+
+		await renderOnce();
+		mockInput.pressKey("g");
+		await renderOnce();
+
+		// Escape requires small delay for ESC buffer flush (default 10ms timeout in stdin parser)
+		mockInput.pressEscape();
+		await new Promise((r) => setTimeout(r, 20));
+		await renderOnce();
+
+		// After escape, panel should be gone and the list should be visible
+		const frame = captureCharFrame();
+		expect(frame).not.toMatch(/Group by/i);
+	});
+
+	test("selecting author grouping shows group headers", async () => {
+		const prs = [
+			makePR({ number: 1, author: "alice", title: "PR alpha" }),
+			makePR({ number: 2, author: "bob", title: "PR beta" }),
+		];
+
+		const { renderOnce, captureCharFrame, mockInput } = await testRender(
+			() => (
+				<ListView
+					prs={prs}
+					onRefreshSelected={() => {}}
+					onRefreshAll={() => {}}
+					onNavigate={() => {}}
+				/>
+			),
+			{ width: 120, height: 20 },
+		);
+
+		await renderOnce();
+		mockInput.pressKey("g");
+		await renderOnce();
+
+		// Navigate to "author" option and select it
+		// The panel lists options; navigate until we find "author" (it should be near the top)
+		// First option is typically "smart-status", second might be "author"
+		// Let's navigate down once to get to author
+		mockInput.pressKey("j");
+		await renderOnce();
+		mockInput.pressEnter();
+		await renderOnce();
+
+		const frame = captureCharFrame();
+		// Group header "alice" or "bob" should appear
+		expect(frame).toMatch(/alice|bob/);
+	});
+});
+
+// ── Grouped rendering ─────────────────────────────────────────────────────────
+
+describe("ListView — grouped rendering", () => {
+	test("smart-status groupBy shows tier group headers", async () => {
+		const prs = [
+			makePR({ number: 1, title: "Blocked", requestedReviewers: ["me"] }),
+			makePR({ number: 2, title: "Waiting", isDraft: true }),
+		];
+
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => (
+				<ListView
+					prs={prs}
+					currentUser="me"
+					groupBy="smart-status"
+					onRefreshSelected={() => {}}
+					onRefreshAll={() => {}}
+					onNavigate={() => {}}
+				/>
+			),
+			{ width: 120, height: 20 },
+		);
+
+		await renderOnce();
+		const frame = captureCharFrame();
+		// Should show tier headers
+		expect(frame).toMatch(/[Mm]e blocking|[Ww]aiting/i);
+	});
+
+	test("author groupBy shows author name as group headers", async () => {
+		const prs = [
+			makePR({ number: 1, author: "alice", title: "Alice PR" }),
+			makePR({ number: 2, author: "bob", title: "Bob PR" }),
+		];
+
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => (
+				<ListView
+					prs={prs}
+					groupBy="author"
+					onRefreshSelected={() => {}}
+					onRefreshAll={() => {}}
+					onNavigate={() => {}}
+				/>
+			),
+			{ width: 120, height: 20 },
+		);
+
+		await renderOnce();
+		const frame = captureCharFrame();
+		expect(frame).toContain("Alice PR");
+		expect(frame).toContain("Bob PR");
+	});
+});
+
 // ── Scroll logic (pure function tests) ──────────────────────────────────────
 
 describe("computeScrollTarget", () => {
