@@ -52,9 +52,13 @@ export function App(props: AppProps) {
 	const repoControllers = new Map<string, AbortController>();
 	const [_loadingRepos, setLoadingRepos] = createSignal(new Set<string>());
 	let summaryController: AbortController | undefined;
+	let bgThreadsController: AbortController | undefined;
 	let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 	/** Session cache (not keyed by commit); cleared on refresh. */
 	const summaryCache = new Map<string, PRSummary>();
+
+	/** Concurrency limit for background thread-count fetches. */
+	const THREAD_CONCURRENCY = 5;
 
 	function currentRepoSlug(): string | undefined {
 		if (activeTab() === 0) return undefined;
@@ -142,6 +146,7 @@ export function App(props: AppProps) {
 	}
 
 	async function loadPRs() {
+		bgThreadsController?.abort(); // Cancel any in-flight background thread loading.
 		for (const c of repoControllers.values()) c.abort();
 		repoControllers.clear();
 		setLoadingRepos(new Set<string>());
@@ -162,6 +167,8 @@ export function App(props: AppProps) {
 		const stale = controllers.some((c) => c.signal.aborted);
 		if (!stale) {
 			setLoading(false);
+			// Kick off background thread-count loading for all PRs.
+			startBackgroundThreadLoad(repos).catch(() => {});
 		}
 	}
 
@@ -176,6 +183,37 @@ export function App(props: AppProps) {
 			const result = await props.app.fetchPRSummary(repo, pr.number, ac.signal);
 			if (ac.signal.aborted) return;
 			summaryCache.set(key, result);
+
+			// Propagate fresh PR fields back into the list.  Fields like `mergeable`
+			// and `reviewDecision` can change between the initial list fetch and the
+			// summary fetch (e.g. another PR was merged causing a conflict).
+			// Also sync `comments` so the background thread-loader can skip this PR.
+			setPrsByRepo((prev) => {
+				const repoPrs = prev[repo] ?? [];
+				const updated = repoPrs.map((p) =>
+					p.number === pr.number
+						? {
+								...p,
+								mergeable: result.mergeable,
+								reviewDecision: result.reviewDecision,
+								requestedReviewers: result.requestedReviewers,
+								isDraft: result.isDraft,
+								headCommitSha: result.headCommitSha,
+								lastCommitDate: result.lastCommitDate,
+								additions: result.additions,
+								deletions: result.deletions,
+								labels: result.labels,
+								assignees: result.assignees,
+								updatedAt: result.updatedAt,
+								comments: result.comments,
+								threadsLoading: false,
+							}
+						: p,
+				);
+				return { ...prev, [repo]: updated };
+			});
+			updateDisplayedPRs();
+
 			const selected = selectedPr();
 			if (selected && cacheKey(selected) === key) {
 				setSummary(result);
@@ -183,6 +221,98 @@ export function App(props: AppProps) {
 		} catch {
 			// Non-fatal — summary just won't load (includes abort)
 		}
+	}
+
+	/**
+	 * Background-load unresolved thread counts for every PR in `repos`.
+	 * Runs up to THREAD_CONCURRENCY fetches in parallel; marks rows with
+	 * `threadsLoading: true` while in-flight so the UI can show a spinner.
+	 */
+	async function startBackgroundThreadLoad(repos: string[]) {
+		bgThreadsController?.abort();
+		const ac = new AbortController();
+		bgThreadsController = ac;
+
+		// Snapshot the current PR list and build a work queue.
+		const snapshot = prsByRepo();
+		const queue: Array<{ repo: string; prNumber: number }> = [];
+		for (const repo of repos) {
+			for (const pr of snapshot[repo] ?? []) {
+				queue.push({ repo, prNumber: pr.number });
+			}
+		}
+		if (queue.length === 0) return;
+
+		// Mark every PR without counts as "loading" in one batch update.
+		setPrsByRepo((prev) => {
+			const next = { ...prev };
+			for (const repo of repos) {
+				next[repo] = (prev[repo] ?? []).map((pr) =>
+					pr.comments !== undefined ? pr : { ...pr, threadsLoading: true },
+				);
+			}
+			return next;
+		});
+		updateDisplayedPRs();
+
+		// Worker: pull items off the shared queue and fetch one at a time.
+		const worker = async () => {
+			while (queue.length > 0 && !ac.signal.aborted) {
+				const item = queue.shift()!;
+
+				// Skip if already loaded (e.g. the summary fetch beat us here).
+				const current = (prsByRepo()[item.repo] ?? []).find(
+					(p) => p.number === item.prNumber,
+				);
+				if (current?.comments !== undefined) {
+					// Clear the loading flag if it was set.
+					if (current.threadsLoading) {
+						setPrsByRepo((prev) => ({
+							...prev,
+							[item.repo]: (prev[item.repo] ?? []).map((p) =>
+								p.number === item.prNumber ? { ...p, threadsLoading: false } : p,
+							),
+						}));
+						updateDisplayedPRs();
+					}
+					continue;
+				}
+
+				try {
+					const counts = await props.app.fetchThreadCounts(
+						item.repo,
+						item.prNumber,
+						ac.signal,
+					);
+					if (ac.signal.aborted) return;
+					setPrsByRepo((prev) => ({
+						...prev,
+						[item.repo]: (prev[item.repo] ?? []).map((p) =>
+							p.number === item.prNumber
+								? { ...p, comments: counts, threadsLoading: false }
+								: p,
+						),
+					}));
+					updateDisplayedPRs();
+				} catch {
+					// Non-fatal — clear loading flag so the spinner doesn't hang.
+					if (!ac.signal.aborted) {
+						setPrsByRepo((prev) => ({
+							...prev,
+							[item.repo]: (prev[item.repo] ?? []).map((p) =>
+								p.number === item.prNumber ? { ...p, threadsLoading: false } : p,
+							),
+						}));
+						updateDisplayedPRs();
+					}
+				}
+			}
+		};
+
+		// Launch THREAD_CONCURRENCY workers in parallel.
+		await Promise.all(
+			Array.from({ length: Math.min(THREAD_CONCURRENCY, queue.length) }, () => worker()),
+		);
 	}
 
 	function handleSelectionChange(pr: PR) {
@@ -230,6 +360,7 @@ export function App(props: AppProps) {
 	onCleanup(() => {
 		for (const c of repoControllers.values()) c.abort();
 		summaryController?.abort();
+		bgThreadsController?.abort();
 		clearTimeout(debounceTimer);
 	});
 
