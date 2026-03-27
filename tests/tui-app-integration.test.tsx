@@ -181,7 +181,8 @@ describe("App integration", () => {
 		app.config.repos = ["acme/widgets", "acme/gadgets"];
 
 		const { renderOnce, captureCharFrame } = await testRender(() => <App app={app} />, {
-			width: 150,
+			// Wide enough to show title column with Threads + Blocker + Repo columns.
+			width: 180,
 			height: 20,
 		});
 
@@ -233,7 +234,8 @@ describe("App integration", () => {
 		const { renderOnce, captureCharFrame, mockInput } = await testRender(
 			() => <App app={app} />,
 			{
-				width: 150,
+				// Wide enough to show title column with Threads + Blocker + Repo columns.
+				width: 180,
 				height: 20,
 			},
 		);

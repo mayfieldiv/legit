@@ -1,5 +1,5 @@
 import { For, Show, createMemo } from "solid-js";
-import type { PR } from "../lib/types";
+import type { PR, CommentCounts } from "../lib/types";
 import type { MouseEvent } from "@opentui/core";
 import { formatAge, formatSize, formatReviewDecision, formatRepoShort } from "../lib/format";
 import { computeBlocker } from "../lib/blocker-engine";
@@ -63,8 +63,31 @@ const COL = {
 	size: 14,
 	age: 6,
 	review: 18,
+	threads: 10,
 	blocker: 14,
 } as const;
+
+/**
+ * Build the per-span parts for the Threads cell.
+ * Returns an array of `{ text, fg }` items (empty array = nothing to show).
+ */
+function threadParts(
+	comments: CommentCounts | undefined,
+	selected: boolean,
+): Array<{ text: string; fg: string }> {
+	if (!comments || comments.unresolved === 0) return [];
+	const parts: Array<{ text: string; fg: string }> = [];
+	if (comments.unresolvedHuman > 0) {
+		parts.push({ text: `${comments.unresolvedHuman}H`, fg: selected ? "white" : "yellow" });
+	}
+	if (comments.unresolvedHuman > 0 && comments.unresolvedBot > 0) {
+		parts.push({ text: " ", fg: "white" });
+	}
+	if (comments.unresolvedBot > 0) {
+		parts.push({ text: `${comments.unresolvedBot}B`, fg: selected ? "white" : "gray" });
+	}
+	return parts;
+}
 
 /** Compute the text content of the review column. */
 function reviewCellText(pr: PR): string {
@@ -172,10 +195,24 @@ function PRRow(props: {
 			<Cell width={COL.age} paddingRight={1}>
 				<span style={{ fg: fg() }}>{formatAge(props.pr.createdAt)}</span>
 			</Cell>
-			<Cell width={COL.review} paddingRight={props.currentUser ? 1 : 0}>
+			<Cell width={COL.review} paddingRight={1}>
 				<span style={{ fg: reviewCellFg(props.pr, props.selected) }}>
 					{reviewCellText(props.pr)}
 				</span>
+			</Cell>
+			<Cell width={COL.threads} paddingRight={props.currentUser ? 1 : 0}>
+				<Show
+					when={props.pr.comments !== undefined}
+					fallback={
+						<Show when={props.pr.threadsLoading}>
+							<span style={{ fg: "gray" }}>…</span>
+						</Show>
+					}
+				>
+					<For each={threadParts(props.pr.comments, props.selected)}>
+						{(part) => <span style={{ fg: part.fg }}>{part.text}</span>}
+					</For>
+				</Show>
 			</Cell>
 			<Show when={props.currentUser}>
 				<Cell width={COL.blocker}>
@@ -215,8 +252,11 @@ export function PRListHeader(props: { showRepo?: boolean; currentUser?: string }
 			<Cell width={COL.age} paddingRight={1}>
 				<b>Age</b>
 			</Cell>
-			<Cell width={COL.review} paddingRight={props.currentUser ? 1 : 0}>
+			<Cell width={COL.review} paddingRight={1}>
 				<b>Review</b>
+			</Cell>
+			<Cell width={COL.threads} paddingRight={props.currentUser ? 1 : 0}>
+				<b>Threads</b>
 			</Cell>
 			<Show when={props.currentUser}>
 				<Cell width={COL.blocker}>
