@@ -57,11 +57,30 @@ function isCiFailing(checks: CheckRun[]): boolean {
  *  4. Changes requested (via reviewDecision or individual reviews)
  *                         → waiting-on-author (author must respond before
  *                           pending reviewers need to act)
- *  5. Current user is a requested reviewer → me-blocking
- *  6. Another reviewer requested → waiting-on-other
- *  7. Default             → needs-review
+ *  5. Unresolved threads  → waiting-on-author (author must resolve open
+ *                           review comments; only when data is loaded)
+ *  6. Approved            → waiting-on-author (author should merge; no more
+ *                           reviewer action needed regardless of pending requests)
+ *  7. Current user is a requested reviewer → me-blocking
+ *  8. Another reviewer requested → waiting-on-other
+ *  9. Default             → needs-review
+ *
+ * Post-processing: if any waiting-on-author result has the current user as the
+ * blocker (i.e. it's their own PR that needs attention), the tier is elevated
+ * to me-blocking so the PR surfaces at the top of the list.
  */
 export function computeBlocker(pr: PR, currentUser: string, opts?: BlockerOptions): BlockerResult {
+	const result = _computeBlockerCore(pr, currentUser, opts);
+	// Elevate to me-blocking when the current user is the one who must act —
+	// whether they're the author (e.g. CI failing on their own PR) or a reviewer.
+	if (result.tier === "waiting-on-author" && result.blocker === currentUser) {
+		return { ...result, tier: "me-blocking" };
+	}
+	return result;
+}
+
+/** Internal implementation — call computeBlocker for the public API. */
+function _computeBlockerCore(pr: PR, currentUser: string, opts?: BlockerOptions): BlockerResult {
 	const checks = opts?.checks ?? [];
 	const reviews = opts?.reviews ?? [];
 
@@ -106,7 +125,30 @@ export function computeBlocker(pr: PR, currentUser: string, opts?: BlockerOption
 		};
 	}
 
-	// 5. Current user is a requested reviewer → me-blocking
+	// 5. Unresolved review threads → author must address open comments before
+	//    reviewers need to re-examine. Only fires when comment data is available
+	//    (lazily populated after the PR summary is fetched).
+	const unresolvedThreads =
+		(pr.comments?.unresolvedHuman ?? 0) + (pr.comments?.unresolvedBot ?? 0);
+	if (unresolvedThreads > 0) {
+		return {
+			blocker: pr.author,
+			tier: "waiting-on-author",
+			reason: `${unresolvedThreads} unresolved thread${unresolvedThreads === 1 ? "" : "s"}`,
+		};
+	}
+
+	// 6. Approved — the PR has the green light; author's turn to merge (or fix
+	//    whatever is blocking the merge, e.g. a conflict that appeared after approval).
+	if (pr.reviewDecision === "APPROVED") {
+		return {
+			blocker: pr.author,
+			tier: "waiting-on-author",
+			reason: "Approved — ready to merge",
+		};
+	}
+
+	// 7. Current user is a requested reviewer → me-blocking
 	if (pr.requestedReviewers.includes(currentUser)) {
 		return {
 			blocker: currentUser,
@@ -115,7 +157,7 @@ export function computeBlocker(pr: PR, currentUser: string, opts?: BlockerOption
 		};
 	}
 
-	// 6. Another (non-current-user) reviewer is requested → waiting-on-other
+	// 8. Another (non-current-user) reviewer is requested → waiting-on-other
 	const otherReviewers = pr.requestedReviewers.filter((r) => r !== currentUser);
 	if (otherReviewers.length > 0) {
 		return {

@@ -306,8 +306,9 @@ describe("runCommand", () => {
 		const app = createTestLegit({ httpFetch: fetch });
 		const result = await runCommand(["blocker", "42"], app);
 		const output = result.output as any;
-		expect(output.tier).toBe("me-blocking");
-		expect(output.blocker).toBe("testuser");
+		// APPROVED overrides me-blocking: PR is approved, author should merge.
+		expect(output.tier).toBe("waiting-on-author");
+		expect(output.blocker).toBe("alice"); // PR author from SAMPLE_REST_PR
 		expect(typeof output.reason).toBe("string");
 	});
 

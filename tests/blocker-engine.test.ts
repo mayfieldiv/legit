@@ -61,10 +61,12 @@ describe("computeBlocker — basic (no checks, no reviews)", () => {
 		expect(result.tier).toBe("needs-review");
 	});
 
-	test("reviewDecision APPROVED, no requested reviewers → needs-review", () => {
+	test("reviewDecision APPROVED → waiting-on-author (author should merge)", () => {
 		const pr = makePR({ author: AUTHOR, reviewDecision: "APPROVED" });
 		const result = computeBlocker(pr, ME);
-		expect(result.tier).toBe("needs-review");
+		expect(result.tier).toBe("waiting-on-author");
+		expect(result.blocker).toBe(AUTHOR);
+		expect(result.reason.toLowerCase()).toContain("approved");
 	});
 });
 
@@ -253,10 +255,11 @@ describe("computeBlocker — draft PRs", () => {
 		expect(result.tier).toBe("needs-review");
 	});
 
-	test("draft PR where current user is author → waiting-on-author (blocker = self)", () => {
+	test("draft PR where current user is author → me-blocking (blocker = self)", () => {
+		// waiting-on-author with blocker === currentUser elevates to me-blocking.
 		const pr = makePR({ author: ME, isDraft: true });
 		const result = computeBlocker(pr, ME);
-		expect(result.tier).toBe("waiting-on-author");
+		expect(result.tier).toBe("me-blocking");
 		expect(result.blocker).toBe(ME);
 	});
 });
@@ -305,6 +308,176 @@ describe("computeBlocker — merge conflicts", () => {
 	});
 });
 
+// ── Approved PRs ─────────────────────────────────────────────────────────────
+
+describe("computeBlocker — approved review decision", () => {
+	test("APPROVED with no pending reviewers → waiting-on-author", () => {
+		const pr = makePR({ author: AUTHOR, reviewDecision: "APPROVED" });
+		const result = computeBlocker(pr, ME);
+		expect(result.tier).toBe("waiting-on-author");
+		expect(result.blocker).toBe(AUTHOR);
+	});
+
+	test("APPROVED with pending reviewer → still waiting-on-author (not me-blocking)", () => {
+		// Reviewer already approved; pending reviewers are irrelevant.
+		const pr = makePR({ author: AUTHOR, reviewDecision: "APPROVED", requestedReviewers: [ME] });
+		const result = computeBlocker(pr, ME);
+		expect(result.tier).toBe("waiting-on-author");
+		expect(result.blocker).toBe(AUTHOR);
+	});
+
+	test("APPROVED overrides waiting-on-other", () => {
+		const pr = makePR({
+			author: AUTHOR,
+			reviewDecision: "APPROVED",
+			requestedReviewers: [OTHER],
+		});
+		const result = computeBlocker(pr, ME);
+		expect(result.tier).toBe("waiting-on-author");
+	});
+
+	test("conflict beats APPROVED (author must rebase before merging)", () => {
+		const pr = makePR({
+			author: AUTHOR,
+			reviewDecision: "APPROVED",
+			mergeable: "CONFLICTING",
+		});
+		const result = computeBlocker(pr, ME);
+		expect(result.tier).toBe("waiting-on-author");
+		expect(result.reason.toLowerCase()).toContain("conflict");
+	});
+
+	test("CI failing beats APPROVED", () => {
+		const pr = makePR({ author: AUTHOR, reviewDecision: "APPROVED" });
+		const result = computeBlocker(pr, ME, {
+			checks: [{ name: "ci", status: "completed", conclusion: "failure" }],
+		});
+		expect(result.tier).toBe("waiting-on-author");
+		expect(result.reason.toLowerCase()).toContain("ci");
+	});
+
+	test("unresolved threads beat APPROVED", () => {
+		const pr = makePR({
+			author: AUTHOR,
+			reviewDecision: "APPROVED",
+			comments: { total: 2, unresolved: 1, unresolvedHuman: 1, unresolvedBot: 0 },
+		});
+		const result = computeBlocker(pr, ME);
+		expect(result.tier).toBe("waiting-on-author");
+		expect(result.reason.toLowerCase()).toContain("thread");
+	});
+
+	test("individual APPROVED review (not reviewDecision) does not trigger waiting-on-author", () => {
+		// reviewDecision is empty — only one person reviewed but GitHub hasn't
+		// set the overall decision to APPROVED yet.
+		const pr = makePR({ author: AUTHOR });
+		const result = computeBlocker(pr, ME, { reviews: [{ user: OTHER, state: "APPROVED" }] });
+		expect(result.tier).toBe("needs-review");
+	});
+});
+
+// ── Unresolved review threads ─────────────────────────────────────────────────
+
+describe("computeBlocker — unresolved review threads", () => {
+	test("human unresolved threads → waiting-on-author", () => {
+		const pr = makePR({
+			author: AUTHOR,
+			comments: { total: 3, unresolved: 2, unresolvedHuman: 2, unresolvedBot: 0 },
+		});
+		const result = computeBlocker(pr, ME);
+		expect(result.tier).toBe("waiting-on-author");
+		expect(result.blocker).toBe(AUTHOR);
+		expect(result.reason).toContain("2");
+		expect(result.reason.toLowerCase()).toContain("thread");
+	});
+
+	test("bot unresolved threads → waiting-on-author", () => {
+		const pr = makePR({
+			author: AUTHOR,
+			comments: { total: 1, unresolved: 1, unresolvedHuman: 0, unresolvedBot: 1 },
+		});
+		const result = computeBlocker(pr, ME);
+		expect(result.tier).toBe("waiting-on-author");
+		expect(result.blocker).toBe(AUTHOR);
+	});
+
+	test("mixed human + bot unresolved threads → waiting-on-author, reason shows total", () => {
+		const pr = makePR({
+			author: AUTHOR,
+			comments: { total: 5, unresolved: 3, unresolvedHuman: 2, unresolvedBot: 1 },
+		});
+		const result = computeBlocker(pr, ME);
+		expect(result.tier).toBe("waiting-on-author");
+		expect(result.reason).toContain("3");
+	});
+
+	test("zero unresolved threads → no effect on tier", () => {
+		const pr = makePR({
+			author: AUTHOR,
+			comments: { total: 5, unresolved: 0, unresolvedHuman: 0, unresolvedBot: 0 },
+		});
+		const result = computeBlocker(pr, ME);
+		expect(result.tier).toBe("needs-review");
+	});
+
+	test("missing comments field (not yet loaded) → no effect on tier", () => {
+		const pr = makePR({ author: AUTHOR });
+		const result = computeBlocker(pr, ME);
+		expect(result.tier).toBe("needs-review");
+	});
+
+	test("changes-requested beats unresolved threads in reason", () => {
+		// Both apply — changes requested fires first (more specific feedback).
+		const pr = makePR({
+			author: AUTHOR,
+			reviewDecision: "CHANGES_REQUESTED",
+			comments: { total: 3, unresolved: 2, unresolvedHuman: 2, unresolvedBot: 0 },
+		});
+		const result = computeBlocker(pr, ME);
+		expect(result.tier).toBe("waiting-on-author");
+		expect(result.reason.toLowerCase()).toContain("changes");
+	});
+
+	test("unresolved threads override me-blocking (author must resolve first)", () => {
+		const pr = makePR({
+			author: AUTHOR,
+			requestedReviewers: [ME],
+			comments: { total: 2, unresolved: 1, unresolvedHuman: 1, unresolvedBot: 0 },
+		});
+		const result = computeBlocker(pr, ME);
+		expect(result.tier).toBe("waiting-on-author");
+		expect(result.blocker).toBe(AUTHOR);
+	});
+
+	test("unresolved threads override waiting-on-other (author must resolve first)", () => {
+		const pr = makePR({
+			author: AUTHOR,
+			requestedReviewers: [OTHER],
+			comments: { total: 2, unresolved: 1, unresolvedHuman: 0, unresolvedBot: 1 },
+		});
+		const result = computeBlocker(pr, ME);
+		expect(result.tier).toBe("waiting-on-author");
+	});
+
+	test("singular thread has correct grammar", () => {
+		const pr = makePR({
+			author: AUTHOR,
+			comments: { total: 1, unresolved: 1, unresolvedHuman: 1, unresolvedBot: 0 },
+		});
+		const result = computeBlocker(pr, ME);
+		expect(result.reason).toBe("1 unresolved thread");
+	});
+
+	test("plural threads has correct grammar", () => {
+		const pr = makePR({
+			author: AUTHOR,
+			comments: { total: 3, unresolved: 2, unresolvedHuman: 2, unresolvedBot: 0 },
+		});
+		const result = computeBlocker(pr, ME);
+		expect(result.reason).toBe("2 unresolved threads");
+	});
+});
+
 // ── Edge cases ────────────────────────────────────────────────────────────────
 
 describe("computeBlocker — edge cases", () => {
@@ -314,10 +487,11 @@ describe("computeBlocker — edge cases", () => {
 		expect(result.tier).toBe("needs-review");
 	});
 
-	test("current user is the author, CI failing → waiting-on-author (blocker = currentUser)", () => {
+	test("current user is the author, CI failing → me-blocking (blocker = currentUser)", () => {
+		// waiting-on-author with blocker === currentUser elevates to me-blocking.
 		const pr = makePR({ author: ME });
 		const result = computeBlocker(pr, ME, { checks: [failedCheck()] });
-		expect(result.tier).toBe("waiting-on-author");
+		expect(result.tier).toBe("me-blocking");
 		expect(result.blocker).toBe(ME);
 	});
 
