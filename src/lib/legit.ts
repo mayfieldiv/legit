@@ -3,7 +3,14 @@ import { loadConfig, saveConfig, addRepo, type LegitConfig } from "./config";
 import { createGitHubTransport, type HttpFetch } from "./github-transport";
 import { createGitHubClient, type GitHubClient } from "./github-client";
 import { categorizeFiles as _categorizeFiles } from "./file-categorizer";
-import type { PR, PRDetail, FileChange, FileCategorization, PRSummary } from "./types";
+import type {
+	PR,
+	PRDetail,
+	FileChange,
+	FileCategorization,
+	PRSummary,
+	CommentCounts,
+} from "./types";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -226,6 +233,18 @@ export class Legit {
 
 	categorizeFiles(files: FileChange[]): FileCategorization {
 		return _categorizeFiles(files, this.config.fileRules);
+	}
+
+	/**
+	 * Fetch only the review-thread counts for a single PR.
+	 * Lighter-weight than fetchPRSummary — used for background pre-loading.
+	 */
+	async fetchThreadCounts(
+		repo: string,
+		prNumber: number,
+		signal?: AbortSignal,
+	): Promise<CommentCounts> {
+		return this.client.fetchReviewComments(repo, prNumber, this.config.botLogins, signal);
 	}
 
 	async fetchPRSummary(repo: string, number: number, signal?: AbortSignal): Promise<PRSummary> {

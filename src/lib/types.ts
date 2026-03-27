@@ -25,6 +25,10 @@ export interface PR {
 	mergeable: string;
 	lastCommitDate: string | null;
 	headCommitSha: string | null;
+	/** Unresolved review-thread counts. Populated by the background thread-count loader. */
+	comments?: CommentCounts;
+	/** True while the background fetch of thread counts is in-flight for this PR. */
+	threadsLoading?: boolean;
 }
 
 export interface PRDetail extends PR {
