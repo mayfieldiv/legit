@@ -95,11 +95,53 @@ export function ListView(props: ListViewProps) {
 	const selection = createListSelection(() => displayPRs().length);
 	let scrollRef: ScrollBoxRenderable | undefined;
 
-	// Reset when tab/dataset changes
+	// ── Selection anchoring ────────────────────────────────────────────────────
+	// When background data arrives and re-groups the list, keep the highlight on
+	// the same PR by identity (repo slug + number) rather than the same index.
+	// `_anchor` is set whenever the user explicitly changes selection and is
+	// cleared on tab/reset so a fresh selection can be established.
+	let _anchor: { repoSlug: string | undefined; number: number } | null = null;
+
+	function prMatchesAnchor(pr: PR): boolean {
+		return _anchor !== null && pr.number === _anchor.number && pr.repoSlug === _anchor.repoSlug;
+	}
+
+	// Re-anchor the selection index whenever the displayed list changes.
+	createEffect(
+		on(
+			displayPRs,
+			(prs) => {
+				// Initialise anchor to the first PR on first non-empty render.
+				if (_anchor === null) {
+					if (prs.length > 0) {
+						const first = prs[0]!;
+						_anchor = { repoSlug: first.repoSlug, number: first.number };
+					}
+					return;
+				}
+
+				// If the current selection already points to the right PR, nothing to do.
+				const current = selection.selectedItem(prs);
+				if (current && prMatchesAnchor(current)) return;
+
+				// Find the anchored PR in the (possibly re-ordered) list and move to it.
+				const idx = prs.findIndex(prMatchesAnchor);
+				if (idx >= 0 && idx !== selection.index()) {
+					const prevIdx = selection.index();
+					selection.select(idx);
+					ensureVisible(idx >= prevIdx ? "down" : "up");
+				}
+			},
+			{ defer: true },
+		),
+	);
+
+	// Reset when tab/dataset changes — clear anchor so it reinitialises to the new first PR.
 	createEffect(
 		on(
 			() => props.resetKey,
 			() => {
+				_anchor = null;
 				selection.select(0);
 				scrollRef?.scrollTo(0);
 			},
@@ -107,7 +149,7 @@ export function ListView(props: ListViewProps) {
 		),
 	);
 
-	// Reset when filter changes
+	// Reset when filter changes — try to keep the same PR, fall back to index 0.
 	createEffect(
 		on(
 			() => filterText(),
@@ -156,14 +198,20 @@ export function ListView(props: ListViewProps) {
 		if (selection.index() !== prev) {
 			ensureVisible(direction);
 			const pr = selection.selectedItem(displayPRs());
-			if (pr) props.onSelectionChange?.(pr);
+			if (pr) {
+				_anchor = { repoSlug: pr.repoSlug, number: pr.number };
+				props.onSelectionChange?.(pr);
+			}
 		}
 	}
 
 	function selectIndex(index: number) {
 		selection.select(index);
 		const pr = selection.selectedItem(displayPRs());
-		if (pr) props.onSelectionChange?.(pr);
+		if (pr) {
+			_anchor = { repoSlug: pr.repoSlug, number: pr.number };
+			props.onSelectionChange?.(pr);
+		}
 	}
 
 	// ── Panel helpers ─────────────────────────────────────────────────────────
