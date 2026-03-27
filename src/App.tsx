@@ -2,7 +2,7 @@ import { createSignal, onMount, onCleanup } from "solid-js";
 import { execFile } from "child_process";
 import { AppShell } from "./components/AppShell";
 import type { Legit } from "./lib/legit";
-import type { PR, PRSummary } from "./lib/types";
+import type { PR, PRSummary, CommentCounts } from "./lib/types";
 
 /** Build a GitHub PR URL from a repo slug and PR number. */
 export function prUrl(repoSlug: string, number: number): string {
@@ -212,7 +212,11 @@ export function App(props: AppProps) {
 				);
 				return { ...prev, [repo]: updated };
 			});
-			updateDisplayedPRs();
+			// Defer re-grouping while background thread loading is active —
+			// the batch apply at the end will pick up our changes.
+			if (!bgThreadsController || bgThreadsController.signal.aborted) {
+				updateDisplayedPRs();
+			}
 
 			const selected = selectedPr();
 			if (selected && cacheKey(selected) === key) {
@@ -225,25 +229,30 @@ export function App(props: AppProps) {
 
 	/**
 	 * Background-load unresolved thread counts for every PR in `repos`.
-	 * Runs up to THREAD_CONCURRENCY fetches in parallel; marks rows with
-	 * `threadsLoading: true` while in-flight so the UI can show a spinner.
+	 *
+	 * Results are collected silently and applied in **one batch** when all
+	 * fetches complete, so the list only re-groups once instead of after every
+	 * individual response.  PRs show a `…` spinner in the Threads column while
+	 * loading is in progress.
 	 */
 	async function startBackgroundThreadLoad(repos: string[]) {
 		bgThreadsController?.abort();
 		const ac = new AbortController();
 		bgThreadsController = ac;
 
-		// Snapshot the current PR list and build a work queue.
+		// Build work queue, skipping PRs that already have comment data.
 		const snapshot = prsByRepo();
 		const queue: Array<{ repo: string; prNumber: number }> = [];
 		for (const repo of repos) {
 			for (const pr of snapshot[repo] ?? []) {
-				queue.push({ repo, prNumber: pr.number });
+				if (pr.comments === undefined) {
+					queue.push({ repo, prNumber: pr.number });
+				}
 			}
 		}
 		if (queue.length === 0) return;
 
-		// Mark every PR without counts as "loading" in one batch update.
+		// Mark queued PRs as "loading" in one batch (shows `…` in Threads column).
 		setPrsByRepo((prev) => {
 			const next = { ...prev };
 			for (const repo of repos) {
@@ -255,28 +264,18 @@ export function App(props: AppProps) {
 		});
 		updateDisplayedPRs();
 
-		// Worker: pull items off the shared queue and fetch one at a time.
+		// Collect all results into a Map keyed by "repo#number".
+		const results = new Map<string, CommentCounts>();
+
 		const worker = async () => {
 			while (queue.length > 0 && !ac.signal.aborted) {
 				const item = queue.shift()!;
 
-				// Skip if already loaded (e.g. the summary fetch beat us here).
+				// Skip if the summary fetch already populated this PR's comments.
 				const current = (prsByRepo()[item.repo] ?? []).find(
 					(p) => p.number === item.prNumber,
 				);
-				if (current?.comments !== undefined) {
-					// Clear the loading flag if it was set.
-					if (current.threadsLoading) {
-						setPrsByRepo((prev) => ({
-							...prev,
-							[item.repo]: (prev[item.repo] ?? []).map((p) =>
-								p.number === item.prNumber ? { ...p, threadsLoading: false } : p,
-							),
-						}));
-						updateDisplayedPRs();
-					}
-					continue;
-				}
+				if (current?.comments !== undefined) continue;
 
 				try {
 					const counts = await props.app.fetchThreadCounts(
@@ -285,34 +284,36 @@ export function App(props: AppProps) {
 						ac.signal,
 					);
 					if (ac.signal.aborted) return;
-					setPrsByRepo((prev) => ({
-						...prev,
-						[item.repo]: (prev[item.repo] ?? []).map((p) =>
-							p.number === item.prNumber
-								? { ...p, comments: counts, threadsLoading: false }
-								: p,
-						),
-					}));
-					updateDisplayedPRs();
+					results.set(`${item.repo}#${item.prNumber}`, counts);
 				} catch {
-					// Non-fatal — clear loading flag so the spinner doesn't hang.
-					if (!ac.signal.aborted) {
-						setPrsByRepo((prev) => ({
-							...prev,
-							[item.repo]: (prev[item.repo] ?? []).map((p) =>
-								p.number === item.prNumber ? { ...p, threadsLoading: false } : p,
-							),
-						}));
-						updateDisplayedPRs();
-					}
+					if (ac.signal.aborted) return;
+					// Non-fatal — this PR just won't have thread data.
 				}
 			}
 		};
 
-		// Launch THREAD_CONCURRENCY workers in parallel.
 		await Promise.all(
 			Array.from({ length: Math.min(THREAD_CONCURRENCY, queue.length) }, () => worker()),
 		);
+
+		if (ac.signal.aborted) return;
+
+		// Apply all results in a single batch → one re-group instead of N.
+		setPrsByRepo((prev) => {
+			const next = { ...prev };
+			for (const repo of repos) {
+				next[repo] = (prev[repo] ?? []).map((pr) => {
+					const counts = results.get(`${repo}#${pr.number}`);
+					if (counts) {
+						return { ...pr, comments: counts, threadsLoading: false };
+					}
+					// Clear loading flag for PRs whose fetch was skipped or failed.
+					return pr.threadsLoading ? { ...pr, threadsLoading: false } : pr;
+				});
+			}
+			return next;
+		});
+		updateDisplayedPRs();
 	}
 
 	function handleSelectionChange(pr: PR) {
