@@ -239,8 +239,13 @@ export function createGitHubClient(transport: GitHubTransport): GitHubClient {
 				total++;
 				if (!thread.isResolved) {
 					unresolved++;
-					const author = thread.comments.nodes[0]?.author?.login;
-					if (author && botSet.has(author)) {
+					const authorNode = thread.comments.nodes[0]?.author;
+					const isBot =
+						authorNode != null &&
+						(authorNode.__typename === "Bot" ||
+							authorNode.login.endsWith("[bot]") ||
+							botSet.has(authorNode.login));
+					if (isBot) {
 						unresolvedBot++;
 					} else {
 						unresolvedHuman++;

@@ -51,7 +51,7 @@ export interface RawReview {
 
 export interface RawReviewThread {
 	isResolved: boolean;
-	comments: { nodes: Array<{ author: { login: string } | null }> };
+	comments: { nodes: Array<{ author: { login: string; __typename?: string } | null }> };
 }
 
 // ── Transport interface ─────────────────────────────────────────────────────
@@ -245,7 +245,7 @@ export function createGitHubTransport(
 								nodes {
 									isResolved
 									comments(first: 1) {
-										nodes { author { login } }
+										nodes { author { login __typename } }
 									}
 								}
 							}
