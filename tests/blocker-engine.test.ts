@@ -35,10 +35,10 @@ describe("computeBlocker — basic (no checks, no reviews)", () => {
 		expect(result.blocker).toBe(ME);
 	});
 
-	test("another reviewer requested (not current user) → waiting-on-other", () => {
+	test("another reviewer requested (not current user) → needs-review", () => {
 		const pr = makePR({ author: AUTHOR, requestedReviewers: [OTHER] });
 		const result = computeBlocker(pr, ME);
-		expect(result.tier).toBe("waiting-on-other");
+		expect(result.tier).toBe("needs-review");
 		expect(result.blocker).toBe(OTHER);
 	});
 
@@ -182,10 +182,10 @@ describe("computeBlocker — multiple requestedReviewers", () => {
 		expect(result.blocker).toBe(ME);
 	});
 
-	test("multiple others → waiting-on-other, blocker is first reviewer", () => {
+	test("multiple others → needs-review, blocker is first reviewer", () => {
 		const pr = makePR({ author: AUTHOR, requestedReviewers: ["dave", "eve"] });
 		const result = computeBlocker(pr, ME);
-		expect(result.tier).toBe("waiting-on-other");
+		expect(result.tier).toBe("needs-review");
 		expect(result.blocker).toBe("dave");
 	});
 });
@@ -201,7 +201,7 @@ describe("computeBlocker — precedence ordering", () => {
 		expect(result.reason.toLowerCase()).toContain("ci");
 	});
 
-	test("CHANGES_REQUESTED review beats waiting-on-other", () => {
+	test("CHANGES_REQUESTED review beats needs-review", () => {
 		const pr = makePR({ author: AUTHOR, requestedReviewers: [OTHER] });
 		const result = computeBlocker(pr, ME, {
 			reviews: [review(OTHER, "CHANGES_REQUESTED")],
@@ -209,7 +209,7 @@ describe("computeBlocker — precedence ordering", () => {
 		expect(result.tier).toBe("waiting-on-author");
 	});
 
-	test("me-blocking beats waiting-on-other when current user also requested", () => {
+	test("me-blocking beats needs-review when current user also requested", () => {
 		const pr = makePR({ author: AUTHOR, requestedReviewers: [ME, OTHER] });
 		const result = computeBlocker(pr, ME);
 		expect(result.tier).toBe("me-blocking");
@@ -326,7 +326,7 @@ describe("computeBlocker — approved review decision", () => {
 		expect(result.blocker).toBe(AUTHOR);
 	});
 
-	test("APPROVED overrides waiting-on-other", () => {
+	test("APPROVED overrides needs-review", () => {
 		const pr = makePR({
 			author: AUTHOR,
 			reviewDecision: "APPROVED",
@@ -449,7 +449,7 @@ describe("computeBlocker — unresolved review threads", () => {
 		expect(result.blocker).toBe(AUTHOR);
 	});
 
-	test("unresolved threads override waiting-on-other (author must resolve first)", () => {
+	test("unresolved threads override needs-review (author must resolve first)", () => {
 		const pr = makePR({
 			author: AUTHOR,
 			requestedReviewers: [OTHER],

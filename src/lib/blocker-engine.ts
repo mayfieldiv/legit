@@ -5,7 +5,7 @@
  * tier. No side effects — all inputs are passed explicitly.
  *
  * Tier priority order (highest → lowest urgency to the current user):
- *   me-blocking → needs-review → waiting-on-other → waiting-on-author
+ *   me-blocking → needs-review → waiting-on-author
  */
 
 import type { PR, CheckRun, Review } from "./types";
@@ -15,7 +15,6 @@ import type { PR, CheckRun, Review } from "./types";
 export type Tier =
 	| "me-blocking" // current user must act
 	| "needs-review" // needs a reviewer's attention (no specific person)
-	| "waiting-on-other" // a different reviewer must act
 	| "waiting-on-author"; // author must act (hidden by default unless you're the author)
 
 export interface BlockerResult {
@@ -62,7 +61,7 @@ function isCiFailing(checks: CheckRun[]): boolean {
  *  6. Approved            → waiting-on-author (author should merge; no more
  *                           reviewer action needed regardless of pending requests)
  *  7. Current user is a requested reviewer → me-blocking
- *  8. Another reviewer requested → waiting-on-other
+ *  8. Another reviewer requested → needs-review
  *  9. Default             → needs-review
  *
  * Post-processing: if any waiting-on-author result has the current user as the
@@ -157,21 +156,12 @@ function _computeBlockerCore(pr: PR, currentUser: string, opts?: BlockerOptions)
 		};
 	}
 
-	// 8. Another (non-current-user) reviewer is requested → waiting-on-other
+	// 8. Default — needs review (whether a specific reviewer is requested or not)
 	const otherReviewers = pr.requestedReviewers.filter((r) => r !== currentUser);
-	if (otherReviewers.length > 0) {
-		return {
-			blocker: otherReviewers[0]!,
-			tier: "waiting-on-other",
-			reason: "Awaiting reviewer",
-		};
-	}
-
-	// 7. Default — no specific blocker identified
 	return {
-		blocker: "",
+		blocker: otherReviewers[0] ?? "",
 		tier: "needs-review",
-		reason: "Awaiting review",
+		reason: otherReviewers.length > 0 ? "Awaiting reviewer" : "Awaiting review",
 	};
 }
 
@@ -180,8 +170,7 @@ function _computeBlockerCore(pr: PR, currentUser: string, opts?: BlockerOptions)
 const TIER_ORDER: Record<Tier, number> = {
 	"me-blocking": 0,
 	"needs-review": 1,
-	"waiting-on-other": 2,
-	"waiting-on-author": 3,
+	"waiting-on-author": 2,
 };
 
 /**
@@ -201,8 +190,6 @@ export function tierLabel(tier: Tier): string {
 			return "Me blocking";
 		case "needs-review":
 			return "Needs review";
-		case "waiting-on-other":
-			return "Waiting on other";
 		case "waiting-on-author":
 			return "Waiting on author";
 	}

@@ -211,19 +211,20 @@ describe("processPRList — groupBy: smart-status", () => {
 		const prs = [
 			// waiting-on-author: draft
 			makePR({ number: 1, isDraft: true, author: "alice" }),
-			// needs-review
+			// needs-review (no specific reviewer)
 			makePR({ number: 2 }),
 			// me-blocking: I'm requested reviewer
 			makePR({ number: 3, requestedReviewers: ["me"] }),
-			// waiting-on-other: other reviewer requested
+			// needs-review (specific reviewer requested, but still needs-review tier)
 			makePR({ number: 4, requestedReviewers: ["bob"] }),
 		];
 		const result = processPRList(prs, { groupBy: "smart-status", currentUser: "me" });
 		const ls = labels(result);
 		expect(ls[0]).toBe("Me blocking");
 		expect(ls[1]).toBe("Needs review");
-		expect(ls[2]).toBe("Waiting on other");
-		expect(ls[3]).toBe("Waiting on author");
+		expect(ls[2]).toBe("Waiting on author");
+		// PRs 2 and 4 both go to Needs review
+		expect(result.groups[1]!.prs).toHaveLength(2);
 	});
 
 	test("empty tiers are omitted", () => {

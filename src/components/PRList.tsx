@@ -116,10 +116,8 @@ function blockerDisplay(
 			return { text: "you", fg: "magenta" };
 		case "waiting-on-author":
 			return { text: isMe ? "you" : blocker || "author", fg: isMe ? "magenta" : "yellow" };
-		case "waiting-on-other":
-			return { text: blocker, fg: "gray" };
 		case "needs-review":
-			return null;
+			return blocker ? { text: blocker, fg: "gray" } : null;
 	}
 }
 
