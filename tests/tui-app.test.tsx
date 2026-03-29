@@ -39,7 +39,8 @@ describe("AppShell", () => {
 					onRefreshAll={() => {}}
 				/>
 			),
-			{ width: 130, height: 20 },
+			// Wide enough to accommodate the Threads column without squeezing the title.
+			{ width: 160, height: 20 },
 		);
 
 		await renderOnce();

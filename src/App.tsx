@@ -2,11 +2,37 @@ import { createSignal, onMount, onCleanup } from "solid-js";
 import { execFile } from "child_process";
 import { AppShell } from "./components/AppShell";
 import type { Legit } from "./lib/legit";
-import type { PR, PRSummary } from "./lib/types";
+import type { PR, PRSummary, CommentCounts } from "./lib/types";
 
 /** Build a GitHub PR URL from a repo slug and PR number. */
 export function prUrl(repoSlug: string, number: number): string {
 	return `https://github.com/${repoSlug}/pull/${number}`;
+}
+
+/**
+ * Coalesces rapid successive values into one callback invocation per macrotask
+ * boundary. Values arriving in the same microtask burst are collapsed to the
+ * latest; the callback fires on the next macrotask (setTimeout 0).
+ *
+ * Call flush() in a finally block to apply the last value synchronously and
+ * cancel any pending macrotask — finally runs before macrotasks, so this is safe.
+ */
+function makeCoalescer<T>(apply: (v: T) => void, signal?: AbortSignal) {
+	let latest: T | undefined;
+	let pending: ReturnType<typeof setTimeout> | undefined;
+
+	const flush = () => {
+		clearTimeout(pending);
+		pending = undefined;
+		if (latest !== undefined && !signal?.aborted) apply(latest);
+	};
+
+	const schedule = (v: T) => {
+		latest = v;
+		pending ??= setTimeout(flush, 0);
+	};
+
+	return { schedule, flush };
 }
 
 export interface AppProps {
@@ -26,9 +52,13 @@ export function App(props: AppProps) {
 	const repoControllers = new Map<string, AbortController>();
 	const [_loadingRepos, setLoadingRepos] = createSignal(new Set<string>());
 	let summaryController: AbortController | undefined;
+	let bgThreadsController: AbortController | undefined;
 	let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 	/** Session cache (not keyed by commit); cleared on refresh. */
 	const summaryCache = new Map<string, PRSummary>();
+
+	/** Concurrency limit for background thread-count fetches. */
+	const THREAD_CONCURRENCY = 5;
 
 	function currentRepoSlug(): string | undefined {
 		if (activeTab() === 0) return undefined;
@@ -86,10 +116,15 @@ export function App(props: AppProps) {
 		setError("");
 		setPrsByRepo((prev) => ({ ...prev, [repo]: [] }));
 		updateDisplayedPRs();
+
+		const { schedule, flush } = makeCoalescer<PR[]>((snapshot) => {
+			setPrsByRepo((prev) => ({ ...prev, [repo]: snapshot }));
+			updateDisplayedPRs();
+		}, ac.signal);
+
 		try {
 			for await (const snapshot of props.app.fetchPRs(repo, ac.signal)) {
-				setPrsByRepo((prev) => ({ ...prev, [repo]: snapshot }));
-				updateDisplayedPRs();
+				schedule(snapshot);
 				if (!selectedPr() && snapshot.length > 0 && activeTab() === 0) {
 					handleSelectionChange({ ...snapshot[0]!, repoSlug: repo });
 				}
@@ -99,6 +134,7 @@ export function App(props: AppProps) {
 				setError(err.message ?? String(err));
 			}
 		} finally {
+			flush();
 			if (!ac.signal.aborted) {
 				setRepoLoading(repo, false);
 			}
@@ -110,6 +146,7 @@ export function App(props: AppProps) {
 	}
 
 	async function loadPRs() {
+		bgThreadsController?.abort(); // Cancel any in-flight background thread loading.
 		for (const c of repoControllers.values()) c.abort();
 		repoControllers.clear();
 		setLoadingRepos(new Set<string>());
@@ -130,6 +167,8 @@ export function App(props: AppProps) {
 		const stale = controllers.some((c) => c.signal.aborted);
 		if (!stale) {
 			setLoading(false);
+			// Kick off background thread-count loading for all PRs.
+			startBackgroundThreadLoad(repos).catch(() => {});
 		}
 	}
 
@@ -144,6 +183,41 @@ export function App(props: AppProps) {
 			const result = await props.app.fetchPRSummary(repo, pr.number, ac.signal);
 			if (ac.signal.aborted) return;
 			summaryCache.set(key, result);
+
+			// Propagate fresh PR fields back into the list.  Fields like `mergeable`
+			// and `reviewDecision` can change between the initial list fetch and the
+			// summary fetch (e.g. another PR was merged causing a conflict).
+			// Also sync `comments` so the background thread-loader can skip this PR.
+			setPrsByRepo((prev) => {
+				const repoPrs = prev[repo] ?? [];
+				const updated = repoPrs.map((p) =>
+					p.number === pr.number
+						? {
+								...p,
+								mergeable: result.mergeable,
+								reviewDecision: result.reviewDecision,
+								requestedReviewers: result.requestedReviewers,
+								isDraft: result.isDraft,
+								headCommitSha: result.headCommitSha,
+								lastCommitDate: result.lastCommitDate,
+								additions: result.additions,
+								deletions: result.deletions,
+								labels: result.labels,
+								assignees: result.assignees,
+								updatedAt: result.updatedAt,
+								comments: result.comments,
+								threadsLoading: false,
+							}
+						: p,
+				);
+				return { ...prev, [repo]: updated };
+			});
+			// Defer re-grouping while background thread loading is active —
+			// the batch apply at the end will pick up our changes.
+			if (!bgThreadsController || bgThreadsController.signal.aborted) {
+				updateDisplayedPRs();
+			}
+
 			const selected = selectedPr();
 			if (selected && cacheKey(selected) === key) {
 				setSummary(result);
@@ -151,6 +225,95 @@ export function App(props: AppProps) {
 		} catch {
 			// Non-fatal — summary just won't load (includes abort)
 		}
+	}
+
+	/**
+	 * Background-load unresolved thread counts for every PR in `repos`.
+	 *
+	 * Results are collected silently and applied in **one batch** when all
+	 * fetches complete, so the list only re-groups once instead of after every
+	 * individual response.  PRs show a `…` spinner in the Threads column while
+	 * loading is in progress.
+	 */
+	async function startBackgroundThreadLoad(repos: string[]) {
+		bgThreadsController?.abort();
+		const ac = new AbortController();
+		bgThreadsController = ac;
+
+		// Build work queue, skipping PRs that already have comment data.
+		const snapshot = prsByRepo();
+		const queue: Array<{ repo: string; prNumber: number }> = [];
+		for (const repo of repos) {
+			for (const pr of snapshot[repo] ?? []) {
+				if (pr.comments === undefined) {
+					queue.push({ repo, prNumber: pr.number });
+				}
+			}
+		}
+		if (queue.length === 0) return;
+
+		// Mark queued PRs as "loading" in one batch (shows `…` in Threads column).
+		setPrsByRepo((prev) => {
+			const next = { ...prev };
+			for (const repo of repos) {
+				next[repo] = (prev[repo] ?? []).map((pr) =>
+					pr.comments !== undefined ? pr : { ...pr, threadsLoading: true },
+				);
+			}
+			return next;
+		});
+		updateDisplayedPRs();
+
+		// Collect all results into a Map keyed by "repo#number".
+		const results = new Map<string, CommentCounts>();
+
+		const worker = async () => {
+			while (queue.length > 0 && !ac.signal.aborted) {
+				const item = queue.shift()!;
+
+				// Skip if the summary fetch already populated this PR's comments.
+				const current = (prsByRepo()[item.repo] ?? []).find(
+					(p) => p.number === item.prNumber,
+				);
+				if (current?.comments !== undefined) continue;
+
+				try {
+					const counts = await props.app.fetchThreadCounts(
+						item.repo,
+						item.prNumber,
+						ac.signal,
+					);
+					if (ac.signal.aborted) return;
+					results.set(`${item.repo}#${item.prNumber}`, counts);
+				} catch {
+					if (ac.signal.aborted) return;
+					// Non-fatal — this PR just won't have thread data.
+				}
+			}
+		};
+
+		await Promise.all(
+			Array.from({ length: Math.min(THREAD_CONCURRENCY, queue.length) }, () => worker()),
+		);
+
+		if (ac.signal.aborted) return;
+
+		// Apply all results in a single batch → one re-group instead of N.
+		setPrsByRepo((prev) => {
+			const next = { ...prev };
+			for (const repo of repos) {
+				next[repo] = (prev[repo] ?? []).map((pr) => {
+					const counts = results.get(`${repo}#${pr.number}`);
+					if (counts) {
+						return { ...pr, comments: counts, threadsLoading: false };
+					}
+					// Clear loading flag for PRs whose fetch was skipped or failed.
+					return pr.threadsLoading ? { ...pr, threadsLoading: false } : pr;
+				});
+			}
+			return next;
+		});
+		updateDisplayedPRs();
 	}
 
 	function handleSelectionChange(pr: PR) {
@@ -198,6 +361,7 @@ export function App(props: AppProps) {
 	onCleanup(() => {
 		for (const c of repoControllers.values()) c.abort();
 		summaryController?.abort();
+		bgThreadsController?.abort();
 		clearTimeout(debounceTimer);
 	});
 

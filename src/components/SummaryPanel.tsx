@@ -179,6 +179,21 @@ export function SummaryPanel(props: SummaryPanelProps) {
 					)}
 				</Show>
 
+				{/* Comments — shown right after blocker so unresolved threads are prominent */}
+				<Show when={(summary()?.comments.unresolved ?? 0) > 0}>
+					<box height={1} width="100%">
+						<text truncate={true}>
+							<span style={{ fg: "gray" }}>comments: </span>
+							<span>{summary()!.comments.unresolved} unresolved</span>
+							<span style={{ fg: "gray" }}>
+								{" "}
+								({summary()!.comments.unresolvedHuman} human,{" "}
+								{summary()!.comments.unresolvedBot} bot)
+							</span>
+						</text>
+					</box>
+				</Show>
+
 				<Show when={summary()}>
 					{/* Size breakdown */}
 					<Show when={sizeCategories().length > 0}>
@@ -252,21 +267,6 @@ export function SummaryPanel(props: SummaryPanelProps) {
 								</box>
 							)}
 						</For>
-					</Show>
-
-					{/* Comments */}
-					<Show when={summary()!.comments.total > 0}>
-						<box height={1} width="100%">
-							<text truncate={true}>
-								<span style={{ fg: "gray" }}>comments: </span>
-								<span>{summary()!.comments.unresolved} unresolved</span>
-								<span style={{ fg: "gray" }}>
-									{" "}
-									({summary()!.comments.unresolvedHuman} human,{" "}
-									{summary()!.comments.unresolvedBot} bot)
-								</span>
-							</text>
-						</box>
 					</Show>
 
 					{/* CI Checks */}

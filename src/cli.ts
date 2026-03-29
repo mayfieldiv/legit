@@ -15,6 +15,8 @@
 
 import { Legit } from "./lib/legit";
 import { computeBlocker } from "./lib/blocker-engine";
+import { processPRList } from "./lib/group-filter-engine";
+import type { GroupByKey, SortByKey, SortDir } from "./lib/group-filter-engine";
 import type { PR, FileChange } from "./lib/types";
 
 export interface CommandResult {
@@ -51,6 +53,11 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
 				return { error: options.error };
 			}
 
+			const useEngine =
+				options.groupBy !== undefined ||
+				options.sortBy !== undefined ||
+				options.filter !== undefined;
+
 			if (options.all) {
 				const repos = trackedRepos(app);
 				const byRepo: Record<string, PR[]> = {};
@@ -76,12 +83,26 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
 			for await (const snapshot of app.fetchPRs(options.repo)) {
 				prs = snapshot;
 			}
+
 			if (options.withBlockers) {
 				const currentUser = app.currentUser;
 				return {
 					output: prs.map((pr) => ({ ...pr, ...computeBlocker(pr, currentUser) })),
 				};
 			}
+
+			if (useEngine) {
+				return {
+					output: processPRList(prs, {
+						groupBy: options.groupBy,
+						sortBy: options.sortBy,
+						sortDir: options.sortDir,
+						filterText: options.filter,
+						currentUser: app.currentUser,
+					}),
+				};
+			}
+
 			return { output: prs };
 		}
 
@@ -137,15 +158,44 @@ function trackedRepos(app: Legit): string[] {
 	return app.trackedRepos();
 }
 
+const VALID_GROUP_BY: GroupByKey[] = [
+	"smart-status",
+	"author",
+	"repo",
+	"size-category",
+	"label",
+	"none",
+];
+
+// "status" is a user-friendly alias for "smart-status"
+const GROUP_BY_ALIASES: Record<string, GroupByKey> = {
+	status: "smart-status",
+};
+
+const VALID_SORT_BY: SortByKey[] = ["size", "age", "updated"];
+const VALID_SORT_DIR: SortDir[] = ["asc", "desc"];
+
+const USAGE_PRS =
+	"Usage: legit prs [--repo=<owner/repo>|--all] [--with-blockers] [--group-by=<key>] [--sort-by=<size|age|updated>] [--sort-dir=<asc|desc>] [--filter=<text>]";
+
 function parsePrsArgs(args: string[]): {
 	repo?: string;
 	all: boolean;
 	withBlockers: boolean;
+	groupBy?: GroupByKey;
+	sortBy?: SortByKey;
+	sortDir?: SortDir;
+	filter?: string;
 	error?: string;
 } {
 	let repo: string | undefined;
 	let all = false;
 	let withBlockers = false;
+	let groupBy: GroupByKey | undefined;
+	let sortBy: SortByKey | undefined;
+	let sortDir: SortDir | undefined;
+	let filter: string | undefined;
+
 	for (const arg of args) {
 		if (arg === "--all") {
 			all = true;
@@ -153,22 +203,76 @@ function parsePrsArgs(args: string[]): {
 			withBlockers = true;
 		} else if (arg.startsWith("--repo=")) {
 			repo = arg.slice("--repo=".length);
+		} else if (arg.startsWith("--group-by=")) {
+			const val = arg.slice("--group-by=".length);
+			const resolved =
+				GROUP_BY_ALIASES[val] ??
+				(VALID_GROUP_BY.includes(val as GroupByKey) ? (val as GroupByKey) : undefined);
+			if (!resolved) {
+				const allKeys = [...Object.keys(GROUP_BY_ALIASES), ...VALID_GROUP_BY];
+				return {
+					all: false,
+					withBlockers: false,
+					error: `Invalid --group-by value: "${val}". Valid keys: ${allKeys.join(", ")}`,
+				};
+			}
+			groupBy = resolved;
+		} else if (arg.startsWith("--sort-by=")) {
+			const val = arg.slice("--sort-by=".length);
+			if (!VALID_SORT_BY.includes(val as SortByKey)) {
+				return {
+					all: false,
+					withBlockers: false,
+					error: `Invalid --sort-by value: "${val}". Valid keys: ${VALID_SORT_BY.join(", ")}`,
+				};
+			}
+			sortBy = val as SortByKey;
+		} else if (arg.startsWith("--sort-dir=")) {
+			const val = arg.slice("--sort-dir=".length);
+			if (!VALID_SORT_DIR.includes(val as SortDir)) {
+				return {
+					all: false,
+					withBlockers: false,
+					error: `Invalid --sort-dir value: "${val}". Valid values: ${VALID_SORT_DIR.join(", ")}`,
+				};
+			}
+			sortDir = val as SortDir;
+		} else if (arg.startsWith("--filter=")) {
+			filter = arg.slice("--filter=".length);
 		} else {
-			return {
-				all: false,
-				withBlockers: false,
-				error: "Usage: legit prs [--repo=<owner/repo>|--all] [--with-blockers]",
-			};
+			return { all: false, withBlockers: false, error: USAGE_PRS };
 		}
 	}
-	if (all && repo) {
+
+	if (sortDir && !sortBy) {
 		return {
 			all: false,
 			withBlockers: false,
-			error: "Usage: legit prs [--repo=<owner/repo>|--all] [--with-blockers]",
+			error: "--sort-dir requires --sort-by",
 		};
 	}
-	return { repo, all, withBlockers };
+
+	if (all && repo) {
+		return { all: false, withBlockers: false, error: USAGE_PRS };
+	}
+
+	if (all && (groupBy ?? sortBy ?? filter) !== undefined) {
+		return {
+			all: false,
+			withBlockers: false,
+			error: "--all cannot be combined with --group-by, --sort-by, or --filter",
+		};
+	}
+
+	if (withBlockers && (groupBy ?? sortBy ?? filter) !== undefined) {
+		return {
+			all: false,
+			withBlockers: false,
+			error: "--with-blockers cannot be combined with --group-by, --sort-by, or --filter",
+		};
+	}
+
+	return { repo, all, withBlockers, groupBy, sortBy, sortDir, filter };
 }
 
 // ── Entry point ─────────────────────────────────────────────────────────────

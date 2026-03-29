@@ -270,7 +270,7 @@ describe("PRList", () => {
 		expect(youCount).toBeGreaterThanOrEqual(1);
 	});
 
-	test("shows blocker column with reviewer name for waiting-on-other", async () => {
+	test("shows blocker column with reviewer name for needs-review with requested reviewer", async () => {
 		const prs = [makePR({ number: 1, requestedReviewers: ["bob"] })];
 
 		const { renderOnce, captureCharFrame } = await testRender(

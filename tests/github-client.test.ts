@@ -447,28 +447,88 @@ describe("GitHubClient", () => {
 				async *fetchReviewThreads() {
 					yield {
 						isResolved: false,
-						comments: { nodes: [{ author: { login: "alice" } }] },
+						comments: { nodes: [{ author: { login: "alice", __typename: "User" } }] },
 					};
 					yield {
 						isResolved: true,
-						comments: { nodes: [{ author: { login: "bob" } }] },
+						comments: { nodes: [{ author: { login: "bob", __typename: "User" } }] },
 					};
 					yield {
 						isResolved: false,
-						comments: { nodes: [{ author: { login: "app/copilot-swe-agent" } }] },
+						comments: {
+							nodes: [
+								{
+									author: {
+										login: "copilot-swe-agent[bot]",
+										__typename: "Bot",
+									},
+								},
+							],
+						},
 					};
 				},
 			});
 			const client = createGitHubClient(transport);
-			const counts = await client.fetchReviewComments("acme/widgets", 42, [
-				"app/copilot-swe-agent",
-			]);
+			const counts = await client.fetchReviewComments("acme/widgets", 42, []);
 			expect(counts).toEqual({
 				total: 3,
 				unresolved: 2,
 				unresolvedHuman: 1,
 				unresolvedBot: 1,
 			});
+		});
+
+		test("detects bots by [bot] login suffix", async () => {
+			const transport = createMockTransport({
+				async *fetchReviewThreads() {
+					yield {
+						isResolved: false,
+						comments: {
+							nodes: [{ author: { login: "graphite-app[bot]" } }],
+						},
+					};
+				},
+			});
+			const client = createGitHubClient(transport);
+			const counts = await client.fetchReviewComments("acme/widgets", 42, []);
+			expect(counts.unresolvedHuman).toBe(0);
+			expect(counts.unresolvedBot).toBe(1);
+		});
+
+		test("detects bots by __typename Bot", async () => {
+			const transport = createMockTransport({
+				async *fetchReviewThreads() {
+					yield {
+						isResolved: false,
+						comments: {
+							nodes: [{ author: { login: "some-custom-app", __typename: "Bot" } }],
+						},
+					};
+				},
+			});
+			const client = createGitHubClient(transport);
+			const counts = await client.fetchReviewComments("acme/widgets", 42, []);
+			expect(counts.unresolvedHuman).toBe(0);
+			expect(counts.unresolvedBot).toBe(1);
+		});
+
+		test("detects bots by explicit botLogins config", async () => {
+			const transport = createMockTransport({
+				async *fetchReviewThreads() {
+					yield {
+						isResolved: false,
+						comments: {
+							nodes: [{ author: { login: "special-internal-bot" } }],
+						},
+					};
+				},
+			});
+			const client = createGitHubClient(transport);
+			const counts = await client.fetchReviewComments("acme/widgets", 42, [
+				"special-internal-bot",
+			]);
+			expect(counts.unresolvedHuman).toBe(0);
+			expect(counts.unresolvedBot).toBe(1);
 		});
 
 		test("returns zeroes when no threads", async () => {
