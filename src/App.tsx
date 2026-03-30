@@ -1,38 +1,13 @@
-import { createSignal, onMount, onCleanup } from "solid-js";
+import { createSignal } from "solid-js";
 import { execFile } from "child_process";
 import { AppShell } from "./components/AppShell";
+import { createPRStore } from "./lib/pr-store";
 import type { Legit } from "./lib/legit";
-import type { PR, PRSummary, CommentCounts } from "./lib/types";
+import type { PR } from "./lib/types";
 
 /** Build a GitHub PR URL from a repo slug and PR number. */
 export function prUrl(repoSlug: string, number: number): string {
 	return `https://github.com/${repoSlug}/pull/${number}`;
-}
-
-/**
- * Coalesces rapid successive values into one callback invocation per macrotask
- * boundary. Values arriving in the same microtask burst are collapsed to the
- * latest; the callback fires on the next macrotask (setTimeout 0).
- *
- * Call flush() in a finally block to apply the last value synchronously and
- * cancel any pending macrotask — finally runs before macrotasks, so this is safe.
- */
-function makeCoalescer<T>(apply: (v: T) => void, signal?: AbortSignal) {
-	let latest: T | undefined;
-	let pending: ReturnType<typeof setTimeout> | undefined;
-
-	const flush = () => {
-		clearTimeout(pending);
-		pending = undefined;
-		if (latest !== undefined && !signal?.aborted) apply(latest);
-	};
-
-	const schedule = (v: T) => {
-		latest = v;
-		pending ??= setTimeout(flush, 0);
-	};
-
-	return { schedule, flush };
 }
 
 export interface AppProps {
@@ -40,361 +15,40 @@ export interface AppProps {
 }
 
 export function App(props: AppProps) {
-	const [error, setError] = createSignal("");
-	const [repoTabs, setRepoTabs] = createSignal<string[]>([]);
-	const [activeTab, setActiveTab] = createSignal(0);
-	const [prsByRepo, setPrsByRepo] = createSignal<Record<string, PR[]>>({});
-	const [prs, setPrs] = createSignal<PR[]>([]);
-	const [loading, setLoading] = createSignal(true);
-	const [selectedPr, setSelectedPr] = createSignal<PR | undefined>();
-	const [summary, setSummary] = createSignal<PRSummary | undefined>();
+	const store = createPRStore(props.app);
 
-	const repoControllers = new Map<string, AbortController>();
-	const [_loadingRepos, setLoadingRepos] = createSignal(new Set<string>());
-	let summaryController: AbortController | undefined;
-	let bgThreadsController: AbortController | undefined;
-	let debounceTimer: ReturnType<typeof setTimeout> | undefined;
-	/** Session cache (not keyed by commit); cleared on refresh. */
-	const summaryCache = new Map<string, PRSummary>();
-
-	/** Concurrency limit for background thread-count fetches. */
-	const THREAD_CONCURRENCY = 5;
-
-	function currentRepoSlug(): string | undefined {
-		if (activeTab() === 0) return undefined;
-		return repoTabs()[activeTab() - 1];
-	}
-
-	function cacheKey(pr: PR): string {
-		return `${pr.repoSlug ?? props.app.repoSlug}#${pr.number}`;
-	}
-
-	function tabs(): string[] {
-		return ["All", ...repoTabs()];
-	}
-
-	function visiblePRsForTab(tabIndex = activeTab()): PR[] {
-		const byRepo = prsByRepo();
-		if (tabIndex === 0) {
-			const merged: PR[] = [];
-			for (const repo of repoTabs()) {
-				const repoPrs = byRepo[repo] ?? [];
-				for (const pr of repoPrs) {
-					merged.push({ ...pr, repoSlug: repo });
-				}
-			}
-			merged.sort(
-				(a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-			);
-			return merged;
-		}
-		const repo = repoTabs()[tabIndex - 1];
-		if (!repo) return [];
-		return (byRepo[repo] ?? []).map((pr) => (pr.repoSlug ? pr : { ...pr, repoSlug: repo }));
-	}
-
-	function updateDisplayedPRs() {
-		setPrs(visiblePRsForTab());
-	}
-
-	function setRepoLoading(repo: string, value: boolean) {
-		setLoadingRepos((prev) => {
-			const next = new Set(prev);
-			if (value) next.add(repo);
-			else next.delete(repo);
-			// Derive global loading: true if any repo is still loading
-			setLoading(next.size > 0);
-			return next;
-		});
-	}
-
-	async function loadRepo(repo: string) {
-		repoControllers.get(repo)?.abort();
-		const ac = new AbortController();
-		repoControllers.set(repo, ac);
-		setRepoLoading(repo, true);
-		setError("");
-		setPrsByRepo((prev) => ({ ...prev, [repo]: [] }));
-		updateDisplayedPRs();
-
-		const { schedule, flush } = makeCoalescer<PR[]>((snapshot) => {
-			setPrsByRepo((prev) => ({ ...prev, [repo]: snapshot }));
-			updateDisplayedPRs();
-		}, ac.signal);
-
-		try {
-			for await (const snapshot of props.app.fetchPRs(repo, ac.signal)) {
-				schedule(snapshot);
-				if (!selectedPr() && snapshot.length > 0 && activeTab() === 0) {
-					handleSelectionChange({ ...snapshot[0]!, repoSlug: repo });
-				}
-			}
-		} catch (err: any) {
-			if (!ac.signal.aborted) {
-				setError(err.message ?? String(err));
-			}
-		} finally {
-			flush();
-			if (!ac.signal.aborted) {
-				setRepoLoading(repo, false);
-			}
-		}
-	}
-
-	function discoverRepos(): string[] {
-		return props.app.trackedRepos();
-	}
-
-	async function loadPRs() {
-		bgThreadsController?.abort(); // Cancel any in-flight background thread loading.
-		for (const c of repoControllers.values()) c.abort();
-		repoControllers.clear();
-		setLoadingRepos(new Set<string>());
-		setPrsByRepo({});
-		setPrs([]);
-		setLoading(true);
-		setError("");
-		summaryCache.clear();
-		setSummary(undefined);
-		setSelectedPr(undefined);
-		const repos = discoverRepos();
-		setRepoTabs(repos);
-		// Start all repo fetches, then snapshot the controllers so we can
-		// detect if a newer loadPRs call superseded this one.
-		const pending = repos.map((repo) => loadRepo(repo));
-		const controllers = repos.map((repo) => repoControllers.get(repo)!);
-		await Promise.all(pending);
-		const stale = controllers.some((c) => c.signal.aborted);
-		if (!stale) {
-			setLoading(false);
-			// Kick off background thread-count loading for all PRs.
-			startBackgroundThreadLoad(repos).catch(() => {});
-		}
-	}
-
-	async function fetchSummary(pr: PR) {
-		summaryController?.abort();
-		const ac = new AbortController();
-		summaryController = ac;
-
-		const key = cacheKey(pr);
-		try {
-			const repo = pr.repoSlug ?? props.app.repoSlug;
-			const result = await props.app.fetchPRSummary(repo, pr.number, ac.signal);
-			if (ac.signal.aborted) return;
-			summaryCache.set(key, result);
-
-			// Propagate fresh PR fields back into the list.  Fields like `mergeable`
-			// and `reviewDecision` can change between the initial list fetch and the
-			// summary fetch (e.g. another PR was merged causing a conflict).
-			// Also sync `comments` so the background thread-loader can skip this PR.
-			setPrsByRepo((prev) => {
-				const repoPrs = prev[repo] ?? [];
-				const updated = repoPrs.map((p) =>
-					p.number === pr.number
-						? {
-								...p,
-								mergeable: result.mergeable,
-								reviewDecision: result.reviewDecision,
-								requestedReviewers: result.requestedReviewers,
-								isDraft: result.isDraft,
-								headCommitSha: result.headCommitSha,
-								lastCommitDate: result.lastCommitDate,
-								additions: result.additions,
-								deletions: result.deletions,
-								labels: result.labels,
-								assignees: result.assignees,
-								updatedAt: result.updatedAt,
-								comments: result.comments,
-								threadsLoading: false,
-							}
-						: p,
-				);
-				return { ...prev, [repo]: updated };
-			});
-			// Defer re-grouping while background thread loading is active —
-			// the batch apply at the end will pick up our changes.
-			if (!bgThreadsController || bgThreadsController.signal.aborted) {
-				updateDisplayedPRs();
-			}
-
-			const selected = selectedPr();
-			if (selected && cacheKey(selected) === key) {
-				setSummary(result);
-			}
-		} catch {
-			// Non-fatal — summary just won't load (includes abort)
-		}
-	}
-
-	/**
-	 * Background-load unresolved thread counts for every PR in `repos`.
-	 *
-	 * Results are collected silently and applied in **one batch** when all
-	 * fetches complete, so the list only re-groups once instead of after every
-	 * individual response.  PRs show a `…` spinner in the Threads column while
-	 * loading is in progress.
-	 */
-	async function startBackgroundThreadLoad(repos: string[]) {
-		bgThreadsController?.abort();
-		const ac = new AbortController();
-		bgThreadsController = ac;
-
-		// Build work queue, skipping PRs that already have comment data.
-		const snapshot = prsByRepo();
-		const queue: Array<{ repo: string; prNumber: number }> = [];
-		for (const repo of repos) {
-			for (const pr of snapshot[repo] ?? []) {
-				if (pr.comments === undefined) {
-					queue.push({ repo, prNumber: pr.number });
-				}
-			}
-		}
-		if (queue.length === 0) return;
-
-		// Mark queued PRs as "loading" in one batch (shows `…` in Threads column).
-		setPrsByRepo((prev) => {
-			const next = { ...prev };
-			for (const repo of repos) {
-				next[repo] = (prev[repo] ?? []).map((pr) =>
-					pr.comments !== undefined ? pr : { ...pr, threadsLoading: true },
-				);
-			}
-			return next;
-		});
-		updateDisplayedPRs();
-
-		// Collect all results into a Map keyed by "repo#number".
-		const results = new Map<string, CommentCounts>();
-
-		const worker = async () => {
-			while (queue.length > 0 && !ac.signal.aborted) {
-				const item = queue.shift()!;
-
-				// Skip if the summary fetch already populated this PR's comments.
-				const current = (prsByRepo()[item.repo] ?? []).find(
-					(p) => p.number === item.prNumber,
-				);
-				if (current?.comments !== undefined) continue;
-
-				try {
-					const counts = await props.app.fetchThreadCounts(
-						item.repo,
-						item.prNumber,
-						ac.signal,
-					);
-					if (ac.signal.aborted) return;
-					results.set(`${item.repo}#${item.prNumber}`, counts);
-				} catch {
-					if (ac.signal.aborted) return;
-					// Non-fatal — this PR just won't have thread data.
-				}
-			}
-		};
-
-		await Promise.all(
-			Array.from({ length: Math.min(THREAD_CONCURRENCY, queue.length) }, () => worker()),
-		);
-
-		if (ac.signal.aborted) return;
-
-		// Apply all results in a single batch → one re-group instead of N.
-		setPrsByRepo((prev) => {
-			const next = { ...prev };
-			for (const repo of repos) {
-				next[repo] = (prev[repo] ?? []).map((pr) => {
-					const counts = results.get(`${repo}#${pr.number}`);
-					if (counts) {
-						return { ...pr, comments: counts, threadsLoading: false };
-					}
-					// Clear loading flag for PRs whose fetch was skipped or failed.
-					return pr.threadsLoading ? { ...pr, threadsLoading: false } : pr;
-				});
-			}
-			return next;
-		});
-		updateDisplayedPRs();
-	}
-
-	function handleSelectionChange(pr: PR) {
-		setSelectedPr(pr);
-		clearTimeout(debounceTimer);
-		summaryController?.abort();
-
-		const key = cacheKey(pr);
-		const cached = summaryCache.get(key);
-		if (cached) {
-			setSummary(cached);
-			return;
-		}
-
-		setSummary(undefined);
-		debounceTimer = setTimeout(() => fetchSummary(pr), 300);
-	}
-
-	function handleRefreshSelected() {
-		const pr = selectedPr();
-		if (!pr) return;
-		clearTimeout(debounceTimer);
-		summaryController?.abort();
-		summaryCache.delete(cacheKey(pr));
-		setSummary(undefined);
-		fetchSummary(pr);
-	}
+	const [browserError, setBrowserError] = createSignal("");
 
 	function handleOpenInBrowser(pr: PR) {
-		const slug = pr.repoSlug ?? props.app.repoSlug;
-		const url = prUrl(slug, pr.number);
-		execFile("open", [url], (err) => {
-			if (err) setError(`Failed to open browser: ${err.message}`);
+		setBrowserError("");
+		execFile("open", [prUrl(pr.repoSlug ?? props.app.repoSlug, pr.number)], (err) => {
+			if (err) setBrowserError(`Failed to open browser: ${err.message}`);
 		});
 	}
 
-	function handleRefreshAll() {
-		clearTimeout(debounceTimer);
-		summaryController?.abort();
-		props.app.reloadConfig();
-		loadPRs();
-	}
-
-	onMount(loadPRs);
-	onCleanup(() => {
-		for (const c of repoControllers.values()) c.abort();
-		summaryController?.abort();
-		bgThreadsController?.abort();
-		clearTimeout(debounceTimer);
-	});
+	const displayRepoSlug = () => {
+		const tab = store.activeTab();
+		return tab === 0 ? "All repos" : (store.tabs()[tab] ?? "All repos");
+	};
 
 	return (
 		<AppShell
-			prs={prs()}
-			loading={loading()}
-			repoSlug={currentRepoSlug() ?? "All repos"}
-			showRepo={activeTab() === 0 && repoTabs().length > 1}
+			prs={store.prs()}
+			loading={store.loading()}
+			repoSlug={displayRepoSlug()}
+			showRepo={store.showRepo()}
 			currentUser={props.app.currentUser}
-			resetKey={activeTab()}
-			error={error()}
-			onRefreshSelected={handleRefreshSelected}
-			onRefreshAll={handleRefreshAll}
-			onSelectionChange={handleSelectionChange}
+			resetKey={store.activeTab()}
+			error={store.error() || browserError()}
+			tabs={store.tabs()}
+			activeTab={store.activeTab()}
+			selectedPr={store.selectedPr()}
+			summary={store.summary()}
+			onSelectionChange={store.selectPr}
+			onTabChange={store.changeTab}
+			onRefreshAllActive={store.refreshAllActive}
+			onRefreshSelected={store.refreshSelected}
 			onOpenInBrowser={handleOpenInBrowser}
-			selectedPr={selectedPr()}
-			summary={summary()}
-			tabs={tabs()}
-			activeTab={activeTab()}
-			onTabChange={(index) => {
-				setActiveTab(index);
-				updateDisplayedPRs();
-				const first = visiblePRsForTab(index)[0];
-				if (first) {
-					handleSelectionChange(first);
-				} else {
-					clearTimeout(debounceTimer);
-					summaryController?.abort();
-					setSelectedPr(undefined);
-					setSummary(undefined);
-				}
-			}}
 		/>
 	);
 }
