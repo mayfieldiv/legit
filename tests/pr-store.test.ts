@@ -164,7 +164,7 @@ describe("createPRStore", () => {
 		});
 	});
 
-	test("refreshAll resets activeTab to All", async () => {
+	test("refreshAll keeps the current tab (repo tab stays selected)", async () => {
 		const app = createTestLegit({
 			httpFetch: mockHttpFetch([makeSampleRestPR(7)]),
 		});
@@ -180,13 +180,13 @@ describe("createPRStore", () => {
 							sawLoaded = true;
 							store!.changeTab(1);
 							expect(store!.activeTab()).toBe(1);
-							store!.refreshAll();
+							store!.refreshAllActive();
 						}
 						if (sawLoaded && store!.loading()) {
-							expect(store!.activeTab()).toBe(0);
+							expect(store!.activeTab()).toBe(1);
 						}
 						if (sawLoaded && !store!.loading()) {
-							expect(store!.activeTab()).toBe(0);
+							expect(store!.activeTab()).toBe(1);
 							dispose();
 							resolve();
 						}

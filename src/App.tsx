@@ -46,7 +46,7 @@ export function App(props: AppProps) {
 			summary={store.summary()}
 			onSelectionChange={store.selectPr}
 			onTabChange={store.changeTab}
-			onRefreshAll={store.refreshAll}
+			onRefreshAllActive={store.refreshAllActive}
 			onRefreshSelected={store.refreshSelected}
 			onOpenInBrowser={handleOpenInBrowser}
 		/>

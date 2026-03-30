@@ -18,7 +18,7 @@ interface AppShellProps {
 	resetKey?: number | string;
 	error?: string;
 	onRefreshSelected: () => void;
-	onRefreshAll: () => void;
+	onRefreshAllActive: () => void;
 	onSelectionChange?: (pr: PR) => void;
 	onOpenInBrowser?: (pr: PR) => void;
 	selectedPr?: PR;
@@ -109,7 +109,7 @@ export function AppShell(props: AppShellProps) {
 								groupBy={props.groupBy ?? "smart-status"}
 								resetKey={props.resetKey}
 								onRefreshSelected={props.onRefreshSelected}
-								onRefreshAll={props.onRefreshAll}
+								onRefreshAll={props.onRefreshAllActive}
 								onNavigate={setView}
 								onSelectionChange={props.onSelectionChange}
 								onOpenInBrowser={props.onOpenInBrowser}

@@ -23,7 +23,8 @@ export interface PRStore {
 	readonly showRepo: Accessor<boolean>;
 	selectPr(pr: PR): void;
 	changeTab(index: number): void;
-	refreshAll(): void;
+	/** Re-fetch PRs for the current tab (All = every tracked repo; repo tab = that repo only). */
+	refreshAllActive(): void;
 	refreshSelected(): void;
 }
 
@@ -44,11 +45,16 @@ export function createPRStore(app: Legit, options?: PRStoreOptions): PRStore {
 	const [_loadingRepos, setLoadingRepos] = createSignal(new Set<string>());
 	let summaryController: AbortController | undefined;
 	let bgThreadsController: AbortController | undefined;
-	let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+	let summaryDebounceTimer: ReturnType<typeof setTimeout> | undefined;
 	const summaryCache = new Map<string, PRSummary>();
 
 	function cacheKey(pr: PR): string {
 		return `${pr.repoSlug ?? app.repoSlug}#${pr.number}`;
+	}
+
+	function cancelPendingSummary() {
+		clearTimeout(summaryDebounceTimer);
+		summaryController?.abort();
 	}
 
 	const tabs = createMemo(() => ["All", ...repoTabs()]);
@@ -118,16 +124,24 @@ export function createPRStore(app: Legit, options?: PRStoreOptions): PRStore {
 		}
 	}
 
-	function discoverRepos(): string[] {
-		return app.trackedRepos();
+	/** Run `loadRepo` for each slug, then background threads if nothing was superseded. */
+	async function loadRepos(slugs: string[]) {
+		const pending = slugs.map((repo) => loadRepo(repo));
+		const controllers = slugs.map((repo) => repoControllers.get(repo)!);
+		await Promise.all(pending);
+		const stale = controllers.some((c) => c.signal.aborted);
+		if (!stale) {
+			setLoading(false);
+			startBackgroundLoad(slugs).catch(() => {});
+		}
 	}
 
-	async function loadPRs(opts?: { resetActiveTab?: boolean }) {
+	async function loadPRs() {
 		bgThreadsController?.abort();
 		for (const c of repoControllers.values()) c.abort();
 		repoControllers.clear();
 
-		const repos = discoverRepos();
+		const repos = app.trackedRepos();
 
 		batch(() => {
 			setLoadingRepos(new Set<string>());
@@ -138,23 +152,13 @@ export function createPRStore(app: Legit, options?: PRStoreOptions): PRStore {
 			setSummary(undefined);
 			setSelectedPr(undefined);
 			setRepoTabs(repos);
-			if (opts?.resetActiveTab) {
-				setActiveTab(0);
-			}
 		});
 
-		const pending = repos.map((repo) => loadRepo(repo));
-		const controllers = repos.map((repo) => repoControllers.get(repo)!);
-		await Promise.all(pending);
-		const stale = controllers.some((c) => c.signal.aborted);
-		if (!stale) {
-			setLoading(false);
-			startBackgroundThreadLoad(repos).catch(() => {});
-		}
+		await loadRepos(repos);
 	}
 
 	async function fetchSummary(pr: PR) {
-		summaryController?.abort();
+		cancelPendingSummary();
 		const ac = new AbortController();
 		summaryController = ac;
 
@@ -165,30 +169,28 @@ export function createPRStore(app: Legit, options?: PRStoreOptions): PRStore {
 			if (ac.signal.aborted) return;
 			summaryCache.set(key, result);
 
-			setPrsByRepo((prev) => {
-				const repoPrs = prev[repo] ?? [];
-				const updated = repoPrs.map((p) =>
-					p.number === pr.number
-						? {
-								...p,
-								mergeable: result.mergeable,
-								reviewDecision: result.reviewDecision,
-								requestedReviewers: result.requestedReviewers,
-								isDraft: result.isDraft,
-								headCommitSha: result.headCommitSha,
-								lastCommitDate: result.lastCommitDate,
-								additions: result.additions,
-								deletions: result.deletions,
-								labels: result.labels,
-								assignees: result.assignees,
-								updatedAt: result.updatedAt,
-								comments: result.comments,
-								threadsLoading: false,
-							}
-						: p,
-				);
-				return { ...prev, [repo]: updated };
-			});
+			setPrsByRepo((prev) => ({
+				...prev,
+				[repo]: (prev[repo] ?? []).map((row) => {
+					if (row.number !== pr.number) return row;
+					return {
+						...row,
+						mergeable: result.mergeable,
+						reviewDecision: result.reviewDecision,
+						requestedReviewers: result.requestedReviewers,
+						isDraft: result.isDraft,
+						headCommitSha: result.headCommitSha,
+						lastCommitDate: result.lastCommitDate,
+						additions: result.additions,
+						deletions: result.deletions,
+						labels: result.labels,
+						assignees: result.assignees,
+						updatedAt: result.updatedAt,
+						comments: result.comments,
+						threadsLoading: false,
+					};
+				}),
+			}));
 
 			const selected = selectedPr();
 			if (selected && cacheKey(selected) === key) {
@@ -199,7 +201,7 @@ export function createPRStore(app: Legit, options?: PRStoreOptions): PRStore {
 		}
 	}
 
-	async function startBackgroundThreadLoad(repos: string[]) {
+	async function startBackgroundLoad(repos: string[]) {
 		bgThreadsController?.abort();
 		const ac = new AbortController();
 		bgThreadsController = ac;
@@ -269,8 +271,7 @@ export function createPRStore(app: Legit, options?: PRStoreOptions): PRStore {
 
 	function selectPr(pr: PR) {
 		setSelectedPr(pr);
-		clearTimeout(debounceTimer);
-		summaryController?.abort();
+		cancelPendingSummary();
 
 		const key = cacheKey(pr);
 		const cached = summaryCache.get(key);
@@ -283,7 +284,7 @@ export function createPRStore(app: Legit, options?: PRStoreOptions): PRStore {
 		if (summaryDebounceMs <= 0) {
 			void fetchSummary(pr);
 		} else {
-			debounceTimer = setTimeout(() => fetchSummary(pr), summaryDebounceMs);
+			summaryDebounceTimer = setTimeout(() => fetchSummary(pr), summaryDebounceMs);
 		}
 	}
 
@@ -294,8 +295,7 @@ export function createPRStore(app: Legit, options?: PRStoreOptions): PRStore {
 		if (first) {
 			selectPr(first);
 		} else {
-			clearTimeout(debounceTimer);
-			summaryController?.abort();
+			cancelPendingSummary();
 			setSelectedPr(undefined);
 			setSummary(undefined);
 		}
@@ -304,18 +304,38 @@ export function createPRStore(app: Legit, options?: PRStoreOptions): PRStore {
 	function refreshSelected() {
 		const pr = selectedPr();
 		if (!pr) return;
-		clearTimeout(debounceTimer);
-		summaryController?.abort();
+		cancelPendingSummary();
 		summaryCache.delete(cacheKey(pr));
 		setSummary(undefined);
 		void fetchSummary(pr);
 	}
 
 	function refreshAll() {
-		clearTimeout(debounceTimer);
-		summaryController?.abort();
+		cancelPendingSummary();
 		app.reloadConfig();
-		void loadPRs({ resetActiveTab: true });
+
+		batch(() => {
+			const repos = app.trackedRepos();
+			setRepoTabs(repos);
+			setActiveTab((i) => Math.min(i, Math.max(0, repos.length)));
+		});
+
+		const tab = activeTab();
+		const slug = tab > 0 ? repoTabs()[tab - 1] : undefined;
+		if (tab === 0 || !slug) {
+			void loadPRs();
+			return;
+		}
+
+		bgThreadsController?.abort();
+		repoControllers.get(slug)?.abort();
+		batch(() => {
+			setError("");
+			summaryCache.clear();
+			setSummary(undefined);
+			setSelectedPr(undefined);
+		});
+		void loadRepos([slug]);
 	}
 
 	onMount(() => {
@@ -324,9 +344,8 @@ export function createPRStore(app: Legit, options?: PRStoreOptions): PRStore {
 
 	onCleanup(() => {
 		for (const c of repoControllers.values()) c.abort();
-		summaryController?.abort();
+		cancelPendingSummary();
 		bgThreadsController?.abort();
-		clearTimeout(debounceTimer);
 	});
 
 	return {
@@ -340,7 +359,7 @@ export function createPRStore(app: Legit, options?: PRStoreOptions): PRStore {
 		showRepo,
 		selectPr,
 		changeTab,
-		refreshAll,
+		refreshAllActive: refreshAll,
 		refreshSelected,
 	};
 }
