@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import { testRender } from "@opentui/solid";
 import { DetailView } from "../src/components/DetailView";
-import type { PRDetail, CheckRun } from "../src/lib/types";
+import type { PRDetail, CheckRun, FullReviewThread, IssueComment } from "../src/lib/types";
 import { makePR } from "./helpers";
 
 function makeDetail(overrides: Partial<PRDetail> = {}): PRDetail {
@@ -109,5 +109,241 @@ describe("DetailView", () => {
 		});
 		expect(frame).toContain("+100");
 		expect(frame).toContain("-20");
+	});
+
+	// ── Review Threads ─────────────────────────────────────────────────────
+
+	test("renders unresolved review threads with file path and comments", async () => {
+		const threads: FullReviewThread[] = [
+			{
+				id: "RT_1",
+				isResolved: false,
+				path: "src/foo.ts",
+				line: 42,
+				comments: [
+					{
+						id: "RC_1",
+						author: "bob",
+						body: "Needs a null check here",
+						createdAt: "2026-03-10T00:00:00Z",
+						url: "https://github.com/acme/widgets/pull/42#discussion_r1",
+						isBot: false,
+					},
+					{
+						id: "RC_2",
+						author: "alice",
+						body: "Good catch, fixing",
+						createdAt: "2026-03-11T00:00:00Z",
+						url: "https://github.com/acme/widgets/pull/42#discussion_r2",
+						isBot: false,
+					},
+				],
+			},
+		];
+		const frame = await renderDetail({ threads });
+		expect(frame).toContain("Review Threads");
+		expect(frame).toContain("1 shown");
+		expect(frame).toContain("src/foo.ts:42");
+		expect(frame).toContain("unresolved");
+		expect(frame).toContain("bob");
+		expect(frame).toContain("Needs a null check here");
+		expect(frame).toContain("alice");
+		expect(frame).toContain("Good catch, fixing");
+	});
+
+	test("hides resolved threads by default", async () => {
+		const threads: FullReviewThread[] = [
+			{
+				id: "RT_1",
+				isResolved: true,
+				path: "src/bar.ts",
+				line: 10,
+				comments: [
+					{
+						id: "RC_1",
+						author: "bob",
+						body: "This was fixed",
+						createdAt: "2026-03-10T00:00:00Z",
+						url: "https://example.com",
+						isBot: false,
+					},
+				],
+			},
+		];
+		const frame = await renderDetail({ threads, showResolved: false });
+		expect(frame).toContain("Review Threads");
+		expect(frame).toContain("1 hidden");
+		expect(frame).toContain("All threads resolved or hidden");
+		expect(frame).not.toContain("This was fixed");
+	});
+
+	test("shows resolved threads when showResolved is true", async () => {
+		const threads: FullReviewThread[] = [
+			{
+				id: "RT_1",
+				isResolved: true,
+				path: "src/bar.ts",
+				line: null,
+				comments: [
+					{
+						id: "RC_1",
+						author: "bob",
+						body: "This was fixed",
+						createdAt: "2026-03-10T00:00:00Z",
+						url: "https://example.com",
+						isBot: false,
+					},
+				],
+			},
+		];
+		const frame = await renderDetail({ threads, showResolved: true });
+		expect(frame).toContain("resolved");
+		expect(frame).toContain("This was fixed");
+		expect(frame).toContain("src/bar.ts");
+	});
+
+	test("hides bot-only threads when showBotComments is false", async () => {
+		const threads: FullReviewThread[] = [
+			{
+				id: "RT_1",
+				isResolved: false,
+				path: "src/bot.ts",
+				line: 1,
+				comments: [
+					{
+						id: "RC_1",
+						author: "copilot[bot]",
+						body: "Suggestion: refactor",
+						createdAt: "2026-03-10T00:00:00Z",
+						url: "https://example.com",
+						isBot: true,
+					},
+				],
+			},
+		];
+		const frame = await renderDetail({ threads, showBotComments: false });
+		expect(frame).toContain("1 hidden");
+		expect(frame).not.toContain("Suggestion: refactor");
+	});
+
+	test("does not render threads section when no threads exist", async () => {
+		const frame = await renderDetail({ threads: [] });
+		expect(frame).not.toContain("Review Threads");
+	});
+
+	test("shows file path without line when line is null", async () => {
+		const threads: FullReviewThread[] = [
+			{
+				id: "RT_1",
+				isResolved: false,
+				path: "README.md",
+				line: null,
+				comments: [
+					{
+						id: "RC_1",
+						author: "bob",
+						body: "Update readme",
+						createdAt: "2026-03-10T00:00:00Z",
+						url: "https://example.com",
+						isBot: false,
+					},
+				],
+			},
+		];
+		const frame = await renderDetail({ threads });
+		expect(frame).toContain("README.md");
+		expect(frame).not.toContain("README.md:");
+	});
+
+	// ── Conversation ────────────────────────────────────────────────────────
+
+	test("renders issue comments in conversation section", async () => {
+		const comments: IssueComment[] = [
+			{
+				id: 100,
+				author: "alice",
+				body: "Looks good overall",
+				createdAt: "2026-03-10T00:00:00Z",
+				url: "https://github.com/acme/widgets/pull/42#issuecomment-100",
+				isBot: false,
+			},
+			{
+				id: 101,
+				author: "bob",
+				body: "Thanks for the review",
+				createdAt: "2026-03-11T00:00:00Z",
+				url: "https://github.com/acme/widgets/pull/42#issuecomment-101",
+				isBot: false,
+			},
+		];
+		const frame = await renderDetail({ comments });
+		expect(frame).toContain("Conversation");
+		expect(frame).toContain("2 comments");
+		expect(frame).toContain("alice");
+		expect(frame).toContain("Looks good overall");
+		expect(frame).toContain("bob");
+		expect(frame).toContain("Thanks for the review");
+	});
+
+	test("hides bot comments when showBotComments is false", async () => {
+		const comments: IssueComment[] = [
+			{
+				id: 100,
+				author: "alice",
+				body: "Human comment",
+				createdAt: "2026-03-10T00:00:00Z",
+				url: "https://example.com",
+				isBot: false,
+			},
+			{
+				id: 101,
+				author: "github-actions[bot]",
+				body: "Bot comment",
+				createdAt: "2026-03-10T00:00:00Z",
+				url: "https://example.com",
+				isBot: true,
+			},
+		];
+		const frame = await renderDetail({ comments, showBotComments: false });
+		expect(frame).toContain("1 comment");
+		expect(frame).toContain("Human comment");
+		expect(frame).not.toContain("Bot comment");
+	});
+
+	test("shows bot badge on bot comments", async () => {
+		const comments: IssueComment[] = [
+			{
+				id: 100,
+				author: "devin-ai[bot]",
+				body: "Auto summary",
+				createdAt: "2026-03-10T00:00:00Z",
+				url: "https://example.com",
+				isBot: true,
+			},
+		];
+		const frame = await renderDetail({ comments, showBotComments: true });
+		expect(frame).toContain("[bot]");
+		expect(frame).toContain("devin-ai[bot]");
+	});
+
+	test("does not render conversation section when no comments exist", async () => {
+		const frame = await renderDetail({ comments: [] });
+		expect(frame).not.toContain("Conversation");
+	});
+
+	test("singular 'comment' label for 1 comment", async () => {
+		const comments: IssueComment[] = [
+			{
+				id: 100,
+				author: "alice",
+				body: "Single comment",
+				createdAt: "2026-03-10T00:00:00Z",
+				url: "https://example.com",
+				isBot: false,
+			},
+		];
+		const frame = await renderDetail({ comments });
+		expect(frame).toContain("1 comment");
+		expect(frame).not.toContain("1 comments");
 	});
 });

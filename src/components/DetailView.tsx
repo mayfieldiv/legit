@@ -3,15 +3,24 @@
  *
  * Replaces the list+summary layout when a user drills into a PR.
  * Commit 10: shell (header + loading), description (markdown), CI checks.
- * Commit 11: review threads + conversation.
+ * Commit 11: review threads + conversation (filtered by showResolved/showBotComments).
  * Commit 12: keybindings.
+ *
+ * Thread display: unresolved threads shown by default; resolved hidden
+ * unless showResolved is true. Bot-only threads hidden when showBotComments
+ * is false. Threads grouped by file path. Issue comments shown chronologically.
  */
 
 import { Show, For, createMemo } from "solid-js";
 import { MarkdownBody } from "../lib/markdown";
 import { formatAge, formatSize, sortCheckRuns } from "../lib/format";
-import type { PRDetail, CheckRun } from "../lib/types";
-import type { FullReviewThread, IssueComment } from "../lib/types";
+import type {
+	PRDetail,
+	CheckRun,
+	FullReviewThread,
+	IssueComment,
+	ReviewComment,
+} from "../lib/types";
 
 // ── Props ───────────────────────────────────────────────────────────────────
 
@@ -50,6 +59,57 @@ function checkIcon(check: CheckRun): { icon: string; fg: string } {
 	}
 }
 
+// ── Thread / comment sub-components ─────────────────────────────────────────
+
+function ThreadCard(props: { thread: FullReviewThread; showBotComments: boolean }) {
+	const visibleComments = createMemo(() => {
+		if (props.showBotComments) return props.thread.comments;
+		return props.thread.comments.filter((c) => !c.isBot);
+	});
+
+	const location = () => {
+		const t = props.thread;
+		return t.line != null ? `${t.path}:${t.line}` : t.path;
+	};
+
+	return (
+		<Show when={visibleComments().length > 0}>
+			<box flexDirection="column" width="100%" paddingLeft={2}>
+				<box width="100%" height={1}>
+					<text truncate={true}>
+						<span style={{ fg: "cyan" }}>{location()}</span>
+						<span style={{ fg: props.thread.isResolved ? "green" : "yellow" }}>
+							{props.thread.isResolved ? " ✓ resolved" : " ● unresolved"}
+						</span>
+					</text>
+				</box>
+				<For each={visibleComments()}>{(comment) => <CommentRow comment={comment} />}</For>
+			</box>
+		</Show>
+	);
+}
+
+function CommentRow(props: { comment: ReviewComment | IssueComment }) {
+	return (
+		<box flexDirection="column" width="100%" paddingLeft={2}>
+			<box width="100%" height={1}>
+				<text truncate={true}>
+					<span style={{ fg: props.comment.isBot ? "gray" : "green" }}>
+						{props.comment.author}
+					</span>
+					<Show when={props.comment.isBot}>
+						<span style={{ fg: "gray" }}> [bot]</span>
+					</Show>
+					<span style={{ fg: "gray" }}> · {formatAge(props.comment.createdAt)}</span>
+				</text>
+			</box>
+			<box width="100%">
+				<MarkdownBody source={props.comment.body} />
+			</box>
+		</box>
+	);
+}
+
 // ── Component ───────────────────────────────────────────────────────────────
 
 export function DetailView(props: DetailViewProps) {
@@ -73,6 +133,26 @@ export function DetailView(props: DetailViewProps) {
 			).length,
 	);
 	const pending = createMemo(() => checks().filter((c) => c.status !== "completed").length);
+
+	// ── Filtered threads ─────────────────────────────────────────────────
+	const visibleThreads = createMemo(() => {
+		let threads = props.threads;
+		if (!props.showResolved) {
+			threads = threads.filter((t) => !t.isResolved);
+		}
+		if (!props.showBotComments) {
+			threads = threads.filter((t) => t.comments.some((c) => !c.isBot));
+		}
+		return threads;
+	});
+
+	const hiddenThreadCount = createMemo(() => props.threads.length - visibleThreads().length);
+
+	// ── Filtered issue comments ──────────────────────────────────────────
+	const visibleComments = createMemo(() => {
+		if (props.showBotComments) return props.comments;
+		return props.comments.filter((c) => !c.isBot);
+	});
 
 	return (
 		<box flexDirection="column" width="100%" height="100%">
@@ -180,6 +260,73 @@ export function DetailView(props: DetailViewProps) {
 											</box>
 										);
 									}}
+								</For>
+							</Show>
+
+							{/* Review Threads */}
+							<Show when={props.threads.length > 0}>
+								<box width="100%" height={1}>
+									<text>{""}</text>
+								</box>
+								<box width="100%">
+									<text>
+										<span style={{ bold: true, fg: "cyan" }}>
+											## Review Threads
+										</span>
+										<span style={{ fg: "gray" }}>
+											{" "}
+											{visibleThreads().length} shown
+										</span>
+										<Show when={hiddenThreadCount() > 0}>
+											<span style={{ fg: "gray" }}>
+												{" "}
+												· {hiddenThreadCount()} hidden
+											</span>
+										</Show>
+									</text>
+								</box>
+								<Show
+									when={visibleThreads().length > 0}
+									fallback={
+										<box width="100%" paddingLeft={2}>
+											<text>
+												<span style={{ fg: "gray" }}>
+													All threads resolved or hidden.
+												</span>
+											</text>
+										</box>
+									}
+								>
+									<For each={visibleThreads()}>
+										{(thread) => (
+											<ThreadCard
+												thread={thread}
+												showBotComments={props.showBotComments}
+											/>
+										)}
+									</For>
+								</Show>
+							</Show>
+
+							{/* Conversation (issue comments) */}
+							<Show when={props.comments.length > 0}>
+								<box width="100%" height={1}>
+									<text>{""}</text>
+								</box>
+								<box width="100%">
+									<text>
+										<span style={{ bold: true, fg: "cyan" }}>
+											## Conversation
+										</span>
+										<span style={{ fg: "gray" }}>
+											{" "}
+											{visibleComments().length} comment
+											{visibleComments().length !== 1 ? "s" : ""}
+										</span>
+									</text>
+								</box>
+								<For each={visibleComments()}>
+									{(comment) => <CommentRow comment={comment} />}
 								</For>
 							</Show>
 						</box>

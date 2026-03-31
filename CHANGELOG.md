@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - `PRStore.enterDetail` fetches PR detail, full review threads, and issue comments in parallel (#7)
 - `PRStore.toggleResolved` and `PRStore.toggleBotComments` for detail view filtering (#7)
 - Detail view: PR header, markdown-rendered description, and CI checks section (#7)
+- Detail view: review threads with file path/line, resolved/unresolved status, and conversation (issue comments) sections; filtered by `showResolved` and `showBotComments` (#7)
 
 ### Added
 
