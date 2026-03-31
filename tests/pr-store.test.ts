@@ -7,10 +7,19 @@ import {
 	createMockFetch,
 	createTestLegit,
 	makeSampleRestPR,
+	makeGraphQLResponse,
+	SAMPLE_GQL_META,
+	SAMPLE_REST_PR,
 	mockHttpFetch,
 } from "./helpers";
 
 afterAll(cleanupTmpDirs);
+
+const jsonResponse = (body: unknown) =>
+	new Response(JSON.stringify(body), {
+		status: 200,
+		headers: { "Content-Type": "application/json" },
+	});
 
 describe("createPRStore", () => {
 	test("initial load settles with PRs and every pr has repoSlug", async () => {
@@ -268,6 +277,139 @@ describe("createPRStore", () => {
 
 					store.exitDetail();
 					expect(store.view()).toEqual({ view: "list" });
+
+					dispose();
+					resolve();
+				} catch (e) {
+					dispose();
+					reject(e);
+				}
+			});
+		});
+	});
+
+	test("enterDetail fetches PR detail, threads, and issue comments", async () => {
+		const emptyThreadsGql = {
+			data: {
+				repository: {
+					pullRequest: {
+						reviewThreads: {
+							pageInfo: { hasNextPage: false, endCursor: null },
+							nodes: [],
+						},
+					},
+				},
+			},
+		};
+		const fullThreadsGql = {
+			data: {
+				repository: {
+					pullRequest: {
+						reviewThreads: {
+							pageInfo: { hasNextPage: false, endCursor: null },
+							nodes: [
+								{
+									id: "RT_1",
+									isResolved: false,
+									path: "src/foo.ts",
+									line: 10,
+									comments: {
+										nodes: [
+											{
+												id: "RC_1",
+												author: { login: "bob", __typename: "User" },
+												body: "Fix this",
+												createdAt: "2026-03-10T00:00:00Z",
+												url: "https://github.com/acme/widgets/pull/42#discussion_r1",
+											},
+										],
+									},
+								},
+							],
+						},
+					},
+				},
+			},
+		};
+		const fetch = async (url: string | URL | Request, init?: RequestInit) => {
+			const u = typeof url === "string" ? url : url.toString();
+			if (init?.method === "POST" && u.includes("/graphql")) {
+				const q: string = JSON.parse(String(init?.body ?? "{}")).query ?? "";
+				if (q.includes("path") && q.includes("line")) return jsonResponse(fullThreadsGql);
+				if (q.includes("reviewDecision"))
+					return jsonResponse(makeGraphQLResponse([{ ...SAMPLE_GQL_META, number: 42 }]));
+				return jsonResponse(emptyThreadsGql);
+			}
+			if (u.includes("/pulls?")) return jsonResponse([makeSampleRestPR(42)]);
+			if (u.endsWith("/pulls/42"))
+				return jsonResponse({ ...SAMPLE_REST_PR, number: 42, body: "PR description" });
+			if (u.includes("/issues/42/comments"))
+				return jsonResponse([
+					{
+						id: 200,
+						user: { login: "alice", type: "User" },
+						body: "Looks good",
+						created_at: "2026-03-11T00:00:00Z",
+						html_url: "https://github.com/acme/widgets/pull/42#issuecomment-200",
+					},
+				]);
+			if (u.includes("/check-runs")) return jsonResponse({ check_runs: [] });
+			if (u.includes("/reviews")) return jsonResponse([]);
+			if (u.includes("/files")) return jsonResponse([]);
+			return new Response("Not Found", { status: 404 });
+		};
+		const app = createTestLegit({ httpFetch: fetch as any });
+
+		await new Promise<void>((resolve, reject) => {
+			createRoot((dispose) => {
+				const store = createPRStore(app, { summaryDebounceMs: 0 });
+				let enteredDetail = false;
+
+				createEffect(() => {
+					if (!store.loading() && !enteredDetail) {
+						enteredDetail = true;
+						const pr = store.prs()[0];
+						if (pr) store.enterDetail(pr);
+					}
+					if (enteredDetail && !store.detailLoading() && store.detailPr()) {
+						try {
+							expect(store.detailPr()!.body).toBe("PR description");
+							expect(store.detailThreads()).toHaveLength(1);
+							expect(store.detailThreads()[0]!.id).toBe("RT_1");
+							expect(store.detailComments()).toHaveLength(1);
+							expect(store.detailComments()[0]!.author).toBe("alice");
+							dispose();
+							resolve();
+						} catch (e) {
+							dispose();
+							reject(e);
+						}
+					}
+				});
+			});
+		});
+	});
+
+	test("exitDetail clears detail state", async () => {
+		const app = createTestLegit({
+			httpFetch: mockHttpFetch([makeSampleRestPR(42)]),
+		});
+		const pr = makePR({ number: 42 });
+
+		await new Promise<void>((resolve, reject) => {
+			createRoot((dispose) => {
+				const store = createPRStore(app, { summaryDebounceMs: 0 });
+
+				try {
+					store.enterDetail(pr);
+					expect(store.detailLoading()).toBe(true);
+
+					store.exitDetail();
+					expect(store.view()).toEqual({ view: "list" });
+					expect(store.detailPr()).toBeUndefined();
+					expect(store.detailThreads()).toEqual([]);
+					expect(store.detailComments()).toEqual([]);
+					expect(store.detailLoading()).toBe(false);
 
 					dispose();
 					resolve();

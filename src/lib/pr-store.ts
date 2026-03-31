@@ -1,7 +1,14 @@
 import { batch, createMemo, createSignal, onCleanup, onMount, type Accessor } from "solid-js";
 import { makeCoalescer } from "./coalescer";
 import type { Legit } from "./legit";
-import type { PR, PRSummary, CommentCounts } from "./types";
+import type {
+	PR,
+	PRDetail,
+	PRSummary,
+	CommentCounts,
+	FullReviewThread,
+	IssueComment,
+} from "./types";
 
 export type ViewTarget = { view: "list" } | { view: "detail"; pr: PR };
 
@@ -24,6 +31,13 @@ export interface PRStore {
 	readonly loading: Accessor<boolean>;
 	readonly error: Accessor<string>;
 	readonly showRepo: Accessor<boolean>;
+
+	// Detail view state
+	readonly detailPr: Accessor<PRDetail | undefined>;
+	readonly detailThreads: Accessor<FullReviewThread[]>;
+	readonly detailComments: Accessor<IssueComment[]>;
+	readonly detailLoading: Accessor<boolean>;
+
 	selectPr(pr: PR): void;
 	changeTab(index: number): void;
 	/** Re-fetch PRs for the current tab (All = every tracked repo; repo tab = that repo only). */
@@ -46,6 +60,13 @@ export function createPRStore(app: Legit, options?: PRStoreOptions): PRStore {
 	const [loading, setLoading] = createSignal(true);
 	const [selectedPr, setSelectedPr] = createSignal<PR | undefined>();
 	const [summary, setSummary] = createSignal<PRSummary | undefined>();
+
+	// Detail view state
+	const [detailPr, setDetailPr] = createSignal<PRDetail | undefined>();
+	const [detailThreads, setDetailThreads] = createSignal<FullReviewThread[]>([]);
+	const [detailComments, setDetailComments] = createSignal<IssueComment[]>([]);
+	const [detailLoading, setDetailLoading] = createSignal(false);
+	let detailController: AbortController | undefined;
 
 	const repoControllers = new Map<string, AbortController>();
 	const [_loadingRepos, setLoadingRepos] = createSignal(new Set<string>());
@@ -345,11 +366,48 @@ export function createPRStore(app: Legit, options?: PRStoreOptions): PRStore {
 	}
 
 	function enterDetail(pr: PR) {
-		setView({ view: "detail", pr });
+		detailController?.abort();
+		const ac = new AbortController();
+		detailController = ac;
+
+		batch(() => {
+			setView({ view: "detail", pr });
+			setDetailPr(undefined);
+			setDetailThreads([]);
+			setDetailComments([]);
+			setDetailLoading(true);
+		});
+
+		const repo = pr.repoSlug ?? app.repoSlug;
+		Promise.all([
+			app.fetchPR(repo, pr.number, ac.signal),
+			app.fetchFullReviewThreads(repo, pr.number, ac.signal),
+			app.fetchIssueComments(repo, pr.number, ac.signal),
+		])
+			.then(([detail, threads, comments]) => {
+				if (ac.signal.aborted) return;
+				batch(() => {
+					setDetailPr(detail);
+					setDetailThreads(threads);
+					setDetailComments(comments);
+					setDetailLoading(false);
+				});
+			})
+			.catch(() => {
+				if (ac.signal.aborted) return;
+				setDetailLoading(false);
+			});
 	}
 
 	function exitDetail() {
-		setView({ view: "list" });
+		detailController?.abort();
+		batch(() => {
+			setView({ view: "list" });
+			setDetailPr(undefined);
+			setDetailThreads([]);
+			setDetailComments([]);
+			setDetailLoading(false);
+		});
 	}
 
 	onMount(() => {
@@ -360,6 +418,7 @@ export function createPRStore(app: Legit, options?: PRStoreOptions): PRStore {
 		for (const c of repoControllers.values()) c.abort();
 		cancelPendingSummary();
 		bgThreadsController?.abort();
+		detailController?.abort();
 	});
 
 	return {
@@ -372,6 +431,10 @@ export function createPRStore(app: Legit, options?: PRStoreOptions): PRStore {
 		loading,
 		error,
 		showRepo,
+		detailPr,
+		detailThreads,
+		detailComments,
+		detailLoading,
 		selectPr,
 		changeTab,
 		refreshAllActive: refreshAll,
