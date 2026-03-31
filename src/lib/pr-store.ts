@@ -37,6 +37,8 @@ export interface PRStore {
 	readonly detailThreads: Accessor<FullReviewThread[]>;
 	readonly detailComments: Accessor<IssueComment[]>;
 	readonly detailLoading: Accessor<boolean>;
+	readonly showResolved: Accessor<boolean>;
+	readonly showBotComments: Accessor<boolean>;
 
 	selectPr(pr: PR): void;
 	changeTab(index: number): void;
@@ -45,6 +47,8 @@ export interface PRStore {
 	refreshSelected(): void;
 	enterDetail(pr: PR): void;
 	exitDetail(): void;
+	toggleResolved(): void;
+	toggleBotComments(): void;
 }
 
 const THREAD_CONCURRENCY = 5;
@@ -66,6 +70,8 @@ export function createPRStore(app: Legit, options?: PRStoreOptions): PRStore {
 	const [detailThreads, setDetailThreads] = createSignal<FullReviewThread[]>([]);
 	const [detailComments, setDetailComments] = createSignal<IssueComment[]>([]);
 	const [detailLoading, setDetailLoading] = createSignal(false);
+	const [showResolved, setShowResolved] = createSignal(false);
+	const [showBotComments, setShowBotComments] = createSignal(true);
 	let detailController: AbortController | undefined;
 
 	const repoControllers = new Map<string, AbortController>();
@@ -407,7 +413,17 @@ export function createPRStore(app: Legit, options?: PRStoreOptions): PRStore {
 			setDetailThreads([]);
 			setDetailComments([]);
 			setDetailLoading(false);
+			setShowResolved(false);
+			setShowBotComments(true);
 		});
+	}
+
+	function toggleResolved() {
+		setShowResolved((v) => !v);
+	}
+
+	function toggleBotComments() {
+		setShowBotComments((v) => !v);
 	}
 
 	onMount(() => {
@@ -435,11 +451,15 @@ export function createPRStore(app: Legit, options?: PRStoreOptions): PRStore {
 		detailThreads,
 		detailComments,
 		detailLoading,
+		showResolved,
+		showBotComments,
 		selectPr,
 		changeTab,
 		refreshAllActive: refreshAll,
 		refreshSelected,
 		enterDetail,
 		exitDetail,
+		toggleResolved,
+		toggleBotComments,
 	};
 }

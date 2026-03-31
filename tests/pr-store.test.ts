@@ -390,6 +390,78 @@ describe("createPRStore", () => {
 		});
 	});
 
+	test("toggleResolved flips showResolved", async () => {
+		const app = createTestLegit({ httpFetch: mockHttpFetch([makeSampleRestPR(42)]) });
+
+		await new Promise<void>((resolve, reject) => {
+			createRoot((dispose) => {
+				const store = createPRStore(app, { summaryDebounceMs: 0 });
+				try {
+					expect(store.showResolved()).toBe(false);
+					store.toggleResolved();
+					expect(store.showResolved()).toBe(true);
+					store.toggleResolved();
+					expect(store.showResolved()).toBe(false);
+					dispose();
+					resolve();
+				} catch (e) {
+					dispose();
+					reject(e);
+				}
+			});
+		});
+	});
+
+	test("toggleBotComments flips showBotComments (default true)", async () => {
+		const app = createTestLegit({ httpFetch: mockHttpFetch([makeSampleRestPR(42)]) });
+
+		await new Promise<void>((resolve, reject) => {
+			createRoot((dispose) => {
+				const store = createPRStore(app, { summaryDebounceMs: 0 });
+				try {
+					expect(store.showBotComments()).toBe(true);
+					store.toggleBotComments();
+					expect(store.showBotComments()).toBe(false);
+					store.toggleBotComments();
+					expect(store.showBotComments()).toBe(true);
+					dispose();
+					resolve();
+				} catch (e) {
+					dispose();
+					reject(e);
+				}
+			});
+		});
+	});
+
+	test("exitDetail resets showResolved and showBotComments", async () => {
+		const app = createTestLegit({ httpFetch: mockHttpFetch([makeSampleRestPR(42)]) });
+		const pr = makePR({ number: 42 });
+
+		await new Promise<void>((resolve, reject) => {
+			createRoot((dispose) => {
+				const store = createPRStore(app, { summaryDebounceMs: 0 });
+				try {
+					store.enterDetail(pr);
+					store.toggleResolved();
+					store.toggleBotComments();
+					expect(store.showResolved()).toBe(true);
+					expect(store.showBotComments()).toBe(false);
+
+					store.exitDetail();
+					expect(store.showResolved()).toBe(false);
+					expect(store.showBotComments()).toBe(true);
+
+					dispose();
+					resolve();
+				} catch (e) {
+					dispose();
+					reject(e);
+				}
+			});
+		});
+	});
+
 	test("exitDetail clears detail state", async () => {
 		const app = createTestLegit({
 			httpFetch: mockHttpFetch([makeSampleRestPR(42)]),
