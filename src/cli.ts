@@ -11,6 +11,7 @@
  *   pr <n>   — fetch and print PR summary as JSON (PR detail plus checks, reviews, comment threads, files)
  *   files <n> — fetch and print file categorization as JSON
  *   blocker <n> — compute and print blocker/tier/reason as JSON
+ *   comments <n> — fetch and print comment threads + issue comments as JSON
  */
 
 import { Legit } from "./lib/legit";
@@ -128,6 +129,20 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
 			return { output: app.categorizeFiles(files) };
 		}
 
+		case "comments": {
+			const rawNumber = args[1];
+			if (!rawNumber || !/^[1-9]\d*$/.test(rawNumber)) {
+				return { error: "Usage: legit comments <number>" };
+			}
+			const prNumber = Number(rawNumber);
+			const repo = app.repoSlug;
+			const [reviewThreads, issueComments] = await Promise.all([
+				app.fetchFullReviewThreads(repo, prNumber),
+				app.fetchIssueComments(repo, prNumber),
+			]);
+			return { output: { reviewThreads, issueComments } };
+		}
+
 		case "blocker": {
 			const rawNumber = args[1];
 			if (!rawNumber || !/^[1-9]\d*$/.test(rawNumber)) {
@@ -149,7 +164,7 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
 
 		default:
 			return {
-				error: `Unknown command: ${command}\n\nUsage: legit [detect|auth|config|repos|prs [--repo=<owner/repo>|--all]|pr <number>|files <number>|blocker <number>]`,
+				error: `Unknown command: ${command}\n\nUsage: legit [detect|auth|config|repos|prs [--repo=<owner/repo>|--all]|pr <number>|files <number>|blocker <number>|comments <number>]`,
 			};
 	}
 }

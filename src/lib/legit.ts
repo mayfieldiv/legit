@@ -10,6 +10,8 @@ import type {
 	FileCategorization,
 	PRSummary,
 	CommentCounts,
+	FullReviewThread,
+	IssueComment,
 } from "./types";
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -245,6 +247,28 @@ export class Legit {
 		signal?: AbortSignal,
 	): Promise<CommentCounts> {
 		return this.client.fetchReviewComments(repo, prNumber, this.config.botLogins, signal);
+	}
+
+	/**
+	 * Fetch full review threads with comment bodies and bot flags.
+	 */
+	async fetchFullReviewThreads(
+		repo: string,
+		prNumber: number,
+		signal?: AbortSignal,
+	): Promise<FullReviewThread[]> {
+		return this.client.fetchFullReviewThreads(repo, prNumber, this.config.botLogins, signal);
+	}
+
+	/**
+	 * Fetch issue (top-level) comments with bot flags.
+	 */
+	async fetchIssueComments(
+		repo: string,
+		prNumber: number,
+		signal?: AbortSignal,
+	): Promise<IssueComment[]> {
+		return this.client.fetchIssueComments(repo, prNumber, this.config.botLogins, signal);
 	}
 
 	async fetchPRSummary(repo: string, number: number, signal?: AbortSignal): Promise<PRSummary> {

@@ -11,3 +11,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - Domain types for PR detail view: `ReviewComment`, `FullReviewThread`, `IssueComment` (#7)
 - Transport methods `fetchFullReviewThreads` and `listIssueComments` for full comment data (#7)
 - Client methods `fetchFullReviewThreads` and `fetchIssueComments` with bot detection (#7)
+- `legit comments <number>` CLI subcommand — outputs review threads and issue comments as JSON (#7)

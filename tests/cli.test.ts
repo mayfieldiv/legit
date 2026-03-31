@@ -312,6 +312,92 @@ describe("runCommand", () => {
 		expect(typeof output.reason).toBe("string");
 	});
 
+	test("comments <number> returns review threads and issue comments", async () => {
+		const { fetch } = createMockFetch([
+			// fetchFullReviewThreads (GraphQL)
+			{
+				url: /\/graphql/,
+				method: "POST",
+				response: {
+					status: 200,
+					body: {
+						data: {
+							repository: {
+								pullRequest: {
+									reviewThreads: {
+										pageInfo: { hasNextPage: false, endCursor: null },
+										nodes: [
+											{
+												id: "RT_1",
+												isResolved: false,
+												path: "src/foo.ts",
+												line: 42,
+												comments: {
+													nodes: [
+														{
+															id: "RC_1",
+															author: {
+																login: "bob",
+																__typename: "User",
+															},
+															body: "Needs fix",
+															createdAt: "2026-03-10T00:00:00Z",
+															url: "https://github.com/acme/widgets/pull/42#discussion_r1",
+														},
+													],
+												},
+											},
+										],
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			// listIssueComments (REST)
+			{
+				url: /\/issues\/42\/comments/,
+				response: {
+					status: 200,
+					body: [
+						{
+							id: 100,
+							user: { login: "alice", type: "User" },
+							body: "LGTM",
+							created_at: "2026-03-10T00:00:00Z",
+							html_url: "https://github.com/acme/widgets/pull/42#issuecomment-100",
+						},
+					],
+				},
+			},
+		]);
+		const app = createTestLegit({ httpFetch: fetch });
+		const result = await runCommand(["comments", "42"], app);
+		const output = result.output as any;
+		expect(output.reviewThreads).toHaveLength(1);
+		expect(output.reviewThreads[0].id).toBe("RT_1");
+		expect(output.reviewThreads[0].path).toBe("src/foo.ts");
+		expect(output.reviewThreads[0].comments[0].author).toBe("bob");
+		expect(output.issueComments).toHaveLength(1);
+		expect(output.issueComments[0].author).toBe("alice");
+		expect(output.issueComments[0].url).toBe(
+			"https://github.com/acme/widgets/pull/42#issuecomment-100",
+		);
+	});
+
+	test("comments without number returns error", async () => {
+		const app = createTestLegit();
+		const result = await runCommand(["comments"], app);
+		expect(result.error).toContain("Usage");
+	});
+
+	test("comments rejects zero", async () => {
+		const app = createTestLegit();
+		const result = await runCommand(["comments", "0"], app);
+		expect(result.error).toContain("Usage");
+	});
+
 	test("blocker without number returns error", async () => {
 		const app = createTestLegit();
 		const result = await runCommand(["blocker"], app);
