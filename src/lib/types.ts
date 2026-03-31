@@ -71,6 +71,36 @@ export interface CommentCounts {
 	unresolvedBot: number;
 }
 
+// ── Review threads (full) ────────────────────────────────────────────────────
+
+export interface ReviewComment {
+	id: string;
+	author: string;
+	body: string;
+	createdAt: string;
+	url: string;
+	isBot: boolean;
+}
+
+export interface FullReviewThread {
+	id: string;
+	isResolved: boolean;
+	path: string;
+	line: number | null;
+	comments: ReviewComment[];
+}
+
+// ── Issue comments ──────────────────────────────────────────────────────────
+
+export interface IssueComment {
+	id: number;
+	author: string;
+	body: string;
+	createdAt: string;
+	url: string;
+	isBot: boolean;
+}
+
 // ── PR Summary ──────────────────────────────────────────────────────────────
 
 export interface PRSummary extends PRDetail {
