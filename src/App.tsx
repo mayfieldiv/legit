@@ -50,6 +50,12 @@ export function App(props: AppProps) {
 			onRefreshAllActive={store.refreshAllActive}
 			onRefreshSelected={store.refreshSelected}
 			onEnterDetail={store.enterDetail}
+			detailPr={store.detailPr()}
+			detailThreads={store.detailThreads()}
+			detailComments={store.detailComments()}
+			detailLoading={store.detailLoading()}
+			showResolved={store.showResolved()}
+			showBotComments={store.showBotComments()}
 			onOpenInBrowser={handleOpenInBrowser}
 		/>
 	);

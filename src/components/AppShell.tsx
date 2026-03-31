@@ -2,7 +2,8 @@ import { Show, Switch, Match } from "solid-js";
 import { useKeyboard } from "@opentui/solid";
 import { ListView } from "./ListView";
 import { SummaryPanel } from "./SummaryPanel";
-import type { PR, PRSummary } from "../lib/types";
+import { DetailView } from "./DetailView";
+import type { PR, PRDetail, PRSummary, FullReviewThread, IssueComment } from "../lib/types";
 import type { GroupByKey } from "../lib/group-filter-engine";
 import type { ViewTarget } from "../lib/pr-store";
 
@@ -26,6 +27,13 @@ interface AppShellProps {
 	onEnterDetail: (pr: PR) => void;
 	selectedPr?: PR;
 	summary?: PRSummary;
+	// Detail view
+	detailPr?: PRDetail;
+	detailThreads?: FullReviewThread[];
+	detailComments?: IssueComment[];
+	detailLoading?: boolean;
+	showResolved?: boolean;
+	showBotComments?: boolean;
 	tabs?: string[];
 	activeTab?: number;
 	onTabChange?: (index: number) => void;
@@ -129,8 +137,14 @@ export function AppShell(props: AppShellProps) {
 						</box>
 					</Match>
 					<Match when={props.view.view === "detail"}>
-						{/* DetailView placeholder — slice #7 */}
-						<text>Detail view (not yet implemented)</text>
+						<DetailView
+							pr={props.detailPr}
+							threads={props.detailThreads ?? []}
+							comments={props.detailComments ?? []}
+							loading={props.detailLoading ?? false}
+							showResolved={props.showResolved ?? false}
+							showBotComments={props.showBotComments ?? true}
+						/>
 					</Match>
 				</Switch>
 			</Show>

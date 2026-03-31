@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - Move `ViewTarget` and view state from `AppShell` into `PRStore`; `ListView` uses `onEnterDetail` callback instead of `onNavigate` (#7)
 - `PRStore.enterDetail` fetches PR detail, full review threads, and issue comments in parallel (#7)
 - `PRStore.toggleResolved` and `PRStore.toggleBotComments` for detail view filtering (#7)
+- Detail view: PR header, markdown-rendered description, and CI checks section (#7)
 
 ### Added
 
