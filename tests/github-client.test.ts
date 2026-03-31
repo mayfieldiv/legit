@@ -557,4 +557,202 @@ describe("GitHubClient", () => {
 			expect(counts.unresolvedBot).toBe(0);
 		});
 	});
+
+	describe("fetchFullReviewThreads", () => {
+		test("parses threads with comments and bot detection", async () => {
+			const transport = createMockTransport({
+				async *fetchFullReviewThreads() {
+					yield {
+						id: "RT_1",
+						isResolved: false,
+						path: "src/foo.ts",
+						line: 42,
+						comments: {
+							nodes: [
+								{
+									id: "RC_1",
+									author: { login: "bob", __typename: "User" },
+									body: "Needs a null check",
+									createdAt: "2026-03-10T00:00:00Z",
+									url: "https://github.com/acme/widgets/pull/42#discussion_r1",
+								},
+								{
+									id: "RC_2",
+									author: { login: "alice", __typename: "User" },
+									body: "Good catch, fixing",
+									createdAt: "2026-03-11T00:00:00Z",
+									url: "https://github.com/acme/widgets/pull/42#discussion_r2",
+								},
+							],
+						},
+					};
+				},
+			});
+			const client = createGitHubClient(transport);
+			const threads = await client.fetchFullReviewThreads("acme/widgets", 42, []);
+			expect(threads).toHaveLength(1);
+			expect(threads[0]!.id).toBe("RT_1");
+			expect(threads[0]!.path).toBe("src/foo.ts");
+			expect(threads[0]!.line).toBe(42);
+			expect(threads[0]!.comments).toHaveLength(2);
+			expect(threads[0]!.comments[0]!.author).toBe("bob");
+			expect(threads[0]!.comments[0]!.isBot).toBe(false);
+			expect(threads[0]!.comments[1]!.author).toBe("alice");
+		});
+
+		test("detects bots by __typename, [bot] suffix, and botLogins", async () => {
+			const transport = createMockTransport({
+				async *fetchFullReviewThreads() {
+					yield {
+						id: "RT_1",
+						isResolved: false,
+						path: "src/a.ts",
+						line: 1,
+						comments: {
+							nodes: [
+								{
+									id: "RC_1",
+									author: { login: "copilot[bot]", __typename: "Bot" },
+									body: "Suggestion",
+									createdAt: "2026-03-10T00:00:00Z",
+									url: "https://example.com/r1",
+								},
+								{
+									id: "RC_2",
+									author: { login: "graphite-app[bot]" },
+									body: "Auto-merge",
+									createdAt: "2026-03-10T00:00:00Z",
+									url: "https://example.com/r2",
+								},
+								{
+									id: "RC_3",
+									author: { login: "my-custom-bot" },
+									body: "Custom",
+									createdAt: "2026-03-10T00:00:00Z",
+									url: "https://example.com/r3",
+								},
+							],
+						},
+					};
+				},
+			});
+			const client = createGitHubClient(transport);
+			const threads = await client.fetchFullReviewThreads("acme/widgets", 42, [
+				"my-custom-bot",
+			]);
+			expect(threads[0]!.comments[0]!.isBot).toBe(true); // __typename Bot
+			expect(threads[0]!.comments[1]!.isBot).toBe(true); // [bot] suffix
+			expect(threads[0]!.comments[2]!.isBot).toBe(true); // botLogins config
+		});
+
+		test("null author maps to ghost and not bot", async () => {
+			const transport = createMockTransport({
+				async *fetchFullReviewThreads() {
+					yield {
+						id: "RT_1",
+						isResolved: false,
+						path: "src/a.ts",
+						line: null,
+						comments: {
+							nodes: [
+								{
+									id: "RC_1",
+									author: null,
+									body: "Orphaned",
+									createdAt: "2026-03-10T00:00:00Z",
+									url: "https://example.com/r1",
+								},
+							],
+						},
+					};
+				},
+			});
+			const client = createGitHubClient(transport);
+			const threads = await client.fetchFullReviewThreads("acme/widgets", 42, []);
+			expect(threads[0]!.comments[0]!.author).toBe("ghost");
+			expect(threads[0]!.comments[0]!.isBot).toBe(false);
+		});
+
+		test("returns empty array when no threads", async () => {
+			const transport = createMockTransport();
+			const client = createGitHubClient(transport);
+			const threads = await client.fetchFullReviewThreads("acme/widgets", 42, []);
+			expect(threads).toEqual([]);
+		});
+	});
+
+	describe("fetchIssueComments", () => {
+		test("parses comments with bot detection", async () => {
+			const transport = createMockTransport({
+				async *listIssueComments() {
+					yield {
+						id: 100,
+						user: { login: "bob", type: "User" },
+						body: "Looks good",
+						created_at: "2026-03-10T00:00:00Z",
+						html_url: "https://github.com/acme/widgets/pull/42#issuecomment-100",
+					};
+					yield {
+						id: 101,
+						user: { login: "devin-ai[bot]", type: "Bot" },
+						body: "Auto summary",
+						created_at: "2026-03-11T00:00:00Z",
+						html_url: "https://github.com/acme/widgets/pull/42#issuecomment-101",
+					};
+				},
+			});
+			const client = createGitHubClient(transport);
+			const comments = await client.fetchIssueComments("acme/widgets", 42, []);
+			expect(comments).toHaveLength(2);
+			expect(comments[0]!.author).toBe("bob");
+			expect(comments[0]!.isBot).toBe(false);
+			expect(comments[0]!.url).toBe(
+				"https://github.com/acme/widgets/pull/42#issuecomment-100",
+			);
+			expect(comments[1]!.author).toBe("devin-ai[bot]");
+			expect(comments[1]!.isBot).toBe(true);
+		});
+
+		test("detects bots by explicit botLogins config", async () => {
+			const transport = createMockTransport({
+				async *listIssueComments() {
+					yield {
+						id: 100,
+						user: { login: "internal-tool", type: "User" },
+						body: "Automated check",
+						created_at: "2026-03-10T00:00:00Z",
+						html_url: "https://example.com/c100",
+					};
+				},
+			});
+			const client = createGitHubClient(transport);
+			const comments = await client.fetchIssueComments("acme/widgets", 42, ["internal-tool"]);
+			expect(comments[0]!.isBot).toBe(true);
+		});
+
+		test("null user maps to ghost and not bot", async () => {
+			const transport = createMockTransport({
+				async *listIssueComments() {
+					yield {
+						id: 100,
+						user: null,
+						body: "Orphaned comment",
+						created_at: "2026-03-10T00:00:00Z",
+						html_url: "https://example.com/c100",
+					};
+				},
+			});
+			const client = createGitHubClient(transport);
+			const comments = await client.fetchIssueComments("acme/widgets", 42, []);
+			expect(comments[0]!.author).toBe("ghost");
+			expect(comments[0]!.isBot).toBe(false);
+		});
+
+		test("returns empty array when no comments", async () => {
+			const transport = createMockTransport();
+			const client = createGitHubClient(transport);
+			const comments = await client.fetchIssueComments("acme/widgets", 42, []);
+			expect(comments).toEqual([]);
+		});
+	});
 });

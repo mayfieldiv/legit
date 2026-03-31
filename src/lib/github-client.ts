@@ -9,7 +9,17 @@ import type {
 	RawFileChange,
 	GitHubTransport,
 } from "./github-transport";
-import type { PR, PRDetail, FileChange, CheckRun, Review, CommentCounts } from "./types";
+import type {
+	PR,
+	PRDetail,
+	FileChange,
+	CheckRun,
+	Review,
+	CommentCounts,
+	FullReviewThread,
+	ReviewComment,
+	IssueComment,
+} from "./types";
 
 // Re-export transport types that callers may need
 export type {
@@ -22,7 +32,17 @@ export type {
 } from "./github-transport";
 
 // Re-export domain types for backward compatibility
-export type { PR, PRDetail, FileChange, CheckRun, Review, CommentCounts } from "./types";
+export type {
+	PR,
+	PRDetail,
+	FileChange,
+	CheckRun,
+	Review,
+	CommentCounts,
+	FullReviewThread,
+	ReviewComment,
+	IssueComment,
+} from "./types";
 
 // ── Intermediate parsed types ───────────────────────────────────────────────
 
@@ -113,6 +133,18 @@ export interface GitHubClient {
 		botLogins: string[],
 		signal?: AbortSignal,
 	): Promise<CommentCounts>;
+	fetchFullReviewThreads(
+		repo: string,
+		prNumber: number,
+		botLogins: string[],
+		signal?: AbortSignal,
+	): Promise<FullReviewThread[]>;
+	fetchIssueComments(
+		repo: string,
+		prNumber: number,
+		botLogins: string[],
+		signal?: AbortSignal,
+	): Promise<IssueComment[]>;
 }
 
 function parseOwnerRepo(repo: string): [string, string] {
@@ -254,6 +286,83 @@ export function createGitHubClient(transport: GitHubTransport): GitHubClient {
 			}
 
 			return { total, unresolved, unresolvedHuman, unresolvedBot };
+		},
+
+		async fetchFullReviewThreads(
+			repo: string,
+			prNumber: number,
+			botLogins: string[],
+			signal?: AbortSignal,
+		): Promise<FullReviewThread[]> {
+			const [owner, repoName] = parseOwnerRepo(repo);
+			const botSet = new Set(botLogins);
+			const threads: FullReviewThread[] = [];
+
+			for await (const raw of transport.fetchFullReviewThreads(
+				owner,
+				repoName,
+				prNumber,
+				signal,
+			)) {
+				const comments: ReviewComment[] = raw.comments.nodes.map((c) => {
+					const login = c.author?.login ?? "ghost";
+					const isBot =
+						c.author != null &&
+						(c.author.__typename === "Bot" ||
+							login.endsWith("[bot]") ||
+							botSet.has(login));
+					return {
+						id: c.id,
+						author: login,
+						body: c.body,
+						createdAt: c.createdAt,
+						url: c.url,
+						isBot,
+					};
+				});
+				threads.push({
+					id: raw.id,
+					isResolved: raw.isResolved,
+					path: raw.path,
+					line: raw.line,
+					comments,
+				});
+			}
+
+			return threads;
+		},
+
+		async fetchIssueComments(
+			repo: string,
+			prNumber: number,
+			botLogins: string[],
+			signal?: AbortSignal,
+		): Promise<IssueComment[]> {
+			const [owner, repoName] = parseOwnerRepo(repo);
+			const botSet = new Set(botLogins);
+			const comments: IssueComment[] = [];
+
+			for await (const raw of transport.listIssueComments(
+				owner,
+				repoName,
+				prNumber,
+				signal,
+			)) {
+				const login = raw.user?.login ?? "ghost";
+				const isBot =
+					raw.user != null &&
+					(raw.user.type === "Bot" || login.endsWith("[bot]") || botSet.has(login));
+				comments.push({
+					id: raw.id,
+					author: login,
+					body: raw.body,
+					createdAt: raw.created_at,
+					url: raw.html_url,
+					isBot,
+				});
+			}
+
+			return comments;
 		},
 
 		async fetchCheckRuns(
