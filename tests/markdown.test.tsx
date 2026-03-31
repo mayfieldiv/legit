@@ -102,6 +102,20 @@ describe("MarkdownBody — block nodes", () => {
 		expect(frame).toContain("│ A wise quote.");
 	});
 
+	test("renders HTML blocks as placeholder (e.g. bot badges)", async () => {
+		const source = [
+			"Real content above.",
+			"",
+			"<!-- devin-review-badge-begin -->",
+			"",
+			"<!-- devin-review-badge-end -->",
+		].join("\n");
+		const frame = await renderMarkdown(source);
+		expect(frame).toContain("Real content above.");
+		expect(frame).toContain("[html content]");
+		expect(frame).not.toContain("devin");
+	});
+
 	test("renders empty source without error", async () => {
 		const frame = await renderMarkdown("");
 		// Should just be whitespace — no crash
@@ -131,10 +145,11 @@ describe("MarkdownBody — inline nodes", () => {
 		expect(frame).toContain("here.");
 	});
 
-	test("renders link with URL", async () => {
+	test("renders link as clickable text (no raw URL)", async () => {
 		const frame = await renderMarkdown("See [docs](https://example.com) for info.");
 		expect(frame).toContain("docs");
-		expect(frame).toContain("https://example.com");
+		// URL is an OSC 8 hyperlink, not visible in the character frame
+		expect(frame).not.toContain("https://example.com");
 	});
 
 	test("renders image as alt text placeholder", async () => {
@@ -159,7 +174,6 @@ describe("MarkdownBody — inline nodes", () => {
 		const frame = await renderMarkdown("## See [API docs](https://api.example.com)");
 		expect(frame).toContain("## See");
 		expect(frame).toContain("API docs");
-		expect(frame).toContain("https://api.example.com");
 	});
 });
 

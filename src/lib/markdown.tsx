@@ -69,6 +69,13 @@ function MdBlock(props: MdBlockProps) {
 			<Match when={props.node.type === "thematicBreak"}>
 				<MdThematicBreak />
 			</Match>
+			<Match when={props.node.type === "html"}>
+				<box width="100%">
+					<text>
+						<span style={{ fg: "gray" }}>[html content]</span>
+					</text>
+				</box>
+			</Match>
 		</Switch>
 	);
 }
@@ -235,10 +242,9 @@ function InlineNode(props: { node: PhrasingContent }) {
 				<span style={{ fg: "yellow" }}>{(props.node as InlineCode).value}</span>
 			</Match>
 			<Match when={props.node.type === "link"}>
-				<span style={{ fg: "blue", underline: true }}>
+				<a href={(props.node as Link).url}>
 					<InlineNodes nodes={(props.node as Link).children} />
-				</span>
-				<span style={{ fg: "gray" }}> ({(props.node as Link).url})</span>
+				</a>
 			</Match>
 			<Match when={props.node.type === "image"}>
 				<span style={{ fg: "gray" }}>
