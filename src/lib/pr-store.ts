@@ -49,6 +49,7 @@ export interface PRStore {
 	exitDetail(): void;
 	toggleResolved(): void;
 	toggleBotComments(): void;
+	refreshDetail(): void;
 }
 
 const THREAD_CONCURRENCY = 5;
@@ -437,6 +438,12 @@ export function createPRStore(app: Legit, options?: PRStoreOptions): PRStore {
 		detailController?.abort();
 	});
 
+	function refreshDetail() {
+		const v = view();
+		if (v.view !== "detail") return;
+		enterDetail(v.pr);
+	}
+
 	return {
 		view,
 		prs,
@@ -461,5 +468,6 @@ export function createPRStore(app: Legit, options?: PRStoreOptions): PRStore {
 		exitDetail,
 		toggleResolved,
 		toggleBotComments,
+		refreshDetail,
 	};
 }

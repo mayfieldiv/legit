@@ -12,6 +12,7 @@
  */
 
 import { Show, For, createMemo } from "solid-js";
+import { useKeyboard } from "@opentui/solid";
 import { MarkdownBody } from "../lib/markdown";
 import { formatAge, formatSize, sortCheckRuns } from "../lib/format";
 import type {
@@ -31,6 +32,11 @@ export interface DetailViewProps {
 	loading: boolean;
 	showResolved: boolean;
 	showBotComments: boolean;
+	onExit?: () => void;
+	onToggleResolved?: () => void;
+	onToggleBotComments?: () => void;
+	onOpenInBrowser?: () => void;
+	onRefresh?: () => void;
 }
 
 // ── Check icon (shared with SummaryPanel — could extract later) ─────────
@@ -133,6 +139,22 @@ export function DetailView(props: DetailViewProps) {
 			).length,
 	);
 	const pending = createMemo(() => checks().filter((c) => c.status !== "completed").length);
+
+	// ── Keyboard ───────────────────────────────────────────────────────────
+	useKeyboard((event) => {
+		const name = event.name;
+		if (name === "escape") {
+			props.onExit?.();
+		} else if (name === "t") {
+			props.onToggleResolved?.();
+		} else if (name === "b") {
+			props.onToggleBotComments?.();
+		} else if (name === "o") {
+			props.onOpenInBrowser?.();
+		} else if (name === "r" && !event.shift) {
+			props.onRefresh?.();
+		}
+	});
 
 	// ── Filtered threads ─────────────────────────────────────────────────
 	const visibleThreads = createMemo(() => {
@@ -332,6 +354,19 @@ export function DetailView(props: DetailViewProps) {
 						</box>
 					</scrollbox>
 				)}
+			</Show>
+
+			{/* ── Status bar ────────────────────────────────────── */}
+			<Show when={props.pr}>
+				<box width="100%" height={1}>
+					<text>
+						<span style={{ fg: "gray" }}>
+							Esc close · o open · r refresh · t{" "}
+							{props.showResolved ? "hide" : "show"} resolved · b{" "}
+							{props.showBotComments ? "hide" : "show"} bots
+						</span>
+					</text>
+				</box>
 			</Show>
 		</box>
 	);

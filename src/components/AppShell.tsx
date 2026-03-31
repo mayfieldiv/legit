@@ -34,6 +34,10 @@ interface AppShellProps {
 	detailLoading?: boolean;
 	showResolved?: boolean;
 	showBotComments?: boolean;
+	onExitDetail?: () => void;
+	onToggleResolved?: () => void;
+	onToggleBotComments?: () => void;
+	onRefreshDetail?: () => void;
 	tabs?: string[];
 	activeTab?: number;
 	onTabChange?: (index: number) => void;
@@ -144,6 +148,14 @@ export function AppShell(props: AppShellProps) {
 							loading={props.detailLoading ?? false}
 							showResolved={props.showResolved ?? false}
 							showBotComments={props.showBotComments ?? true}
+							onExit={props.onExitDetail}
+							onToggleResolved={props.onToggleResolved}
+							onToggleBotComments={props.onToggleBotComments}
+							onOpenInBrowser={() => {
+								const pr = props.detailPr;
+								if (pr) props.onOpenInBrowser?.(pr);
+							}}
+							onRefresh={props.onRefreshDetail}
 						/>
 					</Match>
 				</Switch>

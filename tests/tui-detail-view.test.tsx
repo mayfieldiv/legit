@@ -346,4 +346,150 @@ describe("DetailView", () => {
 		expect(frame).toContain("1 comment");
 		expect(frame).not.toContain("1 comments");
 	});
+
+	// ── Keybindings ────────────────────────────────────────────────────────
+
+	test("Escape calls onExit", async () => {
+		let exited = false;
+		const { renderOnce, mockInput } = await testRender(
+			() => (
+				<DetailView
+					pr={makeDetail()}
+					threads={[]}
+					comments={[]}
+					loading={false}
+					showResolved={false}
+					showBotComments={true}
+					onExit={() => {
+						exited = true;
+					}}
+				/>
+			),
+			{ width: 80, height: 20 },
+		);
+		await renderOnce();
+		mockInput.pressEscape();
+		await new Promise((r) => setTimeout(r, 20));
+		await renderOnce();
+		expect(exited).toBe(true);
+	});
+
+	test("t calls onToggleResolved", async () => {
+		let toggled = false;
+		const { renderOnce, mockInput } = await testRender(
+			() => (
+				<DetailView
+					pr={makeDetail()}
+					threads={[]}
+					comments={[]}
+					loading={false}
+					showResolved={false}
+					showBotComments={true}
+					onToggleResolved={() => {
+						toggled = true;
+					}}
+				/>
+			),
+			{ width: 80, height: 20 },
+		);
+		await renderOnce();
+		mockInput.pressKey("t");
+		await renderOnce();
+		expect(toggled).toBe(true);
+	});
+
+	test("b calls onToggleBotComments", async () => {
+		let toggled = false;
+		const { renderOnce, mockInput } = await testRender(
+			() => (
+				<DetailView
+					pr={makeDetail()}
+					threads={[]}
+					comments={[]}
+					loading={false}
+					showResolved={false}
+					showBotComments={true}
+					onToggleBotComments={() => {
+						toggled = true;
+					}}
+				/>
+			),
+			{ width: 80, height: 20 },
+		);
+		await renderOnce();
+		mockInput.pressKey("b");
+		await renderOnce();
+		expect(toggled).toBe(true);
+	});
+
+	test("o calls onOpenInBrowser", async () => {
+		let opened = false;
+		const { renderOnce, mockInput } = await testRender(
+			() => (
+				<DetailView
+					pr={makeDetail()}
+					threads={[]}
+					comments={[]}
+					loading={false}
+					showResolved={false}
+					showBotComments={true}
+					onOpenInBrowser={() => {
+						opened = true;
+					}}
+				/>
+			),
+			{ width: 80, height: 20 },
+		);
+		await renderOnce();
+		mockInput.pressKey("o");
+		await renderOnce();
+		expect(opened).toBe(true);
+	});
+
+	test("r calls onRefresh", async () => {
+		let refreshed = false;
+		const { renderOnce, mockInput } = await testRender(
+			() => (
+				<DetailView
+					pr={makeDetail()}
+					threads={[]}
+					comments={[]}
+					loading={false}
+					showResolved={false}
+					showBotComments={true}
+					onRefresh={() => {
+						refreshed = true;
+					}}
+				/>
+			),
+			{ width: 80, height: 20 },
+		);
+		await renderOnce();
+		mockInput.pressKey("r");
+		await renderOnce();
+		expect(refreshed).toBe(true);
+	});
+
+	test("shows status bar with keybinding hints", async () => {
+		const frame = await renderDetail();
+		expect(frame).toContain("Esc close");
+		expect(frame).toContain("o open");
+		expect(frame).toContain("r refresh");
+		expect(frame).toContain("show resolved");
+	});
+
+	test("status bar shows 'hide resolved' when showResolved is true", async () => {
+		const frame = await renderDetail({ showResolved: true });
+		expect(frame).toContain("hide resolved");
+	});
+
+	test("status bar shows 'hide bots' when showBotComments is true", async () => {
+		const frame = await renderDetail({ showBotComments: true });
+		expect(frame).toContain("hide bots");
+	});
+
+	test("status bar shows 'show bots' when showBotComments is false", async () => {
+		const frame = await renderDetail({ showBotComments: false });
+		expect(frame).toContain("show bots");
+	});
 });

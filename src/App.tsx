@@ -56,6 +56,10 @@ export function App(props: AppProps) {
 			detailLoading={store.detailLoading()}
 			showResolved={store.showResolved()}
 			showBotComments={store.showBotComments()}
+			onExitDetail={store.exitDetail}
+			onToggleResolved={store.toggleResolved}
+			onToggleBotComments={store.toggleBotComments}
+			onRefreshDetail={store.refreshDetail}
 			onOpenInBrowser={handleOpenInBrowser}
 		/>
 	);
