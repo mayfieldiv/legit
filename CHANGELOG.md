@@ -9,3 +9,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ### Added
 
 - Domain types for PR detail view: `ReviewComment`, `FullReviewThread`, `IssueComment` (#7)
+- Transport methods `fetchFullReviewThreads` and `listIssueComments` for full comment data (#7)

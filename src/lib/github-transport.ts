@@ -54,6 +54,30 @@ export interface RawReviewThread {
 	comments: { nodes: Array<{ author: { login: string; __typename?: string } | null }> };
 }
 
+export interface RawFullReviewThread {
+	id: string;
+	isResolved: boolean;
+	path: string;
+	line: number | null;
+	comments: {
+		nodes: Array<{
+			id: string;
+			author: { login: string; __typename?: string } | null;
+			body: string;
+			createdAt: string;
+			url: string;
+		}>;
+	};
+}
+
+export interface RawIssueComment {
+	id: number;
+	user: { login: string; type?: string } | null;
+	body: string;
+	created_at: string;
+	html_url: string;
+}
+
 // ── Transport interface ─────────────────────────────────────────────────────
 
 export interface GitHubTransport {
@@ -89,6 +113,18 @@ export interface GitHubTransport {
 		prNumber: number,
 		signal?: AbortSignal,
 	): AsyncIterable<RawReviewThread>;
+	fetchFullReviewThreads(
+		owner: string,
+		repo: string,
+		prNumber: number,
+		signal?: AbortSignal,
+	): AsyncIterable<RawFullReviewThread>;
+	listIssueComments(
+		owner: string,
+		repo: string,
+		prNumber: number,
+		signal?: AbortSignal,
+	): AsyncIterable<RawIssueComment>;
 }
 
 // ── Implementation ──────────────────────────────────────────────────────────
@@ -275,6 +311,68 @@ export function createGitHubTransport(
 				}
 				if (!threads.pageInfo.hasNextPage) break;
 				cursor = threads.pageInfo.endCursor;
+			}
+		},
+
+		async *fetchFullReviewThreads(owner, repo, prNumber, signal?) {
+			let cursor: string | null = null;
+			while (true) {
+				const query = `query($owner: String!, $repo: String!, $number: Int!, $after: String) {
+					repository(owner: $owner, name: $repo) {
+						pullRequest(number: $number) {
+							reviewThreads(first: 100, after: $after) {
+								pageInfo { hasNextPage endCursor }
+								nodes {
+									id
+									isResolved
+									path
+									line
+									comments(first: 100) {
+										nodes {
+											id
+											author { login __typename }
+											body
+											createdAt
+											url
+										}
+									}
+								}
+							}
+						}
+					}
+				}`;
+				const result = (await graphql(
+					query,
+					{ owner, repo, number: prNumber, after: cursor },
+					signal,
+				)) as {
+					data?: {
+						repository?: {
+							pullRequest?: {
+								reviewThreads?: {
+									pageInfo: { hasNextPage: boolean; endCursor: string | null };
+									nodes: RawFullReviewThread[];
+								};
+							};
+						};
+					};
+				};
+				const threads = result.data?.repository?.pullRequest?.reviewThreads;
+				if (!threads) break;
+				for (const thread of threads.nodes) {
+					yield thread;
+				}
+				if (!threads.pageInfo.hasNextPage) break;
+				cursor = threads.pageInfo.endCursor;
+			}
+		},
+
+		async *listIssueComments(owner, repo, prNumber, signal?) {
+			for await (const item of paginateRest(
+				`${GITHUB_API}/repos/${owner}/${repo}/issues/${prNumber}/comments`,
+				signal,
+			)) {
+				yield item as RawIssueComment;
 			}
 		},
 

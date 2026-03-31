@@ -15,6 +15,51 @@ async function collect<T>(iter: AsyncIterable<T>): Promise<T[]> {
 	return items;
 }
 
+const SAMPLE_THREAD = {
+	id: "RT_abc",
+	isResolved: false,
+	path: "src/foo.ts",
+	line: 42,
+	comments: {
+		nodes: [
+			{
+				id: "RC_1",
+				author: { login: "bob", __typename: "User" },
+				body: "Needs a null check",
+				createdAt: "2026-03-10T00:00:00Z",
+				url: "https://github.com/acme/widgets/pull/42#discussion_r1",
+			},
+		],
+	},
+};
+
+const SAMPLE_ISSUE_COMMENT = {
+	id: 100,
+	user: { login: "bob", type: "User" },
+	body: "Looks good overall",
+	created_at: "2026-03-10T00:00:00Z",
+	html_url: "https://github.com/acme/widgets/pull/42#issuecomment-100",
+};
+
+function makeThreadsResponse(
+	threads: unknown[],
+	hasNextPage = false,
+	endCursor: string | null = null,
+) {
+	return {
+		data: {
+			repository: {
+				pullRequest: {
+					reviewThreads: {
+						pageInfo: { hasNextPage, endCursor },
+						nodes: threads,
+					},
+				},
+			},
+		},
+	};
+}
+
 describe("GitHubTransport", () => {
 	describe("listOpenPRs", () => {
 		test("yields individual PRs from a single page", async () => {
@@ -251,6 +296,117 @@ describe("GitHubTransport", () => {
 			const transport = createGitHubTransport("fake-token", fetch);
 			const statuses = await collect(transport.fetchReviewStatus("acme", "widgets", []));
 			expect(statuses).toEqual([]);
+		});
+	});
+
+	describe("fetchFullReviewThreads", () => {
+		test("yields full thread data with comments", async () => {
+			const { fetch } = createMockFetch([
+				{
+					url: "https://api.github.com/graphql",
+					method: "POST",
+					response: { status: 200, body: makeThreadsResponse([SAMPLE_THREAD]) },
+				},
+			]);
+			const transport = createGitHubTransport("fake-token", fetch);
+			const threads = await collect(transport.fetchFullReviewThreads("acme", "widgets", 42));
+			expect(threads).toHaveLength(1);
+			expect(threads[0]!.id).toBe("RT_abc");
+			expect(threads[0]!.isResolved).toBe(false);
+			expect(threads[0]!.path).toBe("src/foo.ts");
+			expect(threads[0]!.line).toBe(42);
+			expect(threads[0]!.comments.nodes).toHaveLength(1);
+			expect(threads[0]!.comments.nodes[0]!.body).toBe("Needs a null check");
+		});
+
+		test("paginates across multiple pages", async () => {
+			const thread1 = { ...SAMPLE_THREAD, id: "RT_1" };
+			const thread2 = { ...SAMPLE_THREAD, id: "RT_2" };
+
+			const { fetch } = createMockFetch([
+				{
+					url: "https://api.github.com/graphql",
+					method: "POST",
+					response: {
+						status: 200,
+						body: makeThreadsResponse([thread1], true, "cursor1"),
+					},
+				},
+				{
+					url: "https://api.github.com/graphql",
+					method: "POST",
+					response: { status: 200, body: makeThreadsResponse([thread2]) },
+				},
+			]);
+			const transport = createGitHubTransport("fake-token", fetch);
+			const threads = await collect(transport.fetchFullReviewThreads("acme", "widgets", 42));
+			expect(threads).toHaveLength(2);
+			expect(threads[0]!.id).toBe("RT_1");
+			expect(threads[1]!.id).toBe("RT_2");
+		});
+
+		test("yields nothing when PR has no threads", async () => {
+			const { fetch } = createMockFetch([
+				{
+					url: "https://api.github.com/graphql",
+					method: "POST",
+					response: { status: 200, body: makeThreadsResponse([]) },
+				},
+			]);
+			const transport = createGitHubTransport("fake-token", fetch);
+			const threads = await collect(transport.fetchFullReviewThreads("acme", "widgets", 42));
+			expect(threads).toEqual([]);
+		});
+	});
+
+	describe("listIssueComments", () => {
+		test("yields individual comments", async () => {
+			const { fetch } = createMockFetch([
+				{
+					url: "https://api.github.com/repos/acme/widgets/issues/42/comments?per_page=100&page=1",
+					response: { status: 200, body: [SAMPLE_ISSUE_COMMENT] },
+				},
+			]);
+			const transport = createGitHubTransport("fake-token", fetch);
+			const comments = await collect(transport.listIssueComments("acme", "widgets", 42));
+			expect(comments).toHaveLength(1);
+			expect(comments[0]!.id).toBe(100);
+			expect(comments[0]!.body).toBe("Looks good overall");
+			expect(comments[0]!.user!.login).toBe("bob");
+		});
+
+		test("paginates comment list", async () => {
+			const page1 = Array.from({ length: 100 }, (_, i) => ({
+				...SAMPLE_ISSUE_COMMENT,
+				id: i + 1,
+			}));
+			const page2 = [{ ...SAMPLE_ISSUE_COMMENT, id: 101 }];
+
+			const { fetch } = createMockFetch([
+				{
+					url: "https://api.github.com/repos/acme/widgets/issues/42/comments?per_page=100&page=1",
+					response: { status: 200, body: page1 },
+				},
+				{
+					url: "https://api.github.com/repos/acme/widgets/issues/42/comments?per_page=100&page=2",
+					response: { status: 200, body: page2 },
+				},
+			]);
+			const transport = createGitHubTransport("fake-token", fetch);
+			const comments = await collect(transport.listIssueComments("acme", "widgets", 42));
+			expect(comments).toHaveLength(101);
+		});
+
+		test("yields nothing for PR with no comments", async () => {
+			const { fetch } = createMockFetch([
+				{
+					url: "https://api.github.com/repos/acme/widgets/issues/42/comments?per_page=100&page=1",
+					response: { status: 200, body: [] },
+				},
+			]);
+			const transport = createGitHubTransport("fake-token", fetch);
+			const comments = await collect(transport.listIssueComments("acme", "widgets", 42));
+			expect(comments).toEqual([]);
 		});
 	});
 });
