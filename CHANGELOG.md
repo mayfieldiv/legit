@@ -12,4 +12,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - Transport methods `fetchFullReviewThreads` and `listIssueComments` for full comment data (#7)
 - Client methods `fetchFullReviewThreads` and `fetchIssueComments` with bot detection (#7)
 - `legit comments <number>` CLI subcommand — outputs review threads and issue comments as JSON (#7)
-- Markdown-to-TUI renderer for PR descriptions — headings, paragraphs, code blocks, lists, blockquotes, thematic breaks (#7)
+- Markdown-to-TUI renderer for PR descriptions — headings, paragraphs, code blocks, lists, blockquotes, thematic breaks; styled inline rendering for bold, italic, inline code, links, and images (#7)

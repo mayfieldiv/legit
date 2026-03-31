@@ -109,6 +109,60 @@ describe("MarkdownBody — block nodes", () => {
 	});
 });
 
+describe("MarkdownBody — inline nodes", () => {
+	test("renders bold text", async () => {
+		const frame = await renderMarkdown("Some **bold** text.");
+		expect(frame).toContain("Some");
+		expect(frame).toContain("bold");
+		expect(frame).toContain("text.");
+	});
+
+	test("renders italic text", async () => {
+		const frame = await renderMarkdown("Some *italic* text.");
+		expect(frame).toContain("Some");
+		expect(frame).toContain("italic");
+		expect(frame).toContain("text.");
+	});
+
+	test("renders inline code", async () => {
+		const frame = await renderMarkdown("Use `foo()` here.");
+		expect(frame).toContain("Use");
+		expect(frame).toContain("foo()");
+		expect(frame).toContain("here.");
+	});
+
+	test("renders link with URL", async () => {
+		const frame = await renderMarkdown("See [docs](https://example.com) for info.");
+		expect(frame).toContain("docs");
+		expect(frame).toContain("https://example.com");
+	});
+
+	test("renders image as alt text placeholder", async () => {
+		const frame = await renderMarkdown("![screenshot](https://example.com/img.png)");
+		expect(frame).toContain("[image: screenshot]");
+	});
+
+	test("renders nested bold inside italic", async () => {
+		const frame = await renderMarkdown("*italic and **bold** inside*");
+		expect(frame).toContain("italic and");
+		expect(frame).toContain("bold");
+		expect(frame).toContain("inside");
+	});
+
+	test("renders mixed inline in list items", async () => {
+		const frame = await renderMarkdown("- Use `code` and **bold** in lists");
+		expect(frame).toContain("code");
+		expect(frame).toContain("bold");
+	});
+
+	test("renders link inside heading", async () => {
+		const frame = await renderMarkdown("## See [API docs](https://api.example.com)");
+		expect(frame).toContain("## See");
+		expect(frame).toContain("API docs");
+		expect(frame).toContain("https://api.example.com");
+	});
+});
+
 describe("collectInlineText", () => {
 	test("extracts plain text", () => {
 		expect(collectInlineText([{ type: "text", value: "hello" }])).toBe("hello");

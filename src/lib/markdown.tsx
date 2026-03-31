@@ -3,9 +3,8 @@
  *
  * Parses markdown source via mdast-util-from-markdown and renders the AST
  * as SolidJS/opentui components. Block-level nodes (headings, paragraphs,
- * code blocks, lists, blockquotes, thematic breaks) are handled here.
- * Inline nodes (emphasis, strong, inlineCode, link) are rendered in a
- * separate inline pass.
+ * code blocks, lists, blockquotes, thematic breaks) produce layout boxes.
+ * Inline nodes (emphasis, strong, inlineCode, link) produce styled spans.
  */
 
 import { For, Switch, Match } from "solid-js";
@@ -19,6 +18,11 @@ import type {
 	ListItem,
 	Blockquote,
 	PhrasingContent,
+	Strong,
+	Emphasis,
+	InlineCode,
+	Link,
+	Image,
 } from "mdast";
 
 // ── Public API ──────────────────────────────────────────────────────────────
@@ -78,7 +82,7 @@ function MdHeading(props: { node: Heading }) {
 			<text>
 				<span style={{ bold: true, fg: "cyan" }}>
 					{prefix()}
-					{collectInlineText(props.node.children)}
+					<InlineNodes nodes={props.node.children} />
 				</span>
 			</text>
 		</box>
@@ -88,7 +92,9 @@ function MdHeading(props: { node: Heading }) {
 function MdParagraph(props: { node: Paragraph }) {
 	return (
 		<box width="100%">
-			<text>{collectInlineText(props.node.children)}</text>
+			<text>
+				<InlineNodes nodes={props.node.children} />
+			</text>
 		</box>
 	);
 }
@@ -145,7 +151,7 @@ function MdListItem(props: { node: ListItem; depth: number; ordered: boolean; in
 							<box width="100%">
 								<text>
 									{childIdx() === 0 ? indent() + bullet() : indent() + "  "}
-									{collectInlineText((child as Paragraph).children)}
+									<InlineNodes nodes={(child as Paragraph).children} />
 								</text>
 							</box>
 						);
@@ -168,7 +174,7 @@ function MdBlockquote(props: { node: Blockquote; depth: number }) {
 							<box width="100%">
 								<text>
 									<span style={{ fg: "gray" }}>
-										│ {collectInlineText((child as Paragraph).children)}
+										│ <InlineNodes nodes={(child as Paragraph).children} />
 									</span>
 								</text>
 							</box>
@@ -202,10 +208,55 @@ function FallbackBlock(props: { node: Nodes }) {
 	);
 }
 
-// ── Inline text extraction ──────────────────────────────────────────────────
-//
-// For commit 5 (block nodes only), inline content is flattened to plain text.
-// Commit 6 will replace this with styled inline rendering.
+// ── Inline renderer ───────────────────────────────────────────────────────
+
+/** Render an array of inline/phrasing nodes as styled <span> elements. */
+export function InlineNodes(props: { nodes: PhrasingContent[] }) {
+	return <For each={props.nodes}>{(node) => <InlineNode node={node} />}</For>;
+}
+
+function InlineNode(props: { node: PhrasingContent }) {
+	return (
+		<Switch fallback={<InlineFallback node={props.node} />}>
+			<Match when={props.node.type === "text"}>
+				<span>{(props.node as { type: "text"; value: string }).value}</span>
+			</Match>
+			<Match when={props.node.type === "strong"}>
+				<span style={{ bold: true }}>
+					<InlineNodes nodes={(props.node as Strong).children} />
+				</span>
+			</Match>
+			<Match when={props.node.type === "emphasis"}>
+				<span style={{ italic: true }}>
+					<InlineNodes nodes={(props.node as Emphasis).children} />
+				</span>
+			</Match>
+			<Match when={props.node.type === "inlineCode"}>
+				<span style={{ fg: "yellow" }}>{(props.node as InlineCode).value}</span>
+			</Match>
+			<Match when={props.node.type === "link"}>
+				<span style={{ fg: "blue", underline: true }}>
+					<InlineNodes nodes={(props.node as Link).children} />
+				</span>
+				<span style={{ fg: "gray" }}> ({(props.node as Link).url})</span>
+			</Match>
+			<Match when={props.node.type === "image"}>
+				<span style={{ fg: "gray" }}>
+					[image: {(props.node as Image).alt ?? (props.node as Image).url}]
+				</span>
+			</Match>
+		</Switch>
+	);
+}
+
+function InlineFallback(props: { node: PhrasingContent }) {
+	if ("value" in props.node) return <span>{String(props.node.value)}</span>;
+	if ("children" in props.node)
+		return <InlineNodes nodes={(props.node as { children: PhrasingContent[] }).children} />;
+	return null;
+}
+
+// ── Plain text extraction (utility) ───────────────────────────────────────
 
 /** Recursively extract plain text from inline/phrasing nodes. */
 export function collectInlineText(nodes: PhrasingContent[]): string {
