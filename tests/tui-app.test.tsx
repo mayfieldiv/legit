@@ -8,6 +8,8 @@ describe("AppShell", () => {
 		const { renderOnce, captureCharFrame } = await testRender(
 			() => (
 				<AppShell
+					view={{ view: "list" }}
+					onEnterDetail={() => {}}
 					prs={[]}
 					loading={true}
 					repoSlug="acme/widgets"
@@ -32,6 +34,8 @@ describe("AppShell", () => {
 		const { renderOnce, captureCharFrame } = await testRender(
 			() => (
 				<AppShell
+					view={{ view: "list" }}
+					onEnterDetail={() => {}}
 					prs={prs}
 					loading={false}
 					repoSlug="acme/widgets"
@@ -53,6 +57,8 @@ describe("AppShell", () => {
 		const { renderOnce, captureCharFrame } = await testRender(
 			() => (
 				<AppShell
+					view={{ view: "list" }}
+					onEnterDetail={() => {}}
 					prs={[]}
 					loading={false}
 					repoSlug="acme/widgets"
@@ -72,6 +78,8 @@ describe("AppShell", () => {
 		const { renderOnce, captureCharFrame } = await testRender(
 			() => (
 				<AppShell
+					view={{ view: "list" }}
+					onEnterDetail={() => {}}
 					prs={[]}
 					loading={false}
 					repoSlug="acme/widgets"
@@ -98,6 +106,8 @@ describe("AppShell", () => {
 		const { renderOnce, captureCharFrame } = await testRender(
 			() => (
 				<AppShell
+					view={{ view: "list" }}
+					onEnterDetail={() => {}}
 					prs={prs}
 					loading={false}
 					repoSlug="acme/widgets"
@@ -117,6 +127,8 @@ describe("AppShell", () => {
 		const { renderOnce, captureCharFrame } = await testRender(
 			() => (
 				<AppShell
+					view={{ view: "list" }}
+					onEnterDetail={() => {}}
 					prs={[]}
 					loading={false}
 					repoSlug="acme/widgets"
@@ -142,6 +154,8 @@ describe("AppShell", () => {
 		const { renderOnce, mockInput } = await testRender(
 			() => (
 				<AppShell
+					view={{ view: "list" }}
+					onEnterDetail={() => {}}
 					prs={[]}
 					loading={false}
 					repoSlug="acme/widgets"
@@ -175,6 +189,8 @@ describe("AppShell", () => {
 		const { renderOnce, mockInput } = await testRender(
 			() => (
 				<AppShell
+					view={{ view: "list" }}
+					onEnterDetail={() => {}}
 					prs={[]}
 					loading={false}
 					repoSlug="acme/widgets"

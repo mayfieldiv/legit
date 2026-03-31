@@ -7,7 +7,6 @@ import { createListSelection } from "../lib/list-selection";
 import { processPRList } from "../lib/group-filter-engine";
 import type { GroupByKey } from "../lib/group-filter-engine";
 import type { PR } from "../lib/types";
-import type { ViewTarget } from "./AppShell";
 import type { ScrollBoxRenderable } from "@opentui/core";
 
 interface ListViewProps {
@@ -20,7 +19,7 @@ interface ListViewProps {
 	resetKey?: number | string;
 	onRefreshSelected: () => void;
 	onRefreshAll: () => void;
-	onNavigate: (target: ViewTarget) => void;
+	onEnterDetail: (pr: PR) => void;
 	onSelectionChange?: (pr: PR) => void;
 	onOpenInBrowser?: (pr: PR) => void;
 }
@@ -253,7 +252,7 @@ export function ListView(props: ListViewProps) {
 			}
 			if (name === "return") {
 				const pr = selection.selectedItem(displayPRs());
-				if (pr) props.onNavigate({ view: "detail", pr });
+				if (pr) props.onEnterDetail(pr);
 				return;
 			}
 			if (name === "escape") {
@@ -284,7 +283,7 @@ export function ListView(props: ListViewProps) {
 		} else if (name === "return") {
 			const pr = selection.selectedItem(displayPRs());
 			if (pr) {
-				props.onNavigate({ view: "detail", pr });
+				props.onEnterDetail(pr);
 			}
 		} else if (name === "o") {
 			const pr = selection.selectedItem(displayPRs());

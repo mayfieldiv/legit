@@ -3,6 +3,8 @@ import { makeCoalescer } from "./coalescer";
 import type { Legit } from "./legit";
 import type { PR, PRSummary, CommentCounts } from "./types";
 
+export type ViewTarget = { view: "list" } | { view: "detail"; pr: PR };
+
 export interface PRStoreOptions {
 	/**
 	 * Debounce delay for summary fetches on selection change.
@@ -13,6 +15,7 @@ export interface PRStoreOptions {
 }
 
 export interface PRStore {
+	readonly view: Accessor<ViewTarget>;
 	readonly prs: Accessor<PR[]>;
 	readonly tabs: Accessor<string[]>;
 	readonly activeTab: Accessor<number>;
@@ -26,6 +29,8 @@ export interface PRStore {
 	/** Re-fetch PRs for the current tab (All = every tracked repo; repo tab = that repo only). */
 	refreshAllActive(): void;
 	refreshSelected(): void;
+	enterDetail(pr: PR): void;
+	exitDetail(): void;
 }
 
 const THREAD_CONCURRENCY = 5;
@@ -33,6 +38,7 @@ const THREAD_CONCURRENCY = 5;
 export function createPRStore(app: Legit, options?: PRStoreOptions): PRStore {
 	const summaryDebounceMs = options?.summaryDebounceMs ?? 300;
 
+	const [view, setView] = createSignal<ViewTarget>({ view: "list" });
 	const [error, setError] = createSignal("");
 	const [repoTabs, setRepoTabs] = createSignal<string[]>([]);
 	const [activeTab, setActiveTab] = createSignal(0);
@@ -338,6 +344,14 @@ export function createPRStore(app: Legit, options?: PRStoreOptions): PRStore {
 		void loadRepos([slug]);
 	}
 
+	function enterDetail(pr: PR) {
+		setView({ view: "detail", pr });
+	}
+
+	function exitDetail() {
+		setView({ view: "list" });
+	}
+
 	onMount(() => {
 		void loadPRs();
 	});
@@ -349,6 +363,7 @@ export function createPRStore(app: Legit, options?: PRStoreOptions): PRStore {
 	});
 
 	return {
+		view,
 		prs,
 		tabs,
 		activeTab,
@@ -361,5 +376,7 @@ export function createPRStore(app: Legit, options?: PRStoreOptions): PRStore {
 		changeTab,
 		refreshAllActive: refreshAll,
 		refreshSelected,
+		enterDetail,
+		exitDetail,
 	};
 }

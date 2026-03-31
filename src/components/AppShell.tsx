@@ -1,11 +1,12 @@
-import { createSignal, Show, Switch, Match } from "solid-js";
+import { Show, Switch, Match } from "solid-js";
 import { useKeyboard } from "@opentui/solid";
 import { ListView } from "./ListView";
 import { SummaryPanel } from "./SummaryPanel";
 import type { PR, PRSummary } from "../lib/types";
 import type { GroupByKey } from "../lib/group-filter-engine";
+import type { ViewTarget } from "../lib/pr-store";
 
-export type ViewTarget = { view: "list" } | { view: "detail"; pr: PR };
+export type { ViewTarget } from "../lib/pr-store";
 
 interface AppShellProps {
 	prs: PR[];
@@ -16,11 +17,13 @@ interface AppShellProps {
 	/** Initial grouping key for the list view. Default: "smart-status". */
 	groupBy?: GroupByKey;
 	resetKey?: number | string;
+	view: ViewTarget;
 	error?: string;
 	onRefreshSelected: () => void;
 	onRefreshAllActive: () => void;
 	onSelectionChange?: (pr: PR) => void;
 	onOpenInBrowser?: (pr: PR) => void;
+	onEnterDetail: (pr: PR) => void;
 	selectedPr?: PR;
 	summary?: PRSummary;
 	tabs?: string[];
@@ -29,7 +32,6 @@ interface AppShellProps {
 }
 
 export function AppShell(props: AppShellProps) {
-	const [view, setView] = createSignal<ViewTarget>({ view: "list" });
 	const tabCount = () => props.tabs?.length ?? 0;
 
 	useKeyboard((event) => {
@@ -100,7 +102,7 @@ export function AppShell(props: AppShellProps) {
 				}
 			>
 				<Switch>
-					<Match when={view().view === "list"}>
+					<Match when={props.view.view === "list"}>
 						<box flexDirection="row" flexGrow={1} width="100%">
 							<ListView
 								prs={props.prs}
@@ -110,7 +112,7 @@ export function AppShell(props: AppShellProps) {
 								resetKey={props.resetKey}
 								onRefreshSelected={props.onRefreshSelected}
 								onRefreshAll={props.onRefreshAllActive}
-								onNavigate={setView}
+								onEnterDetail={props.onEnterDetail}
 								onSelectionChange={props.onSelectionChange}
 								onOpenInBrowser={props.onOpenInBrowser}
 							/>
@@ -126,7 +128,7 @@ export function AppShell(props: AppShellProps) {
 							</box>
 						</box>
 					</Match>
-					<Match when={view().view === "detail"}>
+					<Match when={props.view.view === "detail"}>
 						{/* DetailView placeholder — slice #7 */}
 						<text>Detail view (not yet implemented)</text>
 					</Match>

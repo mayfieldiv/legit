@@ -1,6 +1,7 @@
 import { describe, test, expect, afterAll } from "bun:test";
 import { createRoot, createEffect } from "solid-js";
-import { createPRStore } from "../src/lib/pr-store";
+import { createPRStore, type ViewTarget } from "../src/lib/pr-store";
+import { makePR } from "./helpers";
 import {
 	cleanupTmpDirs,
 	createMockFetch,
@@ -243,6 +244,37 @@ describe("createPRStore", () => {
 						}
 					}
 				});
+			});
+		});
+	});
+
+	test("enterDetail sets view to detail and exitDetail returns to list", async () => {
+		const app = createTestLegit({
+			httpFetch: mockHttpFetch([makeSampleRestPR(42)]),
+		});
+		const pr = makePR({ number: 42 });
+
+		await new Promise<void>((resolve, reject) => {
+			createRoot((dispose) => {
+				const store = createPRStore(app, { summaryDebounceMs: 0 });
+
+				try {
+					expect(store.view()).toEqual({ view: "list" });
+
+					store.enterDetail(pr);
+					const detailView = store.view() as ViewTarget & { view: "detail" };
+					expect(detailView.view).toBe("detail");
+					expect(detailView.pr.number).toBe(42);
+
+					store.exitDetail();
+					expect(store.view()).toEqual({ view: "list" });
+
+					dispose();
+					resolve();
+				} catch (e) {
+					dispose();
+					reject(e);
+				}
 			});
 		});
 	});

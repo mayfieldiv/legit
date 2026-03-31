@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed
+
+- Move `ViewTarget` and view state from `AppShell` into `PRStore`; `ListView` uses `onEnterDetail` callback instead of `onNavigate` (#7)
+
 ### Added
 
 - Domain types for PR detail view: `ReviewComment`, `FullReviewThread`, `IssueComment` (#7)

@@ -33,6 +33,7 @@ export function App(props: AppProps) {
 
 	return (
 		<AppShell
+			view={store.view()}
 			prs={store.prs()}
 			loading={store.loading()}
 			repoSlug={displayRepoSlug()}
@@ -48,6 +49,7 @@ export function App(props: AppProps) {
 			onTabChange={store.changeTab}
 			onRefreshAllActive={store.refreshAllActive}
 			onRefreshSelected={store.refreshSelected}
+			onEnterDetail={store.enterDetail}
 			onOpenInBrowser={handleOpenInBrowser}
 		/>
 	);

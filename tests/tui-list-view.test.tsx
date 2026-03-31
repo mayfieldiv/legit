@@ -16,7 +16,7 @@ describe("ListView", () => {
 					prs={prs}
 					onRefreshSelected={() => {}}
 					onRefreshAll={() => {}}
-					onNavigate={() => {}}
+					onEnterDetail={() => {}}
 				/>
 			),
 			{ width: 120, height: 20 },
@@ -41,7 +41,7 @@ describe("ListView", () => {
 					prs={prs}
 					onRefreshSelected={() => {}}
 					onRefreshAll={() => {}}
-					onNavigate={() => {}}
+					onEnterDetail={() => {}}
 				/>
 			),
 			{ width: 120, height: 20 },
@@ -75,7 +75,7 @@ describe("ListView", () => {
 					prs={prs}
 					onRefreshSelected={() => {}}
 					onRefreshAll={() => {}}
-					onNavigate={() => {}}
+					onEnterDetail={() => {}}
 				/>
 			),
 			{ width: 120, height: 20 },
@@ -98,7 +98,7 @@ describe("ListView", () => {
 						refreshedSelected = true;
 					}}
 					onRefreshAll={() => {}}
-					onNavigate={() => {}}
+					onEnterDetail={() => {}}
 				/>
 			),
 			{ width: 120, height: 20 },
@@ -122,7 +122,7 @@ describe("ListView", () => {
 					onRefreshAll={() => {
 						refreshedAll = true;
 					}}
-					onNavigate={() => {}}
+					onEnterDetail={() => {}}
 				/>
 			),
 			{ width: 120, height: 20 },
@@ -146,7 +146,7 @@ describe("ListView", () => {
 					onRefreshAll={() => {
 						refreshedAll = true;
 					}}
-					onNavigate={() => {}}
+					onEnterDetail={() => {}}
 				/>
 			),
 			{ width: 120, height: 20 },
@@ -159,8 +159,8 @@ describe("ListView", () => {
 		expect(refreshedAll).toBe(true);
 	});
 
-	test("Enter key triggers onNavigate with detail view", async () => {
-		let navigated: unknown = null;
+	test("Enter key triggers onEnterDetail with selected PR", async () => {
+		let navigatedPr: unknown = null;
 		const pr = makePR({ number: 42, title: "Test PR" });
 
 		const { renderOnce, mockInput } = await testRender(
@@ -169,8 +169,8 @@ describe("ListView", () => {
 					prs={[pr]}
 					onRefreshSelected={() => {}}
 					onRefreshAll={() => {}}
-					onNavigate={(target) => {
-						navigated = target;
+					onEnterDetail={(p) => {
+						navigatedPr = p;
 					}}
 				/>
 			),
@@ -181,7 +181,7 @@ describe("ListView", () => {
 		mockInput.pressEnter();
 		await renderOnce();
 
-		expect(navigated).toEqual({ view: "detail", pr });
+		expect(navigatedPr).toEqual(pr);
 	});
 
 	test("shows empty state when no PRs", async () => {
@@ -191,7 +191,7 @@ describe("ListView", () => {
 					prs={[]}
 					onRefreshSelected={() => {}}
 					onRefreshAll={() => {}}
-					onNavigate={() => {}}
+					onEnterDetail={() => {}}
 				/>
 			),
 			{ width: 120, height: 20 },
@@ -209,7 +209,7 @@ describe("ListView", () => {
 					prs={[]}
 					onRefreshSelected={() => {}}
 					onRefreshAll={() => {}}
-					onNavigate={() => {}}
+					onEnterDetail={() => {}}
 				/>
 			),
 			{ width: 120, height: 20 },
@@ -237,7 +237,7 @@ describe("ListView", () => {
 					prs={prs}
 					onRefreshSelected={() => {}}
 					onRefreshAll={() => {}}
-					onNavigate={() => {}}
+					onEnterDetail={() => {}}
 					onSelectionChange={(pr) => selections.push(pr.number)}
 				/>
 			),
@@ -261,7 +261,7 @@ describe("ListView", () => {
 					prs={[pr]}
 					onRefreshSelected={() => {}}
 					onRefreshAll={() => {}}
-					onNavigate={() => {}}
+					onEnterDetail={() => {}}
 					onOpenInBrowser={(p) => {
 						openedPr = p;
 					}}
@@ -285,7 +285,7 @@ describe("ListView", () => {
 					prs={[makePR()]}
 					onRefreshSelected={() => {}}
 					onRefreshAll={() => {}}
-					onNavigate={() => {}}
+					onEnterDetail={() => {}}
 				/>
 			),
 			{ width: 120, height: 20 },
@@ -313,7 +313,7 @@ describe("ListView — filter", () => {
 					prs={prs}
 					onRefreshSelected={() => {}}
 					onRefreshAll={() => {}}
-					onNavigate={() => {}}
+					onEnterDetail={() => {}}
 				/>
 			),
 			{ width: 120, height: 20 },
@@ -340,7 +340,7 @@ describe("ListView — filter", () => {
 					prs={prs}
 					onRefreshSelected={() => {}}
 					onRefreshAll={() => {}}
-					onNavigate={() => {}}
+					onEnterDetail={() => {}}
 				/>
 			),
 			{ width: 120, height: 20 },
@@ -373,7 +373,7 @@ describe("ListView — filter", () => {
 					prs={prs}
 					onRefreshSelected={() => {}}
 					onRefreshAll={() => {}}
-					onNavigate={() => {}}
+					onEnterDetail={() => {}}
 				/>
 			),
 			{ width: 120, height: 20 },
@@ -409,7 +409,7 @@ describe("ListView — filter", () => {
 					prs={prs}
 					onRefreshSelected={() => {}}
 					onRefreshAll={() => {}}
-					onNavigate={() => {}}
+					onEnterDetail={() => {}}
 				/>
 			),
 			{ width: 120, height: 20 },
@@ -450,7 +450,7 @@ describe("ListView — filter", () => {
 					prs={prs}
 					onRefreshSelected={() => {}}
 					onRefreshAll={() => {}}
-					onNavigate={() => {}}
+					onEnterDetail={() => {}}
 					onSelectionChange={(pr) => selections.push(pr.number)}
 				/>
 			),
@@ -481,7 +481,7 @@ describe("ListView — filter", () => {
 					prs={prs}
 					onRefreshSelected={() => {}}
 					onRefreshAll={() => {}}
-					onNavigate={() => {}}
+					onEnterDetail={() => {}}
 				/>
 			),
 			{ width: 120, height: 20 },
@@ -510,7 +510,7 @@ describe("ListView — grouping panel", () => {
 					prs={[makePR()]}
 					onRefreshSelected={() => {}}
 					onRefreshAll={() => {}}
-					onNavigate={() => {}}
+					onEnterDetail={() => {}}
 				/>
 			),
 			{ width: 120, height: 20 },
@@ -532,7 +532,7 @@ describe("ListView — grouping panel", () => {
 					prs={[makePR()]}
 					onRefreshSelected={() => {}}
 					onRefreshAll={() => {}}
-					onNavigate={() => {}}
+					onEnterDetail={() => {}}
 				/>
 			),
 			{ width: 120, height: 20 },
@@ -564,7 +564,7 @@ describe("ListView — grouping panel", () => {
 					prs={prs}
 					onRefreshSelected={() => {}}
 					onRefreshAll={() => {}}
-					onNavigate={() => {}}
+					onEnterDetail={() => {}}
 				/>
 			),
 			{ width: 120, height: 20 },
@@ -606,7 +606,7 @@ describe("ListView — grouped rendering", () => {
 					groupBy="smart-status"
 					onRefreshSelected={() => {}}
 					onRefreshAll={() => {}}
-					onNavigate={() => {}}
+					onEnterDetail={() => {}}
 				/>
 			),
 			{ width: 120, height: 20 },
@@ -631,7 +631,7 @@ describe("ListView — grouped rendering", () => {
 					groupBy="author"
 					onRefreshSelected={() => {}}
 					onRefreshAll={() => {}}
-					onNavigate={() => {}}
+					onEnterDetail={() => {}}
 				/>
 			),
 			{ width: 120, height: 20 },
