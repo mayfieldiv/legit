@@ -20,6 +20,8 @@ export interface RawRestPR {
 	labels: Array<{ name: string }>;
 	requested_reviewers: Array<{ login: string }>;
 	assignees: Array<{ login: string }>;
+	head?: { ref: string };
+	base?: { ref: string };
 }
 
 export interface RawPRReviewStatus {

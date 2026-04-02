@@ -32,6 +32,8 @@ describe("parsing", () => {
 				labels: [{ name: "bug" }],
 				requested_reviewers: [{ login: "bob" }],
 				assignees: [{ login: "alice" }],
+				head: { ref: "fix-bug" },
+				base: { ref: "main" },
 			};
 			const parsed = parseRestPR(raw);
 			expect(parsed).toEqual({
@@ -46,6 +48,8 @@ describe("parsing", () => {
 				labels: ["bug"],
 				requestedReviewers: ["bob"],
 				assignees: ["alice"],
+				headRef: "fix-bug",
+				baseRef: "main",
 			});
 		});
 
