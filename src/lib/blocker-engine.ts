@@ -60,9 +60,10 @@ function isCiFailing(checks: CheckRun[]): boolean {
  *                           review comments; only when data is loaded)
  *  6. Approved            → waiting-on-author (author should merge; no more
  *                           reviewer action needed regardless of pending requests)
- *  7. Current user is a requested reviewer → me-blocking
- *  8. Another reviewer requested → needs-review
- *  9. Default             → needs-review
+ *  7. Current user is sole assignee (not alongside author) → me-blocking
+ *  8. Current user is a requested reviewer → me-blocking
+ *  9. Another reviewer requested → needs-review
+ * 10. Default             → needs-review
  *
  * Post-processing: if any waiting-on-author result has the current user as the
  * blocker (i.e. it's their own PR that needs attention), the tier is elevated
@@ -147,7 +148,18 @@ function _computeBlockerCore(pr: PR, currentUser: string, opts?: BlockerOptions)
 		};
 	}
 
-	// 7. Current user is a requested reviewer → me-blocking
+	// 7. Current user is the sole assignee (not just alongside the author) → me-blocking.
+	//    When the only assignee is the current user it means they own the PR and must act,
+	//    regardless of other review state.
+	if (pr.assignees.length === 1 && pr.assignees[0] === currentUser && pr.author !== currentUser) {
+		return {
+			blocker: currentUser,
+			tier: "me-blocking",
+			reason: "You are the sole assignee",
+		};
+	}
+
+	// 8. Current user is a requested reviewer → me-blocking
 	if (pr.requestedReviewers.includes(currentUser)) {
 		return {
 			blocker: currentUser,
@@ -156,7 +168,7 @@ function _computeBlockerCore(pr: PR, currentUser: string, opts?: BlockerOptions)
 		};
 	}
 
-	// 8. Default — needs review (whether a specific reviewer is requested or not)
+	// 9. Default — needs review (whether a specific reviewer is requested or not)
 	const otherReviewers = pr.requestedReviewers.filter((r) => r !== currentUser);
 	return {
 		blocker: otherReviewers[0] ?? "",
