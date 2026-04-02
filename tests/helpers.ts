@@ -286,7 +286,7 @@ export function makePR(overrides: Partial<PR> = {}): PR {
 		mergeable: "MERGEABLE",
 		lastCommitDate: "2026-03-14T00:00:00Z",
 		headCommitSha: "abc123def456",
-		headRef: "feature/fix-thing",
+		headRef: "my-branch",
 		baseRef: "main",
 		...overrides,
 	};

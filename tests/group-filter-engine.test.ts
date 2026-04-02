@@ -332,6 +332,73 @@ describe("processPRList — filtering", () => {
 		expect(result.groups).toHaveLength(0);
 	});
 
+	test("filters by head branch name", () => {
+		const prs = [
+			makePR({ number: 1, headRef: "feature/login-page" }),
+			makePR({ number: 2, headRef: "bugfix/typo" }),
+		];
+		const result = processPRList(prs, { filterText: "login" });
+		expect(result.totalMatched).toBe(1);
+		expect(result.groups[0]!.prs[0]!.number).toBe(1);
+	});
+
+	test("filters by base branch name", () => {
+		const prs = [
+			makePR({ number: 1, baseRef: "main" }),
+			makePR({ number: 2, baseRef: "develop" }),
+		];
+		const result = processPRList(prs, { filterText: "develop" });
+		expect(result.totalMatched).toBe(1);
+		expect(result.groups[0]!.prs[0]!.number).toBe(2);
+	});
+
+	test("filters by repo slug", () => {
+		const prs = [
+			makePR({ number: 1, repoSlug: "acme/web" }),
+			makePR({ number: 2, repoSlug: "acme/api" }),
+		];
+		const result = processPRList(prs, { filterText: "web" });
+		expect(result.totalMatched).toBe(1);
+		expect(result.groups[0]!.prs[0]!.number).toBe(1);
+	});
+
+	test("filters by draft status", () => {
+		const prs = [makePR({ number: 1, isDraft: true }), makePR({ number: 2, isDraft: false })];
+		const result = processPRList(prs, { filterText: "draft" });
+		expect(result.totalMatched).toBe(1);
+		expect(result.groups[0]!.prs[0]!.number).toBe(1);
+	});
+
+	test("filters by conflict status", () => {
+		const prs = [
+			makePR({ number: 1, mergeable: "CONFLICTING" }),
+			makePR({ number: 2, mergeable: "MERGEABLE" }),
+		];
+		const result = processPRList(prs, { filterText: "conflict" });
+		expect(result.totalMatched).toBe(1);
+		expect(result.groups[0]!.prs[0]!.number).toBe(1);
+	});
+
+	test("filters by review decision", () => {
+		const prs = [
+			makePR({ number: 1, reviewDecision: "APPROVED" }),
+			makePR({ number: 2, reviewDecision: "CHANGES_REQUESTED" }),
+		];
+		const result = processPRList(prs, { filterText: "approved" });
+		expect(result.totalMatched).toBe(1);
+		expect(result.groups[0]!.prs[0]!.number).toBe(1);
+	});
+
+	test("filters by assignee", () => {
+		const prs = [
+			makePR({ number: 1, assignees: ["alice"] }),
+			makePR({ number: 2, assignees: ["bob"] }),
+		];
+		const result = processPRList(prs, { filterText: "bob" });
+		expect(result.totalMatched).toBe(1);
+		expect(result.groups[0]!.prs[0]!.number).toBe(2);
+	});
+
 	test("filter is trimmed", () => {
 		const prs = [makePR({ number: 1, title: "Fix memory leak" })];
 		const result = processPRList(prs, { filterText: "  memory  " });

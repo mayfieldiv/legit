@@ -66,19 +66,23 @@ function matchesPR(pr: PR, filterText: string): boolean {
 
 	const lower = trimmed.toLowerCase();
 
-	// Build searchable text: #number, title, author, labels, reviewers, assignees
-	const haystack = [
+	// Build searchable text from all human-relevant fields.
+	const parts: string[] = [
 		`#${pr.number}`,
 		pr.title,
 		pr.author,
 		...pr.labels,
 		...pr.requestedReviewers,
 		...pr.assignees,
-	]
-		.join(" ")
-		.toLowerCase();
+		pr.headRef,
+		pr.baseRef,
+	];
+	if (pr.repoSlug) parts.push(pr.repoSlug);
+	if (pr.isDraft) parts.push("draft");
+	if (pr.mergeable === "CONFLICTING") parts.push("conflict");
+	if (pr.reviewDecision) parts.push(pr.reviewDecision);
 
-	return haystack.includes(lower);
+	return parts.join(" ").toLowerCase().includes(lower);
 }
 
 // ── Sorting ───────────────────────────────────────────────────────────────────
