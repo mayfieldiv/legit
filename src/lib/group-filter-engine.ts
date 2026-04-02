@@ -64,25 +64,21 @@ function matchesPR(pr: PR, filterText: string): boolean {
 	const trimmed = filterText.trim();
 	if (!trimmed) return true;
 
-	// "#N" syntax: exact PR number match only — does not search title/author
-	if (trimmed.startsWith("#")) {
-		const numStr = trimmed.slice(1);
-		return /^\d+$/.test(numStr) && pr.number === Number(numStr);
-	}
-
 	const lower = trimmed.toLowerCase();
 
-	// PR number as plain string
-	if (String(pr.number) === trimmed) return true;
+	// Build searchable text: #number, title, author, labels, reviewers, assignees
+	const haystack = [
+		`#${pr.number}`,
+		pr.title,
+		pr.author,
+		...pr.labels,
+		...pr.requestedReviewers,
+		...pr.assignees,
+	]
+		.join(" ")
+		.toLowerCase();
 
-	// Text fields (case-insensitive)
-	if (pr.title.toLowerCase().includes(lower)) return true;
-	if (pr.author.toLowerCase().includes(lower)) return true;
-	if (pr.labels.some((l) => l.toLowerCase().includes(lower))) return true;
-	if (pr.requestedReviewers.some((r) => r.toLowerCase().includes(lower))) return true;
-	if (pr.assignees.some((a) => a.toLowerCase().includes(lower))) return true;
-
-	return false;
+	return haystack.includes(lower);
 }
 
 // ── Sorting ───────────────────────────────────────────────────────────────────
