@@ -68,7 +68,10 @@ export function computeScrollTarget({
 export function ListView(props: ListViewProps) {
 	// ── Filter state ──────────────────────────────────────────────────────────
 	const [filterText, setFilterText] = createSignal("");
-	const [filterMode, setFilterMode] = createSignal(false);
+	/** True while the user is actively typing a filter query. */
+	const [filterEditing, setFilterEditing] = createSignal(false);
+	/** True when a filter is applied (text submitted but not editing). */
+	const filterActive = () => !filterEditing() && filterText() !== "";
 
 	// ── Grouping state ────────────────────────────────────────────────────────
 	const [activeGroupBy, setActiveGroupBy] = createSignal<GroupByKey>(props.groupBy ?? "none");
@@ -236,8 +239,8 @@ export function ListView(props: ListViewProps) {
 			return;
 		}
 
-		// Filter mode: navigation via arrow keys only; j/k fall through to text input
-		if (filterMode()) {
+		// Filter editing: typing characters into the filter input
+		if (filterEditing()) {
 			if (name === "down") {
 				navigate("down");
 				return;
@@ -247,13 +250,18 @@ export function ListView(props: ListViewProps) {
 				return;
 			}
 			if (name === "return") {
-				const pr = selection.selectedItem(displayPRs());
-				if (pr) props.onEnterDetail(pr);
+				// Submit: lock in the filter and return to normal navigation
+				if (filterText()) {
+					setFilterEditing(false);
+				} else {
+					// Empty filter — just exit editing
+					setFilterEditing(false);
+				}
 				return;
 			}
 			if (name === "escape") {
 				setFilterText("");
-				setFilterMode(false);
+				setFilterEditing(false);
 				return;
 			}
 			if (name === "backspace") {
@@ -265,6 +273,15 @@ export function ListView(props: ListViewProps) {
 				return;
 			}
 			return;
+		}
+
+		// Filter active (submitted): normal nav but Esc exits filter
+		if (filterActive()) {
+			if (name === "escape") {
+				setFilterText("");
+				return;
+			}
+			// Fall through to normal mode for all other keys
 		}
 
 		// Normal mode
@@ -285,7 +302,7 @@ export function ListView(props: ListViewProps) {
 			const pr = selection.selectedItem(displayPRs());
 			if (pr) props.onOpenInBrowser?.(pr);
 		} else if (name === "/") {
-			setFilterMode(true);
+			setFilterEditing(true);
 		} else if (name === "g") {
 			// Pre-select the current groupBy option in the panel
 			const idx = GROUP_BY_OPTIONS.findIndex((o) => o.key === activeGroupBy());
@@ -300,13 +317,25 @@ export function ListView(props: ListViewProps) {
 		<box flexDirection="column" flexGrow={1} width="100%">
 			<PRListHeader showRepo={props.showRepo} currentUser={props.currentUser} />
 
-			{/* Filter bar — visible when filter mode is active */}
-			<Show when={filterMode()}>
+			{/* Filter bar — editing mode (typing) */}
+			<Show when={filterEditing()}>
 				<box height={1} width="100%">
 					<text>
 						<span style={{ fg: "cyan" }}>Filter: </span>
 						<span>{filterText()}</span>
 						<span style={{ fg: "cyan" }}>█</span>
+						<span style={{ fg: "gray" }}> Enter to submit · Esc to clear</span>
+					</text>
+				</box>
+			</Show>
+
+			{/* Filter bar — active mode (submitted) */}
+			<Show when={filterActive()}>
+				<box height={1} width="100%">
+					<text>
+						<span style={{ fg: "cyan" }}>Filter: </span>
+						<span>matches for </span>
+						<span style={{ fg: "cyan" }}>'{filterText()}'</span>
 						<span style={{ fg: "gray" }}> Esc to clear</span>
 					</text>
 				</box>
