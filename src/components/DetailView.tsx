@@ -219,8 +219,8 @@ export function DetailView(props: DetailViewProps) {
 							</text>
 						</box>
 						<Show when={pr().headRef}>
-							<box width="100%" height={1}>
-								<text truncate={true}>
+							<box width="100%">
+								<text>
 									<span style={{ fg: "cyan" }}>{pr().headRef}</span>
 									<span style={{ fg: "gray" }}> → </span>
 									<span style={{ fg: "cyan" }}>{pr().baseRef}</span>

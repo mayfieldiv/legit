@@ -103,8 +103,8 @@ export function SummaryPanel(props: SummaryPanelProps) {
 
 				{/* Branches */}
 				<Show when={pr()!.headRef}>
-					<box height={1} width="100%">
-						<text truncate={true}>
+					<box width="100%">
+						<text>
 							<span style={{ fg: "cyan" }}>{pr()!.headRef}</span>
 							<span style={{ fg: "gray" }}> → </span>
 							<span style={{ fg: "cyan" }}>{pr()!.baseRef}</span>
