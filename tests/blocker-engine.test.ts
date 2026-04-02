@@ -515,61 +515,81 @@ describe("computeBlocker — edge cases", () => {
 
 // ── sole assignee ────────────────────────────────────────────────────────────
 
-describe("computeBlocker — sole assignee", () => {
-	test("current user is sole assignee → me-blocking", () => {
+describe("computeBlocker — effective author (assignee takeover)", () => {
+	// When the current user is an assignee but the original author is NOT,
+	// the current user becomes the "effective author" — all waiting-on-author
+	// results point to them and get elevated to me-blocking.
+
+	test("assignee (author not assigned) with no issues → me-blocking via approved/needs-review", () => {
+		// With no blockers, default is needs-review; effective author doesn't
+		// change that since needs-review isn't a waiting-on-author result.
 		const pr = makePR({ author: AUTHOR, assignees: [ME] });
 		const result = computeBlocker(pr, ME);
-		expect(result.tier).toBe("me-blocking");
-		expect(result.blocker).toBe(ME);
-		expect(result.reason).toContain("sole assignee");
+		expect(result.tier).toBe("needs-review");
 	});
 
-	test("sole assignee overrides needs-review (no requested reviewers)", () => {
-		const pr = makePR({ author: AUTHOR, assignees: [ME] });
-		const result = computeBlocker(pr, ME);
-		expect(result.tier).toBe("me-blocking");
-	});
-
-	test("sole assignee does not override waiting-on-author (CI failing)", () => {
+	test("assignee (author not assigned) + CI failing → me-blocking", () => {
 		const pr = makePR({ author: AUTHOR, assignees: [ME] });
 		const result = computeBlocker(pr, ME, { checks: [failedCheck()] });
-		expect(result.tier).toBe("waiting-on-author");
+		expect(result.tier).toBe("me-blocking");
+		expect(result.blocker).toBe(ME);
 		expect(result.reason).toContain("CI");
 	});
 
-	test("sole assignee does not override waiting-on-author (changes requested)", () => {
-		const pr = makePR({ author: AUTHOR, assignees: [ME], reviewDecision: "CHANGES_REQUESTED" });
-		const result = computeBlocker(pr, ME);
-		expect(result.tier).toBe("waiting-on-author");
-	});
-
-	test("sole assignee does not override waiting-on-author (draft)", () => {
+	test("assignee (author not assigned) + draft → me-blocking", () => {
 		const pr = makePR({ author: AUTHOR, assignees: [ME], isDraft: true });
 		const result = computeBlocker(pr, ME);
-		expect(result.tier).toBe("waiting-on-author");
+		expect(result.tier).toBe("me-blocking");
+		expect(result.blocker).toBe(ME);
 	});
 
-	test("sole assignee who is also the author → normal rules (not sole-assignee path)", () => {
-		const pr = makePR({ author: ME, assignees: [ME] });
+	test("assignee (author not assigned) + merge conflict → me-blocking", () => {
+		const pr = makePR({ author: AUTHOR, assignees: [ME], mergeable: "CONFLICTING" });
 		const result = computeBlocker(pr, ME);
-		// Should hit needs-review, not me-blocking via sole-assignee
-		expect(result.tier).toBe("needs-review");
+		expect(result.tier).toBe("me-blocking");
+		expect(result.blocker).toBe(ME);
 	});
 
-	test("assignee alongside author → normal rules apply", () => {
+	test("assignee (author not assigned) + changes requested → me-blocking", () => {
+		const pr = makePR({ author: AUTHOR, assignees: [ME], reviewDecision: "CHANGES_REQUESTED" });
+		const result = computeBlocker(pr, ME);
+		expect(result.tier).toBe("me-blocking");
+		expect(result.blocker).toBe(ME);
+	});
+
+	test("assignee (author not assigned) + approved → me-blocking (should merge)", () => {
+		const pr = makePR({ author: AUTHOR, assignees: [ME], reviewDecision: "APPROVED" });
+		const result = computeBlocker(pr, ME);
+		expect(result.tier).toBe("me-blocking");
+		expect(result.blocker).toBe(ME);
+		expect(result.reason).toContain("merge");
+	});
+
+	test("assignee (author not assigned) + unresolved threads → me-blocking", () => {
+		const pr = makePR({
+			author: AUTHOR,
+			assignees: [ME],
+			comments: { total: 3, unresolved: 2, unresolvedHuman: 2, unresolvedBot: 0 },
+		});
+		const result = computeBlocker(pr, ME);
+		expect(result.tier).toBe("me-blocking");
+		expect(result.blocker).toBe(ME);
+	});
+
+	test("both user and author assigned → normal rules (author stays author)", () => {
 		const pr = makePR({ author: AUTHOR, assignees: [ME, AUTHOR] });
 		const result = computeBlocker(pr, ME);
-		// Multiple assignees — sole-assignee rule does not fire
 		expect(result.tier).toBe("needs-review");
 	});
 
-	test("assignee alongside another user → normal rules apply", () => {
-		const pr = makePR({ author: AUTHOR, assignees: [ME, OTHER] });
-		const result = computeBlocker(pr, ME);
-		expect(result.tier).toBe("needs-review");
+	test("both user and author assigned + CI failing → waiting-on-author (not me)", () => {
+		const pr = makePR({ author: AUTHOR, assignees: [ME, AUTHOR] });
+		const result = computeBlocker(pr, ME, { checks: [failedCheck()] });
+		expect(result.tier).toBe("waiting-on-author");
+		expect(result.blocker).toBe(AUTHOR);
 	});
 
-	test("someone else is sole assignee → no effect on current user", () => {
+	test("another user assigned (not me) → no effect on current user", () => {
 		const pr = makePR({ author: AUTHOR, assignees: [OTHER] });
 		const result = computeBlocker(pr, ME);
 		expect(result.tier).toBe("needs-review");
@@ -579,6 +599,14 @@ describe("computeBlocker — sole assignee", () => {
 		const pr = makePR({ author: AUTHOR, assignees: [] });
 		const result = computeBlocker(pr, ME);
 		expect(result.tier).toBe("needs-review");
+	});
+
+	test("user assigned alongside other non-author user (author not assigned) → effective author", () => {
+		// Both ME and OTHER are assigned, but AUTHOR is not → ME becomes effective author
+		const pr = makePR({ author: AUTHOR, assignees: [ME, OTHER] });
+		const result = computeBlocker(pr, ME, { checks: [failedCheck()] });
+		expect(result.tier).toBe("me-blocking");
+		expect(result.blocker).toBe(ME);
 	});
 
 	test("result always has a non-empty reason string", () => {

@@ -60,10 +60,14 @@ function isCiFailing(checks: CheckRun[]): boolean {
  *                           review comments; only when data is loaded)
  *  6. Approved            → waiting-on-author (author should merge; no more
  *                           reviewer action needed regardless of pending requests)
- *  7. Current user is sole assignee (not alongside author) → me-blocking
- *  8. Current user is a requested reviewer → me-blocking
- *  9. Another reviewer requested → needs-review
- * 10. Default             → needs-review
+ *  7. Current user is a requested reviewer → me-blocking
+ *  8. Another reviewer requested → needs-review
+ *  9. Default             → needs-review
+ *
+ * Effective author: when the current user is an assignee but the PR author
+ * is not, the current user is treated as the "effective author" throughout
+ * the algorithm. This models the case where someone takes over responsibility
+ * for a PR from the original author.
  *
  * Post-processing: if any waiting-on-author result has the current user as the
  * blocker (i.e. it's their own PR that needs attention), the tier is elevated
@@ -84,10 +88,18 @@ function _computeBlockerCore(pr: PR, currentUser: string, opts?: BlockerOptions)
 	const checks = opts?.checks ?? [];
 	const reviews = opts?.reviews ?? [];
 
+	// Effective author: when the current user is an assignee but the original
+	// author is not, the current user has taken over responsibility for the PR.
+	// All "waiting-on-author" rules will point to the effective author instead.
+	const effectiveAuthor =
+		pr.assignees.includes(currentUser) && !pr.assignees.includes(pr.author)
+			? currentUser
+			: pr.author;
+
 	// 1. CI failing → waiting-on-author, regardless of reviewers
 	if (isCiFailing(checks)) {
 		return {
-			blocker: pr.author,
+			blocker: effectiveAuthor,
 			tier: "waiting-on-author",
 			reason: "CI is failing",
 		};
@@ -96,7 +108,7 @@ function _computeBlockerCore(pr: PR, currentUser: string, opts?: BlockerOptions)
 	// 2. Draft → waiting-on-author (author isn't ready for review)
 	if (pr.isDraft) {
 		return {
-			blocker: pr.author,
+			blocker: effectiveAuthor,
 			tier: "waiting-on-author",
 			reason: "Draft — not ready for review",
 		};
@@ -105,7 +117,7 @@ function _computeBlockerCore(pr: PR, currentUser: string, opts?: BlockerOptions)
 	// 3. Merge conflict → waiting-on-author (author must rebase)
 	if (pr.mergeable === "CONFLICTING") {
 		return {
-			blocker: pr.author,
+			blocker: effectiveAuthor,
 			tier: "waiting-on-author",
 			reason: "Merge conflict",
 		};
@@ -119,7 +131,7 @@ function _computeBlockerCore(pr: PR, currentUser: string, opts?: BlockerOptions)
 	const changesRequestedByDecision = pr.reviewDecision === "CHANGES_REQUESTED";
 	if (changesRequestedByDecision || changesRequestedByReview) {
 		return {
-			blocker: pr.author,
+			blocker: effectiveAuthor,
 			tier: "waiting-on-author",
 			reason: "Changes requested",
 		};
@@ -132,7 +144,7 @@ function _computeBlockerCore(pr: PR, currentUser: string, opts?: BlockerOptions)
 		(pr.comments?.unresolvedHuman ?? 0) + (pr.comments?.unresolvedBot ?? 0);
 	if (unresolvedThreads > 0) {
 		return {
-			blocker: pr.author,
+			blocker: effectiveAuthor,
 			tier: "waiting-on-author",
 			reason: `${unresolvedThreads} unresolved thread${unresolvedThreads === 1 ? "" : "s"}`,
 		};
@@ -142,24 +154,13 @@ function _computeBlockerCore(pr: PR, currentUser: string, opts?: BlockerOptions)
 	//    whatever is blocking the merge, e.g. a conflict that appeared after approval).
 	if (pr.reviewDecision === "APPROVED") {
 		return {
-			blocker: pr.author,
+			blocker: effectiveAuthor,
 			tier: "waiting-on-author",
 			reason: "Approved — ready to merge",
 		};
 	}
 
-	// 7. Current user is the sole assignee (not just alongside the author) → me-blocking.
-	//    When the only assignee is the current user it means they own the PR and must act,
-	//    regardless of other review state.
-	if (pr.assignees.length === 1 && pr.assignees[0] === currentUser && pr.author !== currentUser) {
-		return {
-			blocker: currentUser,
-			tier: "me-blocking",
-			reason: "You are the sole assignee",
-		};
-	}
-
-	// 8. Current user is a requested reviewer → me-blocking
+	// 7. Current user is a requested reviewer → me-blocking
 	if (pr.requestedReviewers.includes(currentUser)) {
 		return {
 			blocker: currentUser,
@@ -168,7 +169,7 @@ function _computeBlockerCore(pr: PR, currentUser: string, opts?: BlockerOptions)
 		};
 	}
 
-	// 9. Default — needs review (whether a specific reviewer is requested or not)
+	// 8. Default — needs review (whether a specific reviewer is requested or not)
 	const otherReviewers = pr.requestedReviewers.filter((r) => r !== currentUser);
 	return {
 		blocker: otherReviewers[0] ?? "",
