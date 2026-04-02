@@ -94,6 +94,19 @@ export function ListView(props: ListViewProps) {
 	const selection = createListSelection(() => displayPRs().length);
 	let scrollRef: ScrollBoxRenderable | undefined;
 
+	/** The currently selected PR, derived reactively from the index + display list. */
+	const selectedPR = createMemo(() => selection.selectedItem(displayPRs()));
+
+	// Notify parent whenever the selected PR changes identity.
+	createEffect(
+		on(selectedPR, (pr) => {
+			if (pr) {
+				_anchor = { repoSlug: pr.repoSlug, number: pr.number };
+				props.onSelectionChange?.(pr);
+			}
+		}),
+	);
+
 	// ── Selection anchoring ────────────────────────────────────────────────────
 	// When background data arrives and re-groups the list, keep the highlight on
 	// the same PR by identity (repo slug + number) rather than the same index.
@@ -110,14 +123,7 @@ export function ListView(props: ListViewProps) {
 		on(
 			displayPRs,
 			(prs) => {
-				// Initialise anchor to the first PR on first non-empty render.
-				if (_anchor === null) {
-					if (prs.length > 0) {
-						const first = prs[0]!;
-						_anchor = { repoSlug: first.repoSlug, number: first.number };
-					}
-					return;
-				}
+				if (_anchor === null) return;
 
 				// If the current selection already points to the right PR, nothing to do.
 				const current = selection.selectedItem(prs);
@@ -196,21 +202,11 @@ export function ListView(props: ListViewProps) {
 		else selection.moveUp();
 		if (selection.index() !== prev) {
 			ensureVisible(direction);
-			const pr = selection.selectedItem(displayPRs());
-			if (pr) {
-				_anchor = { repoSlug: pr.repoSlug, number: pr.number };
-				props.onSelectionChange?.(pr);
-			}
 		}
 	}
 
 	function selectIndex(index: number) {
 		selection.select(index);
-		const pr = selection.selectedItem(displayPRs());
-		if (pr) {
-			_anchor = { repoSlug: pr.repoSlug, number: pr.number };
-			props.onSelectionChange?.(pr);
-		}
 	}
 
 	// ── Panel helpers ─────────────────────────────────────────────────────────

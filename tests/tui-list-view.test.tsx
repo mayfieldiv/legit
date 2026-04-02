@@ -245,10 +245,13 @@ describe("ListView", () => {
 		);
 
 		await renderOnce();
+		// Initial render fires onSelectionChange for the first PR
+		expect(selections).toEqual([1]);
+
 		mockInput.pressKey("j");
 		await renderOnce();
 
-		expect(selections).toEqual([2]);
+		expect(selections).toEqual([1, 2]);
 	});
 
 	test("o key triggers onOpenInBrowser with selected PR", async () => {
