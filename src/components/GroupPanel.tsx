@@ -1,5 +1,6 @@
 import { For } from "solid-js";
 import type { GroupByKey } from "../lib/group-filter-engine";
+import { theme } from "../lib/theme";
 
 export interface GroupOption {
 	key: GroupByKey;
@@ -25,8 +26,11 @@ export function GroupPanel(props: GroupPanelProps) {
 		<box flexDirection="column" flexGrow={1} width="100%">
 			<box height={1}>
 				<text>
-					<span style={{ fg: "cyan", bold: true }}>Group by</span>
-					<span style={{ fg: "gray" }}> (j/k navigate · Enter select · Esc cancel)</span>
+					<span style={{ fg: theme.accent, bold: true }}>Group by</span>
+					<span style={{ fg: theme.muted }}>
+						{" "}
+						(j/k navigate · Enter select · Esc cancel)
+					</span>
 				</text>
 			</box>
 			<For each={GROUP_BY_OPTIONS}>
@@ -37,15 +41,15 @@ export function GroupPanel(props: GroupPanelProps) {
 						<box
 							height={1}
 							width="100%"
-							backgroundColor={isSelected() ? "blue" : undefined}
+							backgroundColor={isSelected() ? theme.selectedBg : undefined}
 						>
 							<text>
 								<span
 									style={{
 										fg: isSelected()
-											? "white"
+											? theme.selectedFg
 											: isCurrent()
-												? "green"
+												? theme.success
 												: undefined,
 									}}
 								>

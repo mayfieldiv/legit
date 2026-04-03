@@ -1,7 +1,18 @@
 import { Show, For, createMemo } from "solid-js";
-import type { PR, PRSummary, CheckRun, FileCategory } from "../lib/types";
-import { formatAge, formatSize, formatReviewState, sortCheckRuns } from "../lib/format";
+import type { PR, PRSummary, FileCategory } from "../lib/types";
+import {
+	formatAge,
+	formatSize,
+	formatReviewState,
+	sortCheckRuns,
+	checkIcon,
+	reviewIcon,
+	formatMergeable,
+	blockerTierColor,
+	checksSummary,
+} from "../lib/format";
 import { computeBlocker, tierLabel } from "../lib/blocker-engine";
+import { theme } from "../lib/theme";
 
 /** Max number of individual check lines to show before collapsing. */
 const MAX_VISIBLE_CHECKS = 6;
@@ -10,45 +21,6 @@ interface SummaryPanelProps {
 	summary: PRSummary | undefined;
 	pr: PR | undefined;
 	currentUser?: string;
-}
-
-function checkIcon(check: CheckRun): { icon: string; fg: string } {
-	if (check.status !== "completed") {
-		return { icon: "●", fg: "yellow" };
-	}
-	switch (check.conclusion) {
-		case "success":
-			return { icon: "✓", fg: "green" };
-		case "failure":
-		case "timed_out":
-		case "cancelled":
-			return { icon: "✗", fg: "red" };
-		case "action_required":
-			return { icon: "✗", fg: "yellow" };
-		case "neutral":
-			return { icon: "–", fg: "white" };
-		case "skipped":
-			return { icon: "⊘", fg: "gray" };
-		case "stale":
-			return { icon: "⟳", fg: "yellow" };
-		default:
-			return { icon: "?", fg: "white" };
-	}
-}
-
-function reviewIcon(state: string): { icon: string; fg: string } {
-	switch (state) {
-		case "APPROVED":
-			return { icon: "✓", fg: "green" };
-		case "CHANGES_REQUESTED":
-			return { icon: "✗", fg: "red" };
-		case "COMMENTED":
-			return { icon: "●", fg: "cyan" };
-		case "DISMISSED":
-			return { icon: "–", fg: "gray" };
-		default:
-			return { icon: "?", fg: "white" };
-	}
 }
 
 export function SummaryPanel(props: SummaryPanelProps) {
@@ -78,7 +50,7 @@ export function SummaryPanel(props: SummaryPanelProps) {
 				fallback={
 					<box height={1}>
 						<text>
-							<span style={{ fg: "gray" }}>No PR selected</span>
+							<span style={{ fg: theme.muted }}>No PR selected</span>
 						</text>
 					</box>
 				}
@@ -93,10 +65,10 @@ export function SummaryPanel(props: SummaryPanelProps) {
 				{/* Meta */}
 				<box height={1} width="100%">
 					<text truncate={true}>
-						<span style={{ fg: "green" }}>{pr()!.author}</span>
+						<span style={{ fg: theme.success }}>{pr()!.author}</span>
 						<span> #{pr()!.number}</span>
 						<Show when={pr()!.isDraft}>
-							<span style={{ fg: "yellow" }}> draft</span>
+							<span style={{ fg: theme.warning }}> draft</span>
 						</Show>
 					</text>
 				</box>
@@ -105,9 +77,9 @@ export function SummaryPanel(props: SummaryPanelProps) {
 				<Show when={pr()!.headRef}>
 					<box width="100%">
 						<text>
-							<span style={{ fg: "cyan" }}>{pr()!.headRef}</span>
-							<span style={{ fg: "gray" }}> → </span>
-							<span style={{ fg: "cyan" }}>{pr()!.baseRef}</span>
+							<span style={{ fg: theme.accent }}>{pr()!.headRef}</span>
+							<span style={{ fg: theme.muted }}> → </span>
+							<span style={{ fg: theme.accent }}>{pr()!.baseRef}</span>
 						</text>
 					</box>
 				</Show>
@@ -115,9 +87,9 @@ export function SummaryPanel(props: SummaryPanelProps) {
 				{/* Dates */}
 				<box height={1} width="100%">
 					<text truncate={true}>
-						<span style={{ fg: "gray" }}>created </span>
+						<span style={{ fg: theme.muted }}>created </span>
 						<span>{formatAge(pr()!.createdAt)}</span>
-						<span style={{ fg: "gray" }}> updated </span>
+						<span style={{ fg: theme.muted }}> updated </span>
 						<span>{formatAge(pr()!.updatedAt)}</span>
 					</text>
 				</box>
@@ -125,22 +97,10 @@ export function SummaryPanel(props: SummaryPanelProps) {
 				{/* Merge status */}
 				<box height={1} width="100%">
 					<text>
-						<span
-							style={{
-								fg:
-									pr()!.mergeable === "CONFLICTING"
-										? "red"
-										: pr()!.mergeable === "MERGEABLE"
-											? "green"
-											: "gray",
-							}}
-						>
-							{pr()!.mergeable === "CONFLICTING"
-								? "! conflict"
-								: pr()!.mergeable === "MERGEABLE"
-									? "✓ mergeable"
-									: "? merge unknown"}
-						</span>
+						{(() => {
+							const m = formatMergeable(pr()!.mergeable);
+							return <span style={{ fg: m.fg }}>{m.text}</span>;
+						})()}
 					</text>
 				</box>
 
@@ -148,7 +108,7 @@ export function SummaryPanel(props: SummaryPanelProps) {
 				<Show when={pr()!.labels.length > 0}>
 					<box height={1} width="100%">
 						<text truncate={true}>
-							<span style={{ fg: "gray" }}>labels: </span>
+							<span style={{ fg: theme.muted }}>labels: </span>
 							<span>{pr()!.labels.join(", ")}</span>
 						</text>
 					</box>
@@ -158,7 +118,7 @@ export function SummaryPanel(props: SummaryPanelProps) {
 				<Show when={pr()!.assignees.length > 0}>
 					<box height={1} width="100%">
 						<text truncate={true}>
-							<span style={{ fg: "gray" }}>assignees: </span>
+							<span style={{ fg: theme.muted }}>assignees: </span>
 							<span>{pr()!.assignees.join(", ")}</span>
 						</text>
 					</box>
@@ -169,21 +129,12 @@ export function SummaryPanel(props: SummaryPanelProps) {
 					{(b) => (
 						<box height={1} width="100%">
 							<text truncate={true}>
-								<span style={{ fg: "gray" }}>blocker: </span>
-								<span
-									style={{
-										fg:
-											b().tier === "me-blocking"
-												? "magenta"
-												: b().tier === "waiting-on-author"
-													? "yellow"
-													: "gray",
-									}}
-								>
+								<span style={{ fg: theme.muted }}>blocker: </span>
+								<span style={{ fg: blockerTierColor(b().tier) }}>
 									{tierLabel(b().tier)}
 								</span>
 								<Show when={b().blocker}>
-									<span style={{ fg: "gray" }}> ({b().blocker})</span>
+									<span style={{ fg: theme.muted }}> ({b().blocker})</span>
 								</Show>
 							</text>
 						</box>
@@ -194,9 +145,9 @@ export function SummaryPanel(props: SummaryPanelProps) {
 				<Show when={(summary()?.comments.unresolved ?? 0) > 0}>
 					<box height={1} width="100%">
 						<text truncate={true}>
-							<span style={{ fg: "gray" }}>comments: </span>
+							<span style={{ fg: theme.muted }}>comments: </span>
 							<span>{summary()!.comments.unresolved} unresolved</span>
-							<span style={{ fg: "gray" }}>
+							<span style={{ fg: theme.muted }}>
 								{" "}
 								({summary()!.comments.unresolvedHuman} human,{" "}
 								{summary()!.comments.unresolvedBot} bot)
@@ -210,7 +161,7 @@ export function SummaryPanel(props: SummaryPanelProps) {
 					<Show when={sizeCategories().length > 0}>
 						<box height={1} width="100%">
 							<text>
-								<span style={{ fg: "gray" }}>size</span>
+								<span style={{ fg: theme.muted }}>size</span>
 							</text>
 						</box>
 						<For each={sizeCategories()}>
@@ -237,7 +188,7 @@ export function SummaryPanel(props: SummaryPanelProps) {
 					<Show when={summary()!.reviews.length > 0}>
 						<box height={1} width="100%">
 							<text>
-								<span style={{ fg: "gray" }}>reviewers</span>
+								<span style={{ fg: theme.muted }}>reviewers</span>
 							</text>
 						</box>
 						<For each={summary()!.reviews}>
@@ -249,7 +200,7 @@ export function SummaryPanel(props: SummaryPanelProps) {
 											<span>{"  "}</span>
 											<span style={{ fg: ri.fg }}>{ri.icon}</span>
 											<span> {review.user} </span>
-											<span style={{ fg: "gray" }}>
+											<span style={{ fg: theme.muted }}>
 												{formatReviewState(review.state)}
 											</span>
 										</text>
@@ -263,7 +214,7 @@ export function SummaryPanel(props: SummaryPanelProps) {
 					<Show when={pr()!.requestedReviewers.length > 0}>
 						<box height={1} width="100%">
 							<text>
-								<span style={{ fg: "gray" }}>requested</span>
+								<span style={{ fg: theme.muted }}>requested</span>
 							</text>
 						</box>
 						<For each={pr()!.requestedReviewers}>
@@ -271,9 +222,9 @@ export function SummaryPanel(props: SummaryPanelProps) {
 								<box height={1} width="100%">
 									<text truncate={true}>
 										<span>{"  "}</span>
-										<span style={{ fg: "yellow" }}>○</span>
+										<span style={{ fg: theme.warning }}>○</span>
 										<span> {reviewer} </span>
-										<span style={{ fg: "gray" }}>pending</span>
+										<span style={{ fg: theme.muted }}>pending</span>
 									</text>
 								</box>
 							)}
@@ -284,53 +235,36 @@ export function SummaryPanel(props: SummaryPanelProps) {
 					<Show when={summary()!.checks.length > 0}>
 						{(() => {
 							const sorted = createMemo(() => sortCheckRuns(summary()!.checks));
-							const total = createMemo(() => sorted().length);
-							const passed = createMemo(
-								() =>
-									sorted().filter(
-										(c) =>
-											c.status === "completed" && c.conclusion === "success",
-									).length,
-							);
-							const failed = createMemo(
-								() =>
-									sorted().filter(
-										(c) =>
-											c.status === "completed" &&
-											(c.conclusion === "failure" ||
-												c.conclusion === "timed_out" ||
-												c.conclusion === "cancelled"),
-									).length,
-							);
-							const pending = createMemo(
-								() => sorted().filter((c) => c.status !== "completed").length,
-							);
+							const counts = createMemo(() => checksSummary(sorted()));
 							const visible = createMemo(() => sorted().slice(0, MAX_VISIBLE_CHECKS));
 							const overflow = createMemo(() =>
-								Math.max(0, total() - MAX_VISIBLE_CHECKS),
+								Math.max(0, counts().total - MAX_VISIBLE_CHECKS),
 							);
 
 							return (
 								<>
 									<box height={1} width="100%">
 										<text>
-											<span style={{ fg: "gray" }}>checks </span>
-											<Show when={failed() > 0}>
-												<span style={{ fg: "red" }}>
-													{failed()} failed{" "}
+											<span style={{ fg: theme.muted }}>checks </span>
+											<Show when={counts().failed > 0}>
+												<span style={{ fg: theme.error }}>
+													{counts().failed} failed{" "}
 												</span>
 											</Show>
-											<Show when={pending() > 0}>
-												<span style={{ fg: "yellow" }}>
-													{pending()} pending{" "}
+											<Show when={counts().pending > 0}>
+												<span style={{ fg: theme.warning }}>
+													{counts().pending} pending{" "}
 												</span>
 											</Show>
 											<span
 												style={{
-													fg: passed() === total() ? "green" : "gray",
+													fg:
+														counts().passed === counts().total
+															? theme.success
+															: theme.muted,
 												}}
 											>
-												{passed()}/{total()} passed
+												{counts().passed}/{counts().total} passed
 											</span>
 										</text>
 									</box>
@@ -351,7 +285,7 @@ export function SummaryPanel(props: SummaryPanelProps) {
 									<Show when={overflow() > 0}>
 										<box height={1} width="100%">
 											<text>
-												<span style={{ fg: "gray" }}>
+												<span style={{ fg: theme.muted }}>
 													{" "}
 													+{overflow()} more
 												</span>
@@ -368,7 +302,7 @@ export function SummaryPanel(props: SummaryPanelProps) {
 				<Show when={!summary() && pr()}>
 					<box height={1} width="100%">
 						<text>
-							<span style={{ fg: "gray" }}>Loading details...</span>
+							<span style={{ fg: theme.muted }}>Loading details...</span>
 						</text>
 					</box>
 				</Show>

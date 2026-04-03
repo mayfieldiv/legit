@@ -1,4 +1,5 @@
 import type { JSX } from "solid-js";
+import { theme } from "../lib/theme";
 
 /**
  * A single-line status bar showing keyboard shortcut hints.
@@ -10,7 +11,7 @@ export function StatusBar(props: { children?: JSX.Element }) {
 	return (
 		<box width="100%" height={1}>
 			<text>
-				<span style={{ fg: "gray" }}>
+				<span style={{ fg: theme.muted }}>
 					j/k nav · ↵ open · o GitHub · d Devin · r refresh
 					{props.children}
 				</span>

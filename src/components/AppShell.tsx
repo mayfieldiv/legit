@@ -6,6 +6,7 @@ import { DetailView } from "./DetailView";
 import type { PR, PRDetail, PRSummary, FullReviewThread, IssueComment } from "../lib/types";
 import type { GroupByKey } from "../lib/group-filter-engine";
 import type { ViewTarget } from "../lib/pr-store";
+import { theme } from "../lib/theme";
 
 export type { ViewTarget } from "../lib/pr-store";
 
@@ -81,7 +82,7 @@ export function AppShell(props: AppShellProps) {
 			{/* Header */}
 			<box flexDirection="row" width="100%" height={1}>
 				<text>
-					<span style={{ fg: "cyan", bold: true }}>legit</span>
+					<span style={{ fg: theme.accent, bold: true }}>legit</span>
 					<Show when={inListView()}>
 						<span> — </span>
 						<b>{props.repoSlug}</b>
@@ -104,7 +105,7 @@ export function AppShell(props: AppShellProps) {
 			{/* Error */}
 			<Show when={props.error}>
 				<text>
-					<span style={{ fg: "red" }}>Error: {props.error}</span>
+					<span style={{ fg: theme.error }}>Error: {props.error}</span>
 				</text>
 			</Show>
 
@@ -114,7 +115,7 @@ export function AppShell(props: AppShellProps) {
 				fallback={
 					<Show when={props.loading}>
 						<text>
-							<span style={{ fg: "yellow" }}>Loading pull requests...</span>
+							<span style={{ fg: theme.warning }}>Loading pull requests...</span>
 						</text>
 					</Show>
 				}

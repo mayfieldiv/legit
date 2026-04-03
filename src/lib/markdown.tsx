@@ -13,6 +13,7 @@ import { fromHtml } from "hast-util-from-html";
 import type { Element as HastElement } from "hast";
 import { useDetails, type DetailsHandle } from "./details-store";
 import type { MouseEvent as OtuiMouseEvent } from "@opentui/core";
+import { theme } from "./theme";
 import type {
 	Nodes,
 	Heading,
@@ -163,7 +164,7 @@ function MdDetails(props: { group: DetailsGroup }) {
 				}}
 			>
 				<text>
-					<span style={{ fg: "cyan" }}>{handle.expanded() ? "▼ " : "▶ "}</span>
+					<span style={{ fg: theme.accent }}>{handle.expanded() ? "▼ " : "▶ "}</span>
 					<span style={{ bold: true }}>{props.group.summary}</span>
 				</text>
 			</box>
@@ -216,7 +217,7 @@ function MdBlock(props: MdBlockProps) {
 				{!isHtmlCommentOnly((props.node as any).value ?? "") && (
 					<box width="100%">
 						<text>
-							<span style={{ fg: "gray" }}>[html content]</span>
+							<span style={{ fg: theme.muted }}>[html content]</span>
 						</text>
 					</box>
 				)}
@@ -232,7 +233,7 @@ function MdHeading(props: { node: Heading }) {
 	return (
 		<box width="100%">
 			<text>
-				<span style={{ bold: true, fg: "cyan" }}>
+				<span style={{ bold: true, fg: theme.accent }}>
 					{prefix()}
 					<InlineNodes nodes={props.node.children} />
 				</span>
@@ -257,15 +258,15 @@ function MdCode(props: { node: Code }) {
 		<box flexDirection="column" width="100%" paddingLeft={2}>
 			{lang() ? (
 				<text>
-					<span style={{ fg: "gray" }}>```{lang()}</span>
+					<span style={{ fg: theme.muted }}>```{lang()}</span>
 				</text>
 			) : null}
 			<text>
-				<span style={{ fg: "yellow" }}>{props.node.value}</span>
+				<span style={{ fg: theme.code }}>{props.node.value}</span>
 			</text>
 			{lang() ? (
 				<text>
-					<span style={{ fg: "gray" }}>```</span>
+					<span style={{ fg: theme.muted }}>```</span>
 				</text>
 			) : null}
 		</box>
@@ -325,7 +326,7 @@ function MdBlockquote(props: { node: Blockquote; depth: number }) {
 						return (
 							<box width="100%">
 								<text>
-									<span style={{ fg: "gray" }}>
+									<span style={{ fg: theme.muted }}>
 										│ <InlineNodes nodes={(child as Paragraph).children} />
 									</span>
 								</text>
@@ -343,7 +344,7 @@ function MdThematicBreak() {
 	return (
 		<box width="100%">
 			<text>
-				<span style={{ fg: "gray" }}>────────────────────────────────────────</span>
+				<span style={{ fg: theme.muted }}>────────────────────────────────────────</span>
 			</text>
 		</box>
 	);
@@ -384,7 +385,7 @@ function InlineNode(props: { node: PhrasingContent }) {
 				</span>
 			</Match>
 			<Match when={props.node.type === "inlineCode"}>
-				<span style={{ fg: "yellow" }}>{(props.node as InlineCode).value}</span>
+				<span style={{ fg: theme.code }}>{(props.node as InlineCode).value}</span>
 			</Match>
 			<Match when={props.node.type === "link"}>
 				<a href={(props.node as Link).url}>
@@ -392,7 +393,7 @@ function InlineNode(props: { node: PhrasingContent }) {
 				</a>
 			</Match>
 			<Match when={props.node.type === "image"}>
-				<span style={{ fg: "gray" }}>
+				<span style={{ fg: theme.muted }}>
 					[image: {(props.node as Image).alt ?? (props.node as Image).url}]
 				</span>
 			</Match>

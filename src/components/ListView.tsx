@@ -9,6 +9,7 @@ import type { GroupByKey } from "../lib/group-filter-engine";
 import type { PR } from "../lib/types";
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { StatusBar } from "./StatusBar";
+import { theme } from "../lib/theme";
 
 interface ListViewProps {
 	prs: PR[];
@@ -326,10 +327,10 @@ export function ListView(props: ListViewProps) {
 			<Show when={filterEditing()}>
 				<box height={1} width="100%">
 					<text>
-						<span style={{ fg: "cyan" }}>Filter: </span>
+						<span style={{ fg: theme.accent }}>Filter: </span>
 						<span>{filterText()}</span>
-						<span style={{ fg: "cyan" }}>█</span>
-						<span style={{ fg: "gray" }}> Enter to submit · Esc to clear</span>
+						<span style={{ fg: theme.accent }}>█</span>
+						<span style={{ fg: theme.muted }}> Enter to submit · Esc to clear</span>
 					</text>
 				</box>
 			</Show>
@@ -338,10 +339,10 @@ export function ListView(props: ListViewProps) {
 			<Show when={filterActive()}>
 				<box height={1} width="100%">
 					<text>
-						<span style={{ fg: "cyan" }}>Filter: </span>
+						<span style={{ fg: theme.accent }}>Filter: </span>
 						<span>matches for </span>
-						<span style={{ fg: "cyan" }}>'{filterText()}'</span>
-						<span style={{ fg: "gray" }}> Esc to clear</span>
+						<span style={{ fg: theme.accent }}>'{filterText()}'</span>
+						<span style={{ fg: theme.muted }}> Esc to clear</span>
 					</text>
 				</box>
 			</Show>
@@ -358,7 +359,7 @@ export function ListView(props: ListViewProps) {
 					fallback={
 						<box height={1}>
 							<text>
-								<span style={{ fg: "gray" }}>No matching PRs</span>
+								<span style={{ fg: theme.muted }}>No matching PRs</span>
 							</text>
 						</box>
 					}

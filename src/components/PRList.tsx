@@ -4,6 +4,7 @@ import type { MouseEvent } from "@opentui/core";
 import { formatAge, formatSize, formatReviewDecision, formatRepoShort } from "../lib/format";
 import { computeBlocker } from "../lib/blocker-engine";
 import type { Tier } from "../lib/blocker-engine";
+import { theme } from "../lib/theme";
 
 // ── Flat item type (group headers + PR rows) ─────────────────────────────────
 
@@ -78,13 +79,19 @@ function threadParts(
 	if (!comments || comments.unresolved === 0) return [];
 	const parts: Array<{ text: string; fg: string }> = [];
 	if (comments.unresolvedHuman > 0) {
-		parts.push({ text: `${comments.unresolvedHuman}H`, fg: selected ? "white" : "yellow" });
+		parts.push({
+			text: `${comments.unresolvedHuman}H`,
+			fg: selected ? theme.selectedFg : theme.warning,
+		});
 	}
 	if (comments.unresolvedHuman > 0 && comments.unresolvedBot > 0) {
-		parts.push({ text: " ", fg: "white" });
+		parts.push({ text: " ", fg: theme.neutral });
 	}
 	if (comments.unresolvedBot > 0) {
-		parts.push({ text: `${comments.unresolvedBot}B`, fg: selected ? "white" : "gray" });
+		parts.push({
+			text: `${comments.unresolvedBot}B`,
+			fg: selected ? theme.selectedFg : theme.muted,
+		});
 	}
 	return parts;
 }
@@ -99,9 +106,9 @@ function reviewCellText(pr: PR): string {
 
 /** Compute the fg color for the review column (priority: conflict > draft > default). */
 function reviewCellFg(pr: PR, selected: boolean): string | undefined {
-	if (selected) return "white";
-	if (pr.mergeable === "CONFLICTING") return "red";
-	if (pr.isDraft) return "yellow";
+	if (selected) return theme.selectedFg;
+	if (pr.mergeable === "CONFLICTING") return theme.error;
+	if (pr.isDraft) return theme.warning;
 	return undefined;
 }
 
@@ -113,11 +120,14 @@ function blockerDisplay(
 	const isMe = blocker === currentUser;
 	switch (tier) {
 		case "me-blocking":
-			return { text: "you", fg: "magenta" };
+			return { text: "you", fg: theme.selfHighlight };
 		case "waiting-on-author":
-			return { text: isMe ? "you" : blocker || "author", fg: isMe ? "magenta" : "yellow" };
+			return {
+				text: isMe ? "you" : blocker || "author",
+				fg: isMe ? theme.selfHighlight : theme.warning,
+			};
 		case "needs-review":
-			return blocker ? { text: blocker, fg: "gray" } : null;
+			return blocker ? { text: blocker, fg: theme.muted } : null;
 	}
 }
 
@@ -125,7 +135,7 @@ function GroupHeaderRow(props: { label: string }) {
 	return (
 		<box height={1} width="100%">
 			<text wrapMode="none" truncate={true}>
-				<span style={{ fg: "cyan" }}>── {props.label} </span>
+				<span style={{ fg: theme.accent }}>── {props.label} </span>
 			</text>
 		</box>
 	);
@@ -161,7 +171,7 @@ function PRRow(props: {
 	id: string;
 	onMouseDown?: (e: MouseEvent) => void;
 }) {
-	const fg = () => (props.selected ? "white" : undefined);
+	const fg = () => (props.selected ? theme.selectedFg : undefined);
 	const blockerCell = () => {
 		if (!props.currentUser) return null;
 		const b = computeBlocker(props.pr, props.currentUser);
@@ -173,15 +183,17 @@ function PRRow(props: {
 			flexDirection="row"
 			width="100%"
 			height={1}
-			backgroundColor={props.selected ? "blue" : undefined}
+			backgroundColor={props.selected ? theme.selectedBg : undefined}
 			onMouseDown={props.onMouseDown}
 		>
 			<Cell width={COL.pr} paddingRight={1}>
-				<span style={{ fg: props.selected ? "white" : "cyan" }}>#{props.pr.number}</span>
+				<span style={{ fg: props.selected ? theme.selectedFg : theme.accent }}>
+					#{props.pr.number}
+				</span>
 			</Cell>
 			<Show when={props.showRepo}>
 				<Cell width={COL.repo} paddingRight={1}>
-					<span style={{ fg: props.selected ? "white" : "magenta" }}>
+					<span style={{ fg: props.selected ? theme.selectedFg : theme.selfHighlight }}>
 						{formatRepoShort(props.pr.repoSlug)}
 					</span>
 				</Cell>
@@ -190,7 +202,9 @@ function PRRow(props: {
 				<span style={{ fg: fg() }}>{props.pr.title}</span>
 			</Cell>
 			<Cell width={COL.author} paddingRight={1}>
-				<span style={{ fg: props.selected ? "white" : "green" }}>{props.pr.author}</span>
+				<span style={{ fg: props.selected ? theme.selectedFg : theme.success }}>
+					{props.pr.author}
+				</span>
 			</Cell>
 			<Cell width={COL.size} paddingRight={1}>
 				<span style={{ fg: fg() }}>
@@ -210,7 +224,7 @@ function PRRow(props: {
 					when={props.pr.comments !== undefined}
 					fallback={
 						<Show when={props.pr.threadsLoading}>
-							<span style={{ fg: "gray" }}>…</span>
+							<span style={{ fg: theme.muted }}>…</span>
 						</Show>
 					}
 				>
@@ -223,7 +237,7 @@ function PRRow(props: {
 				<Cell width={COL.blocker}>
 					<Show when={blockerCell()}>
 						{(display) => (
-							<span style={{ fg: props.selected ? "white" : display().fg }}>
+							<span style={{ fg: props.selected ? theme.selectedFg : display().fg }}>
 								{display().text}
 							</span>
 						)}

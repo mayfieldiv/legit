@@ -15,17 +15,12 @@ import { Show, For, createMemo, createSignal, createEffect, on } from "solid-js"
 import { useKeyboard } from "@opentui/solid";
 import { MarkdownBody } from "../lib/markdown";
 import { createDetailsController, DetailsCtx, type DetailsController } from "../lib/details-store";
-import { formatAge, formatSize, sortCheckRuns } from "../lib/format";
-import type {
-	PRDetail,
-	CheckRun,
-	FullReviewThread,
-	IssueComment,
-	ReviewComment,
-} from "../lib/types";
+import { formatAge, formatSize, sortCheckRuns, checkIcon, checksSummary } from "../lib/format";
+import type { FullReviewThread, IssueComment, PRDetail, ReviewComment } from "../lib/types";
 import type { MouseEvent } from "@opentui/core";
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { StatusBar } from "./StatusBar";
+import { theme } from "../lib/theme";
 
 // ── Props ───────────────────────────────────────────────────────────────────
 
@@ -91,7 +86,7 @@ function FocusableCard(props: {
 			id={props.id}
 			border={true}
 			customBorderChars={props.focused ? ROUNDED_BORDER : INVISIBLE_BORDER}
-			borderColor="cyan"
+			borderColor={theme.border}
 			width="100%"
 			flexDirection="column"
 			marginTop={props.first ? 0 : -1}
@@ -104,32 +99,6 @@ function FocusableCard(props: {
 			{props.children}
 		</box>
 	);
-}
-
-// ── Check icon (shared with SummaryPanel — could extract later) ─────────
-
-function checkIcon(check: CheckRun): { icon: string; fg: string } {
-	if (check.status !== "completed") {
-		return { icon: "●", fg: "yellow" };
-	}
-	switch (check.conclusion) {
-		case "success":
-			return { icon: "✓", fg: "green" };
-		case "failure":
-		case "timed_out":
-		case "cancelled":
-			return { icon: "✗", fg: "red" };
-		case "action_required":
-			return { icon: "✗", fg: "yellow" };
-		case "neutral":
-			return { icon: "–", fg: "white" };
-		case "skipped":
-			return { icon: "⊘", fg: "gray" };
-		case "stale":
-			return { icon: "⟳", fg: "yellow" };
-		default:
-			return { icon: "?", fg: "white" };
-	}
 }
 
 // ── Thread / comment sub-components ─────────────────────────────────────────
@@ -150,8 +119,10 @@ function ThreadCard(props: { thread: FullReviewThread; showBotComments: boolean 
 			<box flexDirection="column" width="100%" paddingLeft={2}>
 				<box width="100%" height={1}>
 					<text truncate={true}>
-						<span style={{ fg: "cyan" }}>{location()}</span>
-						<span style={{ fg: props.thread.isResolved ? "green" : "yellow" }}>
+						<span style={{ fg: theme.accent }}>{location()}</span>
+						<span
+							style={{ fg: props.thread.isResolved ? theme.success : theme.warning }}
+						>
 							{props.thread.isResolved ? " ✓ resolved" : " ● unresolved"}
 						</span>
 					</text>
@@ -167,13 +138,13 @@ function CommentRow(props: { comment: ReviewComment | IssueComment }) {
 		<box flexDirection="column" width="100%" paddingLeft={2}>
 			<box width="100%" height={1}>
 				<text truncate={true}>
-					<span style={{ fg: props.comment.isBot ? "gray" : "green" }}>
+					<span style={{ fg: props.comment.isBot ? theme.muted : theme.success }}>
 						{props.comment.author}
 					</span>
 					<Show when={props.comment.isBot}>
-						<span style={{ fg: "gray" }}> [bot]</span>
+						<span style={{ fg: theme.muted }}> [bot]</span>
 					</Show>
-					<span style={{ fg: "gray" }}> · {formatAge(props.comment.createdAt)}</span>
+					<span style={{ fg: theme.muted }}> · {formatAge(props.comment.createdAt)}</span>
 				</text>
 			</box>
 			<box width="100%">
@@ -192,20 +163,7 @@ export function DetailView(props: DetailViewProps) {
 		return sortCheckRuns((pr as any).checks ?? []);
 	});
 
-	const passed = createMemo(
-		() => checks().filter((c) => c.status === "completed" && c.conclusion === "success").length,
-	);
-	const failed = createMemo(
-		() =>
-			checks().filter(
-				(c) =>
-					c.status === "completed" &&
-					(c.conclusion === "failure" ||
-						c.conclusion === "timed_out" ||
-						c.conclusion === "cancelled"),
-			).length,
-	);
-	const pending = createMemo(() => checks().filter((c) => c.status !== "completed").length);
+	const counts = createMemo(() => checksSummary(checks()));
 
 	// ── Filtered threads ─────────────────────────────────────────────────
 	const visibleThreads = createMemo(() => {
@@ -325,7 +283,7 @@ export function DetailView(props: DetailViewProps) {
 				fallback={
 					<Show when={props.loading}>
 						<text>
-							<span style={{ fg: "yellow" }}>Loading PR detail...</span>
+							<span style={{ fg: theme.warning }}>Loading PR detail...</span>
 						</text>
 					</Show>
 				}
@@ -341,32 +299,32 @@ export function DetailView(props: DetailViewProps) {
 						</box>
 						<box width="100%" height={1}>
 							<text truncate={true}>
-								<span style={{ fg: "green" }}>{pr().author}</span>
+								<span style={{ fg: theme.success }}>{pr().author}</span>
 								<Show when={pr().repoSlug}>
-									<span style={{ fg: "gray" }}> · </span>
-									<span style={{ fg: "blue" }}>{pr().repoSlug}</span>
+									<span style={{ fg: theme.muted }}> · </span>
+									<span style={{ fg: theme.info }}>{pr().repoSlug}</span>
 								</Show>
-								<span style={{ fg: "gray" }}>
+								<span style={{ fg: theme.muted }}>
 									{" "}
 									· created {formatAge(pr().createdAt)}
 								</span>
-								<span style={{ fg: "gray" }}>
+								<span style={{ fg: theme.muted }}>
 									{" "}
 									· updated {formatAge(pr().updatedAt)}
 								</span>
-								<span style={{ fg: "gray" }}>
+								<span style={{ fg: theme.muted }}>
 									{" "}
 									· {formatSize(pr().additions, pr().deletions)}
 								</span>
 								<Show when={pr().isDraft}>
-									<span style={{ fg: "yellow" }}> draft</span>
+									<span style={{ fg: theme.warning }}> draft</span>
 								</Show>
 							</text>
 						</box>
 						<Show when={pr().repoSlug}>
 							<box width="100%" height={1}>
 								<text wrapMode="none" truncate={true}>
-									<span style={{ fg: "blue", underline: true }}>
+									<span style={{ fg: theme.info, underline: true }}>
 										https://github.com/{pr().repoSlug}/pull/{pr().number}
 									</span>
 								</text>
@@ -375,15 +333,15 @@ export function DetailView(props: DetailViewProps) {
 						<Show when={pr().headRef}>
 							<box width="100%" height={1}>
 								<text wrapMode="none" truncate={true}>
-									<span style={{ fg: "cyan" }}>{pr().headRef}</span>
-									<span style={{ fg: "gray" }}> → </span>
-									<span style={{ fg: "cyan" }}>{pr().baseRef}</span>
+									<span style={{ fg: theme.accent }}>{pr().headRef}</span>
+									<span style={{ fg: theme.muted }}> → </span>
+									<span style={{ fg: theme.accent }}>{pr().baseRef}</span>
 								</text>
 							</box>
 						</Show>
 						<box width="100%" height={1}>
 							<text>
-								<span style={{ fg: "gray" }}>
+								<span style={{ fg: theme.muted }}>
 									────────────────────────────────────────
 								</span>
 							</text>
@@ -410,7 +368,7 @@ export function DetailView(props: DetailViewProps) {
 									when={pr().body.trim()}
 									fallback={
 										<text>
-											<span style={{ fg: "gray" }}>No description.</span>
+											<span style={{ fg: theme.muted }}>No description.</span>
 										</text>
 									}
 								>
@@ -426,16 +384,24 @@ export function DetailView(props: DetailViewProps) {
 							</box>
 							<box width="100%">
 								<text>
-									<span style={{ bold: true, fg: "cyan" }}>## CI Checks</span>
-									<span style={{ fg: "gray" }}>
-										{" "}
-										{passed()}/{checks().length} passed
+									<span style={{ bold: true, fg: theme.accent }}>
+										## CI Checks
 									</span>
-									<Show when={failed() > 0}>
-										<span style={{ fg: "red" }}> · {failed()} failed</span>
+									<span style={{ fg: theme.muted }}>
+										{" "}
+										{counts().passed}/{counts().total} passed
+									</span>
+									<Show when={counts().failed > 0}>
+										<span style={{ fg: theme.error }}>
+											{" "}
+											· {counts().failed} failed
+										</span>
 									</Show>
-									<Show when={pending() > 0}>
-										<span style={{ fg: "yellow" }}> · {pending()} pending</span>
+									<Show when={counts().pending > 0}>
+										<span style={{ fg: theme.warning }}>
+											{" "}
+											· {counts().pending} pending
+										</span>
 									</Show>
 								</text>
 							</box>
@@ -462,15 +428,15 @@ export function DetailView(props: DetailViewProps) {
 							</box>
 							<box width="100%">
 								<text>
-									<span style={{ bold: true, fg: "cyan" }}>
+									<span style={{ bold: true, fg: theme.accent }}>
 										## Review Threads
 									</span>
-									<span style={{ fg: "gray" }}>
+									<span style={{ fg: theme.muted }}>
 										{" "}
 										{visibleThreads().length} shown
 									</span>
 									<Show when={hiddenThreadCount() > 0}>
-										<span style={{ fg: "gray" }}>
+										<span style={{ fg: theme.muted }}>
 											{" "}
 											· {hiddenThreadCount()} hidden
 										</span>
@@ -482,7 +448,7 @@ export function DetailView(props: DetailViewProps) {
 								fallback={
 									<box width="100%" paddingLeft={2}>
 										<text>
-											<span style={{ fg: "gray" }}>
+											<span style={{ fg: theme.muted }}>
 												All threads resolved or hidden.
 											</span>
 										</text>
@@ -518,8 +484,10 @@ export function DetailView(props: DetailViewProps) {
 							</box>
 							<box width="100%">
 								<text>
-									<span style={{ bold: true, fg: "cyan" }}>## Conversation</span>
-									<span style={{ fg: "gray" }}>
+									<span style={{ bold: true, fg: theme.accent }}>
+										## Conversation
+									</span>
+									<span style={{ fg: theme.muted }}>
 										{" "}
 										{visibleComments().length} comment
 										{visibleComments().length !== 1 ? "s" : ""}
