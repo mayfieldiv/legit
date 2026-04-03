@@ -26,7 +26,7 @@ export const theme = {
 	/** "you" as blocker */
 	selfHighlight: "#C678DD",
 	/** Markdown code block content and inline code */
-	code: "#D19A66",
+	code: "#7EC8D3",
 
 	/** All text in a selected/highlighted row */
 	selectedFg: "#FFFFFF",
