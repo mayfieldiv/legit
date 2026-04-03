@@ -398,6 +398,7 @@ export function DetailView(props: DetailViewProps) {
 					<scrollbox
 						ref={(el: ScrollBoxRenderable) => {
 							scrollRef = el;
+							el.focusable = false;
 						}}
 						flexGrow={1}
 						width="100%"
