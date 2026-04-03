@@ -46,6 +46,7 @@ export interface DetailViewProps {
 // ── Focus selection model ───────────────────────────────────────────────────
 
 export type FocusableItem =
+	| { kind: "body" }
 	| { kind: "thread"; thread: FullReviewThread; url: string }
 	| { kind: "comment"; comment: IssueComment; url: string };
 
@@ -225,10 +226,10 @@ export function DetailView(props: DetailViewProps) {
 	});
 
 	// ── Focus selection ─────────────────────────────────────────────────
-	const [focusedIndex, setFocusedIndex] = createSignal(-1);
+	const [focusedIndex, setFocusedIndex] = createSignal(0);
 
 	const focusableItems = createMemo<FocusableItem[]>(() => {
-		const items: FocusableItem[] = [];
+		const items: FocusableItem[] = [{ kind: "body" }];
 		for (const thread of visibleThreads()) {
 			if (thread.comments.length > 0) {
 				items.push({ kind: "thread", thread, url: thread.comments[0]!.url });
@@ -245,7 +246,7 @@ export function DetailView(props: DetailViewProps) {
 		on(focusableItems, (items) => {
 			const idx = focusedIndex();
 			if (items.length === 0) {
-				setFocusedIndex(-1);
+				setFocusedIndex(0);
 			} else if (idx >= items.length) {
 				setFocusedIndex(items.length - 1);
 			}
@@ -259,7 +260,7 @@ export function DetailView(props: DetailViewProps) {
 		on(
 			() => focusedIndex(),
 			(idx) => {
-				if (idx >= 0 && scrollRef) {
+				if (scrollRef) {
 					scrollRef.scrollChildIntoView(`focusable-${idx}`);
 				}
 			},
@@ -289,7 +290,7 @@ export function DetailView(props: DetailViewProps) {
 				setFocusedIndex((i) => Math.min(i + 1, items.length - 1));
 			}
 		} else if (name === "k" || name === "up") {
-			setFocusedIndex((i) => Math.max(i - 1, -1));
+			setFocusedIndex((i) => Math.max(i - 1, 0));
 		} else if (name === "t") {
 			props.onToggleResolved?.();
 		} else if (name === "b") {
@@ -297,8 +298,9 @@ export function DetailView(props: DetailViewProps) {
 		} else if (name === "o") {
 			const idx = focusedIndex();
 			const items = focusableItems();
-			if (idx >= 0 && idx < items.length) {
-				props.onOpenUrl?.(items[idx]!.url);
+			const item = items[idx];
+			if (item && item.kind !== "body" && "url" in item) {
+				props.onOpenUrl?.(item.url);
 			} else {
 				props.onOpenInBrowser?.();
 			}
@@ -383,153 +385,150 @@ export function DetailView(props: DetailViewProps) {
 						flexGrow={1}
 						width="100%"
 					>
-						{/* Description */}
-						<box flexDirection="column" width="100%">
-							<Show
-								when={pr().body.trim()}
-								fallback={
-									<text>
-										<span style={{ fg: "gray" }}>No description.</span>
-									</text>
-								}
-							>
-								<MarkdownBody source={pr().body} />
-							</Show>
-
-							{/* CI Checks */}
-							<Show when={checks().length > 0}>
-								<box width="100%" height={1}>
-									<text>{""}</text>
-								</box>
-								<box width="100%">
-									<text>
-										<span style={{ bold: true, fg: "cyan" }}>## CI Checks</span>
-										<span style={{ fg: "gray" }}>
-											{" "}
-											{passed()}/{checks().length} passed
-										</span>
-										<Show when={failed() > 0}>
-											<span style={{ fg: "red" }}> · {failed()} failed</span>
-										</Show>
-										<Show when={pending() > 0}>
-											<span style={{ fg: "yellow" }}>
-												{" "}
-												· {pending()} pending
-											</span>
-										</Show>
-									</text>
-								</box>
-								<For each={checks()}>
-									{(check) => {
-										const ci = checkIcon(check);
-										return (
-											<box width="100%" height={1}>
-												<text truncate={true}>
-													<span>{"  "}</span>
-													<span style={{ fg: ci.fg }}>{ci.icon}</span>
-													<span> {check.name}</span>
-												</text>
-											</box>
-										);
-									}}
-								</For>
-							</Show>
-
-							{/* Review Threads */}
-							<Show when={props.threads.length > 0}>
-								<box width="100%" height={1}>
-									<text>{""}</text>
-								</box>
-								<box width="100%">
-									<text>
-										<span style={{ bold: true, fg: "cyan" }}>
-											## Review Threads
-										</span>
-										<span style={{ fg: "gray" }}>
-											{" "}
-											{visibleThreads().length} shown
-										</span>
-										<Show when={hiddenThreadCount() > 0}>
-											<span style={{ fg: "gray" }}>
-												{" "}
-												· {hiddenThreadCount()} hidden
-											</span>
-										</Show>
-									</text>
-								</box>
+						{/* Description (focusable-0, unstyled) */}
+						<box id="focusable-0" flexDirection="column" width="100%">
+							<DetailsCtx.Provider value={getDetailsController(0)}>
 								<Show
-									when={visibleThreads().length > 0}
+									when={pr().body.trim()}
 									fallback={
-										<box width="100%" paddingLeft={2}>
-											<text>
-												<span style={{ fg: "gray" }}>
-													All threads resolved or hidden.
-												</span>
-											</text>
-										</box>
+										<text>
+											<span style={{ fg: "gray" }}>No description.</span>
+										</text>
 									}
 								>
-									<For each={visibleThreads()}>
-										{(thread, threadIdx) => (
-											<FocusableCard
-												id={`focusable-${threadIdx()}`}
-												focused={focusedIndex() === threadIdx()}
-												first={threadIdx() === 0}
-												onMouseDown={() => setFocusedIndex(threadIdx())}
-											>
-												<DetailsCtx.Provider
-													value={getDetailsController(threadIdx())}
-												>
-													<ThreadCard
-														thread={thread}
-														showBotComments={props.showBotComments}
-													/>
-												</DetailsCtx.Provider>
-											</FocusableCard>
-										)}
-									</For>
+									<MarkdownBody source={pr().body} />
 								</Show>
-							</Show>
+							</DetailsCtx.Provider>
+						</box>
 
-							{/* Conversation (issue comments) */}
-							<Show when={props.comments.length > 0}>
-								<box width="100%" height={1}>
-									<text>{""}</text>
-								</box>
-								<box width="100%">
-									<text>
-										<span style={{ bold: true, fg: "cyan" }}>
-											## Conversation
-										</span>
+						{/* CI Checks */}
+						<Show when={checks().length > 0}>
+							<box width="100%" height={1}>
+								<text>{""}</text>
+							</box>
+							<box width="100%">
+								<text>
+									<span style={{ bold: true, fg: "cyan" }}>## CI Checks</span>
+									<span style={{ fg: "gray" }}>
+										{" "}
+										{passed()}/{checks().length} passed
+									</span>
+									<Show when={failed() > 0}>
+										<span style={{ fg: "red" }}> · {failed()} failed</span>
+									</Show>
+									<Show when={pending() > 0}>
+										<span style={{ fg: "yellow" }}> · {pending()} pending</span>
+									</Show>
+								</text>
+							</box>
+							<For each={checks()}>
+								{(check) => {
+									const ci = checkIcon(check);
+									return (
+										<box width="100%" height={1}>
+											<text truncate={true}>
+												<span>{"  "}</span>
+												<span style={{ fg: ci.fg }}>{ci.icon}</span>
+												<span> {check.name}</span>
+											</text>
+										</box>
+									);
+								}}
+							</For>
+						</Show>
+
+						{/* Review Threads */}
+						<Show when={props.threads.length > 0}>
+							<box width="100%" height={1}>
+								<text>{""}</text>
+							</box>
+							<box width="100%">
+								<text>
+									<span style={{ bold: true, fg: "cyan" }}>
+										## Review Threads
+									</span>
+									<span style={{ fg: "gray" }}>
+										{" "}
+										{visibleThreads().length} shown
+									</span>
+									<Show when={hiddenThreadCount() > 0}>
 										<span style={{ fg: "gray" }}>
 											{" "}
-											{visibleComments().length} comment
-											{visibleComments().length !== 1 ? "s" : ""}
+											· {hiddenThreadCount()} hidden
 										</span>
-									</text>
-								</box>
-								<For each={visibleComments()}>
-									{(comment, commentIdx) => {
-										const itemIdx = () =>
-											visibleThreads().length + commentIdx();
-										return (
-											<FocusableCard
-												id={`focusable-${itemIdx()}`}
-												focused={focusedIndex() === itemIdx()}
-												first={commentIdx() === 0}
-												onMouseDown={() => setFocusedIndex(itemIdx())}
+									</Show>
+								</text>
+							</box>
+							<Show
+								when={visibleThreads().length > 0}
+								fallback={
+									<box width="100%" paddingLeft={2}>
+										<text>
+											<span style={{ fg: "gray" }}>
+												All threads resolved or hidden.
+											</span>
+										</text>
+									</box>
+								}
+							>
+								<For each={visibleThreads()}>
+									{(thread, threadIdx) => (
+										<FocusableCard
+											id={`focusable-${threadIdx() + 1}`}
+											focused={focusedIndex() === threadIdx() + 1}
+											first={threadIdx() === 0}
+											onMouseDown={() => setFocusedIndex(threadIdx() + 1)}
+										>
+											<DetailsCtx.Provider
+												value={getDetailsController(threadIdx() + 1)}
 											>
-												<DetailsCtx.Provider
-													value={getDetailsController(itemIdx())}
-												>
-													<CommentRow comment={comment} />
-												</DetailsCtx.Provider>
-											</FocusableCard>
-										);
-									}}
+												<ThreadCard
+													thread={thread}
+													showBotComments={props.showBotComments}
+												/>
+											</DetailsCtx.Provider>
+										</FocusableCard>
+									)}
 								</For>
 							</Show>
-						</box>
+						</Show>
+
+						{/* Conversation (issue comments) */}
+						<Show when={props.comments.length > 0}>
+							<box width="100%" height={1}>
+								<text>{""}</text>
+							</box>
+							<box width="100%">
+								<text>
+									<span style={{ bold: true, fg: "cyan" }}>## Conversation</span>
+									<span style={{ fg: "gray" }}>
+										{" "}
+										{visibleComments().length} comment
+										{visibleComments().length !== 1 ? "s" : ""}
+									</span>
+								</text>
+							</box>
+							<For each={visibleComments()}>
+								{(comment, commentIdx) => {
+									const itemIdx = () =>
+										1 + visibleThreads().length + commentIdx();
+									return (
+										<FocusableCard
+											id={`focusable-${itemIdx()}`}
+											focused={focusedIndex() === itemIdx()}
+											first={commentIdx() === 0}
+											onMouseDown={() => setFocusedIndex(itemIdx())}
+										>
+											<DetailsCtx.Provider
+												value={getDetailsController(itemIdx())}
+											>
+												<CommentRow comment={comment} />
+											</DetailsCtx.Provider>
+										</FocusableCard>
+									);
+								}}
+							</For>
+						</Show>
 					</scrollbox>
 				)}
 			</Show>
