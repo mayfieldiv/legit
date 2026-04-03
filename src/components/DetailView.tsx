@@ -78,6 +78,7 @@ const INVISIBLE_BORDER = {
 function FocusableCard(props: {
 	focused: boolean;
 	id: string;
+	first?: boolean;
 	onMouseDown?: () => void;
 	children: any;
 }) {
@@ -89,6 +90,8 @@ function FocusableCard(props: {
 			borderColor="cyan"
 			width="100%"
 			flexDirection="column"
+			marginTop={props.first ? 0 : -1}
+			zIndex={props.focused ? 1 : 0}
 			onMouseDown={(e: MouseEvent) => {
 				e.preventDefault();
 				props.onMouseDown?.();
@@ -455,6 +458,7 @@ export function DetailView(props: DetailViewProps) {
 											<FocusableCard
 												id={`focusable-${threadIdx()}`}
 												focused={focusedIndex() === threadIdx()}
+												first={threadIdx() === 0}
 												onMouseDown={() => setFocusedIndex(threadIdx())}
 											>
 												<ThreadCard
@@ -492,6 +496,7 @@ export function DetailView(props: DetailViewProps) {
 											<FocusableCard
 												id={`focusable-${itemIdx()}`}
 												focused={focusedIndex() === itemIdx()}
+												first={commentIdx() === 0}
 												onMouseDown={() => setFocusedIndex(itemIdx())}
 											>
 												<CommentRow comment={comment} />
