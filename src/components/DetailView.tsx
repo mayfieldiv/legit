@@ -9,6 +9,9 @@
  * Thread display: unresolved threads shown by default; resolved hidden
  * unless showResolved is true. Bot-only threads hidden when showBotComments
  * is false. Threads grouped by file path. Issue comments shown chronologically.
+ *
+ * Individual reply comments within threads are selectable via j/k and can be
+ * opened in the browser with o (deep-linking to the specific reply).
  */
 
 import { Show, For, createMemo, createSignal, createEffect, on } from "solid-js";
@@ -45,6 +48,7 @@ export interface DetailViewProps {
 export type FocusableItem =
 	| { kind: "body" }
 	| { kind: "thread"; thread: FullReviewThread; url: string }
+	| { kind: "reply"; comment: ReviewComment; url: string }
 	| { kind: "comment"; comment: IssueComment; url: string };
 
 const ROUNDED_BORDER = {
@@ -78,6 +82,7 @@ function FocusableCard(props: {
 	focused: boolean;
 	id: string;
 	first?: boolean;
+	indent?: number;
 	onMouseDown?: () => void;
 	children: any;
 }) {
@@ -90,6 +95,7 @@ function FocusableCard(props: {
 			width="100%"
 			flexDirection="column"
 			marginTop={props.first ? 0 : -1}
+			paddingLeft={props.indent ?? 0}
 			zIndex={props.focused ? 1 : 0}
 			onMouseDown={(e: MouseEvent) => {
 				e.preventDefault();
@@ -103,10 +109,18 @@ function FocusableCard(props: {
 
 // ── Thread / comment sub-components ─────────────────────────────────────────
 
+/** Renders a thread header (file path + resolved status) and its root comment. */
 function ThreadCard(props: { thread: FullReviewThread; showBotComments: boolean }) {
 	const visibleComments = createMemo(() => {
 		if (props.showBotComments) return props.thread.comments;
 		return props.thread.comments.filter((c) => !c.isBot);
+	});
+
+	// Only show the root (first visible) comment; replies are rendered
+	// as separate focusable items outside this card.
+	const rootComment = createMemo(() => {
+		const first = visibleComments()[0];
+		return first ? [first] : [];
 	});
 
 	const location = () => {
@@ -127,9 +141,32 @@ function ThreadCard(props: { thread: FullReviewThread; showBotComments: boolean 
 						</span>
 					</text>
 				</box>
-				<For each={visibleComments()}>{(comment) => <CommentRow comment={comment} />}</For>
+				<For each={rootComment()}>{(comment) => <CommentRow comment={comment} />}</For>
 			</box>
 		</Show>
+	);
+}
+
+/** Renders an individual reply within a review thread. Indented with ↳ prefix. */
+function ReplyRow(props: { comment: ReviewComment }) {
+	return (
+		<box flexDirection="column" width="100%" paddingLeft={2}>
+			<box width="100%" height={1}>
+				<text truncate={true}>
+					<span style={{ fg: theme.muted }}>↳ </span>
+					<span style={{ fg: props.comment.isBot ? theme.muted : theme.success }}>
+						{props.comment.author}
+					</span>
+					<Show when={props.comment.isBot}>
+						<span style={{ fg: theme.muted }}> [bot]</span>
+					</Show>
+					<span style={{ fg: theme.muted }}> · {formatAge(props.comment.createdAt)}</span>
+				</text>
+			</box>
+			<box width="100%">
+				<MarkdownBody source={props.comment.body} />
+			</box>
+		</box>
 	);
 }
 
@@ -185,20 +222,72 @@ export function DetailView(props: DetailViewProps) {
 		return props.comments.filter((c) => !c.isBot);
 	});
 
+	// ── Helper: visible comments for a specific thread ───────────────────
+	const getVisibleThreadComments = (thread: FullReviewThread) => {
+		if (props.showBotComments) return thread.comments;
+		return thread.comments.filter((c) => !c.isBot);
+	};
+
 	// ── Focus selection ─────────────────────────────────────────────────
 	const [focusedIndex, setFocusedIndex] = createSignal(0);
 
 	const focusableItems = createMemo<FocusableItem[]>(() => {
 		const items: FocusableItem[] = [{ kind: "body" }];
 		for (const thread of visibleThreads()) {
-			if (thread.comments.length > 0) {
-				items.push({ kind: "thread", thread, url: thread.comments[0]!.url });
+			const visComments = getVisibleThreadComments(thread);
+			if (visComments.length > 0) {
+				items.push({ kind: "thread", thread, url: visComments[0]!.url });
+				for (let i = 1; i < visComments.length; i++) {
+					items.push({
+						kind: "reply",
+						comment: visComments[i]!,
+						url: visComments[i]!.url,
+					});
+				}
 			}
 		}
 		for (const comment of visibleComments()) {
 			items.push({ kind: "comment", comment, url: comment.url });
 		}
 		return items;
+	});
+
+	// ── Render data for thread section ──────────────────────────────────
+	type ThreadRenderItem =
+		| { kind: "root"; thread: FullReviewThread; focusIdx: number; isFirst: boolean }
+		| { kind: "reply"; comment: ReviewComment; focusIdx: number };
+
+	const threadRenderItems = createMemo<ThreadRenderItem[]>(() => {
+		const items = focusableItems();
+		const result: ThreadRenderItem[] = [];
+		let isFirst = true;
+		for (let i = 0; i < items.length; i++) {
+			const item = items[i]!;
+			if (item.kind === "thread") {
+				result.push({ kind: "root", thread: item.thread, focusIdx: i, isFirst });
+				isFirst = false;
+			} else if (item.kind === "reply") {
+				result.push({ kind: "reply", comment: item.comment, focusIdx: i });
+			}
+		}
+		return result;
+	});
+
+	// ── Render data for conversation section ────────────────────────────
+	type CommentRenderItem = { comment: IssueComment; focusIdx: number; isFirst: boolean };
+
+	const commentRenderItems = createMemo<CommentRenderItem[]>(() => {
+		const items = focusableItems();
+		const result: CommentRenderItem[] = [];
+		let isFirst = true;
+		for (let i = 0; i < items.length; i++) {
+			const item = items[i]!;
+			if (item.kind === "comment") {
+				result.push({ comment: item.comment, focusIdx: i, isFirst });
+				isFirst = false;
+			}
+		}
+		return result;
 	});
 
 	// Clamp focus index when the focusable items list changes
@@ -259,7 +348,10 @@ export function DetailView(props: DetailViewProps) {
 			const idx = focusedIndex();
 			const items = focusableItems();
 			const item = items[idx];
-			if (item && item.kind !== "body" && "url" in item) {
+			if (
+				item &&
+				(item.kind === "thread" || item.kind === "reply" || item.kind === "comment")
+			) {
 				props.onOpenUrl?.(item.url);
 			} else {
 				props.onOpenInBrowser?.();
@@ -455,23 +547,57 @@ export function DetailView(props: DetailViewProps) {
 									</box>
 								}
 							>
-								<For each={visibleThreads()}>
-									{(thread, threadIdx) => (
-										<FocusableCard
-											id={`focusable-${threadIdx() + 1}`}
-											focused={focusedIndex() === threadIdx() + 1}
-											first={threadIdx() === 0}
-											onMouseDown={() => setFocusedIndex(threadIdx() + 1)}
+								<For each={threadRenderItems()}>
+									{(item) => (
+										<Show
+											when={item.kind === "root" ? item : undefined}
+											fallback={
+												<FocusableCard
+													id={`focusable-${item.focusIdx}`}
+													focused={focusedIndex() === item.focusIdx}
+													indent={4}
+													onMouseDown={() =>
+														setFocusedIndex(item.focusIdx)
+													}
+												>
+													<DetailsCtx.Provider
+														value={getDetailsController(item.focusIdx)}
+													>
+														<ReplyRow
+															comment={
+																(
+																	item as ThreadRenderItem & {
+																		kind: "reply";
+																	}
+																).comment
+															}
+														/>
+													</DetailsCtx.Provider>
+												</FocusableCard>
+											}
 										>
-											<DetailsCtx.Provider
-												value={getDetailsController(threadIdx() + 1)}
-											>
-												<ThreadCard
-													thread={thread}
-													showBotComments={props.showBotComments}
-												/>
-											</DetailsCtx.Provider>
-										</FocusableCard>
+											{(rootItem) => (
+												<FocusableCard
+													id={`focusable-${rootItem().focusIdx}`}
+													focused={focusedIndex() === rootItem().focusIdx}
+													first={rootItem().isFirst}
+													onMouseDown={() =>
+														setFocusedIndex(rootItem().focusIdx)
+													}
+												>
+													<DetailsCtx.Provider
+														value={getDetailsController(
+															rootItem().focusIdx,
+														)}
+													>
+														<ThreadCard
+															thread={rootItem().thread}
+															showBotComments={props.showBotComments}
+														/>
+													</DetailsCtx.Provider>
+												</FocusableCard>
+											)}
+										</Show>
 									)}
 								</For>
 							</Show>
@@ -494,25 +620,21 @@ export function DetailView(props: DetailViewProps) {
 									</span>
 								</text>
 							</box>
-							<For each={visibleComments()}>
-								{(comment, commentIdx) => {
-									const itemIdx = () =>
-										1 + visibleThreads().length + commentIdx();
-									return (
-										<FocusableCard
-											id={`focusable-${itemIdx()}`}
-											focused={focusedIndex() === itemIdx()}
-											first={commentIdx() === 0}
-											onMouseDown={() => setFocusedIndex(itemIdx())}
+							<For each={commentRenderItems()}>
+								{(item) => (
+									<FocusableCard
+										id={`focusable-${item.focusIdx}`}
+										focused={focusedIndex() === item.focusIdx}
+										first={item.isFirst}
+										onMouseDown={() => setFocusedIndex(item.focusIdx)}
+									>
+										<DetailsCtx.Provider
+											value={getDetailsController(item.focusIdx)}
 										>
-											<DetailsCtx.Provider
-												value={getDetailsController(itemIdx())}
-											>
-												<CommentRow comment={comment} />
-											</DetailsCtx.Provider>
-										</FocusableCard>
-									);
-								}}
+											<CommentRow comment={item.comment} />
+										</DetailsCtx.Provider>
+									</FocusableCard>
+								)}
 							</For>
 						</Show>
 					</scrollbox>
