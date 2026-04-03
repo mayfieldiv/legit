@@ -14,6 +14,7 @@
 import { Show, For, createMemo, createSignal, createEffect, on } from "solid-js";
 import { useKeyboard } from "@opentui/solid";
 import { MarkdownBody } from "../lib/markdown";
+import { createDetailsController, DetailsCtx, type DetailsController } from "../lib/details-store";
 import { formatAge, formatSize, sortCheckRuns } from "../lib/format";
 import type {
 	PRDetail,
@@ -266,6 +267,17 @@ export function DetailView(props: DetailViewProps) {
 		),
 	);
 
+	// ── Details controllers (one per focusable card) ─────────────────────────────
+	const detailsControllers = new Map<number, DetailsController>();
+	function getDetailsController(idx: number): DetailsController {
+		let ctrl = detailsControllers.get(idx);
+		if (!ctrl) {
+			ctrl = createDetailsController();
+			detailsControllers.set(idx, ctrl);
+		}
+		return ctrl;
+	}
+
 	// ── Keyboard ───────────────────────────────────────────────────────────
 	useKeyboard((event) => {
 		const name = event.name;
@@ -292,6 +304,10 @@ export function DetailView(props: DetailViewProps) {
 			}
 		} else if (name === "r" && !event.shift) {
 			props.onRefresh?.();
+		} else if (name === "return") {
+			const idx = focusedIndex();
+			const ctrl = detailsControllers.get(idx);
+			if (ctrl) ctrl.toggleAll();
 		}
 	});
 
@@ -461,10 +477,14 @@ export function DetailView(props: DetailViewProps) {
 												first={threadIdx() === 0}
 												onMouseDown={() => setFocusedIndex(threadIdx())}
 											>
-												<ThreadCard
-													thread={thread}
-													showBotComments={props.showBotComments}
-												/>
+												<DetailsCtx.Provider
+													value={getDetailsController(threadIdx())}
+												>
+													<ThreadCard
+														thread={thread}
+														showBotComments={props.showBotComments}
+													/>
+												</DetailsCtx.Provider>
 											</FocusableCard>
 										)}
 									</For>
@@ -499,7 +519,11 @@ export function DetailView(props: DetailViewProps) {
 												first={commentIdx() === 0}
 												onMouseDown={() => setFocusedIndex(itemIdx())}
 											>
-												<CommentRow comment={comment} />
+												<DetailsCtx.Provider
+													value={getDetailsController(itemIdx())}
+												>
+													<CommentRow comment={comment} />
+												</DetailsCtx.Provider>
 											</FocusableCard>
 										);
 									}}
@@ -515,7 +539,7 @@ export function DetailView(props: DetailViewProps) {
 				<box width="100%" height={1}>
 					<text>
 						<span style={{ fg: "gray" }}>
-							Esc close · j/k navigate · o open · r refresh · t{" "}
+							Esc · j/k nav · ↵ expand · o open · r refresh · t{" "}
 							{props.showResolved ? "hide" : "show"} resolved · b{" "}
 							{props.showBotComments ? "hide" : "show"} bots
 						</span>

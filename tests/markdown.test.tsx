@@ -1,6 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import { testRender } from "@opentui/solid";
 import { MarkdownBody, collectInlineText } from "../src/lib/markdown";
+import { createDetailsController, DetailsCtx } from "../src/lib/details-store";
 
 /** Render markdown source and return the captured character frame. */
 async function renderMarkdown(source: string, width = 60, height = 30): Promise<string> {
@@ -127,6 +128,168 @@ describe("MarkdownBody — block nodes", () => {
 		const frame = await renderMarkdown("");
 		// Should just be whitespace — no crash
 		expect(frame).toBeDefined();
+	});
+});
+
+describe("MarkdownBody — details/summary", () => {
+	const detailsSource = [
+		"Some text.",
+		"",
+		"<details>",
+		"<summary>Click to expand</summary>",
+		"",
+		"Hidden **bold** content.",
+		"",
+		"</details>",
+		"",
+		"After details.",
+	].join("\n");
+
+	test("renders collapsed summary with arrow", async () => {
+		const frame = await renderMarkdown(detailsSource);
+		expect(frame).toContain("\u25b6"); // right arrow
+		expect(frame).toContain("Click to expand");
+		// Content is hidden when collapsed
+		expect(frame).not.toContain("Hidden");
+		expect(frame).not.toContain("bold");
+		// Surrounding text still renders
+		expect(frame).toContain("Some text.");
+		expect(frame).toContain("After details.");
+	});
+
+	test("does not show [html content] for details blocks", async () => {
+		const frame = await renderMarkdown(detailsSource);
+		expect(frame).not.toContain("[html content]");
+	});
+
+	test("click toggles expansion", async () => {
+		const { renderOnce, captureCharFrame, mockMouse } = await testRender(
+			() => <MarkdownBody source={detailsSource} />,
+			{ width: 60, height: 30 },
+		);
+		await renderOnce();
+		let frame = captureCharFrame();
+		expect(frame).toContain("\u25b6"); // collapsed
+		expect(frame).not.toContain("Hidden");
+
+		// Find the summary row and click it
+		const lines = frame.split("\n");
+		const summaryLine = lines.findIndex((l) => l.includes("Click to expand"));
+		expect(summaryLine).toBeGreaterThanOrEqual(0);
+		await mockMouse.click(2, summaryLine);
+		await renderOnce();
+		frame = captureCharFrame();
+		expect(frame).toContain("\u25bc"); // expanded arrow
+		expect(frame).toContain("Hidden");
+		expect(frame).toContain("bold");
+
+		// Click again to collapse
+		const lines2 = frame.split("\n");
+		const summaryLine2 = lines2.findIndex((l) => l.includes("Click to expand"));
+		await mockMouse.click(2, summaryLine2);
+		await renderOnce();
+		frame = captureCharFrame();
+		expect(frame).toContain("\u25b6"); // collapsed again
+		expect(frame).not.toContain("Hidden");
+	});
+
+	test("DetailsCtx.toggleAll expands all and collapses all", async () => {
+		const twoDetails = [
+			"<details>",
+			"<summary>First</summary>",
+			"",
+			"Content A.",
+			"",
+			"</details>",
+			"",
+			"<details>",
+			"<summary>Second</summary>",
+			"",
+			"Content B.",
+			"",
+			"</details>",
+		].join("\n");
+
+		const ctrl = createDetailsController();
+		const { renderOnce, captureCharFrame } = await testRender(
+			() => (
+				<DetailsCtx.Provider value={ctrl}>
+					<MarkdownBody source={twoDetails} />
+				</DetailsCtx.Provider>
+			),
+			{ width: 60, height: 30 },
+		);
+		await renderOnce();
+		let frame = captureCharFrame();
+		expect(frame).not.toContain("Content A.");
+		expect(frame).not.toContain("Content B.");
+
+		// toggleAll should expand all
+		ctrl.toggleAll();
+		await renderOnce();
+		frame = captureCharFrame();
+		expect(frame).toContain("Content A.");
+		expect(frame).toContain("Content B.");
+
+		// toggleAll again should collapse all (all were expanded)
+		ctrl.toggleAll();
+		await renderOnce();
+		frame = captureCharFrame();
+		expect(frame).not.toContain("Content A.");
+		expect(frame).not.toContain("Content B.");
+	});
+
+	test("toggleAll expands all when some are collapsed", async () => {
+		const twoDetails = [
+			"<details>",
+			"<summary>First</summary>",
+			"",
+			"Content A.",
+			"",
+			"</details>",
+			"",
+			"<details>",
+			"<summary>Second</summary>",
+			"",
+			"Content B.",
+			"",
+			"</details>",
+		].join("\n");
+
+		const ctrl = createDetailsController();
+		const { renderOnce, captureCharFrame, mockMouse } = await testRender(
+			() => (
+				<DetailsCtx.Provider value={ctrl}>
+					<MarkdownBody source={twoDetails} />
+				</DetailsCtx.Provider>
+			),
+			{ width: 60, height: 30 },
+		);
+		await renderOnce();
+
+		// Click to expand only the first one
+		const lines = captureCharFrame().split("\n");
+		const firstLine = lines.findIndex((l) => l.includes("First"));
+		await mockMouse.click(2, firstLine);
+		await renderOnce();
+		let frame = captureCharFrame();
+		expect(frame).toContain("Content A.");
+		expect(frame).not.toContain("Content B.");
+
+		// toggleAll: some collapsed → expand all
+		ctrl.toggleAll();
+		await renderOnce();
+		frame = captureCharFrame();
+		expect(frame).toContain("Content A.");
+		expect(frame).toContain("Content B.");
+	});
+
+	test("defaults to 'Details' when no summary tag", async () => {
+		const source = ["<details>", "", "Secret content.", "", "</details>"].join("\n");
+		const frame = await renderMarkdown(source);
+		expect(frame).toContain("\u25b6");
+		expect(frame).toContain("Details");
+		expect(frame).not.toContain("Secret content.");
 	});
 });
 

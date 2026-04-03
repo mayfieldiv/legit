@@ -472,7 +472,7 @@ describe("DetailView", () => {
 
 	test("shows status bar with keybinding hints", async () => {
 		const frame = await renderDetail();
-		expect(frame).toContain("Esc close");
+		expect(frame).toContain("Esc");
 		expect(frame).toContain("o open");
 		expect(frame).toContain("r refresh");
 		expect(frame).toContain("show resolved");
@@ -495,7 +495,7 @@ describe("DetailView", () => {
 
 	test("status bar shows j/k navigate hint", async () => {
 		const frame = await renderDetail();
-		expect(frame).toContain("j/k navigate");
+		expect(frame).toContain("j/k nav");
 	});
 
 	// ── Focus selection ─────────────────────────────────────────────────────
@@ -906,5 +906,73 @@ describe("DetailView", () => {
 		const bottomLeftCount = (frame.match(/╰/g) || []).length;
 		expect(topLeftCount).toBe(1);
 		expect(bottomLeftCount).toBe(1);
+	});
+
+	test("Enter toggles all details in focused card", async () => {
+		const commentWithDetails: IssueComment[] = [
+			{
+				id: 1,
+				author: "alice",
+				body: [
+					"<details>",
+					"<summary>First</summary>",
+					"",
+					"Content A.",
+					"",
+					"</details>",
+					"",
+					"<details>",
+					"<summary>Second</summary>",
+					"",
+					"Content B.",
+					"",
+					"</details>",
+				].join("\n"),
+				createdAt: new Date().toISOString(),
+				url: "https://github.com/test#issuecomment-1",
+				isBot: false,
+			},
+		];
+
+		const { renderOnce, captureCharFrame, mockInput } = await testRender(
+			() => (
+				<DetailView
+					pr={makeDetail({ body: "" })}
+					threads={[]}
+					comments={commentWithDetails}
+					loading={false}
+					showResolved={false}
+					showBotComments={true}
+				/>
+			),
+			{ width: 80, height: 40 },
+		);
+		await renderOnce();
+
+		// Both details collapsed initially
+		let frame = captureCharFrame();
+		expect(frame).toContain("\u25b6"); // collapsed arrow
+		expect(frame).not.toContain("Content A.");
+		expect(frame).not.toContain("Content B.");
+
+		// Focus the comment card
+		mockInput.pressKey("j");
+		await renderOnce();
+
+		// Press Enter to expand all details
+		mockInput.pressEnter();
+		await renderOnce();
+		frame = captureCharFrame();
+		expect(frame).toContain("Content A.");
+		expect(frame).toContain("Content B.");
+		expect(frame).toContain("\u25bc"); // expanded arrow
+
+		// Press Enter again to collapse all
+		mockInput.pressEnter();
+		await renderOnce();
+		frame = captureCharFrame();
+		expect(frame).not.toContain("Content A.");
+		expect(frame).not.toContain("Content B.");
+		expect(frame).toContain("\u25b6"); // collapsed again
 	});
 });

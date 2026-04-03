@@ -7,9 +7,12 @@
  * Inline nodes (emphasis, strong, inlineCode, link) produce styled spans.
  */
 
-import { For, Switch, Match } from "solid-js";
+import { For, Show, Switch, Match, createSignal } from "solid-js";
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { fromHtml } from "hast-util-from-html";
+import type { Element as HastElement } from "hast";
+import { useDetails, type DetailsHandle } from "./details-store";
+import type { MouseEvent as OtuiMouseEvent } from "@opentui/core";
 import type {
 	Nodes,
 	Heading,
@@ -32,6 +35,86 @@ function isHtmlCommentOnly(value: string): boolean {
 	return tree.children.length > 0 && tree.children.every((n) => n.type === "comment");
 }
 
+// ── <details> grouping ──────────────────────────────────────────────────────
+
+/** A grouped <details> block: summary text + inner mdast content nodes. */
+export interface DetailsGroup {
+	type: "detailsGroup";
+	summary: string;
+	children: Nodes[];
+}
+
+type BlockOrDetails = Nodes | DetailsGroup;
+
+/** Check if an html node opens a <details> block. */
+function isDetailsOpen(value: string): boolean {
+	const tree = fromHtml(value, { fragment: true });
+	return tree.children.some(
+		(n) => n.type === "element" && (n as HastElement).tagName === "details",
+	);
+}
+
+/** Check if an html node is a </details> closing tag. */
+function isDetailsClose(value: string): boolean {
+	return /^\s*<\/details>\s*$/.test(value);
+}
+
+/** Extract summary text from the opening <details> html block. */
+function extractSummary(value: string): string {
+	const tree = fromHtml(value, { fragment: true });
+	for (const node of tree.children) {
+		if (node.type === "element" && (node as HastElement).tagName === "details") {
+			for (const child of (node as HastElement).children) {
+				if (child.type === "element" && (child as HastElement).tagName === "summary") {
+					return collectHastText(child as HastElement);
+				}
+			}
+		}
+	}
+	return "Details";
+}
+
+/** Recursively extract plain text from a hast element. */
+function collectHastText(node: HastElement): string {
+	let result = "";
+	for (const child of node.children) {
+		if (child.type === "text") result += child.value;
+		else if (child.type === "element") result += collectHastText(child as HastElement);
+	}
+	return result;
+}
+
+/**
+ * Pre-process mdast children to group <details>…</details> into DetailsGroup nodes.
+ * Markdown content between the opening and closing html tags becomes the group's children.
+ */
+function groupDetailsBlocks(nodes: Nodes[]): BlockOrDetails[] {
+	const result: BlockOrDetails[] = [];
+	let i = 0;
+	while (i < nodes.length) {
+		const node = nodes[i]!;
+		if (node.type === "html" && isDetailsOpen((node as any).value ?? "")) {
+			const summary = extractSummary((node as any).value ?? "");
+			const content: Nodes[] = [];
+			i++;
+			while (i < nodes.length) {
+				const n = nodes[i]!;
+				if (n.type === "html" && isDetailsClose((n as any).value ?? "")) {
+					i++;
+					break;
+				}
+				content.push(n);
+				i++;
+			}
+			result.push({ type: "detailsGroup", summary, children: content });
+		} else {
+			result.push(node);
+			i++;
+		}
+	}
+	return result;
+}
+
 // ── Public API ──────────────────────────────────────────────────────────────
 
 export interface MarkdownBodyProps {
@@ -40,10 +123,63 @@ export interface MarkdownBodyProps {
 
 export function MarkdownBody(props: MarkdownBodyProps) {
 	const tree = () => fromMarkdown(props.source);
+	const grouped = () => groupDetailsBlocks(tree().children);
 
 	return (
 		<box flexDirection="column" width="100%">
-			<For each={tree().children}>{(node) => <MdBlock node={node} depth={0} />}</For>
+			<For each={grouped()}>
+				{(node) =>
+					node.type === "detailsGroup" ? (
+						<MdDetails group={node as DetailsGroup} />
+					) : (
+						<MdBlock node={node as Nodes} depth={0} />
+					)
+				}
+			</For>
+		</box>
+	);
+}
+
+// ── <details> component ─────────────────────────────────────────────────────
+
+function MdDetails(props: { group: DetailsGroup }) {
+	const ctrl = useDetails();
+	// If inside a DetailsCtx, register; otherwise use local state.
+	const handle: DetailsHandle = ctrl
+		? ctrl.register()
+		: (() => {
+				const [expanded, setExpanded] = createSignal(false);
+				return { expanded, toggle: () => setExpanded(!expanded()) };
+			})();
+
+	return (
+		<box flexDirection="column" width="100%">
+			<box
+				width="100%"
+				height={1}
+				onMouseDown={(e: OtuiMouseEvent) => {
+					e.preventDefault();
+					handle.toggle();
+				}}
+			>
+				<text>
+					<span style={{ fg: "cyan" }}>{handle.expanded() ? "▼ " : "▶ "}</span>
+					<span style={{ bold: true }}>{props.group.summary}</span>
+				</text>
+			</box>
+			<Show when={handle.expanded()}>
+				<box flexDirection="column" width="100%" paddingLeft={2}>
+					<For each={groupDetailsBlocks(props.group.children)}>
+						{(node) =>
+							node.type === "detailsGroup" ? (
+								<MdDetails group={node as DetailsGroup} />
+							) : (
+								<MdBlock node={node as Nodes} depth={0} />
+							)
+						}
+					</For>
+				</box>
+			</Show>
 		</box>
 	);
 }

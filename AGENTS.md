@@ -9,6 +9,7 @@
     tmux -S "$SOCKET" send-keys -t legit-test:0.0 -- 'cd /Users/mayfield/legit && legit' Enter
     ```
     Always tell the user how to attach: `tmux -S $TMPDIR/claude-tmux-sockets/claude.sock attach -t legit-test`
+- **Do not kill the tmux session.** Leave `legit-test` running so the user can stay attached. If the session already exists, reuse it — just capture the pane or send keys. When the user reports a bug, capture the current pane state to see what they see.
 - **Wait for TUI output** instead of using `sleep`. Use the tmux skill's `wait-for-text.sh`:
     ```bash
     SOCKET=${TMPDIR:-/tmp}/claude-tmux-sockets/claude.sock
