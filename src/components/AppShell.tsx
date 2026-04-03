@@ -24,6 +24,7 @@ interface AppShellProps {
 	onRefreshAllActive: () => void;
 	onSelectionChange?: (pr: PR) => void;
 	onOpenInBrowser?: (pr: PR) => void;
+	onOpenInDevin?: (pr: PR) => void;
 	onEnterDetail: (pr: PR) => void;
 	selectedPr?: PR;
 	summary?: PRSummary;
@@ -132,6 +133,7 @@ export function AppShell(props: AppShellProps) {
 								onEnterDetail={props.onEnterDetail}
 								onSelectionChange={props.onSelectionChange}
 								onOpenInBrowser={props.onOpenInBrowser}
+								onOpenInDevin={props.onOpenInDevin}
 							/>
 							<box width={1} height="100%">
 								<text>│</text>
@@ -159,6 +161,10 @@ export function AppShell(props: AppShellProps) {
 							onOpenInBrowser={() => {
 								const pr = props.detailPr;
 								if (pr) props.onOpenInBrowser?.(pr);
+							}}
+							onOpenInDevin={() => {
+								const pr = props.detailPr;
+								if (pr) props.onOpenInDevin?.(pr);
 							}}
 							onOpenUrl={props.onOpenUrl}
 							onRefresh={props.onRefreshDetail}

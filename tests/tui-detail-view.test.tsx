@@ -473,7 +473,7 @@ describe("DetailView", () => {
 	test("shows status bar with keybinding hints", async () => {
 		const frame = await renderDetail();
 		expect(frame).toContain("Esc");
-		expect(frame).toContain("o open");
+		expect(frame).toContain("o GitHub");
 		expect(frame).toContain("r refresh");
 		expect(frame).toContain("show resolved");
 	});
@@ -484,12 +484,12 @@ describe("DetailView", () => {
 	});
 
 	test("status bar shows 'hide bots' when showBotComments is true", async () => {
-		const frame = await renderDetail({ showBotComments: true });
+		const frame = await renderDetail({ showBotComments: true }, 100);
 		expect(frame).toContain("hide bots");
 	});
 
 	test("status bar shows 'show bots' when showBotComments is false", async () => {
-		const frame = await renderDetail({ showBotComments: false });
+		const frame = await renderDetail({ showBotComments: false }, 100);
 		expect(frame).toContain("show bots");
 	});
 

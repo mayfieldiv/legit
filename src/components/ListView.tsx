@@ -8,6 +8,7 @@ import { processPRList } from "../lib/group-filter-engine";
 import type { GroupByKey } from "../lib/group-filter-engine";
 import type { PR } from "../lib/types";
 import type { ScrollBoxRenderable } from "@opentui/core";
+import { StatusBar } from "./StatusBar";
 
 interface ListViewProps {
 	prs: PR[];
@@ -22,6 +23,7 @@ interface ListViewProps {
 	onEnterDetail: (pr: PR) => void;
 	onSelectionChange?: (pr: PR) => void;
 	onOpenInBrowser?: (pr: PR) => void;
+	onOpenInDevin?: (pr: PR) => void;
 }
 
 /**
@@ -301,6 +303,9 @@ export function ListView(props: ListViewProps) {
 		} else if (name === "o") {
 			const pr = selection.selectedItem(displayPRs());
 			if (pr) props.onOpenInBrowser?.(pr);
+		} else if (name === "d") {
+			const pr = selection.selectedItem(displayPRs());
+			if (pr) props.onOpenInDevin?.(pr);
 		} else if (name === "/") {
 			setFilterEditing(true);
 		} else if (name === "g") {
@@ -375,6 +380,9 @@ export function ListView(props: ListViewProps) {
 					</scrollbox>
 				</Show>
 			</Show>
+
+			{/* ── Status bar ──────────────────────────────────────── */}
+			<StatusBar>{" · "}/ filter · g group</StatusBar>
 		</box>
 	);
 }

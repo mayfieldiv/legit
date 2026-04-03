@@ -25,6 +25,7 @@ import type {
 } from "../lib/types";
 import type { MouseEvent } from "@opentui/core";
 import type { ScrollBoxRenderable } from "@opentui/core";
+import { StatusBar } from "./StatusBar";
 
 // ── Props ───────────────────────────────────────────────────────────────────
 
@@ -39,6 +40,7 @@ export interface DetailViewProps {
 	onToggleResolved?: () => void;
 	onToggleBotComments?: () => void;
 	onOpenInBrowser?: () => void;
+	onOpenInDevin?: () => void;
 	onOpenUrl?: (url: string) => void;
 	onRefresh?: () => void;
 }
@@ -304,6 +306,8 @@ export function DetailView(props: DetailViewProps) {
 			} else {
 				props.onOpenInBrowser?.();
 			}
+		} else if (name === "d") {
+			props.onOpenInDevin?.();
 		} else if (name === "r" && !event.shift) {
 			props.onRefresh?.();
 		} else if (name === "return") {
@@ -548,15 +552,10 @@ export function DetailView(props: DetailViewProps) {
 
 			{/* ── Status bar ────────────────────────────────────── */}
 			<Show when={props.pr}>
-				<box width="100%" height={1}>
-					<text>
-						<span style={{ fg: "gray" }}>
-							Esc · j/k nav · ↵ expand · o open · r refresh · t{" "}
-							{props.showResolved ? "hide" : "show"} resolved · b{" "}
-							{props.showBotComments ? "hide" : "show"} bots
-						</span>
-					</text>
-				</box>
+				<StatusBar>
+					{" · "}Esc back · t {props.showResolved ? "hide" : "show"} resolved · b{" "}
+					{props.showBotComments ? "hide" : "show"} bots
+				</StatusBar>
 			</Show>
 		</box>
 	);

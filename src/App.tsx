@@ -10,6 +10,12 @@ export function prUrl(repoSlug: string, number: number): string {
 	return `https://github.com/${repoSlug}/pull/${number}`;
 }
 
+/** Build a Devin review URL from a repo slug and PR number. */
+export function devinUrl(repoSlug: string, number: number): string {
+	const [owner, repo] = repoSlug.split("/");
+	return `https://app.devin.ai/review/${owner}/${repo}/pull/${number}`;
+}
+
 export interface AppProps {
 	app: Legit;
 }
@@ -30,6 +36,13 @@ export function App(props: AppProps) {
 		setBrowserError("");
 		execFile("open", [url], (err) => {
 			if (err) setBrowserError(`Failed to open browser: ${err.message}`);
+		});
+	}
+
+	function handleOpenInDevin(pr: PR) {
+		setBrowserError("");
+		execFile("open", [devinUrl(pr.repoSlug ?? props.app.repoSlug, pr.number)], (err) => {
+			if (err) setBrowserError(`Failed to open Devin: ${err.message}`);
 		});
 	}
 
@@ -68,6 +81,7 @@ export function App(props: AppProps) {
 			onToggleBotComments={store.toggleBotComments}
 			onRefreshDetail={store.refreshDetail}
 			onOpenInBrowser={handleOpenInBrowser}
+			onOpenInDevin={handleOpenInDevin}
 			onOpenUrl={handleOpenUrl}
 		/>
 	);
