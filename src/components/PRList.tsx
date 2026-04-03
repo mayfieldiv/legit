@@ -131,11 +131,18 @@ function GroupHeaderRow(props: { label: string }) {
 	);
 }
 
-function Cell(props: { width?: number; flexGrow?: number; paddingRight?: number; children: any }) {
+function Cell(props: {
+	width?: number;
+	flexGrow?: number;
+	minWidth?: number;
+	paddingRight?: number;
+	children: any;
+}) {
 	return (
 		<box
 			width={props.width}
 			flexGrow={props.flexGrow}
+			minWidth={props.minWidth}
 			paddingRight={props.paddingRight}
 			overflow="hidden"
 		>
@@ -179,7 +186,7 @@ function PRRow(props: {
 					</span>
 				</Cell>
 			</Show>
-			<Cell flexGrow={1} paddingRight={props.showRepo ? 2 : 3}>
+			<Cell flexGrow={1} minWidth={30} paddingRight={props.showRepo ? 2 : 3}>
 				<span style={{ fg: fg() }}>{props.pr.title}</span>
 			</Cell>
 			<Cell width={COL.author} paddingRight={1}>
@@ -238,7 +245,7 @@ export function PRListHeader(props: { showRepo?: boolean; currentUser?: string }
 					<b>Repo</b>
 				</Cell>
 			</Show>
-			<Cell flexGrow={1} paddingRight={3}>
+			<Cell flexGrow={1} minWidth={30} paddingRight={3}>
 				<b>Title</b>
 			</Cell>
 			<Cell width={COL.author} paddingRight={1}>
