@@ -394,7 +394,7 @@ export function createPRStore(app: Legit, options?: PRStoreOptions): PRStore {
 			.then(([detail, threads, comments]) => {
 				if (ac.signal.aborted) return;
 				batch(() => {
-					setDetailPr(detail);
+					setDetailPr({ ...detail, repoSlug: detail.repoSlug ?? repo });
 					setDetailThreads(threads);
 					setDetailComments(comments);
 					setDetailLoading(false);

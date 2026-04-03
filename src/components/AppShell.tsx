@@ -46,8 +46,10 @@ interface AppShellProps {
 
 export function AppShell(props: AppShellProps) {
 	const tabCount = () => props.tabs?.length ?? 0;
+	const inListView = () => props.view.view === "list";
 
 	useKeyboard((event) => {
+		if (!inListView()) return;
 		if (!props.onTabChange || tabCount() === 0) return;
 		const current = props.activeTab ?? 0;
 		const name = event.name;
@@ -79,13 +81,15 @@ export function AppShell(props: AppShellProps) {
 			<box flexDirection="row" width="100%" height={1}>
 				<text>
 					<span style={{ fg: "cyan", bold: true }}>legit</span>
-					<span> — </span>
-					<b>{props.repoSlug}</b>
-					<span> — {props.prs.length} open PRs</span>
+					<Show when={inListView()}>
+						<span> — </span>
+						<b>{props.repoSlug}</b>
+						<span> — {props.prs.length} open PRs</span>
+					</Show>
 				</text>
 			</box>
 
-			<Show when={tabCount() > 0}>
+			<Show when={tabCount() > 0 && inListView()}>
 				<box flexDirection="row" width="100%" height={1}>
 					<text>
 						{props.tabs!.map((tab, i) => {

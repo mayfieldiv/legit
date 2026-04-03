@@ -338,6 +338,10 @@ export function DetailView(props: DetailViewProps) {
 						<box width="100%" height={1}>
 							<text truncate={true}>
 								<span style={{ fg: "green" }}>{pr().author}</span>
+								<Show when={pr().repoSlug}>
+									<span style={{ fg: "gray" }}> · </span>
+									<span style={{ fg: "blue" }}>{pr().repoSlug}</span>
+								</Show>
 								<span style={{ fg: "gray" }}>
 									{" "}
 									· created {formatAge(pr().createdAt)}
@@ -355,6 +359,15 @@ export function DetailView(props: DetailViewProps) {
 								</Show>
 							</text>
 						</box>
+						<Show when={pr().repoSlug}>
+							<box width="100%" height={1}>
+								<text wrapMode="none" truncate={true}>
+									<span style={{ fg: "blue", underline: true }}>
+										https://github.com/{pr().repoSlug}/pull/{pr().number}
+									</span>
+								</text>
+							</box>
+						</Show>
 						<Show when={pr().headRef}>
 							<box width="100%" height={1}>
 								<text wrapMode="none" truncate={true}>
