@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { testRender } from "@opentui/solid";
-import { MarkdownBody, collectInlineText } from "../src/lib/markdown";
+import { MarkdownBody, collectInlineText, classifyHtmlTag } from "../src/lib/markdown";
 import { createDetailsController, DetailsCtx } from "../src/lib/details-store";
 
 /** Render markdown source and return the captured character frame. */
@@ -121,7 +121,7 @@ describe("MarkdownBody — block nodes", () => {
 		const source = ["Before.", "", "<div>some widget</div>"].join("\n");
 		const frame = await renderMarkdown(source);
 		expect(frame).toContain("Before.");
-		expect(frame).toContain("[html content]");
+		expect(frame).toContain("[<div>]");
 	});
 
 	test("renders empty source without error", async () => {
@@ -344,6 +344,83 @@ describe("MarkdownBody — inline nodes", () => {
 		const frame = await renderMarkdown("## See [API docs](https://api.example.com)");
 		expect(frame).toContain("## See");
 		expect(frame).toContain("API docs");
+	});
+});
+
+describe("MarkdownBody — inline HTML", () => {
+	test("drops known inline tags from Graphite badge", async () => {
+		const source =
+			"*Spotted by [Graphite](https://example.com)*" +
+			"<i class='graphite__hidden'><br /><br />" +
+			'<a href="https://example.com">Fix in Graphite</a></i>' +
+			"<i class='graphite__hidden'><br /><br />" +
+			"Is this helpful?</i>";
+		const frame = await renderMarkdown(source);
+		expect(frame).toContain("Spotted by");
+		expect(frame).toContain("Graphite");
+		expect(frame).not.toContain("<i");
+		expect(frame).not.toContain("</i>");
+		expect(frame).not.toContain("<br");
+		expect(frame).not.toContain("<a ");
+		expect(frame).not.toContain("[html content]");
+	});
+
+	test("renders <br> as newline", async () => {
+		const frame = await renderMarkdown("Hello<br />world");
+		const lines = frame
+			.split("\n")
+			.map((l) => l.trim())
+			.filter(Boolean);
+		const helloLine = lines.findIndex((l) => l.includes("Hello"));
+		const worldLine = lines.findIndex((l) => l.includes("world"));
+		expect(helloLine).toBeGreaterThanOrEqual(0);
+		expect(worldLine).toBeGreaterThan(helloLine);
+		expect(frame).not.toContain("<br");
+	});
+
+	test("shows [<tag>] for unknown tags", async () => {
+		const frame = await renderMarkdown("Hello<div>stuff</div>world");
+		expect(frame).toContain("Hello");
+		expect(frame).toContain("[<div>]");
+	});
+
+	test("text between ignored tags still renders", async () => {
+		const frame = await renderMarkdown("before<i>italic text</i>after");
+		expect(frame).toContain("before");
+		expect(frame).toContain("italic text");
+		expect(frame).toContain("after");
+		expect(frame).not.toContain("<i>");
+	});
+});
+
+describe("classifyHtmlTag", () => {
+	test("ignores known inline tags", () => {
+		expect(classifyHtmlTag("<i class='x'>")).toEqual({ kind: "ignore" });
+		expect(classifyHtmlTag("<a href='x'>")).toEqual({ kind: "ignore" });
+		expect(classifyHtmlTag("<img src='x'>")).toEqual({ kind: "ignore" });
+		expect(classifyHtmlTag("<picture>")).toEqual({ kind: "ignore" });
+		expect(classifyHtmlTag("<source media='x' srcset='y'>")).toEqual({ kind: "ignore" });
+		expect(classifyHtmlTag("<span>")).toEqual({ kind: "ignore" });
+	});
+
+	test("classifies <br> as br", () => {
+		expect(classifyHtmlTag("<br />")).toEqual({ kind: "br" });
+		expect(classifyHtmlTag("<br>")).toEqual({ kind: "br" });
+	});
+
+	test("ignores closing tags", () => {
+		expect(classifyHtmlTag("</i>")).toEqual({ kind: "ignore" });
+		expect(classifyHtmlTag("</a>")).toEqual({ kind: "ignore" });
+		expect(classifyHtmlTag("</span>")).toEqual({ kind: "ignore" });
+	});
+
+	test("classifies HTML comments", () => {
+		expect(classifyHtmlTag("<!-- hello -->")).toEqual({ kind: "comment" });
+	});
+
+	test("returns unknown with tag name for block-level tags", () => {
+		expect(classifyHtmlTag("<div>")).toEqual({ kind: "unknown", tag: "div" });
+		expect(classifyHtmlTag("<table>")).toEqual({ kind: "unknown", tag: "table" });
 	});
 });
 

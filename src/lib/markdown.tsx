@@ -30,10 +30,56 @@ import type {
 	Image,
 } from "mdast";
 
-/** True when the raw HTML value contains only comment nodes (no elements/text). */
-function isHtmlCommentOnly(value: string): boolean {
-	const tree = fromHtml(value, { fragment: true });
-	return tree.children.length > 0 && tree.children.every((n) => n.type === "comment");
+/** Tags that are silently dropped when they appear as inline HTML fragments. */
+const IGNORED_INLINE_TAGS = new Set([
+	"a",
+	"b",
+	"br",
+	"em",
+	"i",
+	"img",
+	"picture",
+	"source",
+	"span",
+	"strong",
+	"sub",
+	"sup",
+]);
+
+/** Result of parsing an inline HTML fragment with hast. */
+export type HtmlTagInfo =
+	| { kind: "ignore" }
+	| { kind: "br" }
+	| { kind: "comment" }
+	| { kind: "unknown"; tag: string };
+
+/**
+ * Classify an HTML fragment using the hast parser.
+ * Returns the kind and, for unknown elements, the tag name.
+ */
+export function classifyHtmlTag(value: string): HtmlTagInfo {
+	const trimmed = value.trim();
+
+	// Closing tags: parse to find the tag name, ignore if known.
+	if (trimmed.startsWith("</")) {
+		const tree = fromHtml(trimmed, { fragment: true });
+		if (tree.children.length === 0) return { kind: "ignore" };
+		if (tree.children.every((n) => n.type === "comment")) return { kind: "comment" };
+		return { kind: "ignore" };
+	}
+
+	const tree = fromHtml(trimmed, { fragment: true });
+	if (tree.children.every((n) => n.type === "comment")) return { kind: "comment" };
+
+	for (const node of tree.children) {
+		if (node.type === "element") {
+			const tag = (node as HastElement).tagName;
+			if (tag === "br") return { kind: "br" };
+			if (IGNORED_INLINE_TAGS.has(tag)) continue;
+			return { kind: "unknown", tag };
+		}
+	}
+	return { kind: "ignore" };
 }
 
 // ── <details> grouping ──────────────────────────────────────────────────────
@@ -214,13 +260,7 @@ function MdBlock(props: MdBlockProps) {
 				<MdThematicBreak />
 			</Match>
 			<Match when={props.node.type === "html"}>
-				{!isHtmlCommentOnly((props.node as any).value ?? "") && (
-					<box width="100%">
-						<text>
-							<span style={{ fg: theme.muted }}>[html content]</span>
-						</text>
-					</box>
-				)}
+				<BlockHtml value={(props.node as any).value ?? ""} />
 			</Match>
 		</Switch>
 	);
@@ -395,6 +435,44 @@ function InlineNode(props: { node: PhrasingContent }) {
 			<Match when={props.node.type === "image"}>
 				<span style={{ fg: theme.muted }}>
 					[image: {(props.node as Image).alt ?? (props.node as Image).url}]
+				</span>
+			</Match>
+			<Match when={props.node.type === "html"}>
+				<InlineHtml value={(props.node as { type: "html"; value: string }).value} />
+			</Match>
+		</Switch>
+	);
+}
+
+function BlockHtml(props: { value: string }) {
+	const info = () => classifyHtmlTag(props.value);
+	return (
+		<Switch>
+			<Match when={info().kind === "unknown"}>
+				<box width="100%">
+					<text>
+						<span style={{ fg: theme.muted }}>
+							[{"<"}
+							{(info() as { kind: "unknown"; tag: string }).tag}
+							{">"}]
+						</span>
+					</text>
+				</box>
+			</Match>
+		</Switch>
+	);
+}
+
+function InlineHtml(props: { value: string }) {
+	const info = () => classifyHtmlTag(props.value);
+	return (
+		<Switch>
+			<Match when={info().kind === "br"}>{"\n"}</Match>
+			<Match when={info().kind === "unknown"}>
+				<span style={{ fg: theme.muted }}>
+					[{"<"}
+					{(info() as { kind: "unknown"; tag: string }).tag}
+					{">"}]
 				</span>
 			</Match>
 		</Switch>
