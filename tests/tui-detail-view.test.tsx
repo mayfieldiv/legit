@@ -492,4 +492,419 @@ describe("DetailView", () => {
 		const frame = await renderDetail({ showBotComments: false });
 		expect(frame).toContain("show bots");
 	});
+
+	test("status bar shows j/k navigate hint", async () => {
+		const frame = await renderDetail();
+		expect(frame).toContain("j/k navigate");
+	});
+
+	// ── Focus selection ─────────────────────────────────────────────────────
+
+	const sampleThreads: FullReviewThread[] = [
+		{
+			id: "RT_1",
+			isResolved: false,
+			path: "src/foo.ts",
+			line: 42,
+			comments: [
+				{
+					id: "RC_1",
+					author: "bob",
+					body: "Thread one comment",
+					createdAt: "2026-03-10T00:00:00Z",
+					url: "https://github.com/acme/widgets/pull/42#discussion_r1",
+					isBot: false,
+				},
+			],
+		},
+		{
+			id: "RT_2",
+			isResolved: false,
+			path: "src/bar.ts",
+			line: 10,
+			comments: [
+				{
+					id: "RC_2",
+					author: "alice",
+					body: "Thread two comment",
+					createdAt: "2026-03-10T00:00:00Z",
+					url: "https://github.com/acme/widgets/pull/42#discussion_r2",
+					isBot: false,
+				},
+			],
+		},
+	];
+
+	const sampleComments: IssueComment[] = [
+		{
+			id: 100,
+			author: "alice",
+			body: "Issue comment one",
+			createdAt: "2026-03-10T00:00:00Z",
+			url: "https://github.com/acme/widgets/pull/42#issuecomment-100",
+			isBot: false,
+		},
+	];
+
+	test("j moves focus to first thread and shows border", async () => {
+		const { renderOnce, captureCharFrame, mockInput } = await testRender(
+			() => (
+				<DetailView
+					pr={makeDetail()}
+					threads={sampleThreads}
+					comments={[]}
+					loading={false}
+					showResolved={false}
+					showBotComments={true}
+				/>
+			),
+			{ width: 80, height: 60 },
+		);
+		await renderOnce();
+
+		// No focus initially — no border visible
+		let frame = captureCharFrame();
+		expect(frame).not.toContain("╭");
+
+		// Press j to focus first item
+		mockInput.pressKey("j");
+		await renderOnce();
+		frame = captureCharFrame();
+		// Rounded border should appear
+		expect(frame).toContain("╭");
+		expect(frame).toContain("╰");
+	});
+
+	test("k from first item unfocuses (index -1)", async () => {
+		const { renderOnce, captureCharFrame, mockInput } = await testRender(
+			() => (
+				<DetailView
+					pr={makeDetail()}
+					threads={sampleThreads}
+					comments={[]}
+					loading={false}
+					showResolved={false}
+					showBotComments={true}
+				/>
+			),
+			{ width: 80, height: 60 },
+		);
+		await renderOnce();
+
+		// Focus first, then move back up
+		mockInput.pressKey("j");
+		await renderOnce();
+		mockInput.pressKey("k");
+		await renderOnce();
+
+		const frame = captureCharFrame();
+		expect(frame).not.toContain("╭");
+	});
+
+	test("j navigates through threads then to comments", async () => {
+		const { renderOnce, captureCharFrame, mockInput } = await testRender(
+			() => (
+				<DetailView
+					pr={makeDetail()}
+					threads={sampleThreads}
+					comments={sampleComments}
+					loading={false}
+					showResolved={false}
+					showBotComments={true}
+				/>
+			),
+			{ width: 80, height: 80 },
+		);
+		await renderOnce();
+
+		// j → focus thread 0 (src/foo.ts)
+		mockInput.pressKey("j");
+		await renderOnce();
+		let frame = captureCharFrame();
+		// The focused card contains src/foo.ts — we can't easily tell which card
+		// has the border, but the border should be present
+		expect(frame).toContain("╭");
+
+		// j → focus thread 1 (src/bar.ts)
+		mockInput.pressKey("j");
+		await renderOnce();
+		frame = captureCharFrame();
+		// Still has a border (now on thread 2)
+		expect(frame).toContain("╭");
+
+		// j → focus comment 0 ("Issue comment one")
+		mockInput.pressKey("j");
+		await renderOnce();
+		frame = captureCharFrame();
+		expect(frame).toContain("╭");
+		expect(frame).toContain("Issue comment one");
+	});
+
+	test("j stops at last item", async () => {
+		const { renderOnce, captureCharFrame, mockInput } = await testRender(
+			() => (
+				<DetailView
+					pr={makeDetail()}
+					threads={[sampleThreads[0]!]}
+					comments={[]}
+					loading={false}
+					showResolved={false}
+					showBotComments={true}
+				/>
+			),
+			{ width: 80, height: 60 },
+		);
+		await renderOnce();
+
+		// Focus the only item, then try to go further
+		mockInput.pressKey("j");
+		await renderOnce();
+		mockInput.pressKey("j");
+		await renderOnce();
+		mockInput.pressKey("j");
+		await renderOnce();
+
+		// Should still show border (stuck on last item)
+		const frame = captureCharFrame();
+		expect(frame).toContain("╭");
+	});
+
+	test("down arrow also navigates focus", async () => {
+		const { renderOnce, captureCharFrame, mockInput } = await testRender(
+			() => (
+				<DetailView
+					pr={makeDetail()}
+					threads={sampleThreads}
+					comments={[]}
+					loading={false}
+					showResolved={false}
+					showBotComments={true}
+				/>
+			),
+			{ width: 80, height: 60 },
+		);
+		await renderOnce();
+		mockInput.pressArrow("down");
+		await renderOnce();
+		const frame = captureCharFrame();
+		expect(frame).toContain("╭");
+	});
+
+	test("up arrow navigates focus backward", async () => {
+		let openedUrl = "";
+		const { renderOnce, mockInput } = await testRender(
+			() => (
+				<DetailView
+					pr={makeDetail()}
+					threads={sampleThreads}
+					comments={[]}
+					loading={false}
+					showResolved={false}
+					showBotComments={true}
+					onOpenUrl={(url: string) => {
+						openedUrl = url;
+					}}
+				/>
+			),
+			{ width: 80, height: 60 },
+		);
+		await renderOnce();
+
+		// Navigate down two, then up one → back to first thread
+		mockInput.pressKey("j");
+		await renderOnce();
+		mockInput.pressKey("j");
+		await renderOnce();
+		mockInput.pressArrow("up");
+		await renderOnce();
+
+		// Press o to verify we’re on the first thread (RT_1)
+		mockInput.pressKey("o");
+		await renderOnce();
+		expect(openedUrl).toBe("https://github.com/acme/widgets/pull/42#discussion_r1");
+	});
+
+	test("o opens focused item URL via onOpenUrl", async () => {
+		let openedUrl = "";
+		let prOpened = false;
+		const { renderOnce, mockInput } = await testRender(
+			() => (
+				<DetailView
+					pr={makeDetail()}
+					threads={sampleThreads}
+					comments={[]}
+					loading={false}
+					showResolved={false}
+					showBotComments={true}
+					onOpenInBrowser={() => {
+						prOpened = true;
+					}}
+					onOpenUrl={(url: string) => {
+						openedUrl = url;
+					}}
+				/>
+			),
+			{ width: 80, height: 60 },
+		);
+		await renderOnce();
+
+		// Focus first thread, then press o
+		mockInput.pressKey("j");
+		await renderOnce();
+		mockInput.pressKey("o");
+		await renderOnce();
+
+		expect(openedUrl).toBe("https://github.com/acme/widgets/pull/42#discussion_r1");
+		expect(prOpened).toBe(false);
+	});
+
+	test("o opens PR in browser when nothing is focused", async () => {
+		let prOpened = false;
+		let openedUrl = "";
+		const { renderOnce, mockInput } = await testRender(
+			() => (
+				<DetailView
+					pr={makeDetail()}
+					threads={sampleThreads}
+					comments={[]}
+					loading={false}
+					showResolved={false}
+					showBotComments={true}
+					onOpenInBrowser={() => {
+						prOpened = true;
+					}}
+					onOpenUrl={(url: string) => {
+						openedUrl = url;
+					}}
+				/>
+			),
+			{ width: 80, height: 60 },
+		);
+		await renderOnce();
+
+		// No focus navigation — press o directly
+		mockInput.pressKey("o");
+		await renderOnce();
+
+		expect(prOpened).toBe(true);
+		expect(openedUrl).toBe("");
+	});
+
+	test("o on second thread opens its URL", async () => {
+		let openedUrl = "";
+		const { renderOnce, mockInput } = await testRender(
+			() => (
+				<DetailView
+					pr={makeDetail()}
+					threads={sampleThreads}
+					comments={sampleComments}
+					loading={false}
+					showResolved={false}
+					showBotComments={true}
+					onOpenUrl={(url: string) => {
+						openedUrl = url;
+					}}
+				/>
+			),
+			{ width: 80, height: 80 },
+		);
+		await renderOnce();
+
+		// j → thread 0, j → thread 1, o
+		mockInput.pressKey("j");
+		await renderOnce();
+		mockInput.pressKey("j");
+		await renderOnce();
+		mockInput.pressKey("o");
+		await renderOnce();
+
+		expect(openedUrl).toBe("https://github.com/acme/widgets/pull/42#discussion_r2");
+	});
+
+	test("o on issue comment opens its URL", async () => {
+		let openedUrl = "";
+		const { renderOnce, mockInput } = await testRender(
+			() => (
+				<DetailView
+					pr={makeDetail()}
+					threads={sampleThreads}
+					comments={sampleComments}
+					loading={false}
+					showResolved={false}
+					showBotComments={true}
+					onOpenUrl={(url: string) => {
+						openedUrl = url;
+					}}
+				/>
+			),
+			{ width: 80, height: 80 },
+		);
+		await renderOnce();
+
+		// j → thread 0, j → thread 1, j → comment 0, o
+		mockInput.pressKey("j");
+		await renderOnce();
+		mockInput.pressKey("j");
+		await renderOnce();
+		mockInput.pressKey("j");
+		await renderOnce();
+		mockInput.pressKey("o");
+		await renderOnce();
+
+		expect(openedUrl).toBe("https://github.com/acme/widgets/pull/42#issuecomment-100");
+	});
+
+	test("mouse click focuses a comment card", async () => {
+		const { renderOnce, captureCharFrame, mockMouse } = await testRender(
+			() => (
+				<DetailView
+					pr={makeDetail({ body: "" })}
+					threads={[]}
+					comments={sampleComments}
+					loading={false}
+					showResolved={false}
+					showBotComments={true}
+				/>
+			),
+			{ width: 80, height: 30 },
+		);
+		await renderOnce();
+
+		// Comment card content is at rows 8–9 (inside scrollbox).
+		// Click inside the card area.
+		await mockMouse.click(10, 8);
+		await renderOnce();
+
+		const frame = captureCharFrame();
+		// After clicking, the border should appear
+		expect(frame).toContain("╭");
+	});
+
+	test("only one item has a visible border at a time", async () => {
+		const { renderOnce, captureCharFrame, mockInput } = await testRender(
+			() => (
+				<DetailView
+					pr={makeDetail()}
+					threads={sampleThreads}
+					comments={[]}
+					loading={false}
+					showResolved={false}
+					showBotComments={true}
+				/>
+			),
+			{ width: 80, height: 60 },
+		);
+		await renderOnce();
+
+		// Focus first thread
+		mockInput.pressKey("j");
+		await renderOnce();
+
+		const frame = captureCharFrame();
+		// Count border corners — should have exactly one top-left and one bottom-left
+		const topLeftCount = (frame.match(/╭/g) || []).length;
+		const bottomLeftCount = (frame.match(/╰/g) || []).length;
+		expect(topLeftCount).toBe(1);
+		expect(bottomLeftCount).toBe(1);
+	});
 });

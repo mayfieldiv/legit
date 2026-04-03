@@ -26,6 +26,13 @@ export function App(props: AppProps) {
 		});
 	}
 
+	function handleOpenUrl(url: string) {
+		setBrowserError("");
+		execFile("open", [url], (err) => {
+			if (err) setBrowserError(`Failed to open browser: ${err.message}`);
+		});
+	}
+
 	const displayRepoSlug = () => {
 		const tab = store.activeTab();
 		return tab === 0 ? "All repos" : (store.tabs()[tab] ?? "All repos");
@@ -61,6 +68,7 @@ export function App(props: AppProps) {
 			onToggleBotComments={store.toggleBotComments}
 			onRefreshDetail={store.refreshDetail}
 			onOpenInBrowser={handleOpenInBrowser}
+			onOpenUrl={handleOpenUrl}
 		/>
 	);
 }

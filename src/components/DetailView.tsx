@@ -11,7 +11,7 @@
  * is false. Threads grouped by file path. Issue comments shown chronologically.
  */
 
-import { Show, For, createMemo } from "solid-js";
+import { Show, For, createMemo, createSignal, createEffect, on } from "solid-js";
 import { useKeyboard } from "@opentui/solid";
 import { MarkdownBody } from "../lib/markdown";
 import { formatAge, formatSize, sortCheckRuns } from "../lib/format";
@@ -22,6 +22,8 @@ import type {
 	IssueComment,
 	ReviewComment,
 } from "../lib/types";
+import type { MouseEvent } from "@opentui/core";
+import type { ScrollBoxRenderable } from "@opentui/core";
 
 // ── Props ───────────────────────────────────────────────────────────────────
 
@@ -36,7 +38,65 @@ export interface DetailViewProps {
 	onToggleResolved?: () => void;
 	onToggleBotComments?: () => void;
 	onOpenInBrowser?: () => void;
+	onOpenUrl?: (url: string) => void;
 	onRefresh?: () => void;
+}
+
+// ── Focus selection model ───────────────────────────────────────────────────
+
+export type FocusableItem =
+	| { kind: "thread"; thread: FullReviewThread; url: string }
+	| { kind: "comment"; comment: IssueComment; url: string };
+
+const ROUNDED_BORDER = {
+	topLeft: "╭",
+	topRight: "╮",
+	bottomLeft: "╰",
+	bottomRight: "╯",
+	horizontal: "─",
+	vertical: "│",
+	topT: "┬",
+	bottomT: "┴",
+	leftT: "├",
+	rightT: "┤",
+	cross: "┼",
+};
+const INVISIBLE_BORDER = {
+	topLeft: " ",
+	topRight: " ",
+	bottomLeft: " ",
+	bottomRight: " ",
+	horizontal: " ",
+	vertical: " ",
+	topT: " ",
+	bottomT: " ",
+	leftT: " ",
+	rightT: " ",
+	cross: " ",
+};
+
+function FocusableCard(props: {
+	focused: boolean;
+	id: string;
+	onMouseDown?: () => void;
+	children: any;
+}) {
+	return (
+		<box
+			id={props.id}
+			border={true}
+			customBorderChars={props.focused ? ROUNDED_BORDER : INVISIBLE_BORDER}
+			borderColor="cyan"
+			width="100%"
+			flexDirection="column"
+			onMouseDown={(e: MouseEvent) => {
+				e.preventDefault();
+				props.onMouseDown?.();
+			}}
+		>
+			{props.children}
+		</box>
+	);
 }
 
 // ── Check icon (shared with SummaryPanel — could extract later) ─────────
@@ -140,22 +200,6 @@ export function DetailView(props: DetailViewProps) {
 	);
 	const pending = createMemo(() => checks().filter((c) => c.status !== "completed").length);
 
-	// ── Keyboard ───────────────────────────────────────────────────────────
-	useKeyboard((event) => {
-		const name = event.name;
-		if (name === "escape") {
-			props.onExit?.();
-		} else if (name === "t") {
-			props.onToggleResolved?.();
-		} else if (name === "b") {
-			props.onToggleBotComments?.();
-		} else if (name === "o") {
-			props.onOpenInBrowser?.();
-		} else if (name === "r" && !event.shift) {
-			props.onRefresh?.();
-		}
-	});
-
 	// ── Filtered threads ─────────────────────────────────────────────────
 	const visibleThreads = createMemo(() => {
 		let threads = props.threads;
@@ -174,6 +218,78 @@ export function DetailView(props: DetailViewProps) {
 	const visibleComments = createMemo(() => {
 		if (props.showBotComments) return props.comments;
 		return props.comments.filter((c) => !c.isBot);
+	});
+
+	// ── Focus selection ─────────────────────────────────────────────────
+	const [focusedIndex, setFocusedIndex] = createSignal(-1);
+
+	const focusableItems = createMemo<FocusableItem[]>(() => {
+		const items: FocusableItem[] = [];
+		for (const thread of visibleThreads()) {
+			if (thread.comments.length > 0) {
+				items.push({ kind: "thread", thread, url: thread.comments[0]!.url });
+			}
+		}
+		for (const comment of visibleComments()) {
+			items.push({ kind: "comment", comment, url: comment.url });
+		}
+		return items;
+	});
+
+	// Clamp focus index when the focusable items list changes
+	createEffect(
+		on(focusableItems, (items) => {
+			const idx = focusedIndex();
+			if (items.length === 0) {
+				setFocusedIndex(-1);
+			} else if (idx >= items.length) {
+				setFocusedIndex(items.length - 1);
+			}
+		}),
+	);
+
+	// Auto-scroll focused item into view
+	let scrollRef: ScrollBoxRenderable | undefined;
+
+	createEffect(
+		on(
+			() => focusedIndex(),
+			(idx) => {
+				if (idx >= 0 && scrollRef) {
+					scrollRef.scrollChildIntoView(`focusable-${idx}`);
+				}
+			},
+			{ defer: true },
+		),
+	);
+
+	// ── Keyboard ───────────────────────────────────────────────────────────
+	useKeyboard((event) => {
+		const name = event.name;
+		if (name === "escape") {
+			props.onExit?.();
+		} else if (name === "j" || name === "down") {
+			const items = focusableItems();
+			if (items.length > 0) {
+				setFocusedIndex((i) => Math.min(i + 1, items.length - 1));
+			}
+		} else if (name === "k" || name === "up") {
+			setFocusedIndex((i) => Math.max(i - 1, -1));
+		} else if (name === "t") {
+			props.onToggleResolved?.();
+		} else if (name === "b") {
+			props.onToggleBotComments?.();
+		} else if (name === "o") {
+			const idx = focusedIndex();
+			const items = focusableItems();
+			if (idx >= 0 && idx < items.length) {
+				props.onOpenUrl?.(items[idx]!.url);
+			} else {
+				props.onOpenInBrowser?.();
+			}
+		} else if (name === "r" && !event.shift) {
+			props.onRefresh?.();
+		}
 	});
 
 	return (
@@ -241,7 +357,13 @@ export function DetailView(props: DetailViewProps) {
 			{/* ── Scrollable body ──────────────────────────────────── */}
 			<Show when={props.pr}>
 				{(pr) => (
-					<scrollbox flexGrow={1} width="100%">
+					<scrollbox
+						ref={(el: ScrollBoxRenderable) => {
+							scrollRef = el;
+						}}
+						flexGrow={1}
+						width="100%"
+					>
 						{/* Description */}
 						<box flexDirection="column" width="100%">
 							<Show
@@ -329,11 +451,17 @@ export function DetailView(props: DetailViewProps) {
 									}
 								>
 									<For each={visibleThreads()}>
-										{(thread) => (
-											<ThreadCard
-												thread={thread}
-												showBotComments={props.showBotComments}
-											/>
+										{(thread, threadIdx) => (
+											<FocusableCard
+												id={`focusable-${threadIdx()}`}
+												focused={focusedIndex() === threadIdx()}
+												onMouseDown={() => setFocusedIndex(threadIdx())}
+											>
+												<ThreadCard
+													thread={thread}
+													showBotComments={props.showBotComments}
+												/>
+											</FocusableCard>
 										)}
 									</For>
 								</Show>
@@ -357,7 +485,19 @@ export function DetailView(props: DetailViewProps) {
 									</text>
 								</box>
 								<For each={visibleComments()}>
-									{(comment) => <CommentRow comment={comment} />}
+									{(comment, commentIdx) => {
+										const itemIdx = () =>
+											visibleThreads().length + commentIdx();
+										return (
+											<FocusableCard
+												id={`focusable-${itemIdx()}`}
+												focused={focusedIndex() === itemIdx()}
+												onMouseDown={() => setFocusedIndex(itemIdx())}
+											>
+												<CommentRow comment={comment} />
+											</FocusableCard>
+										);
+									}}
 								</For>
 							</Show>
 						</box>
@@ -370,7 +510,7 @@ export function DetailView(props: DetailViewProps) {
 				<box width="100%" height={1}>
 					<text>
 						<span style={{ fg: "gray" }}>
-							Esc close · o open · r refresh · t{" "}
+							Esc close · j/k navigate · o open · r refresh · t{" "}
 							{props.showResolved ? "hide" : "show"} resolved · b{" "}
 							{props.showBotComments ? "hide" : "show"} bots
 						</span>

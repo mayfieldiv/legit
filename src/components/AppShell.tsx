@@ -37,6 +37,7 @@ interface AppShellProps {
 	onExitDetail?: () => void;
 	onToggleResolved?: () => void;
 	onToggleBotComments?: () => void;
+	onOpenUrl?: (url: string) => void;
 	onRefreshDetail?: () => void;
 	tabs?: string[];
 	activeTab?: number;
@@ -155,6 +156,7 @@ export function AppShell(props: AppShellProps) {
 								const pr = props.detailPr;
 								if (pr) props.onOpenInBrowser?.(pr);
 							}}
+							onOpenUrl={props.onOpenUrl}
 							onRefresh={props.onRefreshDetail}
 						/>
 					</Match>
