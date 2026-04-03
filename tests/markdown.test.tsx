@@ -102,7 +102,7 @@ describe("MarkdownBody — block nodes", () => {
 		expect(frame).toContain("│ A wise quote.");
 	});
 
-	test("renders HTML blocks as placeholder (e.g. bot badges)", async () => {
+	test("hides HTML comments (e.g. bot badges)", async () => {
 		const source = [
 			"Real content above.",
 			"",
@@ -112,8 +112,15 @@ describe("MarkdownBody — block nodes", () => {
 		].join("\n");
 		const frame = await renderMarkdown(source);
 		expect(frame).toContain("Real content above.");
-		expect(frame).toContain("[html content]");
+		expect(frame).not.toContain("[html content]");
 		expect(frame).not.toContain("devin");
+	});
+
+	test("renders non-comment HTML as placeholder", async () => {
+		const source = ["Before.", "", "<div>some widget</div>"].join("\n");
+		const frame = await renderMarkdown(source);
+		expect(frame).toContain("Before.");
+		expect(frame).toContain("[html content]");
 	});
 
 	test("renders empty source without error", async () => {

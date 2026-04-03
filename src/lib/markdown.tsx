@@ -9,6 +9,7 @@
 
 import { For, Switch, Match } from "solid-js";
 import { fromMarkdown } from "mdast-util-from-markdown";
+import { fromHtml } from "hast-util-from-html";
 import type {
 	Nodes,
 	Heading,
@@ -24,6 +25,12 @@ import type {
 	Link,
 	Image,
 } from "mdast";
+
+/** True when the raw HTML value contains only comment nodes (no elements/text). */
+function isHtmlCommentOnly(value: string): boolean {
+	const tree = fromHtml(value, { fragment: true });
+	return tree.children.length > 0 && tree.children.every((n) => n.type === "comment");
+}
 
 // ── Public API ──────────────────────────────────────────────────────────────
 
@@ -70,11 +77,13 @@ function MdBlock(props: MdBlockProps) {
 				<MdThematicBreak />
 			</Match>
 			<Match when={props.node.type === "html"}>
-				<box width="100%">
-					<text>
-						<span style={{ fg: "gray" }}>[html content]</span>
-					</text>
-				</box>
+				{!isHtmlCommentOnly((props.node as any).value ?? "") && (
+					<box width="100%">
+						<text>
+							<span style={{ fg: "gray" }}>[html content]</span>
+						</text>
+					</box>
+				)}
 			</Match>
 		</Switch>
 	);
