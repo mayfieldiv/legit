@@ -54,6 +54,8 @@ interface PRListProps {
 	showRepo?: boolean;
 	currentUser?: string;
 	onSelect?: (index: number) => void;
+	/** Which optional columns are visible (responsive). Shows all if omitted. */
+	visibleColumns?: VisibleColumns;
 }
 
 // Column widths — fixed columns; title gets remaining space via flexGrow
@@ -67,6 +69,70 @@ const COL = {
 	threads: 10,
 	blocker: 14,
 } as const;
+
+/** Set of optional columns that can be hidden at narrow widths. */
+export interface VisibleColumns {
+	author: boolean;
+	size: boolean;
+	age: boolean;
+	review: boolean;
+	threads: boolean;
+	blocker: boolean;
+}
+
+/**
+ * Compute which optional columns to show given the available list width.
+ * Columns are hidden progressively from least to most important:
+ *   blocker → threads → review → size → author → age
+ */
+export function computeVisibleColumns(listWidth: number, showRepo: boolean): VisibleColumns {
+	// Base: PR(7) + Title(30 min) = 37, plus Repo(14) if shown
+	const base = COL.pr + 30 + (showRepo ? COL.repo : 0);
+	let budget = listWidth - base;
+
+	// Add columns in priority order (most important first)
+	const cols: VisibleColumns = {
+		age: false,
+		author: false,
+		size: false,
+		review: false,
+		threads: false,
+		blocker: false,
+	};
+
+	// age (6) — very compact, show early
+	if (budget >= COL.age) {
+		cols.age = true;
+		budget -= COL.age;
+	}
+	// author (14)
+	if (budget >= COL.author) {
+		cols.author = true;
+		budget -= COL.author;
+	}
+	// size (14)
+	if (budget >= COL.size) {
+		cols.size = true;
+		budget -= COL.size;
+	}
+	// review (18)
+	if (budget >= COL.review) {
+		cols.review = true;
+		budget -= COL.review;
+	}
+	// threads (10)
+	if (budget >= COL.threads) {
+		cols.threads = true;
+		budget -= COL.threads;
+	}
+	// blocker (14)
+	if (budget >= COL.blocker) {
+		cols.blocker = true;
+		budget -= COL.blocker;
+	}
+
+	return cols;
+}
 
 /**
  * Build the per-span parts for the Threads cell.
@@ -170,6 +236,7 @@ function PRRow(props: {
 	currentUser?: string;
 	id: string;
 	onMouseDown?: (e: MouseEvent) => void;
+	visibleColumns?: VisibleColumns;
 }) {
 	const fg = () => (props.selected ? theme.selectedFg : undefined);
 	const blockerCell = () => {
@@ -198,42 +265,52 @@ function PRRow(props: {
 					</span>
 				</Cell>
 			</Show>
-			<Cell flexGrow={1} minWidth={30} paddingRight={props.showRepo ? 2 : 3}>
+			<Cell flexGrow={1} minWidth={10} paddingRight={props.showRepo ? 2 : 3}>
 				<span style={{ fg: fg() }}>{props.pr.title}</span>
 			</Cell>
-			<Cell width={COL.author} paddingRight={1}>
-				<span style={{ fg: props.selected ? theme.selectedFg : theme.success }}>
-					{props.pr.author}
-				</span>
-			</Cell>
-			<Cell width={COL.size} paddingRight={1}>
-				<span style={{ fg: fg() }}>
-					{formatSize(props.pr.additions, props.pr.deletions)}
-				</span>
-			</Cell>
-			<Cell width={COL.age} paddingRight={1}>
-				<span style={{ fg: fg() }}>{formatAge(props.pr.createdAt)}</span>
-			</Cell>
-			<Cell width={COL.review} paddingRight={1}>
-				<span style={{ fg: reviewCellFg(props.pr, props.selected) }}>
-					{reviewCellText(props.pr)}
-				</span>
-			</Cell>
-			<Cell width={COL.threads} paddingRight={props.currentUser ? 1 : 0}>
-				<Show
-					when={props.pr.comments !== undefined}
-					fallback={
-						<Show when={props.pr.threadsLoading}>
-							<span style={{ fg: theme.muted }}>…</span>
-						</Show>
-					}
-				>
-					<For each={threadParts(props.pr.comments, props.selected)}>
-						{(part) => <span style={{ fg: part.fg }}>{part.text}</span>}
-					</For>
-				</Show>
-			</Cell>
-			<Show when={props.currentUser}>
+			<Show when={props.visibleColumns?.author !== false}>
+				<Cell width={COL.author} paddingRight={1}>
+					<span style={{ fg: props.selected ? theme.selectedFg : theme.success }}>
+						{props.pr.author}
+					</span>
+				</Cell>
+			</Show>
+			<Show when={props.visibleColumns?.size !== false}>
+				<Cell width={COL.size} paddingRight={1}>
+					<span style={{ fg: fg() }}>
+						{formatSize(props.pr.additions, props.pr.deletions)}
+					</span>
+				</Cell>
+			</Show>
+			<Show when={props.visibleColumns?.age !== false}>
+				<Cell width={COL.age} paddingRight={1}>
+					<span style={{ fg: fg() }}>{formatAge(props.pr.createdAt)}</span>
+				</Cell>
+			</Show>
+			<Show when={props.visibleColumns?.review !== false}>
+				<Cell width={COL.review} paddingRight={1}>
+					<span style={{ fg: reviewCellFg(props.pr, props.selected) }}>
+						{reviewCellText(props.pr)}
+					</span>
+				</Cell>
+			</Show>
+			<Show when={props.visibleColumns?.threads !== false}>
+				<Cell width={COL.threads} paddingRight={props.currentUser ? 1 : 0}>
+					<Show
+						when={props.pr.comments !== undefined}
+						fallback={
+							<Show when={props.pr.threadsLoading}>
+								<span style={{ fg: theme.muted }}>…</span>
+							</Show>
+						}
+					>
+						<For each={threadParts(props.pr.comments, props.selected)}>
+							{(part) => <span style={{ fg: part.fg }}>{part.text}</span>}
+						</For>
+					</Show>
+				</Cell>
+			</Show>
+			<Show when={props.currentUser && props.visibleColumns?.blocker !== false}>
 				<Cell width={COL.blocker}>
 					<Show when={blockerCell()}>
 						{(display) => (
@@ -248,7 +325,11 @@ function PRRow(props: {
 	);
 }
 
-export function PRListHeader(props: { showRepo?: boolean; currentUser?: string }) {
+export function PRListHeader(props: {
+	showRepo?: boolean;
+	currentUser?: string;
+	visibleColumns?: VisibleColumns;
+}) {
 	return (
 		<box flexDirection="row" width="100%" height={1}>
 			<Cell width={COL.pr} paddingRight={1}>
@@ -259,25 +340,35 @@ export function PRListHeader(props: { showRepo?: boolean; currentUser?: string }
 					<b>Repo</b>
 				</Cell>
 			</Show>
-			<Cell flexGrow={1} minWidth={30} paddingRight={3}>
+			<Cell flexGrow={1} minWidth={10} paddingRight={3}>
 				<b>Title</b>
 			</Cell>
-			<Cell width={COL.author} paddingRight={1}>
-				<b>Author</b>
-			</Cell>
-			<Cell width={COL.size} paddingRight={1}>
-				<b>Size</b>
-			</Cell>
-			<Cell width={COL.age} paddingRight={1}>
-				<b>Age</b>
-			</Cell>
-			<Cell width={COL.review} paddingRight={1}>
-				<b>Review</b>
-			</Cell>
-			<Cell width={COL.threads} paddingRight={props.currentUser ? 1 : 0}>
-				<b>Threads</b>
-			</Cell>
-			<Show when={props.currentUser}>
+			<Show when={props.visibleColumns?.author !== false}>
+				<Cell width={COL.author} paddingRight={1}>
+					<b>Author</b>
+				</Cell>
+			</Show>
+			<Show when={props.visibleColumns?.size !== false}>
+				<Cell width={COL.size} paddingRight={1}>
+					<b>Size</b>
+				</Cell>
+			</Show>
+			<Show when={props.visibleColumns?.age !== false}>
+				<Cell width={COL.age} paddingRight={1}>
+					<b>Age</b>
+				</Cell>
+			</Show>
+			<Show when={props.visibleColumns?.review !== false}>
+				<Cell width={COL.review} paddingRight={1}>
+					<b>Review</b>
+				</Cell>
+			</Show>
+			<Show when={props.visibleColumns?.threads !== false}>
+				<Cell width={COL.threads} paddingRight={props.currentUser ? 1 : 0}>
+					<b>Threads</b>
+				</Cell>
+			</Show>
+			<Show when={props.currentUser && props.visibleColumns?.blocker !== false}>
 				<Cell width={COL.blocker}>
 					<b>Blocker</b>
 				</Cell>
@@ -310,6 +401,7 @@ export function PRList(props: PRListProps) {
 								selected={item.prIndex === props.selectedIndex}
 								showRepo={props.showRepo}
 								currentUser={props.currentUser}
+								visibleColumns={props.visibleColumns}
 								onMouseDown={(e: MouseEvent) => {
 									e.preventDefault();
 									props.onSelect?.(item.prIndex);

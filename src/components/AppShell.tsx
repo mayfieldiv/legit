@@ -1,5 +1,5 @@
-import { Show, Switch, Match } from "solid-js";
-import { useKeyboard } from "@opentui/solid";
+import { Show, Switch, Match, createMemo } from "solid-js";
+import { useKeyboard, useTerminalDimensions } from "@opentui/solid";
 import { ListView } from "./ListView";
 import { SummaryPanel } from "./SummaryPanel";
 import { DetailView } from "./DetailView";
@@ -7,6 +7,7 @@ import type { PR, PRDetail, PRSummary, FullReviewThread, IssueComment } from "..
 import type { GroupByKey } from "../lib/group-filter-engine";
 import type { ViewTarget } from "../lib/pr-store";
 import { theme } from "../lib/theme";
+import { computeVisibleColumns } from "./PRList";
 
 export type { ViewTarget } from "../lib/pr-store";
 
@@ -46,9 +47,37 @@ interface AppShellProps {
 	onTabChange?: (index: number) => void;
 }
 
+/** Summary panel width: full at wide widths, narrower when tight, hidden when very narrow. */
+const SUMMARY_FULL = 50;
+const SUMMARY_NARROW = 36;
+const SUMMARY_DIVIDER = 1;
+/** Minimum terminal width to show the summary panel at all. */
+const SUMMARY_MIN_TERM_WIDTH = 80;
+
 export function AppShell(props: AppShellProps) {
 	const tabCount = () => props.tabs?.length ?? 0;
 	const inListView = () => props.view.view === "list";
+	const dims = useTerminalDimensions();
+
+	/** Whether to show the summary panel. */
+	const showSummary = () => dims().width >= SUMMARY_MIN_TERM_WIDTH;
+
+	/** Width of the summary panel (0 when hidden). */
+	const summaryWidth = () => {
+		if (!showSummary()) return 0;
+		return dims().width >= 140 ? SUMMARY_FULL : SUMMARY_NARROW;
+	};
+
+	/** Available width for the list (excluding summary + divider). */
+	const listWidth = () => {
+		const sw = summaryWidth();
+		return dims().width - (sw > 0 ? sw + SUMMARY_DIVIDER : 0);
+	};
+
+	/** Responsive column visibility. */
+	const visibleColumns = createMemo(() =>
+		computeVisibleColumns(listWidth(), props.showRepo ?? false),
+	);
 
 	useKeyboard((event) => {
 		if (!inListView()) return;
@@ -135,17 +164,20 @@ export function AppShell(props: AppShellProps) {
 								onSelectionChange={props.onSelectionChange}
 								onOpenInBrowser={props.onOpenInBrowser}
 								onOpenInDevin={props.onOpenInDevin}
+								visibleColumns={visibleColumns()}
 							/>
-							<box width={1} height="100%">
-								<text>│</text>
-							</box>
-							<box width={50}>
-								<SummaryPanel
-									summary={props.summary}
-									pr={props.selectedPr}
-									currentUser={props.currentUser}
-								/>
-							</box>
+							<Show when={showSummary()}>
+								<box width={1} height="100%">
+									<text>│</text>
+								</box>
+								<box width={summaryWidth()}>
+									<SummaryPanel
+										summary={props.summary}
+										pr={props.selectedPr}
+										currentUser={props.currentUser}
+									/>
+								</box>
+							</Show>
 						</box>
 					</Match>
 					<Match when={props.view.view === "detail"}>

@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { testRender } from "@opentui/solid";
-import { PRList, PRListHeader } from "../src/components/PRList";
+import { PRList, PRListHeader, computeVisibleColumns } from "../src/components/PRList";
 import { makePR } from "./helpers";
 
 describe("PRList", () => {
@@ -317,5 +317,46 @@ describe("PRList", () => {
 		await renderOnce();
 		const frame = captureCharFrame();
 		expect(frame).not.toMatch(/[Bb]locker/);
+	});
+});
+
+const countTrueValues = (c: object) => Object.values(c).filter(Boolean).length;
+
+describe("computeVisibleColumns", () => {
+	test("shows all columns at very wide widths", () => {
+		const cols = computeVisibleColumns(180, true);
+		expect(cols.age).toBe(true);
+		expect(cols.author).toBe(true);
+		expect(cols.size).toBe(true);
+		expect(cols.review).toBe(true);
+		expect(cols.threads).toBe(true);
+		expect(cols.blocker).toBe(true);
+	});
+
+	test("hides columns progressively at narrow widths", () => {
+		// base with repo = 7 (PR) + 30 (title) + 14 (repo) = 51
+		// At 60 chars with repo: budget = 9, age(6) fits but author(14) doesn't
+		const cols = computeVisibleColumns(60, true);
+		expect(cols.age).toBe(true);
+		expect(cols.author).toBe(false);
+		expect(cols.size).toBe(false);
+		expect(cols.review).toBe(false);
+		expect(cols.threads).toBe(false);
+		expect(cols.blocker).toBe(false);
+	});
+
+	test("without repo, more columns fit", () => {
+		// Without repo, base is smaller (37 vs 51), so more budget
+		const withRepo = computeVisibleColumns(80, true);
+		const withoutRepo = computeVisibleColumns(80, false);
+		// Without repo should show at least as many columns
+		expect(countTrueValues(withoutRepo)).toBeGreaterThanOrEqual(countTrueValues(withRepo));
+	});
+
+	test("hides everything when extremely narrow", () => {
+		const cols = computeVisibleColumns(30, true);
+		expect(cols.age).toBe(false);
+		expect(cols.author).toBe(false);
+		expect(cols.blocker).toBe(false);
 	});
 });

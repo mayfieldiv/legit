@@ -1,7 +1,7 @@
 import { useKeyboard } from "@opentui/solid";
 import { createSignal, createMemo, createEffect, on, Show } from "solid-js";
 import { PRList, PRListHeader, buildFlatItems, prIndexToDisplayRow } from "./PRList";
-import type { FlatItem } from "./PRList";
+import type { FlatItem, VisibleColumns } from "./PRList";
 import { GroupPanel, GROUP_BY_OPTIONS } from "./GroupPanel";
 import { createListSelection } from "../lib/list-selection";
 import { processPRList } from "../lib/group-filter-engine";
@@ -25,6 +25,8 @@ interface ListViewProps {
 	onSelectionChange?: (pr: PR) => void;
 	onOpenInBrowser?: (pr: PR) => void;
 	onOpenInDevin?: (pr: PR) => void;
+	/** Which optional columns are visible (responsive). */
+	visibleColumns?: VisibleColumns;
 }
 
 /**
@@ -321,7 +323,11 @@ export function ListView(props: ListViewProps) {
 
 	return (
 		<box flexDirection="column" flexGrow={1} width="100%">
-			<PRListHeader showRepo={props.showRepo} currentUser={props.currentUser} />
+			<PRListHeader
+				showRepo={props.showRepo}
+				currentUser={props.currentUser}
+				visibleColumns={props.visibleColumns}
+			/>
 
 			{/* Filter bar — editing mode (typing) */}
 			<Show when={filterEditing()}>
@@ -378,6 +384,7 @@ export function ListView(props: ListViewProps) {
 							showRepo={props.showRepo}
 							currentUser={props.currentUser}
 							onSelect={selectIndex}
+							visibleColumns={props.visibleColumns}
 						/>
 					</scrollbox>
 				</Show>
