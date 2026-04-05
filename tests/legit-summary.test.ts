@@ -82,6 +82,47 @@ describe("Legit.fetchPRSummary", () => {
 					},
 				},
 			},
+			// fetchFullReviewThreads (GraphQL)
+			{
+				url: /\/graphql/,
+				method: "POST",
+				response: {
+					status: 200,
+					body: {
+						data: {
+							repository: {
+								pullRequest: {
+									reviewThreads: {
+										pageInfo: { hasNextPage: false, endCursor: null },
+										nodes: [
+											{
+												id: "RT_1",
+												isResolved: false,
+												path: "src/app.ts",
+												line: 10,
+												comments: {
+													nodes: [
+														{
+															id: "RC_1",
+															author: {
+																login: "alice",
+																__typename: "User",
+															},
+															body: "comment",
+															createdAt: "2026-03-01T00:00:00Z",
+															url: "https://github.com/test",
+														},
+													],
+												},
+											},
+										],
+									},
+								},
+							},
+						},
+					},
+				},
+			},
 			// fetchFiles
 			{
 				url: /\/files/,
@@ -112,6 +153,8 @@ describe("Legit.fetchPRSummary", () => {
 		expect(summary.comments.total).toBe(1);
 		expect(summary.comments.unresolved).toBe(1);
 		expect(summary.comments.unresolvedHuman).toBe(1);
+		expect(summary.threads).toHaveLength(1);
+		expect(summary.threads[0]!.isResolved).toBe(false);
 		expect(summary.files.files).toHaveLength(1);
 		expect(summary.files.files[0]!.category).toBe("code");
 	});
@@ -139,6 +182,26 @@ describe("Legit.fetchPRSummary", () => {
 			// fetchReviews
 			{ url: /\/reviews/, response: { status: 200, body: [] } },
 			// fetchReviewComments (GraphQL)
+			{
+				url: /\/graphql/,
+				method: "POST",
+				response: {
+					status: 200,
+					body: {
+						data: {
+							repository: {
+								pullRequest: {
+									reviewThreads: {
+										pageInfo: { hasNextPage: false, endCursor: null },
+										nodes: [],
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			// fetchFullReviewThreads (GraphQL)
 			{
 				url: /\/graphql/,
 				method: "POST",

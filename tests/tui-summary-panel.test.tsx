@@ -11,6 +11,7 @@ function makeSummary(overrides: Partial<PRSummary> = {}): PRSummary {
 		checks: [],
 		reviews: [],
 		comments: { total: 0, unresolved: 0, unresolvedHuman: 0, unresolvedBot: 0 },
+		threads: [],
 		files: {
 			files: [],
 			breakdown: {

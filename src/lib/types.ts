@@ -111,6 +111,7 @@ export interface PRSummary extends PRDetail {
 	checks: CheckRun[];
 	reviews: Review[];
 	comments: CommentCounts;
+	threads: FullReviewThread[];
 	files: FileCategorization;
 }
 

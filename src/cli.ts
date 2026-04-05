@@ -155,6 +155,7 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
 				output: computeBlocker(summary, currentUser, {
 					checks: summary.checks,
 					reviews: summary.reviews,
+					threads: summary.threads,
 				}),
 			};
 		}

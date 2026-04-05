@@ -113,6 +113,26 @@ describe("runCommand", () => {
 					},
 				},
 			},
+			// fetchFullReviewThreads (GraphQL)
+			{
+				url: /\/graphql/,
+				method: "POST",
+				response: {
+					status: 200,
+					body: {
+						data: {
+							repository: {
+								pullRequest: {
+									reviewThreads: {
+										pageInfo: { hasNextPage: false, endCursor: null },
+										nodes: [],
+									},
+								},
+							},
+						},
+					},
+				},
+			},
 			// fetchFiles
 			{
 				url: /\/files/,
@@ -278,6 +298,26 @@ describe("runCommand", () => {
 				response: { status: 200, body: [] },
 			},
 			// fetchReviewComments (GraphQL)
+			{
+				url: /\/graphql/,
+				method: "POST",
+				response: {
+					status: 200,
+					body: {
+						data: {
+							repository: {
+								pullRequest: {
+									reviewThreads: {
+										pageInfo: { hasNextPage: false, endCursor: null },
+										nodes: [],
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			// fetchFullReviewThreads (GraphQL)
 			{
 				url: /\/graphql/,
 				method: "POST",

@@ -32,7 +32,7 @@ export function SummaryPanel(props: SummaryPanelProps) {
 		const s = summary();
 		const u = props.currentUser;
 		if (!s || !u) return null;
-		return computeBlocker(s, u, { checks: s.checks, reviews: s.reviews });
+		return computeBlocker(s, u, { checks: s.checks, reviews: s.reviews, threads: s.threads });
 	});
 
 	const sizeCategories = (): FileCategory[] => {

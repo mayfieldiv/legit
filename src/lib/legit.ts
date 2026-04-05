@@ -276,12 +276,13 @@ export class Legit {
 		const detail = await this.client.fetchPR(repo, number, signal);
 
 		// Phase 2: fetch enrichments in parallel
-		const [checks, reviews, comments, files] = await Promise.all([
+		const [checks, reviews, comments, threads, files] = await Promise.all([
 			detail.headCommitSha
 				? this.client.fetchCheckRuns(repo, detail.headCommitSha, signal)
 				: Promise.resolve([]),
 			this.client.fetchReviews(repo, number, signal),
 			this.client.fetchReviewComments(repo, number, this.config.botLogins, signal),
+			this.client.fetchFullReviewThreads(repo, number, this.config.botLogins, signal),
 			collectFiles(this.client.fetchFiles(repo, number, signal)),
 		]);
 
@@ -290,6 +291,7 @@ export class Legit {
 			checks,
 			reviews,
 			comments,
+			threads,
 			files: this.categorizeFiles(files),
 		};
 	}
