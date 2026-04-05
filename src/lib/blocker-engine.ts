@@ -8,7 +8,7 @@
  *   me-blocking → needs-review → waiting-on-author
  */
 
-import type { PR, CheckRun, Review } from "./types";
+import type { PR, CheckRun, Review, FullReviewThread, ReviewComment } from "./types";
 
 // ── Public types ─────────────────────────────────────────────────────────────
 
@@ -29,6 +29,8 @@ export interface BlockerOptions {
 	checks?: CheckRun[];
 	/** Individual reviewer states fetched from the Reviews API. */
 	reviews?: Review[];
+	/** Full review threads. When provided, enables unreplied vs awaiting-reviewer distinction. */
+	threads?: FullReviewThread[];
 }
 
 // ── CI helpers ────────────────────────────────────────────────────────────────
@@ -44,6 +46,111 @@ function isCiFailing(checks: CheckRun[]): boolean {
 	);
 }
 
+// ── Thread classification ─────────────────────────────────────────────────────
+
+export interface ThreadClassification {
+	/** Unresolved threads where the thread starter's comment is the last non-bot comment (author must act). */
+	unreplied: number;
+	/** Unresolved threads where someone other than the thread starter replied last (reviewer must act). */
+	awaitingReviewer: number;
+	/** Map of reviewer login → count of threads awaiting them. */
+	awaitingByReviewer: Map<string, { count: number; oldestReplyDate: string }>;
+}
+
+/**
+ * Classify unresolved threads into unreplied vs awaiting-reviewer.
+ *
+ * For each unresolved thread, look at the last non-bot comment:
+ * - If it's from the thread starter (the reviewer) → unreplied (author must respond)
+ * - If it's from anyone else → awaiting-reviewer (reviewer must resolve/reply)
+ */
+export function classifyThreads(threads: FullReviewThread[]): ThreadClassification {
+	let unreplied = 0;
+	let awaitingReviewer = 0;
+	const awaitingByReviewer = new Map<string, { count: number; oldestReplyDate: string }>();
+
+	for (const thread of threads) {
+		if (thread.isResolved) continue;
+		if (thread.comments.length === 0) continue;
+
+		const threadStarter = thread.comments[0]!.author;
+		const lastNonBot = findLastNonBotComment(thread.comments);
+
+		if (!lastNonBot || lastNonBot.author === threadStarter) {
+			// Thread starter spoke last (or only bots replied) → author must respond
+			unreplied++;
+		} else {
+			// Someone else replied last → reviewer (thread starter) must act
+			awaitingReviewer++;
+			const existing = awaitingByReviewer.get(threadStarter);
+			if (existing) {
+				existing.count++;
+				if (lastNonBot.createdAt < existing.oldestReplyDate) {
+					existing.oldestReplyDate = lastNonBot.createdAt;
+				}
+			} else {
+				awaitingByReviewer.set(threadStarter, {
+					count: 1,
+					oldestReplyDate: lastNonBot.createdAt,
+				});
+			}
+		}
+	}
+
+	return { unreplied, awaitingReviewer, awaitingByReviewer };
+}
+
+/**
+ * Classify a single unresolved thread as "unreplied" or "awaiting-reviewer".
+ * Returns "resolved" for resolved threads.
+ */
+export function classifyThread(
+	thread: FullReviewThread,
+): "resolved" | "unreplied" | "awaiting-reviewer" {
+	if (thread.isResolved) return "resolved";
+	if (thread.comments.length === 0) return "unreplied";
+
+	const threadStarter = thread.comments[0]!.author;
+	const lastNonBot = findLastNonBotComment(thread.comments);
+
+	if (!lastNonBot || lastNonBot.author === threadStarter) {
+		return "unreplied";
+	}
+	return "awaiting-reviewer";
+}
+
+function findLastNonBotComment(comments: ReviewComment[]): ReviewComment | undefined {
+	for (let i = comments.length - 1; i >= 0; i--) {
+		if (!comments[i]!.isBot) return comments[i]!;
+	}
+	return undefined;
+}
+
+/**
+ * Pick the reviewer with the most awaiting-reviewer threads.
+ * Ties broken by oldest reply date (longest-waiting reviewer wins).
+ */
+function pickTopAwaitingReviewer(
+	awaitingByReviewer: Map<string, { count: number; oldestReplyDate: string }>,
+): string {
+	let topReviewer = "";
+	let topCount = 0;
+	let topOldest = "";
+
+	for (const [reviewer, data] of awaitingByReviewer) {
+		if (
+			data.count > topCount ||
+			(data.count === topCount && data.oldestReplyDate < topOldest)
+		) {
+			topReviewer = reviewer;
+			topCount = data.count;
+			topOldest = data.oldestReplyDate;
+		}
+	}
+
+	return topReviewer;
+}
+
 // ── Core algorithm ────────────────────────────────────────────────────────────
 
 /**
@@ -56,13 +163,16 @@ function isCiFailing(checks: CheckRun[]): boolean {
  *  4. Changes requested (via reviewDecision or individual reviews)
  *                         → waiting-on-author (author must respond before
  *                           pending reviewers need to act)
- *  5. Unresolved threads  → waiting-on-author (author must resolve open
- *                           review comments; only when data is loaded)
+ *  5a. Unreplied threads  → waiting-on-author (author must respond to open
+ *                           review comments; only when thread data is loaded)
+ *  5b. (legacy) Unresolved threads without thread data → waiting-on-author
  *  6. Approved            → waiting-on-author (author should merge; no more
  *                           reviewer action needed regardless of pending requests)
- *  7. Current user is a requested reviewer → me-blocking
- *  8. Another reviewer requested → needs-review
- *  9. Default             → needs-review
+ *  7. All threads awaiting-reviewer → needs-review/me-blocking for the
+ *                           reviewer (author replied to every unresolved thread)
+ *  8. Current user is a requested reviewer → me-blocking
+ *  9. Another reviewer requested → needs-review
+ * 10. Default             → needs-review
  *
  * Effective author: when the current user is an assignee but the PR author
  * is not, the current user is treated as the "effective author" throughout
@@ -137,17 +247,33 @@ function _computeBlockerCore(pr: PR, currentUser: string, opts?: BlockerOptions)
 		};
 	}
 
-	// 5. Unresolved review threads → author must address open comments before
-	//    reviewers need to re-examine. Only fires when comment data is available
-	//    (lazily populated after the PR summary is fetched).
-	const unresolvedThreads =
-		(pr.comments?.unresolvedHuman ?? 0) + (pr.comments?.unresolvedBot ?? 0);
-	if (unresolvedThreads > 0) {
-		return {
-			blocker: effectiveAuthor,
-			tier: "waiting-on-author",
-			reason: `${unresolvedThreads} unresolved thread${unresolvedThreads === 1 ? "" : "s"}`,
-		};
+	// 5a. Unreplied review threads (when full thread data is available).
+	//     Only threads where the author hasn't replied count against the author.
+	const threads = opts?.threads;
+	let threadClassification: ThreadClassification | undefined;
+
+	if (threads) {
+		threadClassification = classifyThreads(threads);
+		if (threadClassification.unreplied > 0) {
+			const n = threadClassification.unreplied;
+			return {
+				blocker: effectiveAuthor,
+				tier: "waiting-on-author",
+				reason: `${n} unreplied thread${n === 1 ? "" : "s"}`,
+			};
+		}
+	} else {
+		// 5b. Legacy fallback: when only CommentCounts are available (no full thread data),
+		//     treat all unresolved threads as waiting-on-author.
+		const unresolvedThreads =
+			(pr.comments?.unresolvedHuman ?? 0) + (pr.comments?.unresolvedBot ?? 0);
+		if (unresolvedThreads > 0) {
+			return {
+				blocker: effectiveAuthor,
+				tier: "waiting-on-author",
+				reason: `${unresolvedThreads} unresolved thread${unresolvedThreads === 1 ? "" : "s"}`,
+			};
+		}
 	}
 
 	// 6. Approved — the PR has the green light; author's turn to merge (or fix
@@ -160,7 +286,20 @@ function _computeBlockerCore(pr: PR, currentUser: string, opts?: BlockerOptions)
 		};
 	}
 
-	// 7. Current user is a requested reviewer → me-blocking
+	// 7. All unresolved threads are awaiting-reviewer (author replied to every one).
+	//    Identify the reviewer who needs to act.
+	if (threadClassification && threadClassification.awaitingReviewer > 0) {
+		const reviewer = pickTopAwaitingReviewer(threadClassification.awaitingByReviewer);
+		const n = threadClassification.awaitingReviewer;
+		const tier = reviewer === currentUser ? "me-blocking" : "needs-review";
+		return {
+			blocker: reviewer,
+			tier,
+			reason: `${n} thread${n === 1 ? "" : "s"} awaiting ${reviewer}`,
+		};
+	}
+
+	// 8. Current user is a requested reviewer → me-blocking
 	if (pr.requestedReviewers.includes(currentUser)) {
 		return {
 			blocker: currentUser,
@@ -169,7 +308,7 @@ function _computeBlockerCore(pr: PR, currentUser: string, opts?: BlockerOptions)
 		};
 	}
 
-	// 8. Default — needs review (whether a specific reviewer is requested or not)
+	// 9. Default — needs review (whether a specific reviewer is requested or not)
 	const otherReviewers = pr.requestedReviewers.filter((r) => r !== currentUser);
 	return {
 		blocker: otherReviewers[0] ?? "",

@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test";
-import { computeBlocker } from "../src/lib/blocker-engine";
+import { computeBlocker, classifyThreads } from "../src/lib/blocker-engine";
 import { makePR } from "./helpers";
-import type { CheckRun, Review } from "../src/lib/types";
+import type { CheckRun, Review, FullReviewThread, ReviewComment } from "../src/lib/types";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -24,6 +24,32 @@ function review(user: string, state: Review["state"]): Review {
 const ME = "alice";
 const OTHER = "bob";
 const AUTHOR = "charlie";
+
+// ── Thread helpers ───────────────────────────────────────────────────────────
+
+function makeComment(
+	author: string,
+	opts?: { isBot?: boolean; createdAt?: string },
+): ReviewComment {
+	return {
+		id: `comment-${Math.random().toString(36).slice(2, 8)}`,
+		author,
+		body: "comment body",
+		createdAt: opts?.createdAt ?? "2026-03-15T00:00:00Z",
+		url: "https://github.com/test",
+		isBot: opts?.isBot ?? false,
+	};
+}
+
+function makeThread(comments: ReviewComment[], opts?: { isResolved?: boolean }): FullReviewThread {
+	return {
+		id: `thread-${Math.random().toString(36).slice(2, 8)}`,
+		isResolved: opts?.isResolved ?? false,
+		path: "src/test.ts",
+		line: 10,
+		comments,
+	};
+}
 
 // ── Base tier logic (no extended data) ──────────────────────────────────────
 
@@ -621,5 +647,302 @@ describe("computeBlocker — effective author (assignee takeover)", () => {
 			expect(typeof result.reason).toBe("string");
 			expect(result.reason.length).toBeGreaterThan(0);
 		}
+	});
+});
+
+// ── classifyThreads ──────────────────────────────────────────────────────────
+
+describe("classifyThreads", () => {
+	test("resolved threads are ignored", () => {
+		const threads = [
+			makeThread([makeComment(OTHER), makeComment(AUTHOR)], { isResolved: true }),
+		];
+		const result = classifyThreads(threads);
+		expect(result.unreplied).toBe(0);
+		expect(result.awaitingReviewer).toBe(0);
+	});
+
+	test("thread with only reviewer comment → unreplied", () => {
+		const threads = [makeThread([makeComment(OTHER)])];
+		const result = classifyThreads(threads);
+		expect(result.unreplied).toBe(1);
+		expect(result.awaitingReviewer).toBe(0);
+	});
+
+	test("thread where author replied last → awaiting-reviewer", () => {
+		const threads = [makeThread([makeComment(OTHER), makeComment(AUTHOR)])];
+		const result = classifyThreads(threads);
+		expect(result.unreplied).toBe(0);
+		expect(result.awaitingReviewer).toBe(1);
+		expect(result.awaitingByReviewer.get(OTHER)?.count).toBe(1);
+	});
+
+	test("ping-pong: reviewer replied after author → unreplied", () => {
+		const threads = [makeThread([makeComment(OTHER), makeComment(AUTHOR), makeComment(OTHER)])];
+		const result = classifyThreads(threads);
+		expect(result.unreplied).toBe(1);
+		expect(result.awaitingReviewer).toBe(0);
+	});
+
+	test("bot comment after author reply does not flip back to unreplied", () => {
+		const threads = [
+			makeThread([
+				makeComment(OTHER),
+				makeComment(AUTHOR),
+				makeComment("github-actions[bot]", { isBot: true }),
+			]),
+		];
+		const result = classifyThreads(threads);
+		expect(result.unreplied).toBe(0);
+		expect(result.awaitingReviewer).toBe(1);
+	});
+
+	test("thread with only bot comments → unreplied (no non-bot to identify)", () => {
+		const threads = [
+			makeThread([
+				makeComment("bot1", { isBot: true }),
+				makeComment("bot2", { isBot: true }),
+			]),
+		];
+		const result = classifyThreads(threads);
+		expect(result.unreplied).toBe(1);
+		expect(result.awaitingReviewer).toBe(0);
+	});
+
+	test("empty thread (no comments) is skipped", () => {
+		const threads = [makeThread([])];
+		const result = classifyThreads(threads);
+		expect(result.unreplied).toBe(0);
+		expect(result.awaitingReviewer).toBe(0);
+	});
+
+	test("multiple reviewers tracked separately in awaitingByReviewer", () => {
+		const threads = [
+			makeThread([makeComment(OTHER), makeComment(AUTHOR)]),
+			makeThread([makeComment("dave"), makeComment(AUTHOR)]),
+			makeThread([makeComment(OTHER), makeComment(AUTHOR)]),
+		];
+		const result = classifyThreads(threads);
+		expect(result.awaitingReviewer).toBe(3);
+		expect(result.awaitingByReviewer.get(OTHER)?.count).toBe(2);
+		expect(result.awaitingByReviewer.get("dave")?.count).toBe(1);
+	});
+
+	test("mixed unreplied and awaiting-reviewer", () => {
+		const threads = [
+			makeThread([makeComment(OTHER)]), // unreplied
+			makeThread([makeComment(OTHER), makeComment(AUTHOR)]), // awaiting
+		];
+		const result = classifyThreads(threads);
+		expect(result.unreplied).toBe(1);
+		expect(result.awaitingReviewer).toBe(1);
+	});
+
+	test("oldest reply date tracked for tie-breaking", () => {
+		const threads = [
+			makeThread([
+				makeComment(OTHER),
+				makeComment(AUTHOR, { createdAt: "2026-03-10T00:00:00Z" }),
+			]),
+			makeThread([
+				makeComment(OTHER),
+				makeComment(AUTHOR, { createdAt: "2026-03-12T00:00:00Z" }),
+			]),
+		];
+		const result = classifyThreads(threads);
+		expect(result.awaitingByReviewer.get(OTHER)?.oldestReplyDate).toBe("2026-03-10T00:00:00Z");
+	});
+});
+
+// ── computeBlocker — unreplied vs awaiting-reviewer threads ──────────────────
+
+describe("computeBlocker — unreplied vs awaiting-reviewer threads", () => {
+	test("unreplied threads → waiting-on-author", () => {
+		const pr = makePR({ author: AUTHOR });
+		const threads = [makeThread([makeComment(OTHER)])];
+		const result = computeBlocker(pr, ME, { threads });
+		expect(result.tier).toBe("waiting-on-author");
+		expect(result.blocker).toBe(AUTHOR);
+		expect(result.reason).toBe("1 unreplied thread");
+	});
+
+	test("plural unreplied threads", () => {
+		const pr = makePR({ author: AUTHOR });
+		const threads = [makeThread([makeComment(OTHER)]), makeThread([makeComment("dave")])];
+		const result = computeBlocker(pr, ME, { threads });
+		expect(result.reason).toBe("2 unreplied threads");
+	});
+
+	test("all threads awaiting-reviewer → needs-review with reviewer as blocker", () => {
+		const pr = makePR({ author: AUTHOR });
+		const threads = [makeThread([makeComment(OTHER), makeComment(AUTHOR)])];
+		const result = computeBlocker(pr, ME, { threads });
+		expect(result.tier).toBe("needs-review");
+		expect(result.blocker).toBe(OTHER);
+		expect(result.reason).toBe(`1 thread awaiting ${OTHER}`);
+	});
+
+	test("awaiting-reviewer with current user as reviewer → me-blocking", () => {
+		const pr = makePR({ author: AUTHOR });
+		const threads = [makeThread([makeComment(ME), makeComment(AUTHOR)])];
+		const result = computeBlocker(pr, ME, { threads });
+		expect(result.tier).toBe("me-blocking");
+		expect(result.blocker).toBe(ME);
+		expect(result.reason).toBe(`1 thread awaiting ${ME}`);
+	});
+
+	test("mixed unreplied + awaiting → waiting-on-author (unreplied takes priority)", () => {
+		const pr = makePR({ author: AUTHOR });
+		const threads = [
+			makeThread([makeComment(OTHER)]), // unreplied
+			makeThread([makeComment(OTHER), makeComment(AUTHOR)]), // awaiting
+		];
+		const result = computeBlocker(pr, ME, { threads });
+		expect(result.tier).toBe("waiting-on-author");
+		expect(result.blocker).toBe(AUTHOR);
+		expect(result.reason).toBe("1 unreplied thread");
+	});
+
+	test("approved beats awaiting-reviewer (author should merge)", () => {
+		const pr = makePR({ author: AUTHOR, reviewDecision: "APPROVED" });
+		const threads = [makeThread([makeComment(OTHER), makeComment(AUTHOR)])];
+		const result = computeBlocker(pr, ME, { threads });
+		expect(result.tier).toBe("waiting-on-author");
+		expect(result.blocker).toBe(AUTHOR);
+		expect(result.reason).toContain("Approved");
+	});
+
+	test("unreplied threads beat approved", () => {
+		const pr = makePR({ author: AUTHOR, reviewDecision: "APPROVED" });
+		const threads = [makeThread([makeComment(OTHER)])];
+		const result = computeBlocker(pr, ME, { threads });
+		expect(result.tier).toBe("waiting-on-author");
+		expect(result.reason).toContain("unreplied");
+	});
+
+	test("changes-requested beats unreplied threads", () => {
+		const pr = makePR({ author: AUTHOR, reviewDecision: "CHANGES_REQUESTED" });
+		const threads = [makeThread([makeComment(OTHER)])];
+		const result = computeBlocker(pr, ME, { threads });
+		expect(result.tier).toBe("waiting-on-author");
+		expect(result.reason).toContain("Changes");
+	});
+
+	test("CI failing beats unreplied threads", () => {
+		const pr = makePR({ author: AUTHOR });
+		const threads = [makeThread([makeComment(OTHER)])];
+		const result = computeBlocker(pr, ME, { threads, checks: [failedCheck()] });
+		expect(result.tier).toBe("waiting-on-author");
+		expect(result.reason).toContain("CI");
+	});
+
+	test("empty threads array → no thread-based blocking, falls through", () => {
+		const pr = makePR({ author: AUTHOR });
+		const result = computeBlocker(pr, ME, { threads: [] });
+		expect(result.tier).toBe("needs-review");
+	});
+
+	test("all resolved threads → no thread-based blocking", () => {
+		const pr = makePR({ author: AUTHOR });
+		const threads = [
+			makeThread([makeComment(OTHER), makeComment(AUTHOR)], { isResolved: true }),
+		];
+		const result = computeBlocker(pr, ME, { threads });
+		expect(result.tier).toBe("needs-review");
+	});
+
+	test("reviewer with most awaiting threads becomes blocker", () => {
+		const pr = makePR({ author: AUTHOR });
+		const threads = [
+			makeThread([makeComment(OTHER), makeComment(AUTHOR)]),
+			makeThread([makeComment(OTHER), makeComment(AUTHOR)]),
+			makeThread([makeComment("dave"), makeComment(AUTHOR)]),
+		];
+		const result = computeBlocker(pr, ME, { threads });
+		expect(result.blocker).toBe(OTHER);
+		expect(result.reason).toBe(`3 threads awaiting ${OTHER}`);
+	});
+
+	test("tie-break: reviewer waiting longest becomes blocker", () => {
+		const pr = makePR({ author: AUTHOR });
+		const threads = [
+			makeThread([
+				makeComment(OTHER),
+				makeComment(AUTHOR, { createdAt: "2026-03-12T00:00:00Z" }),
+			]),
+			makeThread([
+				makeComment("dave"),
+				makeComment(AUTHOR, { createdAt: "2026-03-10T00:00:00Z" }),
+			]),
+		];
+		const result = computeBlocker(pr, ME, { threads });
+		// dave has been waiting since 03-10, bob since 03-12 → dave wins tie
+		expect(result.blocker).toBe("dave");
+	});
+
+	test("effective author (assignee) with unreplied threads → me-blocking", () => {
+		const pr = makePR({ author: AUTHOR, assignees: [ME] });
+		const threads = [makeThread([makeComment(OTHER)])];
+		const result = computeBlocker(pr, ME, { threads });
+		expect(result.tier).toBe("me-blocking");
+		expect(result.blocker).toBe(ME);
+	});
+
+	test("legacy fallback: no threads, CommentCounts → waiting-on-author", () => {
+		const pr = makePR({
+			author: AUTHOR,
+			comments: { total: 2, unresolved: 1, unresolvedHuman: 1, unresolvedBot: 0 },
+		});
+		const result = computeBlocker(pr, ME);
+		expect(result.tier).toBe("waiting-on-author");
+		expect(result.reason).toContain("unresolved");
+	});
+
+	test("threads provided overrides CommentCounts", () => {
+		// PR has CommentCounts saying unresolved, but threads say all awaiting-reviewer
+		const pr = makePR({
+			author: AUTHOR,
+			comments: { total: 1, unresolved: 1, unresolvedHuman: 1, unresolvedBot: 0 },
+		});
+		const threads = [makeThread([makeComment(OTHER), makeComment(AUTHOR)])];
+		const result = computeBlocker(pr, ME, { threads });
+		expect(result.tier).toBe("needs-review");
+		expect(result.blocker).toBe(OTHER);
+	});
+
+	test("PR #568 scenario: author replied to all threads → awaiting cmbankester", () => {
+		// Simulates the real-world case that motivated this feature
+		const pr = makePR({ author: "mayfieldiv" });
+		const threads = [
+			// Thread 1: cmbankester → cmbankester → mayfieldiv
+			makeThread([
+				makeComment("cmbankester", { createdAt: "2026-04-01T00:00:00Z" }),
+				makeComment("cmbankester", { createdAt: "2026-04-02T00:00:00Z" }),
+				makeComment("mayfieldiv", { createdAt: "2026-04-02T12:00:00Z" }),
+			]),
+			// Thread 2: cmbankester only (unreplied)
+			makeThread([makeComment("cmbankester", { createdAt: "2026-04-02T00:00:00Z" })]),
+		];
+		// With one unreplied thread, still waiting on author
+		const result = computeBlocker(pr, "someuser", { threads });
+		expect(result.tier).toBe("waiting-on-author");
+		expect(result.blocker).toBe("mayfieldiv");
+		expect(result.reason).toBe("1 unreplied thread");
+	});
+
+	test("PR #568 scenario: author replied to ALL threads → awaiting cmbankester", () => {
+		const pr = makePR({ author: "mayfieldiv" });
+		const threads = [
+			makeThread([
+				makeComment("cmbankester"),
+				makeComment("cmbankester"),
+				makeComment("mayfieldiv"),
+			]),
+			makeThread([makeComment("cmbankester"), makeComment("mayfieldiv")]),
+		];
+		const result = computeBlocker(pr, "someuser", { threads });
+		expect(result.tier).toBe("needs-review");
+		expect(result.blocker).toBe("cmbankester");
+		expect(result.reason).toBe("2 threads awaiting cmbankester");
 	});
 });

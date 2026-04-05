@@ -20,6 +20,7 @@ import { MarkdownBody } from "../lib/markdown";
 import { createDetailsController, DetailsCtx, type DetailsController } from "../lib/details-store";
 import { formatAge, formatSize, sortCheckRuns, checkIcon, checksSummary } from "../lib/format";
 import type { FullReviewThread, IssueComment, PRDetail, ReviewComment } from "../lib/types";
+import { classifyThread } from "../lib/blocker-engine";
 import type { MouseEvent } from "@opentui/core";
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { StatusBar } from "./StatusBar";
@@ -134,11 +135,18 @@ function ThreadCard(props: { thread: FullReviewThread; showBotComments: boolean 
 				<box width="100%" height={1}>
 					<text truncate={true}>
 						<span style={{ fg: theme.accent }}>{location()}</span>
-						<span
-							style={{ fg: props.thread.isResolved ? theme.success : theme.warning }}
-						>
-							{props.thread.isResolved ? " ✓ resolved" : " ● unresolved"}
-						</span>
+						{(() => {
+							if (props.thread.isResolved) {
+								return <span style={{ fg: theme.success }}>{" ✓ resolved"}</span>;
+							}
+							const status = classifyThread(props.thread);
+							if (status === "awaiting-reviewer") {
+								return (
+									<span style={{ fg: theme.info }}>{" ◐ awaiting reviewer"}</span>
+								);
+							}
+							return <span style={{ fg: theme.warning }}>{" ● unreplied"}</span>;
+						})()}
 					</text>
 				</box>
 				<For each={rootComment()}>{(comment) => <CommentRow comment={comment} />}</For>

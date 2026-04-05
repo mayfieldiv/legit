@@ -113,7 +113,7 @@ describe("DetailView", () => {
 
 	// ── Review Threads ─────────────────────────────────────────────────────
 
-	test("renders unresolved review threads with file path and comments", async () => {
+	test("renders review threads with three-state labels (unreplied/awaiting/resolved)", async () => {
 		const threads: FullReviewThread[] = [
 			{
 				id: "RT_1",
@@ -144,7 +144,7 @@ describe("DetailView", () => {
 		expect(frame).toContain("Review Threads");
 		expect(frame).toContain("1 shown");
 		expect(frame).toContain("src/foo.ts:42");
-		expect(frame).toContain("unresolved");
+		expect(frame).toContain("awaiting reviewer");
 		expect(frame).toContain("bob");
 		expect(frame).toContain("Needs a null check here");
 		expect(frame).toContain("alice");
