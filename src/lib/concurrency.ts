@@ -3,6 +3,8 @@
  * Limits the number of simultaneous in-flight requests.
  */
 
+import { appendFileSync, writeFileSync } from "fs";
+import { join } from "path";
 import type { HttpFetch } from "./github-transport";
 
 export interface GitHubNetworkStats {
@@ -46,9 +48,15 @@ export function withConcurrencyLimit(
 		}
 		active++;
 		notify();
+		const start = performance.now();
+		let status = 0;
 		try {
-			return await fetch(url, init);
+			const res = await fetch(url, init);
+			status = res.status;
+			return res;
 		} finally {
+			const duration = performance.now() - start;
+			logRequest(url, init?.method ?? "GET", status, duration);
 			active--;
 			queue.shift()?.();
 			notify();
@@ -63,4 +71,32 @@ export function withConcurrencyLimit(
 			return () => subs.delete(listener);
 		},
 	};
+}
+
+// ── Request logger ──────────────────────────────────────────────────────────
+
+const LOG_PATH = join(process.env.HOME ?? "/tmp", ".config", "legit", "requests.log");
+let logInitialized = false;
+const startTime = Date.now();
+
+function logRequest(url: string, method: string, status: number, durationMs: number) {
+	if (!logInitialized) {
+		try {
+			writeFileSync(
+				LOG_PATH,
+				`# legit request log — ${new Date().toISOString()}\n# method  status  duration_ms  relative_ms  url\n`,
+			);
+		} catch {
+			// Non-fatal — logging is best-effort
+			return;
+		}
+		logInitialized = true;
+	}
+	const relative = Date.now() - startTime;
+	const line = `${method.padEnd(6)} ${String(status).padStart(3)}  ${durationMs.toFixed(0).padStart(7)}ms  @${String(relative).padStart(8)}ms  ${url}\n`;
+	try {
+		appendFileSync(LOG_PATH, line);
+	} catch {
+		// Non-fatal
+	}
 }
