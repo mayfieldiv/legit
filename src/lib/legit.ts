@@ -188,7 +188,7 @@ export class Legit {
 	get client(): GitHubClient {
 		if (!this._client) {
 			this._concurrencyLimited = withConcurrencyLimit(
-				5,
+				10,
 				this._options.httpFetch ?? globalThis.fetch,
 			);
 			const transport = createGitHubTransport(

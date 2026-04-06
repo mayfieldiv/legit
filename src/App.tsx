@@ -149,46 +149,60 @@ function AppInner(props: AppInnerProps) {
 		return "";
 	});
 
+	// ── Track which repos have finished fetching (generator complete) ─────
+	/**
+	 * Repos whose PR streamedQuery generator has finished. Until a repo
+	 * settles, its PRs must NOT trigger enrichment — otherwise hundreds of
+	 * per-PR queries flood the concurrency semaphore and starve the
+	 * still-running PR-list pagination & reviewStatus batches.
+	 */
+	const settledRepos = createMemo(() => {
+		const settled = new Set<string>();
+		const repos = repoTabs();
+		for (let i = 0; i < repos.length; i++) {
+			const q = prQueries[i];
+			if (q && !q.isFetching) settled.add(repos[i]!);
+		}
+		return settled;
+	});
+
 	// ── Per-PR enrichment queries (threads, checks, reviews) ──────────────
 	const threadsQueries = useQueries(() => ({
-		queries: visiblePRs().map((pr) => ({
-			queryKey: ["threads", pr.repoSlug ?? props.app.repoSlug, pr.number] as const,
-			queryFn: async ({ signal }: { signal: AbortSignal }) =>
-				props.app.fetchFullReviewThreads(
-					pr.repoSlug ?? props.app.repoSlug,
-					pr.number,
-					signal,
-				),
-			enabled: true,
-		})),
+		queries: visiblePRs().map((pr) => {
+			const repo = pr.repoSlug ?? props.app.repoSlug;
+			return {
+				queryKey: ["threads", repo, pr.number] as const,
+				queryFn: async ({ signal }: { signal: AbortSignal }) =>
+					props.app.fetchFullReviewThreads(repo, pr.number, signal),
+				enabled: settledRepos().has(repo),
+			};
+		}),
 	}));
 
 	const checksQueries = useQueries(() => ({
-		queries: visiblePRs().map((pr) => ({
-			queryKey: [
-				"checks",
-				pr.repoSlug ?? props.app.repoSlug,
-				pr.headCommitSha ?? "",
-			] as const,
-			queryFn: async ({ signal }: { signal: AbortSignal }) =>
-				pr.headCommitSha
-					? props.app.fetchCheckRuns(
-							pr.repoSlug ?? props.app.repoSlug,
-							pr.headCommitSha,
-							signal,
-						)
-					: ([] as CheckRun[]),
-			enabled: !!pr.headCommitSha,
-		})),
+		queries: visiblePRs().map((pr) => {
+			const repo = pr.repoSlug ?? props.app.repoSlug;
+			return {
+				queryKey: ["checks", repo, pr.headCommitSha ?? ""] as const,
+				queryFn: async ({ signal }: { signal: AbortSignal }) =>
+					pr.headCommitSha
+						? props.app.fetchCheckRuns(repo, pr.headCommitSha, signal)
+						: ([] as CheckRun[]),
+				enabled: !!pr.headCommitSha && settledRepos().has(repo),
+			};
+		}),
 	}));
 
 	const reviewsQueries = useQueries(() => ({
-		queries: visiblePRs().map((pr) => ({
-			queryKey: ["reviews", pr.repoSlug ?? props.app.repoSlug, pr.number] as const,
-			queryFn: async ({ signal }: { signal: AbortSignal }) =>
-				props.app.fetchReviews(pr.repoSlug ?? props.app.repoSlug, pr.number, signal),
-			enabled: true,
-		})),
+		queries: visiblePRs().map((pr) => {
+			const repo = pr.repoSlug ?? props.app.repoSlug;
+			return {
+				queryKey: ["reviews", repo, pr.number] as const,
+				queryFn: async ({ signal }: { signal: AbortSignal }) =>
+					props.app.fetchReviews(repo, pr.number, signal),
+				enabled: settledRepos().has(repo),
+			};
+		}),
 	}));
 
 	// ── Blocker data lookup for grouping engine ───────────────────────────
