@@ -6,10 +6,10 @@ import { categorizeFiles as _categorizeFiles } from "./file-categorizer";
 import type {
 	PR,
 	PRDetail,
+	CheckRun,
+	Review,
 	FileChange,
 	FileCategorization,
-	PRSummary,
-	CommentCounts,
 	FullReviewThread,
 	IssueComment,
 } from "./types";
@@ -238,18 +238,6 @@ export class Legit {
 	}
 
 	/**
-	 * Fetch only the review-thread counts for a single PR.
-	 * Lighter-weight than fetchPRSummary — used for background pre-loading.
-	 */
-	async fetchThreadCounts(
-		repo: string,
-		prNumber: number,
-		signal?: AbortSignal,
-	): Promise<CommentCounts> {
-		return this.client.fetchReviewComments(repo, prNumber, this.config.botLogins, signal);
-	}
-
-	/**
 	 * Fetch full review threads with comment bodies and bot flags.
 	 */
 	async fetchFullReviewThreads(
@@ -271,29 +259,38 @@ export class Legit {
 		return this.client.fetchIssueComments(repo, prNumber, this.config.botLogins, signal);
 	}
 
-	async fetchPRSummary(repo: string, number: number, signal?: AbortSignal): Promise<PRSummary> {
-		// Phase 1: fetch PR detail (need headCommitSha for check runs)
-		const detail = await this.client.fetchPR(repo, number, signal);
+	/**
+	 * Fetch check runs for a commit.
+	 */
+	async fetchCheckRuns(
+		repo: string,
+		commitSha: string,
+		signal?: AbortSignal,
+	): Promise<CheckRun[]> {
+		return this.client.fetchCheckRuns(repo, commitSha, signal);
+	}
 
-		// Phase 2: fetch enrichments in parallel
-		const [checks, reviews, comments, threads, files] = await Promise.all([
-			detail.headCommitSha
-				? this.client.fetchCheckRuns(repo, detail.headCommitSha, signal)
-				: Promise.resolve([]),
-			this.client.fetchReviews(repo, number, signal),
-			this.client.fetchReviewComments(repo, number, this.config.botLogins, signal),
-			this.client.fetchFullReviewThreads(repo, number, this.config.botLogins, signal),
-			collectFiles(this.client.fetchFiles(repo, number, signal)),
-		]);
+	/**
+	 * Fetch reviews for a PR.
+	 */
+	async fetchReviews(
+		repo: string,
+		prNumber: number,
+		signal?: AbortSignal,
+	): Promise<Review[]> {
+		return this.client.fetchReviews(repo, prNumber, signal);
+	}
 
-		return {
-			...detail,
-			checks,
-			reviews,
-			comments,
-			threads,
-			files: this.categorizeFiles(files),
-		};
+	/**
+	 * Fetch and categorize files for a PR.
+	 */
+	async fetchCategorizedFiles(
+		repo: string,
+		prNumber: number,
+		signal?: AbortSignal,
+	): Promise<FileCategorization> {
+		const files = await collectFiles(this.client.fetchFiles(repo, prNumber, signal));
+		return this.categorizeFiles(files);
 	}
 }
 
