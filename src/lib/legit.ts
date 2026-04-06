@@ -2,6 +2,7 @@ import { execFileSync } from "child_process";
 import { loadConfig, saveConfig, addRepo, type LegitConfig } from "./config";
 import { createGitHubTransport, type HttpFetch } from "./github-transport";
 import { createGitHubClient, type GitHubClient } from "./github-client";
+import { withConcurrencyLimit } from "./concurrency";
 import { categorizeFiles as _categorizeFiles } from "./file-categorizer";
 import type {
 	PR,
@@ -179,7 +180,8 @@ export class Legit {
 
 	get client(): GitHubClient {
 		if (!this._client) {
-			const transport = createGitHubTransport(this.auth.token, this._options.httpFetch);
+			const httpFetch = withConcurrencyLimit(5, this._options.httpFetch ?? globalThis.fetch);
+			const transport = createGitHubTransport(this.auth.token, httpFetch);
 			this._client = createGitHubClient(transport);
 		}
 		return this._client;
