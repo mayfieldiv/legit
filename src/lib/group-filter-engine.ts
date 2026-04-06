@@ -8,7 +8,13 @@
  */
 
 import type { PR } from "./types";
-import { computeBlocker, compareTiers, tierLabel, type Tier } from "./blocker-engine";
+import {
+	computeBlocker,
+	compareTiers,
+	tierLabel,
+	type Tier,
+	type BlockerOptions,
+} from "./blocker-engine";
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -28,6 +34,12 @@ export interface ProcessOptions {
 	filterText?: string;
 	/** Current user login — required for smart-status grouping. */
 	currentUser?: string;
+	/**
+	 * Lookup function that returns enrichment data for a PR.
+	 * Returns `BlockerOptions` when data is loaded, `undefined` when still loading.
+	 * Used by smart-status grouping to classify PRs or place them in "Loading details…".
+	 */
+	getBlockerData?: (pr: PR) => BlockerOptions | undefined;
 }
 
 export interface PRGroup {
@@ -109,7 +121,12 @@ function sortPRs(prs: PR[], sortBy: SortByKey | undefined, sortDir: SortDir): PR
 
 // ── Grouping ─────────────────────────────────────────────────────────────────
 
-function groupByKey(prs: PR[], key: GroupByKey, currentUser?: string): PRGroup[] {
+function groupByKey(
+	prs: PR[],
+	key: GroupByKey,
+	currentUser?: string,
+	getBlockerData?: (pr: PR) => BlockerOptions | undefined,
+): PRGroup[] {
 	switch (key) {
 		case "none": {
 			if (prs.length === 0) return [];
@@ -180,18 +197,38 @@ function groupByKey(prs: PR[], key: GroupByKey, currentUser?: string): PRGroup[]
 		case "smart-status": {
 			const user = currentUser ?? "";
 			const tierMap = new Map<Tier, PR[]>();
+			const loadingPrs: PR[] = [];
 			for (const pr of prs) {
-				const { tier } = computeBlocker(pr, user);
-				if (!tierMap.has(tier)) tierMap.set(tier, []);
-				tierMap.get(tier)!.push(pr);
+				if (getBlockerData) {
+					const opts = getBlockerData(pr);
+					if (opts === undefined) {
+						loadingPrs.push(pr);
+						continue;
+					}
+					const { tier } = computeBlocker(pr, user, opts);
+					if (!tierMap.has(tier)) tierMap.set(tier, []);
+					tierMap.get(tier)!.push(pr);
+				} else {
+					const { tier } = computeBlocker(pr, user);
+					if (!tierMap.has(tier)) tierMap.set(tier, []);
+					tierMap.get(tier)!.push(pr);
+				}
 			}
-			return [...tierMap.entries()]
+			const groups: PRGroup[] = [...tierMap.entries()]
 				.toSorted(([a], [b]) => compareTiers(a, b))
 				.map(([tier, list]) => ({
 					key: tier,
 					label: tierLabel(tier),
 					prs: list,
 				}));
+			if (loadingPrs.length > 0) {
+				groups.push({
+					key: "loading-details",
+					label: "Loading details\u2026",
+					prs: loadingPrs,
+				});
+			}
+			return groups;
 		}
 	}
 }
@@ -207,13 +244,20 @@ function groupByKey(prs: PR[], key: GroupByKey, currentUser?: string): PRGroup[]
  * - Empty groups are omitted.
  */
 export function processPRList(prs: PR[], options: ProcessOptions = {}): GroupedResult {
-	const { groupBy = "none", sortBy, sortDir = "desc", filterText = "", currentUser } = options;
+	const {
+		groupBy = "none",
+		sortBy,
+		sortDir = "desc",
+		filterText = "",
+		currentUser,
+		getBlockerData,
+	} = options;
 
 	// Step 1: Filter
 	const matched = prs.filter((pr) => matchesPR(pr, filterText));
 
 	// Step 2: Group
-	const groups = groupByKey(matched, groupBy, currentUser);
+	const groups = groupByKey(matched, groupBy, currentUser, getBlockerData);
 
 	// Step 3: Sort within each group
 	const sortedGroups =
