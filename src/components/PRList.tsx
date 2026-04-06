@@ -1,5 +1,5 @@
 import { For, Show, createMemo } from "solid-js";
-import type { PR, CommentCounts, FullReviewThread, CheckRun, Review } from "../lib/types";
+import type { PR, CommentCounts } from "../lib/types";
 import { computeCommentCounts } from "../lib/types";
 import type { MouseEvent } from "@opentui/core";
 import { formatAge, formatSize, formatReviewDecision, formatRepoShort } from "../lib/format";

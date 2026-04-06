@@ -3,7 +3,12 @@
  * Parsing functions are exported for direct testing.
  */
 
-import type { RawRestPR, RawPRReviewStatus, RawFileChange, GitHubTransport } from "./github-transport";
+import type {
+	RawRestPR,
+	RawPRReviewStatus,
+	RawFileChange,
+	GitHubTransport,
+} from "./github-transport";
 import type {
 	PR,
 	PRDetail,
@@ -24,7 +29,6 @@ export type {
 	RawFileChange,
 	RawCheckRun,
 } from "./github-transport";
-
 
 // Re-export domain types for backward compatibility
 export type {

@@ -1,12 +1,5 @@
 import { describe, test, expect, afterAll } from "bun:test";
-import {
-	cleanupTmpDirs,
-	createTestLegit,
-	createMockFetch,
-	makeSampleRestPR,
-	makeGraphQLResponse,
-	SAMPLE_GQL_META,
-} from "./helpers";
+import { cleanupTmpDirs, createTestLegit, createMockFetch } from "./helpers";
 
 afterAll(cleanupTmpDirs);
 
@@ -29,9 +22,7 @@ describe("Legit individual data fetching", () => {
 		const app = createTestLegit({ httpFetch: fetch });
 		const checks = await app.fetchCheckRuns(app.repoSlug, "abc123");
 
-		expect(checks).toEqual([
-			{ name: "build", status: "completed", conclusion: "success" },
-		]);
+		expect(checks).toEqual([{ name: "build", status: "completed", conclusion: "success" }]);
 	});
 
 	test("fetchReviews returns deduplicated reviews", async () => {

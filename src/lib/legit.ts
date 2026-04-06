@@ -273,11 +273,7 @@ export class Legit {
 	/**
 	 * Fetch reviews for a PR.
 	 */
-	async fetchReviews(
-		repo: string,
-		prNumber: number,
-		signal?: AbortSignal,
-	): Promise<Review[]> {
+	async fetchReviews(repo: string, prNumber: number, signal?: AbortSignal): Promise<Review[]> {
 		return this.client.fetchReviews(repo, prNumber, signal);
 	}
 

@@ -407,10 +407,7 @@ describe("computeBlocker — approved review decision", () => {
 describe("computeBlocker — unresolved review threads (via opts.threads)", () => {
 	test("unreplied threads → waiting-on-author", () => {
 		const pr = makePR({ author: AUTHOR });
-		const threads = [
-			makeThread([makeComment(OTHER)]),
-			makeThread([makeComment(OTHER)]),
-		];
+		const threads = [makeThread([makeComment(OTHER)]), makeThread([makeComment(OTHER)])];
 		const result = computeBlocker(pr, ME, { threads });
 		expect(result.tier).toBe("waiting-on-author");
 		expect(result.blocker).toBe(AUTHOR);
@@ -459,10 +456,7 @@ describe("computeBlocker — unresolved review threads (via opts.threads)", () =
 
 	test("plural threads has correct grammar", () => {
 		const pr = makePR({ author: AUTHOR });
-		const threads = [
-			makeThread([makeComment(OTHER)]),
-			makeThread([makeComment(OTHER)]),
-		];
+		const threads = [makeThread([makeComment(OTHER)]), makeThread([makeComment(OTHER)])];
 		const result = computeBlocker(pr, ME, { threads });
 		expect(result.reason).toBe("2 unreplied threads");
 	});

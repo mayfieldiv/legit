@@ -1,4 +1,4 @@
-import { createSignal, createMemo, createEffect, on, onCleanup } from "solid-js";
+import { createSignal, createMemo, createEffect, on } from "solid-js";
 import { execFile } from "child_process";
 import {
 	QueryClient,
@@ -8,12 +8,10 @@ import {
 	experimental_streamedQuery as streamedQuery,
 } from "@tanstack/solid-query";
 import { AppShell } from "./components/AppShell";
-import { createUIState, type ViewTarget } from "./lib/ui-state";
+import { createUIState } from "./lib/ui-state";
 import type { Legit } from "./lib/legit";
 import type { PR, CheckRun, Review, FullReviewThread, FileCategorization } from "./lib/types";
 import type { BlockerOptions } from "./lib/blocker-engine";
-import { withConcurrencyLimit } from "./lib/concurrency";
-
 /** Build a GitHub PR URL from a repo slug and PR number. */
 export function prUrl(repoSlug: string, number: number): string {
 	return `https://github.com/${repoSlug}/pull/${number}`;
@@ -28,8 +26,6 @@ export function devinUrl(repoSlug: string, number: number): string {
 export interface AppProps {
 	app: Legit;
 }
-
-const MAX_CONCURRENT_REQUESTS = 5;
 
 function createQueryClient(): QueryClient {
 	return new QueryClient({
@@ -94,9 +90,7 @@ function AppInner(props: AppInnerProps) {
 				merged.push(pr.repoSlug ? pr : { ...pr, repoSlug: repo });
 			}
 		}
-		merged.sort(
-			(a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-		);
+		merged.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 		return merged;
 	});
 
@@ -139,10 +133,18 @@ function AppInner(props: AppInnerProps) {
 
 	const checksQueries = useQueries(() => ({
 		queries: visiblePRs().map((pr) => ({
-			queryKey: ["checks", pr.repoSlug ?? props.app.repoSlug, pr.headCommitSha ?? ""] as const,
+			queryKey: [
+				"checks",
+				pr.repoSlug ?? props.app.repoSlug,
+				pr.headCommitSha ?? "",
+			] as const,
 			queryFn: async ({ signal }: { signal: AbortSignal }) =>
 				pr.headCommitSha
-					? props.app.fetchCheckRuns(pr.repoSlug ?? props.app.repoSlug, pr.headCommitSha, signal)
+					? props.app.fetchCheckRuns(
+							pr.repoSlug ?? props.app.repoSlug,
+							pr.headCommitSha,
+							signal,
+						)
 					: ([] as CheckRun[]),
 			enabled: !!pr.headCommitSha,
 		})),
@@ -160,9 +162,7 @@ function AppInner(props: AppInnerProps) {
 	// ── Blocker data lookup for grouping engine ───────────────────────────
 	const getBlockerData = (pr: PR): BlockerOptions | undefined => {
 		const prs = visiblePRs();
-		const idx = prs.findIndex(
-			(p) => p.number === pr.number && p.repoSlug === pr.repoSlug,
-		);
+		const idx = prs.findIndex((p) => p.number === pr.number && p.repoSlug === pr.repoSlug);
 		if (idx < 0) return undefined;
 
 		const tq = threadsQueries[idx];
@@ -339,9 +339,7 @@ function AppInner(props: AppInnerProps) {
 		const pr = selectedPr();
 		if (!pr) return undefined;
 		const prs = visiblePRs();
-		const idx = prs.findIndex(
-			(p) => p.number === pr.number && p.repoSlug === pr.repoSlug,
-		);
+		const idx = prs.findIndex((p) => p.number === pr.number && p.repoSlug === pr.repoSlug);
 		if (idx < 0) return undefined;
 		return threadsQueries[idx]?.data;
 	};
@@ -350,9 +348,7 @@ function AppInner(props: AppInnerProps) {
 		const pr = selectedPr();
 		if (!pr) return undefined;
 		const prs = visiblePRs();
-		const idx = prs.findIndex(
-			(p) => p.number === pr.number && p.repoSlug === pr.repoSlug,
-		);
+		const idx = prs.findIndex((p) => p.number === pr.number && p.repoSlug === pr.repoSlug);
 		if (idx < 0) return undefined;
 		return checksQueries[idx]?.data;
 	};
@@ -361,9 +357,7 @@ function AppInner(props: AppInnerProps) {
 		const pr = selectedPr();
 		if (!pr) return undefined;
 		const prs = visiblePRs();
-		const idx = prs.findIndex(
-			(p) => p.number === pr.number && p.repoSlug === pr.repoSlug,
-		);
+		const idx = prs.findIndex((p) => p.number === pr.number && p.repoSlug === pr.repoSlug);
 		if (idx < 0) return undefined;
 		return reviewsQueries[idx]?.data;
 	};
@@ -376,9 +370,7 @@ function AppInner(props: AppInnerProps) {
 		const pr = selectedPr();
 		if (!pr) return false;
 		const prs = visiblePRs();
-		const idx = prs.findIndex(
-			(p) => p.number === pr.number && p.repoSlug === pr.repoSlug,
-		);
+		const idx = prs.findIndex((p) => p.number === pr.number && p.repoSlug === pr.repoSlug);
 		if (idx < 0) return false;
 		return (
 			(threadsQueries[idx]?.isPending ?? true) ||

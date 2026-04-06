@@ -21,13 +21,7 @@ describe("SummaryPanel", () => {
 		const pr = makePR({ title: "Fix login bug", author: "alice", number: 99 });
 		const { renderOnce, captureCharFrame } = await testRender(
 			() => (
-				<SummaryPanel
-					pr={pr}
-					threads={[]}
-					checks={[]}
-					reviews={[]}
-					files={EMPTY_FILES}
-				/>
+				<SummaryPanel pr={pr} threads={[]} checks={[]} reviews={[]} files={EMPTY_FILES} />
 			),
 			{ width: 40, height: 30 },
 		);
@@ -42,13 +36,7 @@ describe("SummaryPanel", () => {
 		const pr = makePR({ isDraft: true });
 		const { renderOnce, captureCharFrame } = await testRender(
 			() => (
-				<SummaryPanel
-					pr={pr}
-					threads={[]}
-					checks={[]}
-					reviews={[]}
-					files={EMPTY_FILES}
-				/>
+				<SummaryPanel pr={pr} threads={[]} checks={[]} reviews={[]} files={EMPTY_FILES} />
 			),
 			{ width: 40, height: 30 },
 		);
@@ -61,13 +49,7 @@ describe("SummaryPanel", () => {
 		const pr = makePR({ mergeable: "CONFLICTING" });
 		const { renderOnce, captureCharFrame } = await testRender(
 			() => (
-				<SummaryPanel
-					pr={pr}
-					threads={[]}
-					checks={[]}
-					reviews={[]}
-					files={EMPTY_FILES}
-				/>
+				<SummaryPanel pr={pr} threads={[]} checks={[]} reviews={[]} files={EMPTY_FILES} />
 			),
 			{ width: 40, height: 30 },
 		);
@@ -242,9 +224,7 @@ describe("SummaryPanel", () => {
 
 	test("shows waiting-on-author when CI is failing", async () => {
 		const pr = makePR({ author: "charlie" });
-		const checks: CheckRun[] = [
-			{ name: "build", status: "completed", conclusion: "failure" },
-		];
+		const checks: CheckRun[] = [{ name: "build", status: "completed", conclusion: "failure" }];
 		const { renderOnce, captureCharFrame } = await testRender(
 			() => (
 				<SummaryPanel
@@ -267,13 +247,7 @@ describe("SummaryPanel", () => {
 		const pr = makePR({ requestedReviewers: ["alice"] });
 		const { renderOnce, captureCharFrame } = await testRender(
 			() => (
-				<SummaryPanel
-					pr={pr}
-					threads={[]}
-					checks={[]}
-					reviews={[]}
-					files={EMPTY_FILES}
-				/>
+				<SummaryPanel pr={pr} threads={[]} checks={[]} reviews={[]} files={EMPTY_FILES} />
 			),
 			{ width: 50, height: 30 },
 		);
