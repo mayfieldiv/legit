@@ -389,6 +389,7 @@ export function ListView(props: ListViewProps) {
 							currentUser={props.currentUser}
 							onSelect={selectIndex}
 							visibleColumns={props.visibleColumns}
+							getBlockerData={props.getBlockerData}
 						/>
 					</scrollbox>
 				</Show>
