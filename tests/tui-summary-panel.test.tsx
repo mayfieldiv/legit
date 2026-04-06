@@ -2,36 +2,33 @@ import { describe, test, expect } from "bun:test";
 import { testRender } from "@opentui/solid";
 import { SummaryPanel } from "../src/components/SummaryPanel";
 import { makePR } from "./helpers";
-import type { PRSummary } from "../src/lib/types";
+import type { CheckRun, Review, FullReviewThread, FileCategorization } from "../src/lib/types";
 
-function makeSummary(overrides: Partial<PRSummary> = {}): PRSummary {
-	return {
-		...makePR(),
-		body: "",
-		checks: [],
-		reviews: [],
-		comments: { total: 0, unresolved: 0, unresolvedHuman: 0, unresolvedBot: 0 },
-		threads: [],
-		files: {
-			files: [],
-			breakdown: {
-				code: { additions: 0, deletions: 0, files: 0 },
-				test: { additions: 0, deletions: 0, files: 0 },
-				generated: { additions: 0, deletions: 0, files: 0 },
-				docs: { additions: 0, deletions: 0, files: 0 },
-				config: { additions: 0, deletions: 0, files: 0 },
-				total: { additions: 0, deletions: 0, files: 0 },
-			},
-		},
-		...overrides,
-	};
-}
+const EMPTY_FILES: FileCategorization = {
+	files: [],
+	breakdown: {
+		code: { additions: 0, deletions: 0, files: 0 },
+		test: { additions: 0, deletions: 0, files: 0 },
+		generated: { additions: 0, deletions: 0, files: 0 },
+		docs: { additions: 0, deletions: 0, files: 0 },
+		config: { additions: 0, deletions: 0, files: 0 },
+		total: { additions: 0, deletions: 0, files: 0 },
+	},
+};
 
 describe("SummaryPanel", () => {
 	test("shows PR title and author", async () => {
-		const summary = makeSummary({ title: "Fix login bug", author: "alice", number: 99 });
+		const pr = makePR({ title: "Fix login bug", author: "alice", number: 99 });
 		const { renderOnce, captureCharFrame } = await testRender(
-			() => <SummaryPanel summary={summary} pr={makePR()} />,
+			() => (
+				<SummaryPanel
+					pr={pr}
+					threads={[]}
+					checks={[]}
+					reviews={[]}
+					files={EMPTY_FILES}
+				/>
+			),
 			{ width: 40, height: 30 },
 		);
 		await renderOnce();
@@ -42,9 +39,17 @@ describe("SummaryPanel", () => {
 	});
 
 	test("shows draft badge for draft PRs", async () => {
-		const summary = makeSummary({ isDraft: true });
+		const pr = makePR({ isDraft: true });
 		const { renderOnce, captureCharFrame } = await testRender(
-			() => <SummaryPanel summary={summary} pr={makePR()} />,
+			() => (
+				<SummaryPanel
+					pr={pr}
+					threads={[]}
+					checks={[]}
+					reviews={[]}
+					files={EMPTY_FILES}
+				/>
+			),
 			{ width: 40, height: 30 },
 		);
 		await renderOnce();
@@ -53,9 +58,17 @@ describe("SummaryPanel", () => {
 	});
 
 	test("shows merge conflict indicator", async () => {
-		const summary = makeSummary({ mergeable: "CONFLICTING" });
+		const pr = makePR({ mergeable: "CONFLICTING" });
 		const { renderOnce, captureCharFrame } = await testRender(
-			() => <SummaryPanel summary={summary} pr={makePR()} />,
+			() => (
+				<SummaryPanel
+					pr={pr}
+					threads={[]}
+					checks={[]}
+					reviews={[]}
+					files={EMPTY_FILES}
+				/>
+			),
 			{ width: 40, height: 30 },
 		);
 		await renderOnce();
@@ -64,15 +77,21 @@ describe("SummaryPanel", () => {
 	});
 
 	test("shows CI checks sorted: failed first", async () => {
-		const summary = makeSummary({
-			checks: [
-				{ name: "lint", status: "completed", conclusion: "success" },
-				{ name: "build", status: "completed", conclusion: "failure" },
-				{ name: "deploy", status: "in_progress", conclusion: null },
-			],
-		});
+		const checks: CheckRun[] = [
+			{ name: "lint", status: "completed", conclusion: "success" },
+			{ name: "build", status: "completed", conclusion: "failure" },
+			{ name: "deploy", status: "in_progress", conclusion: null },
+		];
 		const { renderOnce, captureCharFrame } = await testRender(
-			() => <SummaryPanel summary={summary} pr={makePR()} />,
+			() => (
+				<SummaryPanel
+					pr={makePR()}
+					threads={[]}
+					checks={checks}
+					reviews={[]}
+					files={EMPTY_FILES}
+				/>
+			),
 			{ width: 40, height: 30 },
 		);
 		await renderOnce();
@@ -88,14 +107,20 @@ describe("SummaryPanel", () => {
 	});
 
 	test("shows reviewers", async () => {
-		const summary = makeSummary({
-			reviews: [
-				{ user: "bob", state: "APPROVED" },
-				{ user: "carol", state: "CHANGES_REQUESTED" },
-			],
-		});
+		const reviews: Review[] = [
+			{ user: "bob", state: "APPROVED" },
+			{ user: "carol", state: "CHANGES_REQUESTED" },
+		];
 		const { renderOnce, captureCharFrame } = await testRender(
-			() => <SummaryPanel summary={summary} pr={makePR()} />,
+			() => (
+				<SummaryPanel
+					pr={makePR()}
+					threads={[]}
+					checks={[]}
+					reviews={reviews}
+					files={EMPTY_FILES}
+				/>
+			),
 			{ width: 40, height: 30 },
 		);
 		await renderOnce();
@@ -104,12 +129,67 @@ describe("SummaryPanel", () => {
 		expect(frame).toContain("carol");
 	});
 
-	test("shows comment counts", async () => {
-		const summary = makeSummary({
-			comments: { total: 5, unresolved: 3, unresolvedHuman: 2, unresolvedBot: 1 },
-		});
+	test("shows unresolved thread counts", async () => {
+		const threads: FullReviewThread[] = [
+			{
+				id: "RT_1",
+				isResolved: false,
+				path: "src/a.ts",
+				line: 1,
+				comments: [
+					{
+						id: "RC_1",
+						author: "alice",
+						body: "fix",
+						createdAt: "2026-03-01T00:00:00Z",
+						url: "https://github.com/test",
+						isBot: false,
+					},
+				],
+			},
+			{
+				id: "RT_2",
+				isResolved: false,
+				path: "src/b.ts",
+				line: 2,
+				comments: [
+					{
+						id: "RC_2",
+						author: "alice",
+						body: "fix2",
+						createdAt: "2026-03-01T00:00:00Z",
+						url: "https://github.com/test",
+						isBot: false,
+					},
+				],
+			},
+			{
+				id: "RT_3",
+				isResolved: false,
+				path: "src/c.ts",
+				line: 3,
+				comments: [
+					{
+						id: "RC_3",
+						author: "bot",
+						body: "bot comment",
+						createdAt: "2026-03-01T00:00:00Z",
+						url: "https://github.com/test",
+						isBot: true,
+					},
+				],
+			},
+		];
 		const { renderOnce, captureCharFrame } = await testRender(
-			() => <SummaryPanel summary={summary} pr={makePR()} />,
+			() => (
+				<SummaryPanel
+					pr={makePR()}
+					threads={threads}
+					checks={[]}
+					reviews={[]}
+					files={EMPTY_FILES}
+				/>
+			),
 			{ width: 40, height: 30 },
 		);
 		await renderOnce();
@@ -118,9 +198,9 @@ describe("SummaryPanel", () => {
 		expect(frame).toContain("unresolved");
 	});
 
-	test("shows empty state when no summary or pr", async () => {
+	test("shows empty state when no pr", async () => {
 		const { renderOnce, captureCharFrame } = await testRender(
-			() => <SummaryPanel summary={undefined} pr={undefined} />,
+			() => <SummaryPanel pr={undefined} />,
 			{ width: 40, height: 30 },
 		);
 		await renderOnce();
@@ -128,10 +208,10 @@ describe("SummaryPanel", () => {
 		expect(frame).toBeDefined();
 	});
 
-	test("shows basic info from PR when summary is loading", async () => {
+	test("shows basic info from PR when enrichment is loading", async () => {
 		const pr = makePR({ title: "Loading test", number: 77 });
 		const { renderOnce, captureCharFrame } = await testRender(
-			() => <SummaryPanel summary={undefined} pr={pr} />,
+			() => <SummaryPanel pr={pr} loading={true} />,
 			{ width: 40, height: 30 },
 		);
 		await renderOnce();
@@ -140,28 +220,42 @@ describe("SummaryPanel", () => {
 		expect(frame).toContain("#77");
 	});
 
-	test("shows blocker tier when currentUser is provided and summary is loaded", async () => {
-		const summary = makeSummary({
-			author: "charlie",
-			requestedReviewers: ["alice"],
-		});
+	test("shows blocker tier when currentUser is provided and enrichment loaded", async () => {
+		const pr = makePR({ author: "charlie", requestedReviewers: ["alice"] });
 		const { renderOnce, captureCharFrame } = await testRender(
-			() => <SummaryPanel summary={summary} pr={makePR()} currentUser="alice" />,
+			() => (
+				<SummaryPanel
+					pr={pr}
+					currentUser="alice"
+					threads={[]}
+					checks={[]}
+					reviews={[]}
+					files={EMPTY_FILES}
+				/>
+			),
 			{ width: 50, height: 30 },
 		);
 		await renderOnce();
 		const frame = captureCharFrame();
-		// me-blocking tier should be shown
 		expect(frame).toMatch(/me.blocking|you/i);
 	});
 
 	test("shows waiting-on-author when CI is failing", async () => {
-		const summary = makeSummary({
-			author: "charlie",
-			checks: [{ name: "build", status: "completed", conclusion: "failure" }],
-		});
+		const pr = makePR({ author: "charlie" });
+		const checks: CheckRun[] = [
+			{ name: "build", status: "completed", conclusion: "failure" },
+		];
 		const { renderOnce, captureCharFrame } = await testRender(
-			() => <SummaryPanel summary={summary} pr={makePR()} currentUser="alice" />,
+			() => (
+				<SummaryPanel
+					pr={pr}
+					currentUser="alice"
+					threads={[]}
+					checks={checks}
+					reviews={[]}
+					files={EMPTY_FILES}
+				/>
+			),
 			{ width: 50, height: 30 },
 		);
 		await renderOnce();
@@ -170,9 +264,17 @@ describe("SummaryPanel", () => {
 	});
 
 	test("does not show blocker section when currentUser is not provided", async () => {
-		const summary = makeSummary({ requestedReviewers: ["alice"] });
+		const pr = makePR({ requestedReviewers: ["alice"] });
 		const { renderOnce, captureCharFrame } = await testRender(
-			() => <SummaryPanel summary={summary} pr={makePR()} />,
+			() => (
+				<SummaryPanel
+					pr={pr}
+					threads={[]}
+					checks={[]}
+					reviews={[]}
+					files={EMPTY_FILES}
+				/>
+			),
 			{ width: 50, height: 30 },
 		);
 		await renderOnce();
