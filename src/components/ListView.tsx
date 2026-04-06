@@ -7,6 +7,7 @@ import { createListSelection } from "../lib/list-selection";
 import { processPRList } from "../lib/group-filter-engine";
 import type { GroupByKey } from "../lib/group-filter-engine";
 import type { PR } from "../lib/types";
+import type { BlockerOptions } from "../lib/blocker-engine";
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { StatusBar } from "./StatusBar";
 import { theme } from "../lib/theme";
@@ -19,6 +20,8 @@ interface ListViewProps {
 	groupBy?: GroupByKey;
 	/** When this value changes, the selection resets to index 0. */
 	resetKey?: number | string;
+	/** Lookup function for enrichment data (threads/checks/reviews). */
+	getBlockerData?: (pr: PR) => BlockerOptions | undefined;
 	onRefreshSelected: () => void;
 	onRefreshAll: () => void;
 	onEnterDetail: (pr: PR) => void;
@@ -89,6 +92,7 @@ export function ListView(props: ListViewProps) {
 			groupBy: activeGroupBy(),
 			filterText: filterText(),
 			currentUser: props.currentUser,
+			getBlockerData: props.getBlockerData,
 		}),
 	);
 
