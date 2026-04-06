@@ -2,7 +2,13 @@ import { execFileSync } from "child_process";
 import { loadConfig, saveConfig, addRepo, type LegitConfig } from "./config";
 import { createGitHubTransport, type HttpFetch } from "./github-transport";
 import { createGitHubClient, type GitHubClient } from "./github-client";
-import { withConcurrencyLimit } from "./concurrency";
+import {
+	withConcurrencyLimit,
+	type ConcurrencyLimitedFetch,
+	type GitHubNetworkStats,
+} from "./concurrency";
+
+export type { GitHubNetworkStats };
 import { categorizeFiles as _categorizeFiles } from "./file-categorizer";
 import type {
 	PR,
@@ -130,6 +136,7 @@ export class Legit {
 	private _auth?: AuthInfo;
 	private _config?: LegitConfig;
 	private _client?: GitHubClient;
+	private _concurrencyLimited?: ConcurrencyLimitedFetch;
 
 	constructor(options?: LegitOptions) {
 		this._options = options ?? {};
@@ -180,11 +187,28 @@ export class Legit {
 
 	get client(): GitHubClient {
 		if (!this._client) {
-			const httpFetch = withConcurrencyLimit(5, this._options.httpFetch ?? globalThis.fetch);
-			const transport = createGitHubTransport(this.auth.token, httpFetch);
+			this._concurrencyLimited = withConcurrencyLimit(
+				5,
+				this._options.httpFetch ?? globalThis.fetch,
+			);
+			const transport = createGitHubTransport(
+				this.auth.token,
+				this._concurrencyLimited.fetch,
+			);
 			this._client = createGitHubClient(transport);
 		}
 		return this._client;
+	}
+
+	/** Snapshot of GitHub HTTP concurrency (in-flight vs waiting for a slot). */
+	get githubNetworkStats(): GitHubNetworkStats {
+		return this._concurrencyLimited?.getSnapshot() ?? { inFlight: 0, waiting: 0 };
+	}
+
+	/** Subscribe to changes in `githubNetworkStats` (after the GitHub client is first used). */
+	subscribeGitHubNetworkStats(listener: () => void): () => void {
+		void this.client;
+		return this._concurrencyLimited?.subscribe(listener) ?? (() => {});
 	}
 
 	get repoSlug(): string {

@@ -23,6 +23,7 @@ import type { FullReviewThread, IssueComment, PRDetail, ReviewComment } from "..
 import { classifyThread } from "../lib/blocker-engine";
 import type { MouseEvent } from "@opentui/core";
 import type { ScrollBoxRenderable } from "@opentui/core";
+import type { GitHubNetworkStats } from "../lib/concurrency";
 import { StatusBar } from "./StatusBar";
 import { theme } from "../lib/theme";
 
@@ -42,6 +43,7 @@ export interface DetailViewProps {
 	onOpenInDevin?: () => void;
 	onOpenUrl?: (url: string) => void;
 	onRefresh?: () => void;
+	networkStats?: GitHubNetworkStats;
 }
 
 // ── Focus selection model ───────────────────────────────────────────────────
@@ -651,7 +653,7 @@ export function DetailView(props: DetailViewProps) {
 
 			{/* ── Status bar ────────────────────────────────────── */}
 			<Show when={props.pr}>
-				<StatusBar>
+				<StatusBar networkStats={props.networkStats}>
 					{" · "}Esc back · t {props.showResolved ? "hide" : "show"} resolved · b{" "}
 					{props.showBotComments ? "hide" : "show"} bots
 				</StatusBar>

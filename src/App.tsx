@@ -1,15 +1,17 @@
-import { createSignal, createMemo, createEffect, on } from "solid-js";
+import { createSignal, createMemo, createEffect, on, onMount, onCleanup } from "solid-js";
 import { execFile } from "child_process";
 import {
 	QueryClient,
 	QueryClientProvider,
 	useQuery,
 	useQueries,
+	useIsFetching,
 	experimental_streamedQuery as streamedQuery,
 } from "@tanstack/solid-query";
 import { AppShell } from "./components/AppShell";
 import { createUIState } from "./lib/ui-state";
 import type { Legit } from "./lib/legit";
+import type { GitHubNetworkStats } from "./lib/concurrency";
 import type { PR, CheckRun, Review, FullReviewThread, FileCategorization } from "./lib/types";
 import type { BlockerOptions } from "./lib/blocker-engine";
 /** Build a GitHub PR URL from a repo slug and PR number. */
@@ -58,6 +60,36 @@ interface AppInnerProps {
 
 function AppInner(props: AppInnerProps) {
 	const ui = createUIState();
+
+	/** HTTP concurrency (Legit fetch wrapper). */
+	const [httpNetworkStats, setHttpNetworkStats] = createSignal<GitHubNetworkStats>({
+		inFlight: 0,
+		waiting: 0,
+	});
+
+	/**
+	 * Reactive count of queries with fetchStatus 'fetching' (TanStack's own hook wires
+	 * QueryCache → Solid signals; manual subscribe + setSignal did not update the TUI reliably).
+	 */
+	const fetchingQueryCount = useIsFetching(undefined, () => props.queryClient);
+
+	/** In-flight = HTTP layer; waiting = other fetching queries not yet in an HTTP slot (see concurrency.ts). */
+	const githubNetworkStatsForBar = createMemo<GitHubNetworkStats>(() => {
+		const h = httpNetworkStats();
+		const f = fetchingQueryCount();
+		return {
+			inFlight: h.inFlight,
+			waiting: Math.max(0, f - h.inFlight),
+		};
+	});
+
+	onMount(() => {
+		setHttpNetworkStats(props.app.githubNetworkStats);
+		const unsubHttp = props.app.subscribeGitHubNetworkStats(() => {
+			setHttpNetworkStats(props.app.githubNetworkStats);
+		});
+		onCleanup(unsubHttp);
+	});
 
 	// ── Repo tabs ─────────────────────────────────────────────────────────
 	const [repoTabs, setRepoTabs] = createSignal<string[]>(props.app.trackedRepos());
@@ -385,6 +417,7 @@ function AppInner(props: AppInnerProps) {
 			view={ui.view()}
 			prs={visiblePRs()}
 			loading={loading()}
+			githubNetworkStats={githubNetworkStatsForBar()}
 			repoSlug={displayRepoSlug()}
 			showRepo={showRepo()}
 			currentUser={props.app.currentUser}

@@ -15,6 +15,7 @@ import type {
 import type { GroupByKey } from "../lib/group-filter-engine";
 import type { ViewTarget } from "../lib/ui-state";
 import type { BlockerOptions } from "../lib/blocker-engine";
+import type { GitHubNetworkStats } from "../lib/concurrency";
 import { theme } from "../lib/theme";
 import { computeVisibleColumns } from "./PRList";
 
@@ -61,6 +62,8 @@ interface AppShellProps {
 	tabs?: string[];
 	activeTab?: number;
 	onTabChange?: (index: number) => void;
+	/** GitHub HTTP concurrency (shown in status bar). */
+	githubNetworkStats?: GitHubNetworkStats;
 }
 
 /** Summary panel width: full at wide widths, narrower when tight, hidden when very narrow. */
@@ -182,6 +185,7 @@ export function AppShell(props: AppShellProps) {
 								onOpenInBrowser={props.onOpenInBrowser}
 								onOpenInDevin={props.onOpenInDevin}
 								visibleColumns={visibleColumns()}
+								networkStats={props.githubNetworkStats}
 							/>
 							<Show when={showSummary()}>
 								<box width={1} height="100%">
@@ -222,6 +226,7 @@ export function AppShell(props: AppShellProps) {
 							}}
 							onOpenUrl={props.onOpenUrl}
 							onRefresh={props.onRefreshDetail}
+							networkStats={props.githubNetworkStats}
 						/>
 					</Match>
 				</Switch>
