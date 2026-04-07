@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Detail view: pressing `o` on PR body opened the wrong repo URL; repo slug was missing from the fetched `PRDetail`, causing fallback to the CWD repo (#27)
+- Detail view: repo slug and full PR URL not shown in header for the same reason (#27)
+
 ### Changed
 
 - Move `ViewTarget` and view state from `AppShell` into `PRStore`; `ListView` uses `onEnterDetail` callback instead of `onNavigate` (#7)

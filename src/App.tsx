@@ -318,12 +318,18 @@ function AppInner(props: AppInnerProps) {
     if (!pr) return;
     const repo = pr.repoSlug ?? props.app.repoSlug;
     void props.queryClient.invalidateQueries({ queryKey: ["prs", repo] });
-    void props.queryClient.invalidateQueries({ queryKey: ["threads", repo, pr.number] });
+    void props.queryClient.invalidateQueries({
+      queryKey: ["threads", repo, pr.number],
+    });
     void props.queryClient.invalidateQueries({
       queryKey: ["checks", repo, pr.headCommitSha ?? ""],
     });
-    void props.queryClient.invalidateQueries({ queryKey: ["reviews", repo, pr.number] });
-    void props.queryClient.invalidateQueries({ queryKey: ["files", repo, pr.number] });
+    void props.queryClient.invalidateQueries({
+      queryKey: ["reviews", repo, pr.number],
+    });
+    void props.queryClient.invalidateQueries({
+      queryKey: ["files", repo, pr.number],
+    });
   }
 
   function refreshAll() {
@@ -336,8 +342,12 @@ function AppInner(props: AppInnerProps) {
     const pr = detailPr();
     if (!pr) return;
     const repo = pr.repoSlug ?? props.app.repoSlug;
-    void props.queryClient.invalidateQueries({ queryKey: ["pr-detail", repo, pr.number] });
-    void props.queryClient.invalidateQueries({ queryKey: ["threads", repo, pr.number] });
+    void props.queryClient.invalidateQueries({
+      queryKey: ["pr-detail", repo, pr.number],
+    });
+    void props.queryClient.invalidateQueries({
+      queryKey: ["threads", repo, pr.number],
+    });
     void props.queryClient.invalidateQueries({
       queryKey: ["issue-comments", repo, pr.number],
     });
@@ -443,7 +453,12 @@ function AppInner(props: AppInnerProps) {
       onRefreshAllActive={refreshAll}
       onRefreshSelected={refreshSelected}
       onEnterDetail={(pr: PR) => ui.enterDetail(pr)}
-      detailPr={detailPrQuery.data ?? undefined}
+      detailPr={(() => {
+        const data = detailPrQuery.data;
+        if (!data) return undefined;
+        const pr = detailPr();
+        return { ...data, repoSlug: pr?.repoSlug ?? props.app.repoSlug };
+      })()}
       detailThreads={detailThreadsQuery.data ?? []}
       detailComments={detailCommentsQuery.data ?? []}
       detailLoading={detailPrQuery.isPending && !!detailPr()}
