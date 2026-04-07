@@ -41,9 +41,31 @@ export function withConcurrencyLimit(
 
 	const wrapped: HttpFetch = async (url, init) => {
 		if (active >= maxConcurrent) {
-			await new Promise<void>((resolve) => {
+			await new Promise<void>((resolve, reject) => {
 				queue.push(resolve);
 				notify();
+				const signal = init?.signal;
+				if (signal) {
+					if (signal.aborted) {
+						const idx = queue.indexOf(resolve);
+						if (idx >= 0) queue.splice(idx, 1);
+						reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+						notify();
+						return;
+					}
+					signal.addEventListener(
+						"abort",
+						() => {
+							const idx = queue.indexOf(resolve);
+							if (idx >= 0) {
+								queue.splice(idx, 1);
+								reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+								notify();
+							}
+						},
+						{ once: true },
+					);
+				}
 			});
 		}
 		active++;
