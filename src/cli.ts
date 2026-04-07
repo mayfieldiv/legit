@@ -19,6 +19,7 @@ import { computeBlocker } from "./lib/blocker-engine";
 import { processPRList } from "./lib/group-filter-engine";
 import type { GroupByKey, SortByKey, SortDir } from "./lib/group-filter-engine";
 import type { PR, FileChange } from "./lib/types";
+import { computeCommentCounts } from "./lib/types";
 
 export interface CommandResult {
 	output?: unknown;
@@ -113,7 +114,26 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
 				return { error: "Usage: legit pr <number>" };
 			}
 			const prNumber = Number(rawNumber);
-			return { output: await app.fetchPRSummary(app.repoSlug, prNumber) };
+			const repo = app.repoSlug;
+			const detail = await app.fetchPR(repo, prNumber);
+			const [checks, reviews, threads, files] = await Promise.all([
+				detail.headCommitSha
+					? app.fetchCheckRuns(repo, detail.headCommitSha)
+					: Promise.resolve([]),
+				app.fetchReviews(repo, prNumber),
+				app.fetchFullReviewThreads(repo, prNumber),
+				app.fetchCategorizedFiles(repo, prNumber),
+			]);
+			return {
+				output: {
+					...detail,
+					checks,
+					reviews,
+					comments: computeCommentCounts(threads),
+					threads,
+					files,
+				},
+			};
 		}
 
 		case "files": {
@@ -149,14 +169,18 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
 				return { error: "Usage: legit blocker <number>" };
 			}
 			const prNumber = Number(rawNumber);
-			const summary = await app.fetchPRSummary(app.repoSlug, prNumber);
+			const repo = app.repoSlug;
+			const detail = await app.fetchPR(repo, prNumber);
+			const [checks, reviews, threads] = await Promise.all([
+				detail.headCommitSha
+					? app.fetchCheckRuns(repo, detail.headCommitSha)
+					: Promise.resolve([]),
+				app.fetchReviews(repo, prNumber),
+				app.fetchFullReviewThreads(repo, prNumber),
+			]);
 			const currentUser = app.currentUser;
 			return {
-				output: computeBlocker(summary, currentUser, {
-					checks: summary.checks,
-					reviews: summary.reviews,
-					threads: summary.threads,
-				}),
+				output: computeBlocker(detail, currentUser, { checks, reviews, threads }),
 			};
 		}
 

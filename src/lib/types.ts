@@ -29,10 +29,6 @@ export interface PR {
 	headRef: string;
 	/** Target branch name (e.g. "main"). */
 	baseRef: string;
-	/** Unresolved review-thread counts. Populated by the background thread-count loader. */
-	comments?: CommentCounts;
-	/** True while the background fetch of thread counts is in-flight for this PR. */
-	threadsLoading?: boolean;
 }
 
 export interface PRDetail extends PR {
@@ -75,6 +71,37 @@ export interface CommentCounts {
 	unresolvedBot: number;
 }
 
+// ── Comment counts derivation ────────────────────────────────────────────────
+
+/** Derive CommentCounts from full review threads (pure function). */
+export function computeCommentCounts(
+	threads: FullReviewThread[],
+	botLogins: string[] = [],
+): CommentCounts {
+	const botSet = new Set(botLogins);
+	let total = 0;
+	let unresolved = 0;
+	let unresolvedHuman = 0;
+	let unresolvedBot = 0;
+
+	for (const thread of threads) {
+		total++;
+		if (!thread.isResolved) {
+			unresolved++;
+			const firstComment = thread.comments[0];
+			const isBot =
+				firstComment != null && (firstComment.isBot || botSet.has(firstComment.author));
+			if (isBot) {
+				unresolvedBot++;
+			} else {
+				unresolvedHuman++;
+			}
+		}
+	}
+
+	return { total, unresolved, unresolvedHuman, unresolvedBot };
+}
+
 // ── Review threads (full) ────────────────────────────────────────────────────
 
 export interface ReviewComment {
@@ -103,16 +130,6 @@ export interface IssueComment {
 	createdAt: string;
 	url: string;
 	isBot: boolean;
-}
-
-// ── PR Summary ──────────────────────────────────────────────────────────────
-
-export interface PRSummary extends PRDetail {
-	checks: CheckRun[];
-	reviews: Review[];
-	comments: CommentCounts;
-	threads: FullReviewThread[];
-	files: FileCategorization;
 }
 
 // ── File categorization ─────────────────────────────────────────────────────

@@ -1,9 +1,10 @@
 import { For, Show, createMemo } from "solid-js";
 import type { PR, CommentCounts } from "../lib/types";
+import { computeCommentCounts } from "../lib/types";
 import type { MouseEvent } from "@opentui/core";
 import { formatAge, formatSize, formatReviewDecision, formatRepoShort } from "../lib/format";
 import { computeBlocker } from "../lib/blocker-engine";
-import type { Tier } from "../lib/blocker-engine";
+import type { Tier, BlockerOptions } from "../lib/blocker-engine";
 import { theme } from "../lib/theme";
 
 // ── Flat item type (group headers + PR rows) ─────────────────────────────────
@@ -56,6 +57,8 @@ interface PRListProps {
 	onSelect?: (index: number) => void;
 	/** Which optional columns are visible (responsive). Shows all if omitted. */
 	visibleColumns?: VisibleColumns;
+	/** Lookup function for enrichment data per PR. */
+	getBlockerData?: (pr: PR) => BlockerOptions | undefined;
 }
 
 // Column widths — fixed columns; title gets remaining space via flexGrow
@@ -237,13 +240,20 @@ function PRRow(props: {
 	id: string;
 	onMouseDown?: (e: MouseEvent) => void;
 	visibleColumns?: VisibleColumns;
+	blockerData?: BlockerOptions;
 }) {
 	const fg = () => (props.selected ? theme.selectedFg : undefined);
 	const blockerCell = () => {
 		if (!props.currentUser) return null;
-		const b = computeBlocker(props.pr, props.currentUser);
+		const b = computeBlocker(props.pr, props.currentUser, props.blockerData);
 		return blockerDisplay(b.tier, b.blocker, props.currentUser);
 	};
+	const comments = (): CommentCounts | undefined => {
+		const data = props.blockerData;
+		if (!data?.threads) return undefined;
+		return computeCommentCounts(data.threads);
+	};
+	const enrichmentLoading = () => props.blockerData === undefined;
 	return (
 		<box
 			id={props.id}
@@ -297,14 +307,14 @@ function PRRow(props: {
 			<Show when={props.visibleColumns?.threads !== false}>
 				<Cell width={COL.threads} paddingRight={props.currentUser ? 1 : 0}>
 					<Show
-						when={props.pr.comments !== undefined}
+						when={comments() !== undefined}
 						fallback={
-							<Show when={props.pr.threadsLoading}>
+							<Show when={enrichmentLoading()}>
 								<span style={{ fg: theme.muted }}>…</span>
 							</Show>
 						}
 					>
-						<For each={threadParts(props.pr.comments, props.selected)}>
+						<For each={threadParts(comments(), props.selected)}>
 							{(part) => <span style={{ fg: part.fg }}>{part.text}</span>}
 						</For>
 					</Show>
@@ -402,6 +412,7 @@ export function PRList(props: PRListProps) {
 								showRepo={props.showRepo}
 								currentUser={props.currentUser}
 								visibleColumns={props.visibleColumns}
+								blockerData={props.getBlockerData?.(item.pr)}
 								onMouseDown={(e: MouseEvent) => {
 									e.preventDefault();
 									props.onSelect?.(item.prIndex);

@@ -2,14 +2,21 @@ import { execFileSync } from "child_process";
 import { loadConfig, saveConfig, addRepo, type LegitConfig } from "./config";
 import { createGitHubTransport, type HttpFetch } from "./github-transport";
 import { createGitHubClient, type GitHubClient } from "./github-client";
+import {
+	withConcurrencyLimit,
+	type ConcurrencyLimitedFetch,
+	type GitHubNetworkStats,
+} from "./concurrency";
+
+export type { GitHubNetworkStats };
 import { categorizeFiles as _categorizeFiles } from "./file-categorizer";
 import type {
 	PR,
 	PRDetail,
+	CheckRun,
+	Review,
 	FileChange,
 	FileCategorization,
-	PRSummary,
-	CommentCounts,
 	FullReviewThread,
 	IssueComment,
 } from "./types";
@@ -129,6 +136,7 @@ export class Legit {
 	private _auth?: AuthInfo;
 	private _config?: LegitConfig;
 	private _client?: GitHubClient;
+	private _concurrencyLimited?: ConcurrencyLimitedFetch;
 
 	constructor(options?: LegitOptions) {
 		this._options = options ?? {};
@@ -179,10 +187,28 @@ export class Legit {
 
 	get client(): GitHubClient {
 		if (!this._client) {
-			const transport = createGitHubTransport(this.auth.token, this._options.httpFetch);
+			this._concurrencyLimited = withConcurrencyLimit(
+				10,
+				this._options.httpFetch ?? globalThis.fetch,
+			);
+			const transport = createGitHubTransport(
+				this.auth.token,
+				this._concurrencyLimited.fetch,
+			);
 			this._client = createGitHubClient(transport);
 		}
 		return this._client;
+	}
+
+	/** Snapshot of GitHub HTTP concurrency (in-flight vs waiting for a slot). */
+	get githubNetworkStats(): GitHubNetworkStats {
+		return this._concurrencyLimited?.getSnapshot() ?? { inFlight: 0, waiting: 0 };
+	}
+
+	/** Subscribe to changes in `githubNetworkStats` (after the GitHub client is first used). */
+	subscribeGitHubNetworkStats(listener: () => void): () => void {
+		void this.client;
+		return this._concurrencyLimited?.subscribe(listener) ?? (() => {});
 	}
 
 	get repoSlug(): string {
@@ -238,18 +264,6 @@ export class Legit {
 	}
 
 	/**
-	 * Fetch only the review-thread counts for a single PR.
-	 * Lighter-weight than fetchPRSummary — used for background pre-loading.
-	 */
-	async fetchThreadCounts(
-		repo: string,
-		prNumber: number,
-		signal?: AbortSignal,
-	): Promise<CommentCounts> {
-		return this.client.fetchReviewComments(repo, prNumber, this.config.botLogins, signal);
-	}
-
-	/**
 	 * Fetch full review threads with comment bodies and bot flags.
 	 */
 	async fetchFullReviewThreads(
@@ -271,29 +285,34 @@ export class Legit {
 		return this.client.fetchIssueComments(repo, prNumber, this.config.botLogins, signal);
 	}
 
-	async fetchPRSummary(repo: string, number: number, signal?: AbortSignal): Promise<PRSummary> {
-		// Phase 1: fetch PR detail (need headCommitSha for check runs)
-		const detail = await this.client.fetchPR(repo, number, signal);
+	/**
+	 * Fetch check runs for a commit.
+	 */
+	async fetchCheckRuns(
+		repo: string,
+		commitSha: string,
+		signal?: AbortSignal,
+	): Promise<CheckRun[]> {
+		return this.client.fetchCheckRuns(repo, commitSha, signal);
+	}
 
-		// Phase 2: fetch enrichments in parallel
-		const [checks, reviews, comments, threads, files] = await Promise.all([
-			detail.headCommitSha
-				? this.client.fetchCheckRuns(repo, detail.headCommitSha, signal)
-				: Promise.resolve([]),
-			this.client.fetchReviews(repo, number, signal),
-			this.client.fetchReviewComments(repo, number, this.config.botLogins, signal),
-			this.client.fetchFullReviewThreads(repo, number, this.config.botLogins, signal),
-			collectFiles(this.client.fetchFiles(repo, number, signal)),
-		]);
+	/**
+	 * Fetch reviews for a PR.
+	 */
+	async fetchReviews(repo: string, prNumber: number, signal?: AbortSignal): Promise<Review[]> {
+		return this.client.fetchReviews(repo, prNumber, signal);
+	}
 
-		return {
-			...detail,
-			checks,
-			reviews,
-			comments,
-			threads,
-			files: this.categorizeFiles(files),
-		};
+	/**
+	 * Fetch and categorize files for a PR.
+	 */
+	async fetchCategorizedFiles(
+		repo: string,
+		prNumber: number,
+		signal?: AbortSignal,
+	): Promise<FileCategorization> {
+		const files = await collectFiles(this.client.fetchFiles(repo, prNumber, signal));
+		return this.categorizeFiles(files);
 	}
 }
 

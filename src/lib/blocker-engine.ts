@@ -163,9 +163,8 @@ function pickTopAwaitingReviewer(
  *  4. Changes requested (via reviewDecision or individual reviews)
  *                         → waiting-on-author (author must respond before
  *                           pending reviewers need to act)
- *  5a. Unreplied threads  → waiting-on-author (author must respond to open
+ *  5. Unreplied threads   → waiting-on-author (author must respond to open
  *                           review comments; only when thread data is loaded)
- *  5b. (legacy) Unresolved threads without thread data → waiting-on-author
  *  6. Approved            → waiting-on-author (author should merge; no more
  *                           reviewer action needed regardless of pending requests)
  *  7. All threads awaiting-reviewer → needs-review/me-blocking for the
@@ -247,8 +246,8 @@ function _computeBlockerCore(pr: PR, currentUser: string, opts?: BlockerOptions)
 		};
 	}
 
-	// 5a. Unreplied review threads (when full thread data is available).
-	//     Only threads where the author hasn't replied count against the author.
+	// 5. Unreplied review threads (when full thread data is available).
+	//    Only threads where the author hasn't replied count against the author.
 	const threads = opts?.threads;
 	let threadClassification: ThreadClassification | undefined;
 
@@ -260,18 +259,6 @@ function _computeBlockerCore(pr: PR, currentUser: string, opts?: BlockerOptions)
 				blocker: effectiveAuthor,
 				tier: "waiting-on-author",
 				reason: `${n} unreplied thread${n === 1 ? "" : "s"}`,
-			};
-		}
-	} else {
-		// 5b. Legacy fallback: when only CommentCounts are available (no full thread data),
-		//     treat all unresolved threads as waiting-on-author.
-		const unresolvedThreads =
-			(pr.comments?.unresolvedHuman ?? 0) + (pr.comments?.unresolvedBot ?? 0);
-		if (unresolvedThreads > 0) {
-			return {
-				blocker: effectiveAuthor,
-				tier: "waiting-on-author",
-				reason: `${unresolvedThreads} unresolved thread${unresolvedThreads === 1 ? "" : "s"}`,
 			};
 		}
 	}

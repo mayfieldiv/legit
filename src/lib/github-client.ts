@@ -15,7 +15,6 @@ import type {
 	FileChange,
 	CheckRun,
 	Review,
-	CommentCounts,
 	FullReviewThread,
 	ReviewComment,
 	IssueComment,
@@ -38,7 +37,6 @@ export type {
 	FileChange,
 	CheckRun,
 	Review,
-	CommentCounts,
 	FullReviewThread,
 	ReviewComment,
 	IssueComment,
@@ -131,12 +129,6 @@ export interface GitHubClient {
 	fetchFiles(repo: string, prNumber: number, signal?: AbortSignal): AsyncIterable<FileChange[]>;
 	fetchCheckRuns(repo: string, commitSha: string, signal?: AbortSignal): Promise<CheckRun[]>;
 	fetchReviews(repo: string, prNumber: number, signal?: AbortSignal): Promise<Review[]>;
-	fetchReviewComments(
-		repo: string,
-		prNumber: number,
-		botLogins: string[],
-		signal?: AbortSignal,
-	): Promise<CommentCounts>;
 	fetchFullReviewThreads(
 		repo: string,
 		prNumber: number,
@@ -251,45 +243,6 @@ export function createGitHubClient(transport: GitHubTransport): GitHubClient {
 				user,
 				state: r.state as Review["state"],
 			}));
-		},
-
-		async fetchReviewComments(
-			repo: string,
-			prNumber: number,
-			botLogins: string[],
-			signal?: AbortSignal,
-		): Promise<CommentCounts> {
-			const [owner, repoName] = parseOwnerRepo(repo);
-			const botSet = new Set(botLogins);
-			let total = 0;
-			let unresolved = 0;
-			let unresolvedHuman = 0;
-			let unresolvedBot = 0;
-
-			for await (const thread of transport.fetchReviewThreads(
-				owner,
-				repoName,
-				prNumber,
-				signal,
-			)) {
-				total++;
-				if (!thread.isResolved) {
-					unresolved++;
-					const authorNode = thread.comments.nodes[0]?.author;
-					const isBot =
-						authorNode != null &&
-						(authorNode.__typename === "Bot" ||
-							authorNode.login.endsWith("[bot]") ||
-							botSet.has(authorNode.login));
-					if (isBot) {
-						unresolvedBot++;
-					} else {
-						unresolvedHuman++;
-					}
-				}
-			}
-
-			return { total, unresolved, unresolvedHuman, unresolvedBot };
 		},
 
 		async fetchFullReviewThreads(

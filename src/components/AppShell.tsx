@@ -3,13 +3,23 @@ import { useKeyboard, useTerminalDimensions } from "@opentui/solid";
 import { ListView } from "./ListView";
 import { SummaryPanel } from "./SummaryPanel";
 import { DetailView } from "./DetailView";
-import type { PR, PRDetail, PRSummary, FullReviewThread, IssueComment } from "../lib/types";
+import type {
+	PR,
+	PRDetail,
+	CheckRun,
+	Review,
+	FullReviewThread,
+	IssueComment,
+	FileCategorization,
+} from "../lib/types";
 import type { GroupByKey } from "../lib/group-filter-engine";
-import type { ViewTarget } from "../lib/pr-store";
+import type { ViewTarget } from "../lib/ui-state";
+import type { BlockerOptions } from "../lib/blocker-engine";
+import type { GitHubNetworkStats } from "../lib/concurrency";
 import { theme } from "../lib/theme";
 import { computeVisibleColumns } from "./PRList";
 
-export type { ViewTarget } from "../lib/pr-store";
+export type { ViewTarget } from "../lib/ui-state";
 
 interface AppShellProps {
 	prs: PR[];
@@ -29,7 +39,14 @@ interface AppShellProps {
 	onOpenInDevin?: (pr: PR) => void;
 	onEnterDetail: (pr: PR) => void;
 	selectedPr?: PR;
-	summary?: PRSummary;
+	// Summary panel data (individual queries, no PRSummary)
+	summaryThreads?: FullReviewThread[];
+	summaryChecks?: CheckRun[];
+	summaryReviews?: Review[];
+	summaryFiles?: FileCategorization;
+	summaryLoading?: boolean;
+	/** Blocker data lookup for grouping engine. */
+	getBlockerData?: (pr: PR) => BlockerOptions | undefined;
 	// Detail view
 	detailPr?: PRDetail;
 	detailThreads?: FullReviewThread[];
@@ -45,6 +62,8 @@ interface AppShellProps {
 	tabs?: string[];
 	activeTab?: number;
 	onTabChange?: (index: number) => void;
+	/** GitHub HTTP concurrency (shown in status bar). */
+	githubNetworkStats?: GitHubNetworkStats;
 }
 
 /** Summary panel width: full at wide widths, narrower when tight, hidden when very narrow. */
@@ -158,6 +177,7 @@ export function AppShell(props: AppShellProps) {
 								currentUser={props.currentUser}
 								groupBy={props.groupBy ?? "smart-status"}
 								resetKey={props.resetKey}
+								getBlockerData={props.getBlockerData}
 								onRefreshSelected={props.onRefreshSelected}
 								onRefreshAll={props.onRefreshAllActive}
 								onEnterDetail={props.onEnterDetail}
@@ -165,6 +185,7 @@ export function AppShell(props: AppShellProps) {
 								onOpenInBrowser={props.onOpenInBrowser}
 								onOpenInDevin={props.onOpenInDevin}
 								visibleColumns={visibleColumns()}
+								networkStats={props.githubNetworkStats}
 							/>
 							<Show when={showSummary()}>
 								<box width={1} height="100%">
@@ -172,9 +193,13 @@ export function AppShell(props: AppShellProps) {
 								</box>
 								<box width={summaryWidth()}>
 									<SummaryPanel
-										summary={props.summary}
 										pr={props.selectedPr}
 										currentUser={props.currentUser}
+										threads={props.summaryThreads}
+										checks={props.summaryChecks}
+										reviews={props.summaryReviews}
+										files={props.summaryFiles}
+										loading={props.summaryLoading}
 									/>
 								</box>
 							</Show>
@@ -201,6 +226,7 @@ export function AppShell(props: AppShellProps) {
 							}}
 							onOpenUrl={props.onOpenUrl}
 							onRefresh={props.onRefreshDetail}
+							networkStats={props.githubNetworkStats}
 						/>
 					</Match>
 				</Switch>

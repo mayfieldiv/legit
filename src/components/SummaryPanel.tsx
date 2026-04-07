@@ -1,5 +1,13 @@
 import { Show, For, createMemo } from "solid-js";
-import type { PR, PRSummary, FileCategory } from "../lib/types";
+import type {
+	PR,
+	CheckRun,
+	Review,
+	FullReviewThread,
+	FileCategorization,
+	FileCategory,
+} from "../lib/types";
+import { computeCommentCounts } from "../lib/types";
 import {
 	formatAge,
 	formatSize,
@@ -18,28 +26,43 @@ import { theme } from "../lib/theme";
 const MAX_VISIBLE_CHECKS = 6;
 
 interface SummaryPanelProps {
-	summary: PRSummary | undefined;
 	pr: PR | undefined;
 	currentUser?: string;
+	threads?: FullReviewThread[];
+	checks?: CheckRun[];
+	reviews?: Review[];
+	files?: FileCategorization;
+	loading?: boolean;
 }
 
 export function SummaryPanel(props: SummaryPanelProps) {
-	const pr = () => props.summary ?? props.pr;
-	const summary = () => props.summary;
+	const pr = () => props.pr;
 
-	/** Blocker result — null when summary not loaded or currentUser absent. */
+	const comments = createMemo(() => {
+		if (!props.threads) return undefined;
+		return computeCommentCounts(props.threads);
+	});
+
+	const hasEnrichment = () =>
+		props.threads !== undefined && props.checks !== undefined && props.reviews !== undefined;
+
+	/** Blocker result — null when enrichment not loaded or currentUser absent. */
 	const blockerResult = createMemo(() => {
-		const s = summary();
+		const p = pr();
 		const u = props.currentUser;
-		if (!s || !u) return null;
-		return computeBlocker(s, u, { checks: s.checks, reviews: s.reviews, threads: s.threads });
+		if (!p || !u || !hasEnrichment()) return null;
+		return computeBlocker(p, u, {
+			checks: props.checks ?? [],
+			reviews: props.reviews ?? [],
+			threads: props.threads ?? [],
+		});
 	});
 
 	const sizeCategories = (): FileCategory[] => {
-		const s = summary();
-		if (!s || s.files.breakdown.total.files === 0) return [];
+		const f = props.files;
+		if (!f || f.breakdown.total.files === 0) return [];
 		return (["code", "test", "generated", "docs", "config"] as const).filter(
-			(cat) => s.files.breakdown[cat].files > 0,
+			(cat) => f.breakdown[cat].files > 0,
 		);
 	};
 
@@ -124,7 +147,7 @@ export function SummaryPanel(props: SummaryPanelProps) {
 					</box>
 				</Show>
 
-				{/* --- Blocker (only when summary loaded and currentUser known) --- */}
+				{/* --- Blocker (only when enrichment loaded and currentUser known) --- */}
 				<Show when={blockerResult()}>
 					{(b) => (
 						<box height={1} width="100%">
@@ -142,21 +165,21 @@ export function SummaryPanel(props: SummaryPanelProps) {
 				</Show>
 
 				{/* Comments — shown right after blocker so unresolved threads are prominent */}
-				<Show when={(summary()?.comments.unresolved ?? 0) > 0}>
+				<Show when={(comments()?.unresolved ?? 0) > 0}>
 					<box height={1} width="100%">
 						<text truncate={true}>
 							<span style={{ fg: theme.muted }}>comments: </span>
-							<span>{summary()!.comments.unresolved} unresolved</span>
+							<span>{comments()!.unresolved} unresolved</span>
 							<span style={{ fg: theme.muted }}>
 								{" "}
-								({summary()!.comments.unresolvedHuman} human,{" "}
-								{summary()!.comments.unresolvedBot} bot)
+								({comments()!.unresolvedHuman} human, {comments()!.unresolvedBot}{" "}
+								bot)
 							</span>
 						</text>
 					</box>
 				</Show>
 
-				<Show when={summary()}>
+				<Show when={hasEnrichment()}>
 					{/* Size breakdown */}
 					<Show when={sizeCategories().length > 0}>
 						<box height={1} width="100%">
@@ -174,8 +197,8 @@ export function SummaryPanel(props: SummaryPanelProps) {
 										</span>
 										<span>
 											{formatSize(
-												summary()!.files.breakdown[cat].additions,
-												summary()!.files.breakdown[cat].deletions,
+												props.files!.breakdown[cat].additions,
+												props.files!.breakdown[cat].deletions,
 											)}
 										</span>
 									</text>
@@ -185,13 +208,13 @@ export function SummaryPanel(props: SummaryPanelProps) {
 					</Show>
 
 					{/* Reviewers */}
-					<Show when={summary()!.reviews.length > 0}>
+					<Show when={(props.reviews?.length ?? 0) > 0}>
 						<box height={1} width="100%">
 							<text>
 								<span style={{ fg: theme.muted }}>reviewers</span>
 							</text>
 						</box>
-						<For each={summary()!.reviews}>
+						<For each={props.reviews!}>
 							{(review) => {
 								const ri = reviewIcon(review.state);
 								return (
@@ -232,9 +255,9 @@ export function SummaryPanel(props: SummaryPanelProps) {
 					</Show>
 
 					{/* CI Checks */}
-					<Show when={summary()!.checks.length > 0}>
+					<Show when={(props.checks?.length ?? 0) > 0}>
 						{(() => {
-							const sorted = createMemo(() => sortCheckRuns(summary()!.checks));
+							const sorted = createMemo(() => sortCheckRuns(props.checks!));
 							const counts = createMemo(() => checksSummary(sorted()));
 							const visible = createMemo(() => sorted().slice(0, MAX_VISIBLE_CHECKS));
 							const overflow = createMemo(() =>
@@ -298,8 +321,8 @@ export function SummaryPanel(props: SummaryPanelProps) {
 					</Show>
 				</Show>
 
-				{/* Loading indicator when summary not yet loaded */}
-				<Show when={!summary() && pr()}>
+				{/* Loading indicator when enrichment not yet loaded */}
+				<Show when={props.loading && pr()}>
 					<box height={1} width="100%">
 						<text>
 							<span style={{ fg: theme.muted }}>Loading details...</span>
