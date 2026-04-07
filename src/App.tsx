@@ -216,7 +216,7 @@ function AppInner(props: AppInnerProps) {
 		const rq = reviewsQueries[idx];
 
 		if (!tq || !cq || !rq) return undefined;
-		if (tq.isPending || cq.isPending || rq.isPending) return undefined;
+		if (tq.isLoading || cq.isLoading || rq.isLoading) return undefined;
 
 		return {
 			threads: tq.data ?? [],
@@ -326,6 +326,7 @@ function AppInner(props: AppInnerProps) {
 		const pr = selectedPr();
 		if (!pr) return;
 		const repo = pr.repoSlug ?? props.app.repoSlug;
+		void props.queryClient.invalidateQueries({ queryKey: ["prs", repo] });
 		void props.queryClient.invalidateQueries({ queryKey: ["threads", repo, pr.number] });
 		void props.queryClient.invalidateQueries({
 			queryKey: ["checks", repo, pr.headCommitSha ?? ""],
@@ -419,10 +420,10 @@ function AppInner(props: AppInnerProps) {
 		const idx = prs.findIndex((p) => p.number === pr.number && p.repoSlug === pr.repoSlug);
 		if (idx < 0) return false;
 		return (
-			(threadsQueries[idx]?.isPending ?? true) ||
-			(checksQueries[idx]?.isPending ?? true) ||
-			(reviewsQueries[idx]?.isPending ?? true) ||
-			filesQuery.isPending
+			(threadsQueries[idx]?.isLoading ?? true) ||
+			(checksQueries[idx]?.isLoading ?? true) ||
+			(reviewsQueries[idx]?.isLoading ?? true) ||
+			filesQuery.isLoading
 		);
 	};
 
