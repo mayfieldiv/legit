@@ -400,7 +400,8 @@ function AppInner(props: AppInnerProps) {
 		const prs = visiblePRs();
 		const idx = prs.findIndex((p) => p.number === pr.number && p.repoSlug === pr.repoSlug);
 		if (idx < 0) return undefined;
-		return checksQueries[idx]?.data;
+		// Checks query can be permanently disabled (null headCommitSha) — treat as empty.
+		return checksQueries[idx]?.data ?? [];
 	};
 
 	const summaryReviews = (): Review[] | undefined => {
