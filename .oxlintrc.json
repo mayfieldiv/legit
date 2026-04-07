@@ -1,24 +1,24 @@
 {
-	"plugins": null,
-	"categories": {
-		"correctness": "error",
-		"suspicious": "warn",
-		"pedantic": "off",
-		"style": "off",
-		"nursery": "off"
-	},
-	"rules": {},
-	"settings": {
-		"react": {
-			"formComponents": [],
-			"linkComponents": [],
-			"version": null,
-			"componentWrapperFunctions": []
-		}
-	},
-	"env": {
-		"builtin": true
-	},
-	"globals": {},
-	"ignorePatterns": []
+  "plugins": null,
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn",
+    "pedantic": "off",
+    "style": "off",
+    "nursery": "off"
+  },
+  "rules": {},
+  "settings": {
+    "react": {
+      "formComponents": [],
+      "linkComponents": [],
+      "version": null,
+      "componentWrapperFunctions": []
+    }
+  },
+  "env": {
+    "builtin": true
+  },
+  "globals": {},
+  "ignorePatterns": []
 }

@@ -4,211 +4,211 @@ import { AppShell } from "../src/components/AppShell";
 import { makePR } from "./helpers";
 
 describe("AppShell", () => {
-	test("shows loading state when loading is true", async () => {
-		const { renderOnce, captureCharFrame } = await testRender(
-			() => (
-				<AppShell
-					view={{ view: "list" }}
-					onEnterDetail={() => {}}
-					prs={[]}
-					loading={true}
-					repoSlug="acme/widgets"
-					onRefreshSelected={() => {}}
-					onRefreshAllActive={() => {}}
-				/>
-			),
-			{ width: 130, height: 20 },
-		);
+  test("shows loading state when loading is true", async () => {
+    const { renderOnce, captureCharFrame } = await testRender(
+      () => (
+        <AppShell
+          view={{ view: "list" }}
+          onEnterDetail={() => {}}
+          prs={[]}
+          loading={true}
+          repoSlug="acme/widgets"
+          onRefreshSelected={() => {}}
+          onRefreshAllActive={() => {}}
+        />
+      ),
+      { width: 130, height: 20 },
+    );
 
-		await renderOnce();
-		const frame = captureCharFrame();
-		expect(frame).toMatch(/loading/i);
-	});
+    await renderOnce();
+    const frame = captureCharFrame();
+    expect(frame).toMatch(/loading/i);
+  });
 
-	test("shows PR list when loaded", async () => {
-		const prs = [
-			makePR({ number: 1, title: "First PR" }),
-			makePR({ number: 2, title: "Second PR" }),
-		];
+  test("shows PR list when loaded", async () => {
+    const prs = [
+      makePR({ number: 1, title: "First PR" }),
+      makePR({ number: 2, title: "Second PR" }),
+    ];
 
-		const { renderOnce, captureCharFrame } = await testRender(
-			() => (
-				<AppShell
-					view={{ view: "list" }}
-					onEnterDetail={() => {}}
-					prs={prs}
-					loading={false}
-					repoSlug="acme/widgets"
-					onRefreshSelected={() => {}}
-					onRefreshAllActive={() => {}}
-				/>
-			),
-			// Wide enough to accommodate the Threads column without squeezing the title.
-			{ width: 160, height: 20 },
-		);
+    const { renderOnce, captureCharFrame } = await testRender(
+      () => (
+        <AppShell
+          view={{ view: "list" }}
+          onEnterDetail={() => {}}
+          prs={prs}
+          loading={false}
+          repoSlug="acme/widgets"
+          onRefreshSelected={() => {}}
+          onRefreshAllActive={() => {}}
+        />
+      ),
+      // Wide enough to accommodate the Threads column without squeezing the title.
+      { width: 160, height: 20 },
+    );
 
-		await renderOnce();
-		const frame = captureCharFrame();
-		expect(frame).toContain("First PR");
-		expect(frame).toContain("Second PR");
-	});
+    await renderOnce();
+    const frame = captureCharFrame();
+    expect(frame).toContain("First PR");
+    expect(frame).toContain("Second PR");
+  });
 
-	test("shows repo name in header", async () => {
-		const { renderOnce, captureCharFrame } = await testRender(
-			() => (
-				<AppShell
-					view={{ view: "list" }}
-					onEnterDetail={() => {}}
-					prs={[]}
-					loading={false}
-					repoSlug="acme/widgets"
-					onRefreshSelected={() => {}}
-					onRefreshAllActive={() => {}}
-				/>
-			),
-			{ width: 130, height: 20 },
-		);
+  test("shows repo name in header", async () => {
+    const { renderOnce, captureCharFrame } = await testRender(
+      () => (
+        <AppShell
+          view={{ view: "list" }}
+          onEnterDetail={() => {}}
+          prs={[]}
+          loading={false}
+          repoSlug="acme/widgets"
+          onRefreshSelected={() => {}}
+          onRefreshAllActive={() => {}}
+        />
+      ),
+      { width: 130, height: 20 },
+    );
 
-		await renderOnce();
-		const frame = captureCharFrame();
-		expect(frame).toContain("acme/widgets");
-	});
+    await renderOnce();
+    const frame = captureCharFrame();
+    expect(frame).toContain("acme/widgets");
+  });
 
-	test("shows error message when error is set", async () => {
-		const { renderOnce, captureCharFrame } = await testRender(
-			() => (
-				<AppShell
-					view={{ view: "list" }}
-					onEnterDetail={() => {}}
-					prs={[]}
-					loading={false}
-					repoSlug="acme/widgets"
-					error="Network timeout"
-					onRefreshSelected={() => {}}
-					onRefreshAllActive={() => {}}
-				/>
-			),
-			{ width: 130, height: 20 },
-		);
+  test("shows error message when error is set", async () => {
+    const { renderOnce, captureCharFrame } = await testRender(
+      () => (
+        <AppShell
+          view={{ view: "list" }}
+          onEnterDetail={() => {}}
+          prs={[]}
+          loading={false}
+          repoSlug="acme/widgets"
+          error="Network timeout"
+          onRefreshSelected={() => {}}
+          onRefreshAllActive={() => {}}
+        />
+      ),
+      { width: 130, height: 20 },
+    );
 
-		await renderOnce();
-		const frame = captureCharFrame();
-		// captureCharFrame may have minor overlap artifacts from layout,
-		// but the error text components should be present
-		expect(frame).toMatch(/Error/);
-		expect(frame).toMatch(/Network/);
-		expect(frame).toMatch(/timeout/);
-	});
+    await renderOnce();
+    const frame = captureCharFrame();
+    // captureCharFrame may have minor overlap artifacts from layout,
+    // but the error text components should be present
+    expect(frame).toMatch(/Error/);
+    expect(frame).toMatch(/Network/);
+    expect(frame).toMatch(/timeout/);
+  });
 
-	test("shows PR count in header", async () => {
-		const prs = [makePR({ number: 1 }), makePR({ number: 2 })];
+  test("shows PR count in header", async () => {
+    const prs = [makePR({ number: 1 }), makePR({ number: 2 })];
 
-		const { renderOnce, captureCharFrame } = await testRender(
-			() => (
-				<AppShell
-					view={{ view: "list" }}
-					onEnterDetail={() => {}}
-					prs={prs}
-					loading={false}
-					repoSlug="acme/widgets"
-					onRefreshSelected={() => {}}
-					onRefreshAllActive={() => {}}
-				/>
-			),
-			{ width: 130, height: 20 },
-		);
+    const { renderOnce, captureCharFrame } = await testRender(
+      () => (
+        <AppShell
+          view={{ view: "list" }}
+          onEnterDetail={() => {}}
+          prs={prs}
+          loading={false}
+          repoSlug="acme/widgets"
+          onRefreshSelected={() => {}}
+          onRefreshAllActive={() => {}}
+        />
+      ),
+      { width: 130, height: 20 },
+    );
 
-		await renderOnce();
-		const frame = captureCharFrame();
-		expect(frame).toContain("2 open PRs");
-	});
+    await renderOnce();
+    const frame = captureCharFrame();
+    expect(frame).toContain("2 open PRs");
+  });
 
-	test("renders tab bar with All and repo tabs", async () => {
-		const { renderOnce, captureCharFrame } = await testRender(
-			() => (
-				<AppShell
-					view={{ view: "list" }}
-					onEnterDetail={() => {}}
-					prs={[]}
-					loading={false}
-					repoSlug="acme/widgets"
-					tabs={["All", "acme/widgets", "acme/gadgets"]}
-					activeTab={0}
-					onTabChange={() => {}}
-					onRefreshSelected={() => {}}
-					onRefreshAllActive={() => {}}
-				/>
-			),
-			{ width: 130, height: 20 },
-		);
+  test("renders tab bar with All and repo tabs", async () => {
+    const { renderOnce, captureCharFrame } = await testRender(
+      () => (
+        <AppShell
+          view={{ view: "list" }}
+          onEnterDetail={() => {}}
+          prs={[]}
+          loading={false}
+          repoSlug="acme/widgets"
+          tabs={["All", "acme/widgets", "acme/gadgets"]}
+          activeTab={0}
+          onTabChange={() => {}}
+          onRefreshSelected={() => {}}
+          onRefreshAllActive={() => {}}
+        />
+      ),
+      { width: 130, height: 20 },
+    );
 
-		await renderOnce();
-		const frame = captureCharFrame();
-		expect(frame).toContain("All");
-		expect(frame).toContain("acme/widgets");
-		expect(frame).toContain("acme/gadgets");
-	});
+    await renderOnce();
+    const frame = captureCharFrame();
+    expect(frame).toContain("All");
+    expect(frame).toContain("acme/widgets");
+    expect(frame).toContain("acme/gadgets");
+  });
 
-	test("tab keybindings switch tabs", async () => {
-		const calls: number[] = [];
-		const { renderOnce, mockInput } = await testRender(
-			() => (
-				<AppShell
-					view={{ view: "list" }}
-					onEnterDetail={() => {}}
-					prs={[]}
-					loading={false}
-					repoSlug="acme/widgets"
-					tabs={["All", "acme/widgets", "acme/gadgets"]}
-					activeTab={1}
-					onTabChange={(index) => calls.push(index)}
-					onRefreshSelected={() => {}}
-					onRefreshAllActive={() => {}}
-				/>
-			),
-			{ width: 130, height: 20 },
-		);
+  test("tab keybindings switch tabs", async () => {
+    const calls: number[] = [];
+    const { renderOnce, mockInput } = await testRender(
+      () => (
+        <AppShell
+          view={{ view: "list" }}
+          onEnterDetail={() => {}}
+          prs={[]}
+          loading={false}
+          repoSlug="acme/widgets"
+          tabs={["All", "acme/widgets", "acme/gadgets"]}
+          activeTab={1}
+          onTabChange={(index) => calls.push(index)}
+          onRefreshSelected={() => {}}
+          onRefreshAllActive={() => {}}
+        />
+      ),
+      { width: 130, height: 20 },
+    );
 
-		await renderOnce();
-		mockInput.pressKey("l");
-		mockInput.pressKey("h");
-		mockInput.pressKey("right");
-		mockInput.pressKey("left");
-		mockInput.pressKey("3");
-		mockInput.pressKey("0");
-		mockInput.pressKey("[");
-		mockInput.pressKey("]");
-		await renderOnce();
+    await renderOnce();
+    mockInput.pressKey("l");
+    mockInput.pressKey("h");
+    mockInput.pressKey("right");
+    mockInput.pressKey("left");
+    mockInput.pressKey("3");
+    mockInput.pressKey("0");
+    mockInput.pressKey("[");
+    mockInput.pressKey("]");
+    await renderOnce();
 
-		expect(calls).toContain(2);
-		expect(calls).toContain(0);
-	});
+    expect(calls).toContain(2);
+    expect(calls).toContain(0);
+  });
 
-	test("number keys map 0 to All and 1 to first repo", async () => {
-		const calls: number[] = [];
-		const { renderOnce, mockInput } = await testRender(
-			() => (
-				<AppShell
-					view={{ view: "list" }}
-					onEnterDetail={() => {}}
-					prs={[]}
-					loading={false}
-					repoSlug="acme/widgets"
-					tabs={["All", "acme/widgets", "acme/gadgets"]}
-					activeTab={2}
-					onTabChange={(index) => calls.push(index)}
-					onRefreshSelected={() => {}}
-					onRefreshAllActive={() => {}}
-				/>
-			),
-			{ width: 130, height: 20 },
-		);
+  test("number keys map 0 to All and 1 to first repo", async () => {
+    const calls: number[] = [];
+    const { renderOnce, mockInput } = await testRender(
+      () => (
+        <AppShell
+          view={{ view: "list" }}
+          onEnterDetail={() => {}}
+          prs={[]}
+          loading={false}
+          repoSlug="acme/widgets"
+          tabs={["All", "acme/widgets", "acme/gadgets"]}
+          activeTab={2}
+          onTabChange={(index) => calls.push(index)}
+          onRefreshSelected={() => {}}
+          onRefreshAllActive={() => {}}
+        />
+      ),
+      { width: 130, height: 20 },
+    );
 
-		await renderOnce();
-		mockInput.pressKey("0");
-		mockInput.pressKey("1");
-		await renderOnce();
+    await renderOnce();
+    mockInput.pressKey("0");
+    mockInput.pressKey("1");
+    await renderOnce();
 
-		expect(calls).toEqual([0, 1]);
-	});
+    expect(calls).toEqual([0, 1]);
+  });
 });

@@ -10,57 +10,57 @@ import type { PR } from "./types";
 export type ViewTarget = { view: "list" } | { view: "detail"; pr: PR };
 
 export interface UIState {
-	readonly view: Accessor<ViewTarget>;
-	readonly activeTab: Accessor<number>;
-	readonly showResolved: Accessor<boolean>;
-	readonly showBotComments: Accessor<boolean>;
+  readonly view: Accessor<ViewTarget>;
+  readonly activeTab: Accessor<number>;
+  readonly showResolved: Accessor<boolean>;
+  readonly showBotComments: Accessor<boolean>;
 
-	changeTab(index: number): void;
-	enterDetail(pr: PR): void;
-	exitDetail(): void;
-	toggleResolved(): void;
-	toggleBotComments(): void;
+  changeTab(index: number): void;
+  enterDetail(pr: PR): void;
+  exitDetail(): void;
+  toggleResolved(): void;
+  toggleBotComments(): void;
 }
 
 export function createUIState(): UIState {
-	const [view, setView] = createSignal<ViewTarget>({ view: "list" });
-	const [activeTab, setActiveTab] = createSignal(0);
-	const [showResolved, setShowResolved] = createSignal(false);
-	const [showBotComments, setShowBotComments] = createSignal(true);
+  const [view, setView] = createSignal<ViewTarget>({ view: "list" });
+  const [activeTab, setActiveTab] = createSignal(0);
+  const [showResolved, setShowResolved] = createSignal(false);
+  const [showBotComments, setShowBotComments] = createSignal(true);
 
-	function changeTab(index: number) {
-		setActiveTab(index);
-	}
+  function changeTab(index: number) {
+    setActiveTab(index);
+  }
 
-	function enterDetail(pr: PR) {
-		setView({ view: "detail", pr });
-	}
+  function enterDetail(pr: PR) {
+    setView({ view: "detail", pr });
+  }
 
-	function exitDetail() {
-		batch(() => {
-			setView({ view: "list" });
-			setShowResolved(false);
-			setShowBotComments(true);
-		});
-	}
+  function exitDetail() {
+    batch(() => {
+      setView({ view: "list" });
+      setShowResolved(false);
+      setShowBotComments(true);
+    });
+  }
 
-	function toggleResolved() {
-		setShowResolved((v) => !v);
-	}
+  function toggleResolved() {
+    setShowResolved((v) => !v);
+  }
 
-	function toggleBotComments() {
-		setShowBotComments((v) => !v);
-	}
+  function toggleBotComments() {
+    setShowBotComments((v) => !v);
+  }
 
-	return {
-		view,
-		activeTab,
-		showResolved,
-		showBotComments,
-		changeTab,
-		enterDetail,
-		exitDetail,
-		toggleResolved,
-		toggleBotComments,
-	};
+  return {
+    view,
+    activeTab,
+    showResolved,
+    showBotComments,
+    changeTab,
+    enterDetail,
+    exitDetail,
+    toggleResolved,
+    toggleBotComments,
+  };
 }

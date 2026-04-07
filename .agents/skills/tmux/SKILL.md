@@ -72,9 +72,9 @@ Some special rules for processes:
 ## Synchronizing / waiting for prompts
 
 - Use timed polling to avoid races with interactive tools. Example: wait for a Python prompt before sending code:
-    ```bash
-    ./scripts/wait-for-text.sh -t "$SESSION":0.0 -p '^>>>' -T 15 -l 4000
-    ```
+  ```bash
+  ./scripts/wait-for-text.sh -t "$SESSION":0.0 -p '^>>>' -T 15 -l 4000
+  ```
 - For long-running commands, poll for completion text (`"Type quit to exit"`, `"Program exited"`, etc.) before proceeding.
 
 ## Interactive tool recipes

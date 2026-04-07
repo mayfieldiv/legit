@@ -11,31 +11,31 @@ import { theme } from "../lib/theme";
  * work (queries fetching but not yet represented in the HTTP in-flight count).
  */
 export function StatusBar(props: { children?: JSX.Element; networkStats?: GitHubNetworkStats }) {
-	const networkLabel = createMemo(() => {
-		const n = props.networkStats;
-		if (!n) return "";
-		return `${n.inFlight} in-flight · ${n.waiting} waiting`;
-	});
+  const networkLabel = createMemo(() => {
+    const n = props.networkStats;
+    if (!n) return "";
+    return `${n.inFlight} in-flight · ${n.waiting} waiting`;
+  });
 
-	const networkFg = createMemo(() => {
-		const n = props.networkStats;
-		if (!n) return theme.muted;
-		return n.inFlight > 0 || n.waiting > 0 ? theme.accent : theme.muted;
-	});
+  const networkFg = createMemo(() => {
+    const n = props.networkStats;
+    if (!n) return theme.muted;
+    return n.inFlight > 0 || n.waiting > 0 ? theme.accent : theme.muted;
+  });
 
-	return (
-		<box flexDirection="row" width="100%" height={1}>
-			<box flexGrow={1}>
-				<text>
-					<span style={{ fg: theme.muted }}>
-						j/k nav · ↵ open · o GitHub · d Devin · r refresh
-						{props.children}
-					</span>
-				</text>
-			</box>
-			<text>
-				<span style={{ fg: networkFg() }}>{networkLabel()}</span>
-			</text>
-		</box>
-	);
+  return (
+    <box flexDirection="row" width="100%" height={1}>
+      <box flexGrow={1}>
+        <text>
+          <span style={{ fg: theme.muted }}>
+            j/k nav · ↵ open · o GitHub · d Devin · r refresh
+            {props.children}
+          </span>
+        </text>
+      </box>
+      <text>
+        <span style={{ fg: networkFg() }}>{networkLabel()}</span>
+      </text>
+    </box>
+  );
 }
