@@ -289,11 +289,134 @@ describe("GitHubClient", () => {
         },
         async *fetchReviewStatus() {},
       });
-      const client = createGitHubClient(transport);
+      const client = createGitHubClient(transport, { mergeableRetryDelayMs: 0 });
       const snapshots = await collectAll(client.fetchOpenPRs("acme/widgets"));
 
       expect(snapshots[0]).toHaveLength(1);
       expect(snapshots[1]).toHaveLength(2);
+    });
+
+    test("retries PRs with UNKNOWN mergeable until resolved", async () => {
+      const raw: RawRestPR = { ...SAMPLE_REST_PR, number: 10 };
+      let callCount = 0;
+      const transport = createMockTransport({
+        async *listOpenPRs() {
+          yield raw;
+        },
+        async *fetchReviewStatus(_o, _r, prNumbers) {
+          callCount++;
+          for (const n of prNumbers) {
+            yield {
+              prNumber: n,
+              additions: 5,
+              deletions: 2,
+              reviewDecision: "REVIEW_REQUIRED",
+              mergeable: callCount === 1 ? "UNKNOWN" : "CONFLICTING",
+              commits: {
+                nodes: [{ commit: { committedDate: "2026-03-14T00:00:00Z", oid: "abc" } }],
+              },
+            };
+          }
+        },
+      });
+      const client = createGitHubClient(transport, { mergeableRetryDelayMs: 0 });
+      const snapshots = await collectAll(client.fetchOpenPRs("acme/widgets"));
+      const last = snapshots[snapshots.length - 1]!;
+      expect(last[0]!.mergeable).toBe("CONFLICTING");
+      expect(callCount).toBe(2); // initial + 1 retry
+    });
+
+    test("skips retry when all PRs have resolved mergeable", async () => {
+      const raw: RawRestPR = { ...SAMPLE_REST_PR, number: 10 };
+      let callCount = 0;
+      const transport = createMockTransport({
+        async *listOpenPRs() {
+          yield raw;
+        },
+        async *fetchReviewStatus(_o, _r, prNumbers) {
+          callCount++;
+          for (const n of prNumbers) {
+            yield {
+              prNumber: n,
+              additions: 5,
+              deletions: 2,
+              reviewDecision: "APPROVED",
+              mergeable: "MERGEABLE",
+              commits: {
+                nodes: [{ commit: { committedDate: "2026-03-14T00:00:00Z", oid: "abc" } }],
+              },
+            };
+          }
+        },
+      });
+      const client = createGitHubClient(transport, { mergeableRetryDelayMs: 0 });
+      await collectAll(client.fetchOpenPRs("acme/widgets"));
+      expect(callCount).toBe(1); // no retries needed
+    });
+
+    test("retries at most 2 times for persistently UNKNOWN mergeable", async () => {
+      const raw: RawRestPR = { ...SAMPLE_REST_PR, number: 10 };
+      let callCount = 0;
+      const transport = createMockTransport({
+        async *listOpenPRs() {
+          yield raw;
+        },
+        async *fetchReviewStatus(_o, _r, prNumbers) {
+          callCount++;
+          for (const n of prNumbers) {
+            yield {
+              prNumber: n,
+              additions: 5,
+              deletions: 2,
+              reviewDecision: null,
+              mergeable: "UNKNOWN",
+              commits: { nodes: [] },
+            };
+          }
+        },
+      });
+      const client = createGitHubClient(transport, { mergeableRetryDelayMs: 0 });
+      const snapshots = await collectAll(client.fetchOpenPRs("acme/widgets"));
+      const last = snapshots[snapshots.length - 1]!;
+      expect(last[0]!.mergeable).toBe("UNKNOWN"); // still unknown after retries exhausted
+      expect(callCount).toBe(3); // initial + 2 retries
+    });
+
+    test("only retries UNKNOWN PRs, not already-resolved ones", async () => {
+      const pr1: RawRestPR = { ...SAMPLE_REST_PR, number: 1 };
+      const pr2: RawRestPR = { ...SAMPLE_REST_PR, number: 2 };
+      const retriedNumbers: number[][] = [];
+      let callCount = 0;
+      const transport = createMockTransport({
+        async *listOpenPRs() {
+          yield pr1;
+          yield pr2;
+        },
+        async *fetchReviewStatus(_o, _r, prNumbers) {
+          callCount++;
+          if (callCount > 1) retriedNumbers.push([...prNumbers]);
+          for (const n of prNumbers) {
+            yield {
+              prNumber: n,
+              additions: 5,
+              deletions: 2,
+              reviewDecision: "REVIEW_REQUIRED",
+              // PR 1 resolves immediately, PR 2 stays UNKNOWN then resolves
+              mergeable: n === 1 ? "MERGEABLE" : callCount === 1 ? "UNKNOWN" : "CONFLICTING",
+              commits: {
+                nodes: [{ commit: { committedDate: "2026-03-14T00:00:00Z", oid: "abc" } }],
+              },
+            };
+          }
+        },
+      });
+      const client = createGitHubClient(transport, { mergeableRetryDelayMs: 0 });
+      const snapshots = await collectAll(client.fetchOpenPRs("acme/widgets"));
+      const last = snapshots[snapshots.length - 1]!;
+      expect(last.find((p) => p.number === 1)!.mergeable).toBe("MERGEABLE");
+      expect(last.find((p) => p.number === 2)!.mergeable).toBe("CONFLICTING");
+      // Retry should only include PR 2
+      expect(retriedNumbers[0]).toEqual([2]);
     });
   });
 
@@ -328,6 +451,62 @@ describe("GitHubClient", () => {
       expect(pr.number).toBe(42);
       expect(pr.body).toBe("## Fix\n\nDoes the thing.");
       expect(pr.reviewDecision).toBe("REVIEW_REQUIRED");
+    });
+
+    test("retries once when mergeable is UNKNOWN", async () => {
+      let callCount = 0;
+      const transport = createMockTransport({
+        async getPR() {
+          return { ...SAMPLE_REST_PR, body: "desc" };
+        },
+        async *fetchReviewStatus(_o, _r, prNumbers) {
+          callCount++;
+          for (const n of prNumbers) {
+            yield {
+              prNumber: n,
+              additions: 5,
+              deletions: 2,
+              reviewDecision: "REVIEW_REQUIRED",
+              mergeable: callCount === 1 ? "UNKNOWN" : "CONFLICTING",
+              commits: {
+                nodes: [{ commit: { committedDate: "2026-03-14T00:00:00Z", oid: "abc" } }],
+              },
+            };
+          }
+        },
+      });
+      const client = createGitHubClient(transport, { mergeableRetryDelayMs: 0 });
+      const pr = await client.fetchPR("acme/widgets", 42);
+      expect(pr.mergeable).toBe("CONFLICTING");
+      expect(callCount).toBe(2);
+    });
+
+    test("skips retry when mergeable resolves on first call", async () => {
+      let callCount = 0;
+      const transport = createMockTransport({
+        async getPR() {
+          return { ...SAMPLE_REST_PR, body: "desc" };
+        },
+        async *fetchReviewStatus(_o, _r, prNumbers) {
+          callCount++;
+          for (const n of prNumbers) {
+            yield {
+              prNumber: n,
+              additions: 5,
+              deletions: 2,
+              reviewDecision: "APPROVED",
+              mergeable: "MERGEABLE",
+              commits: {
+                nodes: [{ commit: { committedDate: "2026-03-14T00:00:00Z", oid: "abc" } }],
+              },
+            };
+          }
+        },
+      });
+      const client = createGitHubClient(transport, { mergeableRetryDelayMs: 0 });
+      const pr = await client.fetchPR("acme/widgets", 42);
+      expect(pr.mergeable).toBe("MERGEABLE");
+      expect(callCount).toBe(1);
     });
   });
 
