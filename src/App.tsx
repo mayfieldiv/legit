@@ -216,12 +216,15 @@ function AppInner(props: AppInnerProps) {
 		const rq = reviewsQueries[idx];
 
 		if (!tq || !cq || !rq) return undefined;
-		if (tq.isLoading || cq.isLoading || rq.isLoading) return undefined;
+		// Threads and reviews always become enabled once the repo settles, so
+		// undefined data means "not yet loaded." Checks can be permanently
+		// disabled (null headCommitSha) — treat missing checks data as empty.
+		if (tq.data === undefined || rq.data === undefined) return undefined;
 
 		return {
-			threads: tq.data ?? [],
+			threads: tq.data,
 			checks: cq.data ?? [],
-			reviews: rq.data ?? [],
+			reviews: rq.data,
 		};
 	};
 
@@ -420,10 +423,9 @@ function AppInner(props: AppInnerProps) {
 		const idx = prs.findIndex((p) => p.number === pr.number && p.repoSlug === pr.repoSlug);
 		if (idx < 0) return false;
 		return (
-			(threadsQueries[idx]?.isLoading ?? true) ||
-			(checksQueries[idx]?.isLoading ?? true) ||
-			(reviewsQueries[idx]?.isLoading ?? true) ||
-			filesQuery.isLoading
+			threadsQueries[idx]?.data === undefined ||
+			reviewsQueries[idx]?.data === undefined ||
+			filesQuery.data === undefined
 		);
 	};
 
