@@ -8,8 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Merge conflicts not detected: GitHub computes mergeability lazily and returns UNKNOWN on the first query; legit now schedules a delayed retry after the PR list settles so conflicts resolve without blocking enrichment (#32)
 - Detail view: pressing `o` on PR body opened the wrong repo URL; repo slug was missing from the fetched `PRDetail`, causing fallback to the CWD repo (#27)
 - Detail view: repo slug and full PR URL not shown in header for the same reason (#27)
+
+### Changed
+
+- GraphQL review-status batches now fire concurrently instead of sequentially, cutting enrichment time from ~14s to ~2.5s for large repos (#32)
+
+### Added
+
+- Detail view shows merge status (conflict / mergeable / unknown) on the branch line (#32)
 
 ### Changed
 
