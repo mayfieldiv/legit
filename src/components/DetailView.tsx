@@ -18,7 +18,14 @@ import { Show, For, createMemo, createSignal, createEffect, on } from "solid-js"
 import { useKeyboard } from "@opentui/solid";
 import { MarkdownBody } from "../lib/markdown";
 import { createDetailsController, DetailsCtx, type DetailsController } from "../lib/details-store";
-import { formatAge, formatSize, sortCheckRuns, checkIcon, checksSummary } from "../lib/format";
+import {
+  formatAge,
+  formatSize,
+  formatMergeable,
+  sortCheckRuns,
+  checkIcon,
+  checksSummary,
+} from "../lib/format";
 import type { FullReviewThread, IssueComment, PRDetail, ReviewComment } from "../lib/types";
 import { classifyThread } from "../lib/blocker-engine";
 import type { MouseEvent } from "@opentui/core";
@@ -427,6 +434,15 @@ export function DetailView(props: DetailViewProps) {
                   <span style={{ fg: theme.accent }}>{pr().headRef}</span>
                   <span style={{ fg: theme.muted }}> → </span>
                   <span style={{ fg: theme.accent }}>{pr().baseRef}</span>
+                  {(() => {
+                    const m = formatMergeable(pr().mergeable);
+                    return (
+                      <>
+                        <span style={{ fg: theme.muted }}> · </span>
+                        <span style={{ fg: m.fg }}>{m.text}</span>
+                      </>
+                    );
+                  })()}
                 </text>
               </box>
             </Show>

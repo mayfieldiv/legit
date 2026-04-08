@@ -111,6 +111,27 @@ describe("DetailView", () => {
     expect(frame).toContain("-20");
   });
 
+  test("shows merge conflict indicator on branch line", async () => {
+    const frame = await renderDetail({
+      pr: makeDetail({ mergeable: "CONFLICTING", headRef: "feat", baseRef: "main" }),
+    });
+    expect(frame).toContain("! conflict");
+  });
+
+  test("shows mergeable status on branch line", async () => {
+    const frame = await renderDetail({
+      pr: makeDetail({ mergeable: "MERGEABLE", headRef: "feat", baseRef: "main" }),
+    });
+    expect(frame).toContain("mergeable");
+  });
+
+  test("shows unknown merge status on branch line", async () => {
+    const frame = await renderDetail({
+      pr: makeDetail({ mergeable: "UNKNOWN", headRef: "feat", baseRef: "main" }),
+    });
+    expect(frame).toContain("merge unknown");
+  });
+
   // ── Review Threads ─────────────────────────────────────────────────────
 
   test("renders review threads with three-state labels (unreplied/awaiting/resolved)", async () => {
