@@ -1,5 +1,5 @@
 import { Show, Switch, Match, createMemo } from "solid-js";
-import { useKeyboard, useTerminalDimensions } from "@opentui/solid";
+import { useTerminalDimensions } from "@opentui/solid";
 import { ListView } from "./ListView";
 import { SummaryPanel } from "./SummaryPanel";
 import { DetailView } from "./DetailView";
@@ -98,33 +98,6 @@ export function AppShell(props: AppShellProps) {
     computeVisibleColumns(listWidth(), props.showRepo ?? false),
   );
 
-  useKeyboard((event) => {
-    if (!inListView()) return;
-    if (!props.onTabChange || tabCount() === 0) return;
-    const current = props.activeTab ?? 0;
-    const name = event.name;
-
-    if (name === "l" || name === "right" || name === "]") {
-      props.onTabChange(Math.min(tabCount() - 1, current + 1));
-      return;
-    }
-    if (name === "h" || name === "left" || name === "[") {
-      props.onTabChange(Math.max(0, current - 1));
-      return;
-    }
-
-    if (name === "0") {
-      props.onTabChange(0);
-      return;
-    }
-    if (/^[1-9]$/.test(name)) {
-      const index = Number(name);
-      if (index < tabCount()) {
-        props.onTabChange(index);
-      }
-    }
-  });
-
   return (
     <box flexDirection="column" width="100%" height="100%">
       {/* Header */}
@@ -186,6 +159,9 @@ export function AppShell(props: AppShellProps) {
                 onOpenInDevin={props.onOpenInDevin}
                 visibleColumns={visibleColumns()}
                 networkStats={props.githubNetworkStats}
+                tabs={props.tabs}
+                activeTab={props.activeTab}
+                onTabChange={props.onTabChange}
               />
               <Show when={showSummary()}>
                 <box width={1} height="100%">

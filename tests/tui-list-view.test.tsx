@@ -472,6 +472,99 @@ describe("ListView — filter", () => {
     // No crash or error — navigation works via arrow keys
   });
 
+  test("digits in filter mode do not trigger tab change", async () => {
+    const prs = [makePR({ number: 1, title: "PR one" }), makePR({ number: 2, title: "PR two" })];
+    const tabCalls: number[] = [];
+
+    const { renderOnce, captureCharFrame, mockInput } = await testRender(
+      () => (
+        <ListView
+          prs={prs}
+          onRefreshSelected={() => {}}
+          onRefreshAll={() => {}}
+          onEnterDetail={() => {}}
+          tabs={["All", "acme/widgets", "acme/gadgets"]}
+          activeTab={0}
+          onTabChange={(i) => tabCalls.push(i)}
+        />
+      ),
+      { width: 120, height: 20 },
+    );
+
+    await renderOnce();
+    // Activate filter
+    mockInput.pressKey("/");
+    await renderOnce();
+    // Type digits — should go to filter text, NOT switch tabs
+    mockInput.pressKey("2");
+    mockInput.pressKey("1");
+    await renderOnce();
+
+    const frame = captureCharFrame();
+    expect(frame).toContain("21");
+    expect(tabCalls).toEqual([]);
+  });
+
+  test("h/l keys in filter mode do not switch tabs", async () => {
+    const prs = [makePR({ number: 1, title: "hello" })];
+    const tabCalls: number[] = [];
+
+    const { renderOnce, captureCharFrame, mockInput } = await testRender(
+      () => (
+        <ListView
+          prs={prs}
+          onRefreshSelected={() => {}}
+          onRefreshAll={() => {}}
+          onEnterDetail={() => {}}
+          tabs={["All", "acme/widgets"]}
+          activeTab={0}
+          onTabChange={(i) => tabCalls.push(i)}
+        />
+      ),
+      { width: 120, height: 20 },
+    );
+
+    await renderOnce();
+    mockInput.pressKey("/");
+    await renderOnce();
+    mockInput.pressKey("h");
+    mockInput.pressKey("l");
+    await renderOnce();
+
+    const frame = captureCharFrame();
+    expect(frame).toContain("hl");
+    expect(tabCalls).toEqual([]);
+  });
+
+  test("tab switching works from ListView in normal mode", async () => {
+    const prs = [makePR({ number: 1, title: "PR one" })];
+    const tabCalls: number[] = [];
+
+    const { renderOnce, mockInput } = await testRender(
+      () => (
+        <ListView
+          prs={prs}
+          onRefreshSelected={() => {}}
+          onRefreshAll={() => {}}
+          onEnterDetail={() => {}}
+          tabs={["All", "acme/widgets", "acme/gadgets"]}
+          activeTab={1}
+          onTabChange={(i) => tabCalls.push(i)}
+        />
+      ),
+      { width: 120, height: 20 },
+    );
+
+    await renderOnce();
+    mockInput.pressKey("l");
+    mockInput.pressKey("h");
+    mockInput.pressKey("0");
+    mockInput.pressKey("2");
+    await renderOnce();
+
+    expect(tabCalls).toEqual([2, 0, 0, 2]);
+  });
+
   test("no match shows empty state message", async () => {
     const prs = [makePR({ number: 1, title: "Fix bug" })];
 
@@ -672,13 +765,23 @@ describe("computeScrollTarget", () => {
   });
 
   test("off-screen below: positions near bottom with margin", () => {
-    const target = scroll({ idx: 30, scrollTop: 0, viewportHeight: 20, direction: "down" });
+    const target = scroll({
+      idx: 30,
+      scrollTop: 0,
+      viewportHeight: 20,
+      direction: "down",
+    });
     expect(target).toBe(13);
     expect(30 - target!).toBe(17); // margin=2 from bottom
   });
 
   test("off-screen above: positions near top with margin", () => {
-    const target = scroll({ idx: 5, scrollTop: 20, viewportHeight: 20, direction: "up" });
+    const target = scroll({
+      idx: 5,
+      scrollTop: 20,
+      viewportHeight: 20,
+      direction: "up",
+    });
     expect(target).toBe(3);
     expect(5 - target!).toBe(2); // margin=2 from top
   });
@@ -691,7 +794,12 @@ describe("computeScrollTarget", () => {
   test("continuous j keeps selection at margin distance from bottom", () => {
     let scrollTop = 0;
     for (let idx = 0; idx < 40; idx++) {
-      const target = scroll({ idx, scrollTop, viewportHeight: 20, direction: "down" });
+      const target = scroll({
+        idx,
+        scrollTop,
+        viewportHeight: 20,
+        direction: "down",
+      });
       if (target !== null) scrollTop = target;
     }
     expect(39 - scrollTop).toBe(17);
@@ -700,14 +808,24 @@ describe("computeScrollTarget", () => {
   test("continuous k keeps selection at margin distance from top", () => {
     let scrollTop = 30;
     for (let idx = 39; idx >= 0; idx--) {
-      const target = scroll({ idx, scrollTop, viewportHeight: 20, direction: "up" });
+      const target = scroll({
+        idx,
+        scrollTop,
+        viewportHeight: 20,
+        direction: "up",
+      });
       if (target !== null) scrollTop = target;
     }
     expect(scrollTop).toBe(0);
   });
 
   test("in margin zone: repositions to margin distance on j", () => {
-    const target = scroll({ idx: 18, scrollTop: 0, viewportHeight: 20, direction: "down" });
+    const target = scroll({
+      idx: 18,
+      scrollTop: 0,
+      viewportHeight: 20,
+      direction: "down",
+    });
     expect(target).toBe(1);
     expect(18 - target!).toBe(17);
   });
@@ -721,13 +839,23 @@ describe("computeScrollTarget", () => {
   });
 
   test("far off-screen below: repositions with margin on j", () => {
-    const target = scroll({ idx: 50, scrollTop: 0, viewportHeight: 20, direction: "down" });
+    const target = scroll({
+      idx: 50,
+      scrollTop: 0,
+      viewportHeight: 20,
+      direction: "down",
+    });
     expect(target).toBe(33);
     expect(50 - target!).toBe(17);
   });
 
   test("far off-screen above: repositions with margin on k", () => {
-    const target = scroll({ idx: 5, scrollTop: 40, viewportHeight: 20, direction: "up" });
+    const target = scroll({
+      idx: 5,
+      scrollTop: 40,
+      viewportHeight: 20,
+      direction: "up",
+    });
     expect(target).toBe(3);
     expect(5 - target!).toBe(2);
   });

@@ -32,6 +32,12 @@ interface ListViewProps {
   /** Which optional columns are visible (responsive). */
   visibleColumns?: VisibleColumns;
   networkStats?: GitHubNetworkStats;
+  /** Repo tab labels (e.g. ["All", "acme/widgets"]). */
+  tabs?: string[];
+  /** Currently active tab index. */
+  activeTab?: number;
+  /** Called when the user switches tabs via keyboard. */
+  onTabChange?: (index: number) => void;
 }
 
 /**
@@ -238,6 +244,7 @@ export function ListView(props: ListViewProps) {
 
     // Grouping panel has priority over all other keys
     if (panelOpen()) {
+      event.stopPropagation();
       if (name === "j" || name === "down") {
         setPanelIndex((i) => Math.min(i + 1, GROUP_BY_OPTIONS.length - 1));
       } else if (name === "k" || name === "up") {
@@ -252,6 +259,7 @@ export function ListView(props: ListViewProps) {
 
     // Filter editing: typing characters into the filter input
     if (filterEditing()) {
+      event.stopPropagation();
       if (name === "down") {
         navigate("down");
         return;
@@ -322,6 +330,22 @@ export function ListView(props: ListViewProps) {
       const idx = GROUP_BY_OPTIONS.findIndex((o) => o.key === activeGroupBy());
       setPanelIndex(idx >= 0 ? idx : 0);
       setPanelOpen(true);
+    } else if (props.onTabChange && props.tabs && props.tabs.length > 0) {
+      // Tab switching — only when tabs are configured
+      const tabCount = props.tabs.length;
+      const current = props.activeTab ?? 0;
+      if (name === "l" || name === "right" || name === "]") {
+        props.onTabChange(Math.min(tabCount - 1, current + 1));
+      } else if (name === "h" || name === "left" || name === "[") {
+        props.onTabChange(Math.max(0, current - 1));
+      } else if (name === "0") {
+        props.onTabChange(0);
+      } else if (/^[1-9]$/.test(name)) {
+        const index = Number(name);
+        if (index < tabCount) {
+          props.onTabChange(index);
+        }
+      }
     }
   });
 

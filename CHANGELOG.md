@@ -1,10 +1,10 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/).
-
 ## [Unreleased]
+
+### Fixed
+
+- Typing digits or h/l keys into the list filter switched repo tabs instead of appending to the filter text; keyboard handling moved from AppShell to ListView so modal states (filter, group panel) consume keys first (#33)
 
 ## [0.1.0] - 2026-04-07
 
