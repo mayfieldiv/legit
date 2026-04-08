@@ -163,7 +163,6 @@ export function createGitHubClient(
   options?: GitHubClientOptions,
 ): GitHubClient {
   const MERGEABLE_RETRY_DELAY_MS = options?.mergeableRetryDelayMs ?? 3_000;
-  const MERGEABLE_MAX_RETRIES = 2;
   return {
     async *fetchOpenPRs(repo: string, signal?: AbortSignal) {
       const [owner, repoName] = parseOwnerRepo(repo);
@@ -193,34 +192,6 @@ export function createGitHubClient(
         if (idx !== -1) {
           prs[idx] = mergePR(restPRs[idx]!, status);
           yield [...prs];
-        }
-      }
-
-      // Phase 3: retry PRs with UNKNOWN mergeable status.
-      // GitHub computes mergeability lazily — the first query triggers
-      // background computation and returns UNKNOWN. A short delay + retry
-      // resolves the vast majority of cases.
-      for (let attempt = 0; attempt < MERGEABLE_MAX_RETRIES; attempt++) {
-        const unknownNumbers = restPRs
-          .filter((_, idx) => prs[idx]!.mergeable === "UNKNOWN")
-          .map((r) => r.number);
-        if (unknownNumbers.length === 0) break;
-
-        await new Promise((r) => setTimeout(r, MERGEABLE_RETRY_DELAY_MS));
-        signal?.throwIfAborted();
-
-        for await (const rawStatus of transport.fetchReviewStatus(
-          owner,
-          repoName,
-          unknownNumbers,
-          signal,
-        )) {
-          const status = parseReviewStatus(rawStatus);
-          const idx = restPRs.findIndex((r) => r.number === rawStatus.prNumber);
-          if (idx !== -1) {
-            prs[idx] = mergePR(restPRs[idx]!, status);
-            yield [...prs];
-          }
         }
       }
     },

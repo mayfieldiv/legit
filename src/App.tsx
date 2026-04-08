@@ -166,6 +166,31 @@ function AppInner(props: AppInnerProps) {
     return settled;
   });
 
+  // ── Retry UNKNOWN mergeable status after settlement ─────────────────
+  // GitHub computes mergeability lazily — the initial fetch triggers
+  // background computation but returns UNKNOWN.  Once the PR list
+  // generator settles, we schedule a single delayed re-fetch so the
+  // retry runs in parallel with enrichment queries instead of blocking them.
+  const mergeableRetried = new Set<string>();
+  createEffect(
+    on(settledRepos, (settled) => {
+      const repos = repoTabs();
+      for (let i = 0; i < repos.length; i++) {
+        const repo = repos[i]!;
+        if (!settled.has(repo)) continue;
+        if (mergeableRetried.has(repo)) continue;
+        const prs = prQueries[i]?.data ?? [];
+        if (prs.some((pr) => pr.mergeable === "UNKNOWN")) {
+          mergeableRetried.add(repo);
+          const timer = setTimeout(() => {
+            void props.queryClient.invalidateQueries({ queryKey: ["prs", repo] });
+          }, 3_000);
+          onCleanup(() => clearTimeout(timer));
+        }
+      }
+    }),
+  );
+
   // ── Per-PR enrichment queries (threads, checks, reviews) ──────────────
   const threadsQueries = useQueries(() => ({
     queries: visiblePRs().map((pr) => {
@@ -317,6 +342,7 @@ function AppInner(props: AppInnerProps) {
     const pr = selectedPr();
     if (!pr) return;
     const repo = pr.repoSlug ?? props.app.repoSlug;
+    mergeableRetried.delete(repo);
     void props.queryClient.invalidateQueries({ queryKey: ["prs", repo] });
     void props.queryClient.invalidateQueries({
       queryKey: ["threads", repo, pr.number],
@@ -335,6 +361,7 @@ function AppInner(props: AppInnerProps) {
   function refreshAll() {
     props.app.reloadConfig();
     setRepoTabs(props.app.trackedRepos());
+    mergeableRetried.clear();
     void props.queryClient.invalidateQueries();
   }
 
