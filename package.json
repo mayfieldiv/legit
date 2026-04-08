@@ -1,5 +1,6 @@
 {
   "name": "legit",
+  "version": "0.1.0",
   "private": true,
   "bin": {
     "legit": "src/cli.ts"

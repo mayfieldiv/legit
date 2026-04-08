@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-04-07
+
 ### Fixed
 
 - Merge conflicts not detected: GitHub computes mergeability lazily and returns UNKNOWN on the first query; legit now schedules a delayed retry after the PR list settles so conflicts resolve without blocking enrichment (#32)
