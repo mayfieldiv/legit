@@ -213,29 +213,38 @@ export function createGitHubTransport(
     async *fetchReviewStatus(owner, repo, prNumbers, signal?) {
       if (prNumbers.length === 0) return;
 
+      // Build all batch requests up front
+      const batches: number[][] = [];
       for (let i = 0; i < prNumbers.length; i += GRAPHQL_BATCH_SIZE) {
-        signal?.throwIfAborted();
-        const batch = prNumbers.slice(i, i + GRAPHQL_BATCH_SIZE);
-        const aliases = batch
-          .map(
-            (n, idx) =>
-              `pr${idx}: pullRequest(number: ${n}) { number additions deletions reviewDecision mergeable commits(last: 1) { nodes { commit { committedDate oid } } } }`,
-          )
-          .join(" ");
+        batches.push(prNumbers.slice(i, i + GRAPHQL_BATCH_SIZE));
+      }
 
-        const query = `query($owner: String!, $repo: String!) { repository(owner: $owner, name: $repo) { ${aliases} } }`;
-        let result: { data?: { repository?: Record<string, any> } };
-        try {
-          result = (await graphql(query, { owner, repo }, signal)) as typeof result;
-        } catch (err: any) {
-          // Skip this batch on server error — PRs will keep REST-only data
-          if (signal?.aborted) throw err;
-          continue;
-        }
+      // Fire all batches concurrently
+      const results = await Promise.allSettled(
+        batches.map((batch) => {
+          signal?.throwIfAborted();
+          const aliases = batch
+            .map(
+              (n, idx) =>
+                `pr${idx}: pullRequest(number: ${n}) { number additions deletions reviewDecision mergeable commits(last: 1) { nodes { commit { committedDate oid } } } }`,
+            )
+            .join(" ");
+          const query = `query($owner: String!, $repo: String!) { repository(owner: $owner, name: $repo) { ${aliases} } }`;
+          return graphql(query, { owner, repo }, signal) as Promise<{
+            data?: { repository?: Record<string, any> };
+          }>;
+        }),
+      );
 
-        const repoData = result.data?.repository;
+      // Yield results in order
+      for (let b = 0; b < batches.length; b++) {
+        const result = results[b]!;
+        if (result.status !== "fulfilled") continue;
+
+        const repoData = result.value.data?.repository;
         if (!repoData) continue;
 
+        const batch = batches[b]!;
         for (let idx = 0; idx < batch.length; idx++) {
           const pr = repoData[`pr${idx}`];
           if (pr) {
