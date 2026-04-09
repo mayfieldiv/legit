@@ -95,13 +95,39 @@ export function ListView(props: ListViewProps) {
   const [panelIndex, setPanelIndex] = createSignal(0);
 
   // ── Processed PR list ─────────────────────────────────────────────────────
-  const processedResult = createMemo(() =>
-    processPRList(props.prs, {
-      groupBy: activeGroupBy(),
-      filterText: filterText(),
-      currentUser: props.currentUser,
-      getBlockerData: props.getBlockerData,
-    }),
+  // The memo computes grouping/filtering/sorting. For smart-status grouping
+  // it reads getBlockerData which is reactive to enrichment queries. A custom
+  // equals function prevents downstream propagation (and thus full <For>
+  // rebuilds) when only enrichment data changed but the group structure
+  // (which PRs are in which group, in what order) stayed the same.
+  const processedResult = createMemo(
+    () =>
+      processPRList(props.prs, {
+        groupBy: activeGroupBy(),
+        filterText: filterText(),
+        currentUser: props.currentUser,
+        getBlockerData: props.getBlockerData,
+      }),
+    undefined,
+    {
+      equals(prev, next) {
+        if (prev === next) return true;
+        if (prev.totalMatched !== next.totalMatched) return false;
+        if (prev.groups.length !== next.groups.length) return false;
+        for (let i = 0; i < prev.groups.length; i++) {
+          const pg = prev.groups[i]!;
+          const ng = next.groups[i]!;
+          if (pg.key !== ng.key) return false;
+          if (pg.prs.length !== ng.prs.length) return false;
+          for (let j = 0; j < pg.prs.length; j++) {
+            const pp = pg.prs[j]!;
+            const np = ng.prs[j]!;
+            if (pp.number !== np.number || pp.repoSlug !== np.repoSlug) return false;
+          }
+        }
+        return true;
+      },
+    },
   );
 
   /** Flat list of matched PRs (for selection tracking). */
