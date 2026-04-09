@@ -4,10 +4,10 @@ import {
   QueryClient,
   QueryClientProvider,
   useQuery,
-  useQueries,
   useIsFetching,
   experimental_streamedQuery as streamedQuery,
 } from "@tanstack/solid-query";
+import { useQueriesLite as useQueries } from "./lib/use-queries-lite";
 import { AppShell } from "./components/AppShell";
 import { createUIState } from "./lib/ui-state";
 import type { Legit } from "./lib/legit";
@@ -99,7 +99,7 @@ function AppInner(props: AppInnerProps) {
   const showRepo = createMemo(() => ui.activeTab() === 0 && repoTabs().length > 1);
 
   // ── PR queries (one per repo) ─────────────────────────────────────────
-  const prQueries = useQueries(() => ({
+  const prQueries = useQueries<PR[]>(() => ({
     queries: repoTabs().map((repo) => ({
       queryKey: ["prs", repo] as const,
       queryFn: streamedQuery({
@@ -192,7 +192,7 @@ function AppInner(props: AppInnerProps) {
   );
 
   // ── Per-PR enrichment queries (threads, checks, reviews) ──────────────
-  const threadsQueries = useQueries(() => ({
+  const threadsQueries = useQueries<FullReviewThread[]>(() => ({
     queries: visiblePRs().map((pr) => {
       const repo = pr.repoSlug ?? props.app.repoSlug;
       return {
@@ -204,7 +204,7 @@ function AppInner(props: AppInnerProps) {
     }),
   }));
 
-  const checksQueries = useQueries(() => ({
+  const checksQueries = useQueries<CheckRun[]>(() => ({
     queries: visiblePRs().map((pr) => {
       const repo = pr.repoSlug ?? props.app.repoSlug;
       return {
@@ -218,7 +218,7 @@ function AppInner(props: AppInnerProps) {
     }),
   }));
 
-  const reviewsQueries = useQueries(() => ({
+  const reviewsQueries = useQueries<Review[]>(() => ({
     queries: visiblePRs().map((pr) => {
       const repo = pr.repoSlug ?? props.app.repoSlug;
       return {
