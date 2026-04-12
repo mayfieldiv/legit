@@ -1,4 +1,6 @@
-import { For, Show, createMemo } from "solid-js";
+import { useTerminalDimensions } from "@opentui/solid";
+import { For, Show, createMemo } from "../lib/solid-compat";
+import type { Accessor } from "solid-js";
 import type { PR, CommentCounts } from "../lib/types";
 import { computeCommentCounts } from "../lib/types";
 import type { MouseEvent } from "@opentui/core";
@@ -221,6 +223,7 @@ function Cell(props: {
     <box
       width={props.width}
       flexGrow={props.flexGrow}
+      flexShrink={props.width !== undefined ? 0 : 1}
       minWidth={props.minWidth}
       paddingRight={props.paddingRight}
       overflow="hidden"
@@ -275,15 +278,19 @@ function PRRow(props: {
           </span>
         </Cell>
       </Show>
-      <Cell flexGrow={1} minWidth={10} paddingRight={props.showRepo ? 2 : 3}>
+      <Cell flexGrow={1} minWidth={10}>
         <span style={{ fg: fg() }}>{props.pr.title}</span>
       </Cell>
+      <box width={props.showRepo ? 2 : 3} />
       <Show when={props.visibleColumns?.author !== false}>
-        <Cell width={COL.author} paddingRight={1}>
-          <span style={{ fg: props.selected ? theme.selectedFg : theme.success }}>
-            {props.pr.author}
-          </span>
-        </Cell>
+        <>
+          <Cell width={COL.author} paddingRight={1}>
+            <span style={{ fg: props.selected ? theme.selectedFg : theme.success }}>
+              {` ${props.pr.author}`}
+            </span>
+          </Cell>
+          <box width={1} />
+        </>
       </Show>
       <Show when={props.visibleColumns?.size !== false}>
         <Cell width={COL.size} paddingRight={1}>
@@ -321,7 +328,7 @@ function PRRow(props: {
       <Show when={props.currentUser && props.visibleColumns?.blocker !== false}>
         <Cell width={COL.blocker}>
           <Show when={blockerCell()}>
-            {(display) => (
+            {(display: Accessor<{ text: string; fg: string }>) => (
               <span style={{ fg: props.selected ? theme.selectedFg : display().fg }}>
                 {display().text}
               </span>
@@ -348,13 +355,17 @@ export function PRListHeader(props: {
           <b>Repo</b>
         </Cell>
       </Show>
-      <Cell flexGrow={1} minWidth={10} paddingRight={3}>
+      <Cell flexGrow={1} minWidth={10}>
         <b>Title</b>
       </Cell>
+      <box width={props.showRepo ? 2 : 3} />
       <Show when={props.visibleColumns?.author !== false}>
-        <Cell width={COL.author} paddingRight={1}>
-          <b>Author</b>
-        </Cell>
+        <>
+          <Cell width={COL.author} paddingRight={1}>
+            <b>Author</b>
+          </Cell>
+          <box width={1} />
+        </>
       </Show>
       <Show when={props.visibleColumns?.size !== false}>
         <Cell width={COL.size} paddingRight={1}>
@@ -386,10 +397,17 @@ export function PRListHeader(props: {
 }
 
 export function PRList(props: PRListProps) {
+  const dims = useTerminalDimensions();
+
   // Resolve flat items — prefer `items` prop; fall back to converting `prs`
   const resolvedItems = createMemo((): FlatItem[] => {
     if (props.items) return props.items;
     return (props.prs ?? []).map((pr, i) => ({ kind: "pr", pr, prIndex: i }));
+  });
+
+  const resolvedVisibleColumns = createMemo<VisibleColumns>(() => {
+    if (props.visibleColumns) return props.visibleColumns;
+    return computeVisibleColumns(Math.max(0, dims().width - 12), props.showRepo ?? false);
   });
 
   const hasPRs = () => resolvedItems().some((item) => item.kind === "pr");
@@ -409,7 +427,7 @@ export function PRList(props: PRListProps) {
                 selected={item.prIndex === props.selectedIndex}
                 showRepo={props.showRepo}
                 currentUser={props.currentUser}
-                visibleColumns={props.visibleColumns}
+                visibleColumns={resolvedVisibleColumns()}
                 blockerData={props.getBlockerData?.(item.pr)}
                 onMouseDown={(e: MouseEvent) => {
                   e.preventDefault();

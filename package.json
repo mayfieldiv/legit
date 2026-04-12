@@ -13,12 +13,13 @@
     "check": "oxfmt --write . && oxlint --deny-warnings . && tsgo --noEmit"
   },
   "dependencies": {
-    "@opentui/core": "0.1.88",
-    "@opentui/solid": "0.1.88",
-    "@tanstack/solid-query": "5.96.2",
+    "@opentui/core": "0.1.97",
+    "@opentui/solid": "file:vendor/opentui-solid2",
+    "@solidjs/web": "2.0.0-beta.6",
+    "@tanstack/solid-query": "6.0.0-beta.3",
     "hast-util-from-html": "2.0.3",
     "mdast-util-from-markdown": "2.0.3",
-    "solid-js": "1.9.11"
+    "solid-js": "file:vendor/solid-js-browser"
   },
   "devDependencies": {
     "@tsconfig/bun": "1.0.10",

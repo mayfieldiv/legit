@@ -1,4 +1,4 @@
-import { Show, Switch, Match, createMemo } from "solid-js";
+import { Show, Switch, Match, createMemo } from "../lib/solid-compat";
 import { useTerminalDimensions } from "@opentui/solid";
 import { ListView } from "./ListView";
 import { SummaryPanel } from "./SummaryPanel";

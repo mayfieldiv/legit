@@ -1,5 +1,5 @@
 import { useKeyboard } from "@opentui/solid";
-import { createSignal, createMemo, createEffect, on, Show } from "solid-js";
+import { createSignal, createMemo, createEffect, on, Show } from "../lib/solid-compat";
 import { PRList, PRListHeader, buildFlatItems, prIndexToDisplayRow } from "./PRList";
 import type { FlatItem, VisibleColumns } from "./PRList";
 import { GroupPanel, GROUP_BY_OPTIONS } from "./GroupPanel";
@@ -111,6 +111,7 @@ export function ListView(props: ListViewProps) {
     undefined,
     {
       equals(prev, next) {
+        if (prev === undefined) return false;
         if (prev === next) return true;
         if (prev.totalMatched !== next.totalMatched) return false;
         if (prev.groups.length !== next.groups.length) return false;

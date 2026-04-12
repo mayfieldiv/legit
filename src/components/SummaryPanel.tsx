@@ -1,4 +1,5 @@
-import { Show, For, createMemo } from "solid-js";
+import { Show, For, createMemo } from "../lib/solid-compat";
+import type { Accessor } from "solid-js";
 import type {
   PR,
   CheckRun,
@@ -149,7 +150,7 @@ export function SummaryPanel(props: SummaryPanelProps) {
 
         {/* --- Blocker (only when enrichment loaded and currentUser known) --- */}
         <Show when={blockerResult()}>
-          {(b) => (
+          {(b: Accessor<ReturnType<typeof computeBlocker>>) => (
             <box height={1} width="100%">
               <text truncate={true}>
                 <span style={{ fg: theme.muted }}>blocker: </span>

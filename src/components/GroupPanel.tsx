@@ -1,4 +1,4 @@
-import { For } from "solid-js";
+import { For } from "../lib/solid-compat";
 import type { GroupByKey } from "../lib/group-filter-engine";
 import { theme } from "../lib/theme";
 

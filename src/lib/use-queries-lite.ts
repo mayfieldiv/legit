@@ -14,8 +14,14 @@ import type { QueryObserverOptions, QueryObserverResult } from "@tanstack/query-
 import { useQueryClient } from "@tanstack/solid-query";
 import type { QueryClient, UseQueryResult } from "@tanstack/solid-query";
 import type { Accessor } from "solid-js";
-import { createMemo, createComputed, onCleanup, onMount, mergeProps } from "solid-js";
-import { createStore, reconcile } from "solid-js/store";
+import {
+  createMemo,
+  createComputed,
+  onCleanup,
+  onMount,
+  createStore,
+  reconcile,
+} from "./solid-compat";
 
 /**
  * Lightweight useQueries using reconcile() instead of per-element unwrap().
@@ -23,6 +29,17 @@ import { createStore, reconcile } from "solid-js/store";
  * Type signature mirrors @tanstack/solid-query useQueries — accepts the same
  * options accessor and returns a store array of query results.
  */
+type IndexedQueryObserverResult = QueryObserverResult & {
+  __queryIndex: number;
+};
+
+function withQueryIndex(results: readonly QueryObserverResult[]): IndexedQueryObserverResult[] {
+  return results.map((result, index) => ({
+    ...result,
+    __queryIndex: index,
+  }));
+}
+
 export function useQueriesLite<TData = unknown, TError = Error>(
   queriesOptions: Accessor<{
     queries: readonly QueryObserverOptions[];
@@ -35,13 +52,17 @@ export function useQueriesLite<TData = unknown, TError = Error>(
   });
 
   const defaultedQueries = createMemo(() =>
-    queriesOptions().queries.map((options) =>
-      mergeProps(client().defaultQueryOptions(options), {
-        get _optimisticResults() {
-          return "optimistic" as const;
-        },
-      }),
-    ),
+    queriesOptions().queries.map((options) => ({
+      ...(client().defaultQueryOptions(options) as QueryObserverOptions<
+        unknown,
+        Error,
+        unknown,
+        unknown,
+        readonly unknown[],
+        never
+      >),
+      _optimisticResults: "optimistic" as const,
+    })),
   );
 
   const observer = new QueriesObserver(client(), defaultedQueries());
@@ -49,9 +70,9 @@ export function useQueriesLite<TData = unknown, TError = Error>(
   // Get initial optimistic result
   const [, getCombinedResult] = observer.getOptimisticResult(defaultedQueries(), undefined);
 
-  const [state, setState] = createStore<QueryObserverResult[]>([
-    ...getCombinedResult(),
-  ] as QueryObserverResult[]);
+  const [state, setState] = createStore<IndexedQueryObserverResult[]>(
+    withQueryIndex(getCombinedResult()),
+  );
 
   // Subscribe to observer updates. Use reconcile() for O(changed) diffing
   // instead of the upstream's O(all) unwrap loop.
@@ -61,12 +82,7 @@ export function useQueriesLite<TData = unknown, TError = Error>(
   const subscribeToObserver = () =>
     observer.subscribe((result) => {
       taskQueue.push(() => {
-        setState(
-          reconcile([...result] as QueryObserverResult[], {
-            key: null,
-            merge: true,
-          }),
-        );
+        setState(reconcile(withQueryIndex(result), "__queryIndex"));
       });
       queueMicrotask(() => {
         const taskToRun = taskQueue.pop();

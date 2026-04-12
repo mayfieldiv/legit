@@ -14,7 +14,7 @@
  * opened in the browser with o (deep-linking to the specific reply).
  */
 
-import { Show, For, createMemo, createSignal, createEffect, on } from "solid-js";
+import { Show, For, createMemo, createSignal, createEffect, on } from "../lib/solid-compat";
 import { useKeyboard } from "@opentui/solid";
 import { MarkdownBody } from "../lib/markdown";
 import { createDetailsController, DetailsCtx, type DetailsController } from "../lib/details-store";
@@ -33,6 +33,7 @@ import type { ScrollBoxRenderable } from "@opentui/core";
 import type { GitHubNetworkStats } from "../lib/concurrency";
 import { StatusBar } from "./StatusBar";
 import { theme } from "../lib/theme";
+import type { Accessor } from "solid-js";
 
 // ── Props ───────────────────────────────────────────────────────────────────
 
@@ -61,33 +62,6 @@ export type FocusableItem =
   | { kind: "reply"; comment: ReviewComment; url: string }
   | { kind: "comment"; comment: IssueComment; url: string };
 
-const ROUNDED_BORDER = {
-  topLeft: "╭",
-  topRight: "╮",
-  bottomLeft: "╰",
-  bottomRight: "╯",
-  horizontal: "─",
-  vertical: "│",
-  topT: "┬",
-  bottomT: "┴",
-  leftT: "├",
-  rightT: "┤",
-  cross: "┼",
-};
-const INVISIBLE_BORDER = {
-  topLeft: " ",
-  topRight: " ",
-  bottomLeft: " ",
-  bottomRight: " ",
-  horizontal: " ",
-  vertical: " ",
-  topT: " ",
-  bottomT: " ",
-  leftT: " ",
-  rightT: " ",
-  cross: " ",
-};
-
 function FocusableCard(props: {
   focused: boolean;
   id: string;
@@ -97,23 +71,43 @@ function FocusableCard(props: {
   children: any;
 }) {
   return (
-    <box
-      id={props.id}
-      border={true}
-      customBorderChars={props.focused ? ROUNDED_BORDER : INVISIBLE_BORDER}
-      borderColor={theme.border}
-      width="100%"
-      flexDirection="column"
-      marginTop={props.first ? 0 : -1}
-      paddingLeft={props.indent ?? 0}
-      zIndex={props.focused ? 1 : 0}
-      onMouseDown={(e: MouseEvent) => {
-        e.preventDefault();
-        props.onMouseDown?.();
-      }}
+    <Show
+      when={props.focused}
+      fallback={
+        <box
+          id={props.id}
+          width="100%"
+          flexDirection="column"
+          marginTop={props.first ? 0 : -1}
+          paddingLeft={props.indent ?? 0}
+          zIndex={0}
+          onMouseDown={(e: MouseEvent) => {
+            e.preventDefault();
+            props.onMouseDown?.();
+          }}
+        >
+          {props.children}
+        </box>
+      }
     >
-      {props.children}
-    </box>
+      <box
+        id={props.id}
+        border={true}
+        borderStyle="rounded"
+        borderColor={theme.border}
+        width="100%"
+        flexDirection="column"
+        marginTop={props.first ? 0 : -1}
+        paddingLeft={props.indent ?? 0}
+        zIndex={1}
+        onMouseDown={(e: MouseEvent) => {
+          e.preventDefault();
+          props.onMouseDown?.();
+        }}
+      >
+        {props.children}
+      </box>
+    </Show>
   );
 }
 
@@ -392,7 +386,7 @@ export function DetailView(props: DetailViewProps) {
           </Show>
         }
       >
-        {(pr) => (
+        {(pr: Accessor<PRDetail>) => (
           <>
             <box width="100%" height={1}>
               <text wrapMode="none" truncate={true}>
@@ -457,7 +451,7 @@ export function DetailView(props: DetailViewProps) {
 
       {/* ── Scrollable body ──────────────────────────────────── */}
       <Show when={props.pr}>
-        {(pr) => (
+        {(pr: Accessor<PRDetail>) => (
           <scrollbox
             ref={(el: ScrollBoxRenderable) => {
               scrollRef = el;
@@ -567,7 +561,14 @@ export function DetailView(props: DetailViewProps) {
                         </FocusableCard>
                       }
                     >
-                      {(rootItem) => (
+                      {(
+                        rootItem: Accessor<{
+                          kind: "root";
+                          thread: FullReviewThread;
+                          focusIdx: number;
+                          isFirst: boolean;
+                        }>,
+                      ) => (
                         <FocusableCard
                           id={`focusable-${rootItem().focusIdx}`}
                           focused={focusedIndex() === rootItem().focusIdx}

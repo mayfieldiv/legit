@@ -1,4 +1,5 @@
-import { createSignal, createMemo, createEffect, on, onMount, onCleanup } from "solid-js";
+import { createSignal, createMemo, createEffect, on, onMount, onCleanup } from "./lib/solid-compat";
+import type { JSX as OpenTuiJSX } from "@opentui/solid";
 import { execFile } from "child_process";
 import {
   QueryClient,
@@ -43,13 +44,20 @@ function createQueryClient(): QueryClient {
   });
 }
 
+function OtuiQueryClientProvider(props: {
+  client: QueryClient;
+  children: OpenTuiJSX.Element;
+}): OpenTuiJSX.Element {
+  return QueryClientProvider(props as never) as OpenTuiJSX.Element;
+}
+
 export function App(props: AppProps) {
   const queryClient = createQueryClient();
 
   return (
-    <QueryClientProvider client={queryClient}>
+    <OtuiQueryClientProvider client={queryClient}>
       <AppInner app={props.app} queryClient={queryClient} />
-    </QueryClientProvider>
+    </OtuiQueryClientProvider>
   );
 }
 

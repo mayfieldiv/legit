@@ -1,4 +1,5 @@
-import { createMemo, type JSX } from "solid-js";
+import { createMemo } from "solid-js";
+import type { JSX as OpenTuiJSX } from "@opentui/solid";
 import type { GitHubNetworkStats } from "../lib/concurrency";
 import { theme } from "../lib/theme";
 
@@ -10,7 +11,10 @@ import { theme } from "../lib/theme";
  * Optional `networkStats` is shown right-aligned: in-flight HTTP calls and waiting
  * work (queries fetching but not yet represented in the HTTP in-flight count).
  */
-export function StatusBar(props: { children?: JSX.Element; networkStats?: GitHubNetworkStats }) {
+export function StatusBar(props: {
+  children?: OpenTuiJSX.Element;
+  networkStats?: GitHubNetworkStats;
+}) {
   const networkLabel = createMemo(() => {
     const n = props.networkStats;
     if (!n) return "";

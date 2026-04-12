@@ -7,7 +7,7 @@
  * Inline nodes (emphasis, strong, inlineCode, link) produce styled spans.
  */
 
-import { For, Show, Switch, Match, createSignal } from "solid-js";
+import { For, Show, Switch, Match, createSignal } from "./solid-compat";
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { fromHtml } from "hast-util-from-html";
 import type { Element as HastElement } from "hast";

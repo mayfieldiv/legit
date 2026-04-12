@@ -4,7 +4,7 @@
  * only view state, tab selection, and detail view toggles.
  */
 
-import { batch, createSignal, type Accessor } from "solid-js";
+import { batch, createSignal, type Accessor } from "./solid-compat";
 import type { PR } from "./types";
 
 export type ViewTarget = { view: "list" } | { view: "detail"; pr: PR };
