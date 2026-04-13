@@ -14,14 +14,7 @@ import type { QueryObserverOptions, QueryObserverResult } from "@tanstack/query-
 import { useQueryClient } from "@tanstack/solid-query";
 import type { QueryClient, UseQueryResult } from "@tanstack/solid-query";
 import type { Accessor } from "solid-js";
-import {
-  createMemo,
-  createComputed,
-  onCleanup,
-  onMount,
-  createStore,
-  reconcile,
-} from "./solid-compat";
+import { createMemo, createComputed, onCleanup, onMount, createSignal } from "./solid-compat";
 
 /**
  * Lightweight useQueries using reconcile() instead of per-element unwrap().
@@ -70,24 +63,25 @@ export function useQueriesLite<TData = unknown, TError = Error>(
   // Get initial optimistic result
   const [, getCombinedResult] = observer.getOptimisticResult(defaultedQueries(), undefined);
 
-  const [state, setState] = createStore<IndexedQueryObserverResult[]>(
+  const [state, setState] = createSignal<IndexedQueryObserverResult[]>(
     withQueryIndex(getCombinedResult()),
   );
 
-  // Subscribe to observer updates. Use reconcile() for O(changed) diffing
-  // instead of the upstream's O(all) unwrap loop.
+  // Subscribe to observer updates. Use a signal-backed array proxy instead of
+  // Solid 2 store reconciliation, which is still unstable under the current
+  // terminal renderer/query workload.
   let unsubscribe: () => void = noop;
-  let taskQueue: Array<() => void> = [];
+  let queued = false;
+  let latestResult = state();
 
   const subscribeToObserver = () =>
     observer.subscribe((result) => {
-      taskQueue.push(() => {
-        setState(reconcile(withQueryIndex(result), "__queryIndex"));
-      });
+      latestResult = withQueryIndex(result);
+      if (queued) return;
+      queued = true;
       queueMicrotask(() => {
-        const taskToRun = taskQueue.pop();
-        if (taskToRun) taskToRun();
-        taskQueue = [];
+        queued = false;
+        setState(latestResult);
       });
     });
 
@@ -107,5 +101,28 @@ export function useQueriesLite<TData = unknown, TError = Error>(
     observer.setQueries(defaultedQueries());
   });
 
-  return state as unknown as UseQueryResult<TData, TError>[];
+  const proxy = new Proxy([] as IndexedQueryObserverResult[], {
+    get(_target, prop) {
+      const current = state();
+      if (typeof prop === "symbol") {
+        const value = Reflect.get(current, prop, current);
+        return typeof value === "function" ? value.bind(current) : value;
+      }
+      const value = Reflect.get(current, prop, current);
+      return typeof value === "function" ? value.bind(current) : value;
+    },
+    has(_target, prop) {
+      return prop in state();
+    },
+    ownKeys() {
+      return Reflect.ownKeys(state());
+    },
+    getOwnPropertyDescriptor(_target, prop) {
+      const descriptor = Reflect.getOwnPropertyDescriptor(state(), prop);
+      if (!descriptor) return undefined;
+      return { ...descriptor, configurable: true };
+    },
+  });
+
+  return proxy as unknown as UseQueryResult<TData, TError>[];
 }

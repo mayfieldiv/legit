@@ -224,7 +224,7 @@ function AppInner(props: AppInnerProps) {
     queries: visiblePRs().map((pr) => {
       const repo = pr.repoSlug ?? props.app.repoSlug;
       return {
-        queryKey: ["checks", repo, pr.headCommitSha ?? ""] as const,
+        queryKey: ["checks", repo, pr.headCommitSha ?? `missing-${pr.number}`] as const,
         queryFn: async ({ signal }: { signal: AbortSignal }) =>
           pr.headCommitSha
             ? props.app.fetchCheckRuns(repo, pr.headCommitSha, signal)
