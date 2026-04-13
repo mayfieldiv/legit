@@ -150,9 +150,12 @@ export function Switch(props: {
 
 export function createEffect<T>(fn: (prev?: T) => T, value?: T): void {
   onSettled(() => {
+    let previous = value as T | undefined;
     solidCreateEffect(
-      (previous) => fn(previous as T | undefined),
-      () => undefined,
+      () => fn(previous),
+      (next) => {
+        previous = next as T | undefined;
+      },
       value as T,
     );
   });

@@ -6,12 +6,23 @@ import {
   untrack,
 } from "solid-js/dist/solid.js";
 
-function createRenderEffect(fn, value) {
+function createLegacyRenderEffect(fn, value) {
+  let previous = value;
   solidCreateRenderEffect(
-    (previous) => fn(previous),
-    () => undefined,
+    () => fn(previous),
+    (next) => {
+      previous = next;
+    },
     value,
   );
+}
+
+function effect(compute, effectFn, value) {
+  createLegacyRenderEffect((previous) => {
+    const next = compute(previous);
+    effectFn(next, previous);
+    return next;
+  }, value);
 }
 
 const memo = (fn) => solidCreateMemo(() => fn());
@@ -67,19 +78,21 @@ const mergeProps = (...sources) =>
 
 function ref(getter, node) {
   let previous;
-  createRenderEffect(() => {
+  createLegacyRenderEffect(() => {
     const target = getter();
-    if (target === previous) return;
+    if (target === previous) return previous;
     previous = target;
 
     if (typeof target === "function") {
       target(node);
-      return;
+      return target;
     }
 
     if (Array.isArray(target) && !target.includes(node)) {
       target.push(node);
     }
+
+    return target;
   });
 }
 
@@ -99,7 +112,10 @@ export function createRenderer({
   function insert(parent, accessor, marker, initial) {
     if (marker !== undefined && !initial) initial = [];
     if (typeof accessor !== "function") return insertExpression(parent, accessor, initial, marker);
-    createRenderEffect((current) => insertExpression(parent, accessor(), current, marker), initial);
+    createLegacyRenderEffect(
+      (current) => insertExpression(parent, accessor(), current, marker),
+      initial,
+    );
   }
   function insertExpression(parent, value, current, marker, unwrapArray) {
     while (typeof current === "function") current = current();
@@ -125,16 +141,17 @@ export function createRenderer({
     } else if (value == null || t === "boolean") {
       current = cleanChildren(parent, current, marker);
     } else if (t === "function") {
-      createRenderEffect(() => {
+      createLegacyRenderEffect(() => {
         let v = value();
         while (typeof v === "function") v = v();
         current = insertExpression(parent, v, current, marker);
+        return current;
       });
       return () => current;
     } else if (Array.isArray(value)) {
       const array = [];
       if (normalizeIncomingArray(array, value, unwrapArray)) {
-        createRenderEffect(
+        createLegacyRenderEffect(
           () => (current = insertExpression(parent, array, current, marker, true)),
         );
         return () => current;
@@ -287,19 +304,20 @@ export function createRenderer({
       props = {};
     }
     if (!skipChildren) {
-      createRenderEffect(
+      createLegacyRenderEffect(
         () => (prevProps.children = insertExpression(node, props.children, prevProps.children)),
       );
     }
-    createRenderEffect(() => {
+    createLegacyRenderEffect(() => {
       const refTarget = props.ref;
       if (typeof refTarget === "function") {
         refTarget(node);
       } else if (Array.isArray(refTarget) && !refTarget.includes(node)) {
         refTarget.push(node);
       }
+      return refTarget;
     });
-    createRenderEffect(() => {
+    createLegacyRenderEffect(() => {
       for (const prop in props) {
         if (prop === "children" || prop === "ref") continue;
         const value = props[prop];
@@ -307,6 +325,7 @@ export function createRenderer({
         setProperty(node, prop, value, prevProps[prop]);
         prevProps[prop] = value;
       }
+      return prevProps;
     });
     return prevProps;
   }
@@ -322,7 +341,9 @@ export function createRenderer({
     insert,
     spread(node, accessor, skipChildren) {
       if (typeof accessor === "function") {
-        createRenderEffect((current) => spreadExpression(node, accessor(), current, skipChildren));
+        createLegacyRenderEffect((current) =>
+          spreadExpression(node, accessor(), current, skipChildren),
+        );
       } else spreadExpression(node, accessor, undefined, skipChildren);
     },
     createElement,
@@ -334,7 +355,7 @@ export function createRenderer({
       return value;
     },
     mergeProps,
-    effect: createRenderEffect,
+    effect,
     memo,
     createComponent,
     use(fn, element, arg) {

@@ -284,6 +284,18 @@ describe("PRList", () => {
     expect(frame).toContain("bob");
   });
 
+  test("keeps a visible gap between the PR and title columns in the header", async () => {
+    const { renderOnce, captureCharFrame } = await testRender(() => <PRListHeader />, {
+      width: 80,
+      height: 4,
+    });
+
+    await renderOnce();
+    const line = captureCharFrame().split("\n")[0] ?? "";
+
+    expect(line).toMatch(/^PR\s+Title\s+/);
+  });
+
   test("shows blocker header when currentUser is provided", async () => {
     const prs = [makePR({ number: 1 })];
 
