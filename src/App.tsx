@@ -1,10 +1,10 @@
 import { createSignal, createMemo, createEffect, on, onMount, onCleanup } from "./lib/solid-compat";
 import type { JSX as OpenTuiJSX } from "@opentui/solid";
+import { createEffect as solidCreateEffect } from "solid-js";
 import { execFile } from "child_process";
 import {
   QueryClient,
   QueryClientProvider,
-  useQuery,
   useIsFetching,
   experimental_streamedQuery as streamedQuery,
 } from "@tanstack/solid-query";
@@ -13,7 +13,15 @@ import { AppShell } from "./components/AppShell";
 import { createUIState } from "./lib/ui-state";
 import type { Legit } from "./lib/legit";
 import type { GitHubNetworkStats } from "./lib/concurrency";
-import type { PR, CheckRun, Review, FullReviewThread, FileCategorization } from "./lib/types";
+import type {
+  PR,
+  PRDetail,
+  CheckRun,
+  Review,
+  FullReviewThread,
+  IssueComment,
+  FileCategorization,
+} from "./lib/types";
 import type { BlockerOptions } from "./lib/blocker-engine";
 /** Build a GitHub PR URL from a repo slug and PR number. */
 export function prUrl(repoSlug: string, number: number): string {
@@ -283,19 +291,47 @@ function AppInner(props: AppInnerProps) {
   }
 
   // ── Summary panel queries ─────────────────────────────────────────────
-  const filesQuery = useQuery(() => ({
-    queryKey: [
-      "files",
-      selectedPr()?.repoSlug ?? props.app.repoSlug,
-      selectedPr()?.number ?? 0,
-    ] as const,
-    queryFn: async ({ signal }: { signal: AbortSignal }) => {
-      const pr = selectedPr();
-      if (!pr) return undefined;
-      return props.app.fetchCategorizedFiles(pr.repoSlug ?? props.app.repoSlug, pr.number, signal);
-    },
-    enabled: !!selectedPr(),
+  const filesQueries = useQueries<FileCategorization | undefined>(() => ({
+    queries: [
+      {
+        queryKey: [
+          "files",
+          selectedPr()?.repoSlug ?? props.app.repoSlug,
+          selectedPr()?.number ?? 0,
+        ] as const,
+        queryFn: async ({ signal }: { signal: AbortSignal }) => {
+          const pr = selectedPr();
+          if (!pr) return undefined;
+          return props.app.fetchCategorizedFiles(
+            pr.repoSlug ?? props.app.repoSlug,
+            pr.number,
+            signal,
+          );
+        },
+        enabled: !!selectedPr(),
+      },
+    ],
   }));
+  const filesQuery = () => filesQueries[0];
+  const [filesData, setFilesData] = createSignal<FileCategorization | undefined>();
+
+  createEffect(
+    on(
+      () => selectedPr(),
+      () => {
+        setFilesData(undefined);
+      },
+    ),
+  );
+
+  createEffect(
+    on(
+      () => filesQuery()?.data,
+      (data) => {
+        setFilesData(data ?? undefined);
+      },
+    ),
+  );
 
   // ── Detail view queries ───────────────────────────────────────────────
   const detailPr = () => {
@@ -303,47 +339,65 @@ function AppInner(props: AppInnerProps) {
     return v.view === "detail" ? v.pr : undefined;
   };
 
-  const detailPrQuery = useQuery(() => ({
-    queryKey: [
-      "pr-detail",
-      detailPr()?.repoSlug ?? props.app.repoSlug,
-      detailPr()?.number ?? 0,
-    ] as const,
-    queryFn: async ({ signal }: { signal: AbortSignal }) => {
-      const pr = detailPr();
-      if (!pr) return undefined;
-      return props.app.fetchPR(pr.repoSlug ?? props.app.repoSlug, pr.number, signal);
-    },
-    enabled: !!detailPr(),
-  }));
+  const [detailPrData, setDetailPrData] = createSignal<PRDetail | undefined>();
+  const [detailThreadsData, setDetailThreadsData] = createSignal<FullReviewThread[]>([]);
+  const [detailCommentsData, setDetailCommentsData] = createSignal<IssueComment[]>([]);
+  const [detailLoading, setDetailLoading] = createSignal(false);
+  const [detailError, setDetailError] = createSignal("");
+  const [detailRefreshKey, setDetailRefreshKey] = createSignal(0);
+  let detailController: AbortController | undefined;
 
-  const detailThreadsQuery = useQuery(() => ({
-    queryKey: [
-      "threads",
-      detailPr()?.repoSlug ?? props.app.repoSlug,
-      detailPr()?.number ?? 0,
-    ] as const,
-    queryFn: async ({ signal }: { signal: AbortSignal }) => {
-      const pr = detailPr();
-      if (!pr) return undefined;
-      return props.app.fetchFullReviewThreads(pr.repoSlug ?? props.app.repoSlug, pr.number, signal);
-    },
-    enabled: !!detailPr(),
-  }));
+  onCleanup(() => {
+    detailController?.abort();
+  });
 
-  const detailCommentsQuery = useQuery(() => ({
-    queryKey: [
-      "issue-comments",
-      detailPr()?.repoSlug ?? props.app.repoSlug,
-      detailPr()?.number ?? 0,
-    ] as const,
-    queryFn: async ({ signal }: { signal: AbortSignal }) => {
+  solidCreateEffect(
+    () => {
       const pr = detailPr();
-      if (!pr) return undefined;
-      return props.app.fetchIssueComments(pr.repoSlug ?? props.app.repoSlug, pr.number, signal);
+      const refreshKey = detailRefreshKey();
+      void refreshKey;
+
+      detailController?.abort();
+      detailController = undefined;
+
+      setDetailPrData(undefined);
+      setDetailThreadsData([]);
+      setDetailCommentsData([]);
+      setDetailError("");
+
+      if (!pr) {
+        setDetailLoading(false);
+        return;
+      }
+
+      const repo = pr.repoSlug ?? props.app.repoSlug;
+      const controller = new AbortController();
+      detailController = controller;
+      setDetailLoading(true);
+
+      void Promise.all([
+        props.app.fetchPR(repo, pr.number, controller.signal),
+        props.app.fetchFullReviewThreads(repo, pr.number, controller.signal),
+        props.app.fetchIssueComments(repo, pr.number, controller.signal),
+      ])
+        .then(([nextPr, threads, comments]) => {
+          if (controller.signal.aborted || detailController !== controller) return;
+          props.queryClient.setQueryData(["pr-detail", repo, pr.number], nextPr);
+          props.queryClient.setQueryData(["threads", repo, pr.number], threads);
+          props.queryClient.setQueryData(["issue-comments", repo, pr.number], comments);
+          setDetailPrData(nextPr);
+          setDetailThreadsData(threads);
+          setDetailCommentsData(comments);
+          setDetailLoading(false);
+        })
+        .catch((error: unknown) => {
+          if (controller.signal.aborted || detailController !== controller) return;
+          setDetailLoading(false);
+          setDetailError(error instanceof Error ? error.message : String(error));
+        });
     },
-    enabled: !!detailPr(),
-  }));
+    () => undefined,
+  );
 
   // ── Refresh handlers ──────────────────────────────────────────────────
   function refreshSelected() {
@@ -374,18 +428,8 @@ function AppInner(props: AppInnerProps) {
   }
 
   function refreshDetail() {
-    const pr = detailPr();
-    if (!pr) return;
-    const repo = pr.repoSlug ?? props.app.repoSlug;
-    void props.queryClient.invalidateQueries({
-      queryKey: ["pr-detail", repo, pr.number],
-    });
-    void props.queryClient.invalidateQueries({
-      queryKey: ["threads", repo, pr.number],
-    });
-    void props.queryClient.invalidateQueries({
-      queryKey: ["issue-comments", repo, pr.number],
-    });
+    if (!detailPr()) return;
+    setDetailRefreshKey((n) => n + 1);
   }
 
   // ── Browser actions ───────────────────────────────────────────────────
@@ -447,7 +491,7 @@ function AppInner(props: AppInnerProps) {
   };
 
   const summaryFiles = (): FileCategorization | undefined => {
-    return filesQuery.data ?? undefined;
+    return filesData();
   };
 
   const summaryLoading = (): boolean => {
@@ -459,7 +503,7 @@ function AppInner(props: AppInnerProps) {
     return (
       threadsQueries[idx]?.data === undefined ||
       reviewsQueries[idx]?.data === undefined ||
-      filesQuery.data === undefined
+      filesData() === undefined
     );
   };
 
@@ -473,7 +517,7 @@ function AppInner(props: AppInnerProps) {
       showRepo={showRepo()}
       currentUser={props.app.currentUser}
       resetKey={ui.activeTab()}
-      error={prError() || browserError()}
+      error={prError() || detailError() || browserError()}
       tabs={tabs()}
       activeTab={ui.activeTab()}
       selectedPr={selectedPr()}
@@ -489,14 +533,14 @@ function AppInner(props: AppInnerProps) {
       onRefreshSelected={refreshSelected}
       onEnterDetail={(pr: PR) => ui.enterDetail(pr)}
       detailPr={(() => {
-        const data = detailPrQuery.data;
+        const data = detailPrData();
         if (!data) return undefined;
         const pr = detailPr();
         return { ...data, repoSlug: pr?.repoSlug ?? props.app.repoSlug };
       })()}
-      detailThreads={detailThreadsQuery.data ?? []}
-      detailComments={detailCommentsQuery.data ?? []}
-      detailLoading={detailPrQuery.isPending && !!detailPr()}
+      detailThreads={detailThreadsData()}
+      detailComments={detailCommentsData()}
+      detailLoading={detailLoading()}
       showResolved={ui.showResolved()}
       showBotComments={ui.showBotComments()}
       onExitDetail={ui.exitDetail}

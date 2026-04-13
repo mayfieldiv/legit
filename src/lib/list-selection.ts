@@ -1,4 +1,4 @@
-import { createSignal, type Accessor } from "solid-js";
+import { createSignal, latest, type Accessor } from "solid-js";
 
 export interface ListSelection {
   index: Accessor<number>;
@@ -16,43 +16,42 @@ export interface ListSelection {
  * the index is automatically adjusted on read.
  */
 export function createListSelection(listLength: Accessor<number>): ListSelection {
-  const [rawIndex, setRawIndex] = createSignal(0);
+  const [version, setVersion] = createSignal(0);
+  let rawIndex = 0;
+
+  const clampIndex = (i: number): number => {
+    const len = latest(listLength);
+    if (len === 0) return 0;
+    return Math.min(Math.max(i, 0), len - 1);
+  };
+
+  const syncIndex = (next: number) => {
+    rawIndex = clampIndex(next);
+    setVersion((v) => v + 1);
+  };
 
   // Always-clamped index accessor
   const index: Accessor<number> = () => {
-    const len = listLength();
-    if (len === 0) return 0;
-    const i = rawIndex();
-    return Math.min(Math.max(i, 0), len - 1);
+    version();
+    rawIndex = clampIndex(rawIndex);
+    return rawIndex;
   };
 
   return {
     index,
 
     select(i: number) {
-      const len = listLength();
-      if (len === 0) {
-        setRawIndex(0);
-      } else {
-        setRawIndex(Math.min(Math.max(i, 0), len - 1));
-      }
+      syncIndex(i);
     },
 
     moveDown() {
-      const len = listLength();
-      if (len > 0) {
-        setRawIndex((i) => Math.min(i + 1, len - 1));
+      if (listLength() > 0) {
+        syncIndex(rawIndex + 1);
       }
     },
 
     moveUp() {
-      setRawIndex((i) => {
-        const len = listLength();
-        // Clamp to current list bounds before decrementing,
-        // so a stale raw index doesn't require many presses after list shrink
-        const clamped = len === 0 ? 0 : Math.min(Math.max(i, 0), len - 1);
-        return Math.max(clamped - 1, 0);
-      });
+      syncIndex(rawIndex - 1);
     },
 
     selectedItem<T>(list: T[]): T | undefined {

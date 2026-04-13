@@ -253,6 +253,105 @@ describe("App integration", () => {
     expect(frame).not.toContain("No PR selected");
   });
 
+  test("opens detail view after pressing Enter from the list", async () => {
+    const detailPr = { ...makeSampleRestPR(1), body: "Detail body" };
+    const detailFetch = async (url: string, init?: RequestInit) => {
+      if (/\/repos\/acme\/widgets\/pulls\?state=open/.test(url)) {
+        return new Response(JSON.stringify([makeSampleRestPR(1)]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/repos/acme/widgets/pulls/1")) {
+        return new Response(JSON.stringify(detailPr), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (/\/repos\/acme\/widgets\/pulls\/1\/files/.test(url)) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (/\/repos\/acme\/widgets\/pulls\/1\/reviews/.test(url)) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (/\/repos\/acme\/widgets\/commits\/abc123def456\/check-runs/.test(url)) {
+        return new Response(JSON.stringify({ check_runs: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (/\/repos\/acme\/widgets\/issues\/1\/comments/.test(url)) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/graphql")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { query?: string };
+        const query = body.query ?? "";
+        if (query.includes("reviewThreads")) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    reviewThreads: {
+                      pageInfo: { hasNextPage: false, endCursor: null },
+                      nodes: [],
+                    },
+                  },
+                },
+              },
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        }
+        return new Response(
+          JSON.stringify(
+            makeGraphQLResponse([{ ...SAMPLE_GQL_META, number: 1, mergeable: "MERGEABLE" }]),
+          ),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      return new Response(JSON.stringify({ message: "Not Found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+    const app = createTestLegit({ httpFetch: detailFetch });
+
+    const { renderOnce, captureCharFrame, mockInput } = await testRender(() => <App app={app} />, {
+      width: 160,
+      height: 20,
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+    await renderOnce();
+
+    mockInput.pressEnter();
+    await renderOnce();
+    await new Promise((r) => setTimeout(r, 100));
+    await renderOnce();
+
+    const frame = captureCharFrame();
+    expect(frame).toContain("#1 PR #1");
+    expect(frame).toContain("Detail body");
+    expect(frame).not.toContain("Loading PR detail");
+  });
+
   test("selection resets to first PR when switching back to a tab", async () => {
     // Regression: navigating down on one tab, then switching back to All,
     // left the list highlight on a different row than the summary panel showed.

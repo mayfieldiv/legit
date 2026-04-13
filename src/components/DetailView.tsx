@@ -78,7 +78,7 @@ function FocusableCard(props: {
           id={props.id}
           width="100%"
           flexDirection="column"
-          marginTop={props.first ? 0 : -1}
+          marginTop={0}
           paddingLeft={props.indent ?? 0}
           zIndex={0}
           onMouseDown={(e: MouseEvent) => {
