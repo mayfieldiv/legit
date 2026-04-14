@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { testRender } from "@opentui/solid";
+import { createSignal } from "solid-js";
 import { AppShell } from "../src/components/AppShell";
 import { makePR } from "./helpers";
 
@@ -121,6 +122,53 @@ describe("AppShell", () => {
     await renderOnce();
     const frame = captureCharFrame();
     expect(frame).toContain("2 open PRs");
+  });
+
+  test("updates the summary panel without mixing title and metadata", async () => {
+    const prs = [
+      makePR({
+        number: 597,
+        title: "Add authorization middleware with secure fallback policy by default",
+        author: "cmbankester",
+        repoSlug: "immense/immybot-manager",
+      }),
+      makePR({
+        number: 598,
+        title: "FallbackPolicy — require auth",
+        author: "cmbankester",
+        repoSlug: "immense/immybot-manager",
+      }),
+    ];
+    const [selectedPr, setSelectedPr] = createSignal(prs[0]);
+    const { renderOnce, captureCharFrame } = await testRender(
+      () => (
+        <AppShell
+          view={{ view: "list" }}
+          onEnterDetail={() => {}}
+          prs={prs}
+          loading={false}
+          repoSlug="All repos"
+          selectedPr={selectedPr()}
+          summaryThreads={[]}
+          summaryChecks={[]}
+          summaryReviews={[]}
+          onRefreshSelected={() => {}}
+          onRefreshAllActive={() => {}}
+        />
+      ),
+      { width: 156, height: 17 },
+    );
+
+    await renderOnce();
+    setSelectedPr(prs[1]!);
+    await renderOnce();
+
+    const lines = captureCharFrame().split("\n");
+    expect(lines[1]).toContain("FallbackPolicy");
+    expect(lines[1]).not.toContain("cmbankester");
+    expect(lines[2]).toContain("cmbankester");
+    expect(lines[2]).toContain("#598");
+    expect(lines[2]).not.toContain("middleware");
   });
 
   test("renders tab bar with All and repo tabs", async () => {

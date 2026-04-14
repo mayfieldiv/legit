@@ -80,9 +80,9 @@ export function SummaryPanel(props: SummaryPanelProps) {
           </box>
         }
       >
-        {/* Title — wraps naturally */}
-        <box width="100%">
-          <text>
+        {/* Title — keep to one line so metadata never redraws into wrapped title text. */}
+        <box height={1} width="100%">
+          <text wrapMode="none" truncate={true}>
             <b>{pr()!.title}</b>
           </text>
         </box>
@@ -100,8 +100,8 @@ export function SummaryPanel(props: SummaryPanelProps) {
 
         {/* Branches */}
         <Show when={pr()!.headRef}>
-          <box width="100%">
-            <text>
+          <box height={1} width="100%">
+            <text wrapMode="none" truncate={true}>
               <span style={{ fg: theme.accent }}>{pr()!.headRef}</span>
               <span style={{ fg: theme.muted }}> → </span>
               <span style={{ fg: theme.accent }}>{pr()!.baseRef}</span>
