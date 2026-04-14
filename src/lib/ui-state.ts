@@ -4,7 +4,7 @@
  * only view state, tab selection, and detail view toggles.
  */
 
-import { batch, createSignal, type Accessor } from "./solid-compat";
+import { createSignal, type Accessor } from "solid-js";
 import type { PR } from "./types";
 
 export type ViewTarget = { view: "list" } | { view: "detail"; pr: PR };
@@ -37,11 +37,9 @@ export function createUIState(): UIState {
   }
 
   function exitDetail() {
-    batch(() => {
-      setView({ view: "list" });
-      setShowResolved(false);
-      setShowBotComments(true);
-    });
+    setView({ view: "list" });
+    setShowResolved(false);
+    setShowBotComments(true);
   }
 
   function toggleResolved() {

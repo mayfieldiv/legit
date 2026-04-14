@@ -11,14 +11,8 @@ import { createSignal, createContext, useContext } from "solid-js";
 import type { JSX as OpenTuiJSX } from "@opentui/solid";
 import type { Accessor } from "solid-js";
 
-type ProviderComponent<T> = (props: {
-  value: T;
-  children?: OpenTuiJSX.Element;
-}) => OpenTuiJSX.Element;
-
-type LegacyProviderContext<T> = ReturnType<typeof createContext<T>> & {
-  Provider: ProviderComponent<T>;
-};
+type OpenTuiContext<T> = ReturnType<typeof createContext<T>> &
+  ((props: { value: T; children?: OpenTuiJSX.Element }) => OpenTuiJSX.Element);
 
 export interface DetailsHandle {
   expanded: Accessor<boolean>;
@@ -61,8 +55,7 @@ export function createDetailsController(): DetailsController {
 }
 
 /** Context so MarkdownBody can register <details> without prop-drilling. */
-const detailsContext = createContext<DetailsController | null>(null);
-export const DetailsCtx = Object.assign(detailsContext, {
-  Provider: detailsContext,
-}) as LegacyProviderContext<DetailsController | null>;
+export const DetailsCtx = createContext<DetailsController | null>(
+  null,
+) as OpenTuiContext<DetailsController | null>;
 export const useDetails = () => useContext(DetailsCtx);

@@ -6,26 +6,12 @@ import {
   untrack,
 } from "solid-js/dist/solid.js";
 
-function createLegacyRenderEffect(fn, value) {
-  let previous = value;
-  solidCreateRenderEffect(
-    () => fn(previous),
-    (next) => {
-      previous = next;
-    },
-    value,
-  );
-}
-
 function effect(compute, effectFn, value) {
-  createLegacyRenderEffect((previous) => {
-    const next = compute(previous);
-    effectFn(next, previous);
-    return next;
-  }, value);
+  solidCreateRenderEffect(compute, effectFn, value);
 }
 
-const memo = (fn) => solidCreateMemo(() => fn());
+const memo = (fn, equal) =>
+  solidCreateMemo(fn, undefined, equal === undefined ? undefined : { equals: equal });
 
 const resolvePropsSource = (source) => {
   if (typeof source === "function") {
@@ -78,21 +64,18 @@ const mergeProps = (...sources) =>
 
 function ref(getter, node) {
   let previous;
-  createLegacyRenderEffect(() => {
-    const target = getter();
-    if (target === previous) return previous;
+  solidCreateRenderEffect(getter, (target) => {
+    if (target === previous) return;
     previous = target;
 
     if (typeof target === "function") {
       target(node);
-      return target;
+      return;
     }
 
     if (Array.isArray(target) && !target.includes(node)) {
       target.push(node);
     }
-
-    return target;
   });
 }
 
@@ -112,10 +95,10 @@ export function createRenderer({
   function insert(parent, accessor, marker, initial) {
     if (marker !== undefined && !initial) initial = [];
     if (typeof accessor !== "function") return insertExpression(parent, accessor, initial, marker);
-    createLegacyRenderEffect(
-      (current) => insertExpression(parent, accessor(), current, marker),
-      initial,
-    );
+    let current = initial;
+    solidCreateRenderEffect(accessor, (value) => {
+      current = insertExpression(parent, value, current, marker);
+    });
   }
   function insertExpression(parent, value, current, marker, unwrapArray) {
     while (typeof current === "function") current = current();
@@ -141,18 +124,29 @@ export function createRenderer({
     } else if (value == null || t === "boolean") {
       current = cleanChildren(parent, current, marker);
     } else if (t === "function") {
-      createLegacyRenderEffect(() => {
-        let v = value();
-        while (typeof v === "function") v = v();
-        current = insertExpression(parent, v, current, marker);
-        return current;
-      });
+      solidCreateRenderEffect(
+        () => {
+          let v = value();
+          while (typeof v === "function") v = v();
+          return v;
+        },
+        (v) => {
+          current = insertExpression(parent, v, current, marker);
+        },
+      );
       return () => current;
     } else if (Array.isArray(value)) {
       const array = [];
       if (normalizeIncomingArray(array, value, unwrapArray)) {
-        createLegacyRenderEffect(
-          () => (current = insertExpression(parent, array, current, marker, true)),
+        solidCreateRenderEffect(
+          () => {
+            const nextArray = [];
+            normalizeIncomingArray(nextArray, value, true);
+            return nextArray;
+          },
+          (nextArray) => {
+            current = insertExpression(parent, nextArray, current, marker, true);
+          },
         );
         return () => current;
       }
@@ -299,34 +293,51 @@ export function createRenderer({
     insertNode(parent, newNode, oldNode);
     removeNode(parent, oldNode);
   }
-  function spreadExpression(node, props, prevProps = {}, skipChildren) {
-    if (!props) {
-      props = {};
-    }
+  function spreadExpression(node, propsAccessor, prevProps = {}, skipChildren) {
+    const readProps = () => resolvePropsSource(propsAccessor);
+
     if (!skipChildren) {
-      createLegacyRenderEffect(
-        () => (prevProps.children = insertExpression(node, props.children, prevProps.children)),
+      let current = prevProps.children;
+      solidCreateRenderEffect(
+        () => readProps().children,
+        (children) => {
+          current = insertExpression(node, children, current);
+          prevProps.children = current;
+        },
       );
     }
-    createLegacyRenderEffect(() => {
-      const refTarget = props.ref;
-      if (typeof refTarget === "function") {
-        refTarget(node);
-      } else if (Array.isArray(refTarget) && !refTarget.includes(node)) {
-        refTarget.push(node);
-      }
-      return refTarget;
-    });
-    createLegacyRenderEffect(() => {
-      for (const prop in props) {
-        if (prop === "children" || prop === "ref") continue;
-        const value = props[prop];
-        if (value === prevProps[prop]) continue;
-        setProperty(node, prop, value, prevProps[prop]);
-        prevProps[prop] = value;
-      }
-      return prevProps;
-    });
+
+    solidCreateRenderEffect(
+      () => readProps().ref,
+      (refTarget) => {
+        if (typeof refTarget === "function") {
+          refTarget(node);
+        } else if (Array.isArray(refTarget) && !refTarget.includes(node)) {
+          refTarget.push(node);
+        }
+      },
+    );
+
+    solidCreateRenderEffect(
+      () => {
+        const props = readProps();
+        const nextProps = {};
+        for (const prop in props) {
+          if (prop === "children" || prop === "ref") continue;
+          nextProps[prop] = props[prop];
+        }
+        return nextProps;
+      },
+      (props) => {
+        for (const prop in props) {
+          const value = props[prop];
+          if (value === prevProps[prop]) continue;
+          setProperty(node, prop, value, prevProps[prop]);
+          prevProps[prop] = value;
+        }
+      },
+    );
+
     return prevProps;
   }
   return {
@@ -340,11 +351,7 @@ export function createRenderer({
     },
     insert,
     spread(node, accessor, skipChildren) {
-      if (typeof accessor === "function") {
-        createLegacyRenderEffect((current) =>
-          spreadExpression(node, accessor(), current, skipChildren),
-        );
-      } else spreadExpression(node, accessor, undefined, skipChildren);
+      spreadExpression(node, accessor, undefined, skipChildren);
     },
     createElement,
     createTextNode,

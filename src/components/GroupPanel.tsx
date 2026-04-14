@@ -1,4 +1,4 @@
-import { For } from "../lib/solid-compat";
+import { For } from "@opentui/solid";
 import type { GroupByKey } from "../lib/group-filter-engine";
 import { theme } from "../lib/theme";
 
@@ -33,7 +33,7 @@ export function GroupPanel(props: GroupPanelProps) {
       <For each={GROUP_BY_OPTIONS}>
         {(opt, i) => {
           const isSelected = () => i() === props.selectedIndex;
-          const isCurrent = () => opt.key === props.currentGroupBy;
+          const isCurrent = () => opt().key === props.currentGroupBy;
           return (
             <box
               height={1}
@@ -46,7 +46,7 @@ export function GroupPanel(props: GroupPanelProps) {
                     fg: isSelected() ? theme.selectedFg : isCurrent() ? theme.success : undefined,
                   }}
                 >
-                  {isCurrent() ? "◉" : "○"} {opt.label}
+                  {isCurrent() ? "◉" : "○"} {opt().label}
                 </span>
               </text>
             </box>

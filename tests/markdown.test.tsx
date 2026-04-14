@@ -213,9 +213,9 @@ describe("MarkdownBody — details/summary", () => {
     const ctrl = createDetailsController();
     const { renderOnce, captureCharFrame } = await testRender(
       () => (
-        <DetailsCtx.Provider value={ctrl}>
+        <DetailsCtx value={ctrl}>
           <MarkdownBody source={twoDetails} />
-        </DetailsCtx.Provider>
+        </DetailsCtx>
       ),
       { width: 60, height: 30 },
     );
@@ -259,9 +259,9 @@ describe("MarkdownBody — details/summary", () => {
     const ctrl = createDetailsController();
     const { renderOnce, captureCharFrame, mockMouse } = await testRender(
       () => (
-        <DetailsCtx.Provider value={ctrl}>
+        <DetailsCtx value={ctrl}>
           <MarkdownBody source={twoDetails} />
-        </DetailsCtx.Provider>
+        </DetailsCtx>
       ),
       { width: 60, height: 30 },
     );

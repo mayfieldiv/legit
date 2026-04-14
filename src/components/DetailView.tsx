@@ -14,8 +14,8 @@
  * opened in the browser with o (deep-linking to the specific reply).
  */
 
-import { Show, For, createMemo, createSignal, createEffect, on } from "../lib/solid-compat";
-import { useKeyboard } from "@opentui/solid";
+import { Show, For, useKeyboard } from "@opentui/solid";
+import { createMemo, createSignal, createEffect } from "solid-js";
 import { MarkdownBody } from "../lib/markdown";
 import { createDetailsController, DetailsCtx, type DetailsController } from "../lib/details-store";
 import {
@@ -71,43 +71,23 @@ function FocusableCard(props: {
   children: any;
 }) {
   return (
-    <Show
-      when={props.focused}
-      fallback={
-        <box
-          id={props.id}
-          width="100%"
-          flexDirection="column"
-          marginTop={0}
-          paddingLeft={props.indent ?? 0}
-          zIndex={0}
-          onMouseDown={(e: MouseEvent) => {
-            e.preventDefault();
-            props.onMouseDown?.();
-          }}
-        >
-          {props.children}
-        </box>
-      }
+    <box
+      id={props.id}
+      border={props.focused}
+      borderStyle={props.focused ? "rounded" : undefined}
+      borderColor={props.focused ? theme.border : undefined}
+      width="100%"
+      flexDirection="column"
+      marginTop={props.focused && !props.first ? -1 : 0}
+      paddingLeft={props.indent ?? 0}
+      zIndex={props.focused ? 1 : 0}
+      onMouseDown={(e: MouseEvent) => {
+        e.preventDefault();
+        props.onMouseDown?.();
+      }}
     >
-      <box
-        id={props.id}
-        border={true}
-        borderStyle="rounded"
-        borderColor={theme.border}
-        width="100%"
-        flexDirection="column"
-        marginTop={props.first ? 0 : -1}
-        paddingLeft={props.indent ?? 0}
-        zIndex={1}
-        onMouseDown={(e: MouseEvent) => {
-          e.preventDefault();
-          props.onMouseDown?.();
-        }}
-      >
-        {props.children}
-      </box>
-    </Show>
+      {props.children}
+    </box>
   );
 }
 
@@ -150,7 +130,7 @@ function ThreadCard(props: { thread: FullReviewThread; showBotComments: boolean 
             })()}
           </text>
         </box>
-        <For each={rootComment()}>{(comment) => <CommentRow comment={comment} />}</For>
+        <For each={rootComment()}>{(comment) => <CommentRow comment={comment()} />}</For>
       </box>
     </Show>
   );
@@ -301,29 +281,32 @@ export function DetailView(props: DetailViewProps) {
 
   // Clamp focus index when the focusable items list changes
   createEffect(
-    on(focusableItems, (items) => {
+    () => focusableItems(),
+    (items) => {
       const idx = focusedIndex();
       if (items.length === 0) {
         setFocusedIndex(0);
       } else if (idx >= items.length) {
         setFocusedIndex(items.length - 1);
       }
-    }),
+    },
   );
 
   // Auto-scroll focused item into view
   let scrollRef: ScrollBoxRenderable | undefined;
 
+  let didProcessFocusedIndex = false;
   createEffect(
-    on(
-      () => focusedIndex(),
-      (idx) => {
-        if (scrollRef) {
-          scrollRef.scrollChildIntoView(`focusable-${idx}`);
-        }
-      },
-      { defer: true },
-    ),
+    () => focusedIndex(),
+    (idx) => {
+      if (!didProcessFocusedIndex) {
+        didProcessFocusedIndex = true;
+        return;
+      }
+      if (scrollRef) {
+        scrollRef.scrollChildIntoView(`focusable-${idx}`);
+      }
+    },
   );
 
   // ── Details controllers (one per focusable card) ─────────────────────────────
@@ -462,7 +445,7 @@ export function DetailView(props: DetailViewProps) {
           >
             {/* Description (focusable-0, unstyled) */}
             <box id="focusable-0" flexDirection="column" width="100%">
-              <DetailsCtx.Provider value={getDetailsController(0)}>
+              <DetailsCtx value={getDetailsController(0)}>
                 <Show
                   when={pr().body.trim()}
                   fallback={
@@ -473,7 +456,7 @@ export function DetailView(props: DetailViewProps) {
                 >
                   <MarkdownBody source={pr().body} />
                 </Show>
-              </DetailsCtx.Provider>
+              </DetailsCtx>
             </box>
 
             {/* CI Checks */}
@@ -498,13 +481,13 @@ export function DetailView(props: DetailViewProps) {
               </box>
               <For each={checks()}>
                 {(check) => {
-                  const ci = checkIcon(check);
+                  const ci = () => checkIcon(check());
                   return (
                     <box width="100%" height={1}>
                       <text truncate={true}>
                         <span>{"  "}</span>
-                        <span style={{ fg: ci.fg }}>{ci.icon}</span>
-                        <span> {check.name}</span>
+                        <span style={{ fg: ci().fg }}>{ci().icon}</span>
+                        <span> {check().name}</span>
                       </text>
                     </box>
                   );
@@ -539,25 +522,29 @@ export function DetailView(props: DetailViewProps) {
                 <For each={threadRenderItems()}>
                   {(item) => (
                     <Show
-                      when={item.kind === "root" ? item : undefined}
+                      when={
+                        (item().kind === "root" ? item() : undefined) as
+                          | Extract<ThreadRenderItem, { kind: "root" }>
+                          | undefined
+                      }
                       fallback={
                         <FocusableCard
-                          id={`focusable-${item.focusIdx}`}
-                          focused={focusedIndex() === item.focusIdx}
+                          id={`focusable-${item().focusIdx}`}
+                          focused={focusedIndex() === item().focusIdx}
                           indent={4}
-                          onMouseDown={() => setFocusedIndex(item.focusIdx)}
+                          onMouseDown={() => setFocusedIndex(item().focusIdx)}
                         >
-                          <DetailsCtx.Provider value={getDetailsController(item.focusIdx)}>
+                          <DetailsCtx value={getDetailsController(item().focusIdx)}>
                             <ReplyRow
                               comment={
                                 (
-                                  item as ThreadRenderItem & {
+                                  item() as ThreadRenderItem & {
                                     kind: "reply";
                                   }
                                 ).comment
                               }
                             />
-                          </DetailsCtx.Provider>
+                          </DetailsCtx>
                         </FocusableCard>
                       }
                     >
@@ -575,12 +562,12 @@ export function DetailView(props: DetailViewProps) {
                           first={rootItem().isFirst}
                           onMouseDown={() => setFocusedIndex(rootItem().focusIdx)}
                         >
-                          <DetailsCtx.Provider value={getDetailsController(rootItem().focusIdx)}>
+                          <DetailsCtx value={getDetailsController(rootItem().focusIdx)}>
                             <ThreadCard
                               thread={rootItem().thread}
                               showBotComments={props.showBotComments}
                             />
-                          </DetailsCtx.Provider>
+                          </DetailsCtx>
                         </FocusableCard>
                       )}
                     </Show>
@@ -607,14 +594,14 @@ export function DetailView(props: DetailViewProps) {
               <For each={commentRenderItems()}>
                 {(item) => (
                   <FocusableCard
-                    id={`focusable-${item.focusIdx}`}
-                    focused={focusedIndex() === item.focusIdx}
-                    first={item.isFirst}
-                    onMouseDown={() => setFocusedIndex(item.focusIdx)}
+                    id={`focusable-${item().focusIdx}`}
+                    focused={focusedIndex() === item().focusIdx}
+                    first={item().isFirst}
+                    onMouseDown={() => setFocusedIndex(item().focusIdx)}
                   >
-                    <DetailsCtx.Provider value={getDetailsController(item.focusIdx)}>
-                      <CommentRow comment={item.comment} />
-                    </DetailsCtx.Provider>
+                    <DetailsCtx value={getDetailsController(item().focusIdx)}>
+                      <CommentRow comment={item().comment} />
+                    </DetailsCtx>
                   </FocusableCard>
                 )}
               </For>

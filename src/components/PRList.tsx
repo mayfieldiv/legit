@@ -1,5 +1,5 @@
-import { useTerminalDimensions } from "@opentui/solid";
-import { For, Show, createMemo } from "../lib/solid-compat";
+import { For, Show, useTerminalDimensions } from "@opentui/solid";
+import { createMemo } from "solid-js";
 import type { Accessor } from "solid-js";
 import type { PR, CommentCounts } from "../lib/types";
 import { computeCommentCounts } from "../lib/types";
@@ -320,7 +320,7 @@ function PRRow(props: {
             }
           >
             <For each={threadParts(comments(), props.selected)}>
-              {(part) => <span style={{ fg: part.fg }}>{part.text}</span>}
+              {(part) => <span style={{ fg: part().fg }}>{part().text}</span>}
             </For>
           </Show>
         </Cell>
@@ -417,21 +417,22 @@ export function PRList(props: PRListProps) {
       <Show when={hasPRs()} fallback={<text>No open pull requests</text>}>
         <For each={resolvedItems()}>
           {(item) => {
-            if (item.kind === "header") {
-              return <GroupHeaderRow label={item.label} />;
+            const row = item();
+            if (row.kind === "header") {
+              return <GroupHeaderRow label={row.label} />;
             }
             return (
               <PRRow
-                id={`pr-row-${item.prIndex}`}
-                pr={item.pr}
-                selected={item.prIndex === props.selectedIndex}
+                id={`pr-row-${row.prIndex}`}
+                pr={row.pr}
+                selected={row.prIndex === props.selectedIndex}
                 showRepo={props.showRepo}
                 currentUser={props.currentUser}
                 visibleColumns={resolvedVisibleColumns()}
-                blockerData={props.getBlockerData?.(item.pr)}
+                blockerData={props.getBlockerData?.(row.pr)}
                 onMouseDown={(e: MouseEvent) => {
                   e.preventDefault();
-                  props.onSelect?.(item.prIndex);
+                  props.onSelect?.(row.prIndex);
                 }}
               />
             );

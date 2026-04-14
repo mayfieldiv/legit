@@ -13,8 +13,7 @@ import { QueriesObserver, noop } from "@tanstack/query-core";
 import type { QueryObserverOptions, QueryObserverResult } from "@tanstack/query-core";
 import { useQueryClient } from "@tanstack/solid-query";
 import type { QueryClient, UseQueryResult } from "@tanstack/solid-query";
-import type { Accessor } from "solid-js";
-import { createMemo, createComputed, onCleanup, onMount, createSignal } from "./solid-compat";
+import { createMemo, createEffect, onCleanup, createSignal, type Accessor } from "solid-js";
 
 /**
  * Lightweight useQueries using reconcile() instead of per-element unwrap().
@@ -85,21 +84,14 @@ export function useQueriesLite<TData = unknown, TError = Error>(
       });
     });
 
-  createComputed<() => void>((cleanup) => {
-    cleanup?.();
-    unsubscribe = subscribeToObserver();
-    return () => queueMicrotask(unsubscribe);
-  });
-  onCleanup(unsubscribe);
+  unsubscribe = subscribeToObserver();
+  onCleanup(() => queueMicrotask(unsubscribe));
 
-  // Sync observer when query options change
-  onMount(() => {
-    observer.setQueries(defaultedQueries());
-  });
-
-  createComputed(() => {
-    observer.setQueries(defaultedQueries());
-  });
+  // Sync observer when query options change.
+  createEffect(
+    () => defaultedQueries(),
+    (queries) => observer.setQueries(queries),
+  );
 
   const proxy = new Proxy([] as IndexedQueryObserverResult[], {
     get(_target, prop) {

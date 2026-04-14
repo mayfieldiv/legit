@@ -7,7 +7,8 @@
  * Inline nodes (emphasis, strong, inlineCode, link) produce styled spans.
  */
 
-import { For, Show, Switch, Match, createSignal } from "./solid-compat";
+import { For, Show, Switch, Match } from "@opentui/solid";
+import { createSignal } from "solid-js";
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { fromHtml } from "hast-util-from-html";
 import type { Element as HastElement } from "hast";
@@ -176,10 +177,10 @@ export function MarkdownBody(props: MarkdownBodyProps) {
     <box flexDirection="column" width="100%">
       <For each={grouped()}>
         {(node) =>
-          node.type === "detailsGroup" ? (
-            <MdDetails group={node as DetailsGroup} />
+          node().type === "detailsGroup" ? (
+            <MdDetails group={node() as DetailsGroup} />
           ) : (
-            <MdBlock node={node as Nodes} depth={0} />
+            <MdBlock node={node() as Nodes} depth={0} />
           )
         }
       </For>
@@ -218,10 +219,10 @@ function MdDetails(props: { group: DetailsGroup }) {
         <box flexDirection="column" width="100%" paddingLeft={2}>
           <For each={groupDetailsBlocks(props.group.children)}>
             {(node) =>
-              node.type === "detailsGroup" ? (
-                <MdDetails group={node as DetailsGroup} />
+              node().type === "detailsGroup" ? (
+                <MdDetails group={node() as DetailsGroup} />
               ) : (
-                <MdBlock node={node as Nodes} depth={0} />
+                <MdBlock node={node() as Nodes} depth={0} />
               )
             }
           </For>
@@ -320,7 +321,7 @@ function MdList(props: { node: List; depth: number }) {
       <For each={props.node.children}>
         {(item, index) => (
           <MdListItem
-            node={item as ListItem}
+            node={item() as ListItem}
             depth={props.depth}
             ordered={ordered()}
             index={index()}
@@ -339,18 +340,18 @@ function MdListItem(props: { node: ListItem; depth: number; ordered: boolean; in
     <box flexDirection="column" width="100%">
       <For each={props.node.children}>
         {(child, childIdx) => {
-          if (child.type === "paragraph") {
+          if (child().type === "paragraph") {
             return (
               <box width="100%">
                 <text>
                   {childIdx() === 0 ? indent() + bullet() : indent() + "  "}
-                  <InlineNodes nodes={(child as Paragraph).children} />
+                  <InlineNodes nodes={(child() as Paragraph).children} />
                 </text>
               </box>
             );
           }
           // Nested list or other block
-          return <MdBlock node={child} depth={props.depth + 1} />;
+          return <MdBlock node={child()} depth={props.depth + 1} />;
         }}
       </For>
     </box>
@@ -362,18 +363,18 @@ function MdBlockquote(props: { node: Blockquote; depth: number }) {
     <box flexDirection="column" width="100%" paddingLeft={2}>
       <For each={props.node.children}>
         {(child) => {
-          if (child.type === "paragraph") {
+          if (child().type === "paragraph") {
             return (
               <box width="100%">
                 <text>
                   <span style={{ fg: theme.muted }}>
-                    │ <InlineNodes nodes={(child as Paragraph).children} />
+                    │ <InlineNodes nodes={(child() as Paragraph).children} />
                   </span>
                 </text>
               </box>
             );
           }
-          return <MdBlock node={child} depth={props.depth} />;
+          return <MdBlock node={child()} depth={props.depth} />;
         }}
       </For>
     </box>
@@ -405,7 +406,7 @@ function FallbackBlock(props: { node: Nodes }) {
 
 /** Render an array of inline/phrasing nodes as styled <span> elements. */
 export function InlineNodes(props: { nodes: PhrasingContent[] }) {
-  return <For each={props.nodes}>{(node) => <InlineNode node={node} />}</For>;
+  return <For each={props.nodes}>{(node) => <InlineNode node={node()} />}</For>;
 }
 
 function InlineNode(props: { node: PhrasingContent }) {

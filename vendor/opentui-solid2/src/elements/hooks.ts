@@ -15,14 +15,7 @@ import {
   useContext,
 } from "solid-js/dist/solid.js";
 
-type LegacyProviderContext<T> = ReturnType<typeof createContext<T>> & {
-  Provider: ReturnType<typeof createContext<T>>;
-};
-
-const rendererContext = createContext<CliRenderer>();
-export const RendererContext = Object.assign(rendererContext, {
-  Provider: rendererContext,
-}) as LegacyProviderContext<CliRenderer>;
+export const RendererContext = createContext<CliRenderer>();
 
 export const useRenderer = () => {
   const renderer = useContext(RendererContext);

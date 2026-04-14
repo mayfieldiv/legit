@@ -1,5 +1,5 @@
-import { useKeyboard } from "@opentui/solid";
-import { createSignal, createMemo, createEffect, on, Show } from "../lib/solid-compat";
+import { Show, useKeyboard } from "@opentui/solid";
+import { createSignal, createMemo, createEffect } from "solid-js";
 import { PRList, PRListHeader, buildFlatItems, prIndexToDisplayRow } from "./PRList";
 import type { FlatItem, VisibleColumns } from "./PRList";
 import { GroupPanel, GROUP_BY_OPTIONS } from "./GroupPanel";
@@ -140,18 +140,20 @@ export function ListView(props: ListViewProps) {
   // ── Selection ─────────────────────────────────────────────────────────────
   const selection = createListSelection(() => displayPRs().length);
   let scrollRef: ScrollBoxRenderable | undefined;
+  let _anchor: { repoSlug: string | undefined; number: number } | null = null;
 
   /** The currently selected PR, derived reactively from the index + display list. */
   const selectedPR = createMemo(() => selection.selectedItem(displayPRs()));
 
   // Notify parent whenever the selected PR changes identity.
   createEffect(
-    on(selectedPR, (pr) => {
+    () => selectedPR(),
+    (pr) => {
       if (pr) {
         _anchor = { repoSlug: pr.repoSlug, number: pr.number };
         props.onSelectionChange?.(pr);
       }
-    }),
+    },
   );
 
   // ── Selection anchoring ────────────────────────────────────────────────────
@@ -159,70 +161,76 @@ export function ListView(props: ListViewProps) {
   // the same PR by identity (repo slug + number) rather than the same index.
   // `_anchor` is set whenever the user explicitly changes selection and is
   // cleared on tab/reset so a fresh selection can be established.
-  let _anchor: { repoSlug: string | undefined; number: number } | null = null;
-
   function prMatchesAnchor(pr: PR): boolean {
     return _anchor !== null && pr.number === _anchor.number && pr.repoSlug === _anchor.repoSlug;
   }
 
   // Re-anchor the selection index whenever the displayed list changes.
+  let didProcessDisplayPRs = false;
   createEffect(
-    on(
-      displayPRs,
-      (prs) => {
-        if (_anchor === null) return;
+    () => displayPRs(),
+    (prs) => {
+      if (!didProcessDisplayPRs) {
+        didProcessDisplayPRs = true;
+        return;
+      }
+      if (_anchor === null) return;
 
-        // If the current selection already points to the right PR, nothing to do.
-        const current = selection.selectedItem(prs);
-        if (current && prMatchesAnchor(current)) return;
+      // If the current selection already points to the right PR, nothing to do.
+      const current = selection.selectedItem(prs);
+      if (current && prMatchesAnchor(current)) return;
 
-        // Find the anchored PR in the (possibly re-ordered) list and move to it.
-        const idx = prs.findIndex(prMatchesAnchor);
-        if (idx >= 0 && idx !== selection.index()) {
-          const prevIdx = selection.index();
-          selection.select(idx);
-          ensureVisible(idx >= prevIdx ? "down" : "up");
-        }
-      },
-      { defer: true },
-    ),
+      // Find the anchored PR in the (possibly re-ordered) list and move to it.
+      const idx = prs.findIndex(prMatchesAnchor);
+      if (idx >= 0 && idx !== selection.index()) {
+        const prevIdx = selection.index();
+        selection.select(idx);
+        ensureVisible(idx >= prevIdx ? "down" : "up");
+      }
+    },
   );
 
   // Reset when tab/dataset changes — clear anchor so it reinitialises to the new first PR.
+  let didProcessResetKey = false;
   createEffect(
-    on(
-      () => props.resetKey,
-      () => {
-        _anchor = null;
-        selection.select(0);
-        scrollRef?.scrollTo(0);
-      },
-      { defer: true },
-    ),
+    () => props.resetKey,
+    () => {
+      if (!didProcessResetKey) {
+        didProcessResetKey = true;
+        return;
+      }
+      _anchor = null;
+      selection.select(0);
+      scrollRef?.scrollTo(0);
+    },
   );
 
   // Reset when filter changes — try to keep the same PR, fall back to index 0.
+  let didProcessFilterText = false;
   createEffect(
-    on(
-      () => filterText(),
-      () => {
-        selection.select(0);
-        scrollRef?.scrollTo(0);
-      },
-      { defer: true },
-    ),
+    () => filterText(),
+    () => {
+      if (!didProcessFilterText) {
+        didProcessFilterText = true;
+        return;
+      }
+      selection.select(0);
+      scrollRef?.scrollTo(0);
+    },
   );
 
   // Reset when groupBy changes
+  let didProcessActiveGroupBy = false;
   createEffect(
-    on(
-      () => activeGroupBy(),
-      () => {
-        selection.select(0);
-        scrollRef?.scrollTo(0);
-      },
-      { defer: true },
-    ),
+    () => activeGroupBy(),
+    () => {
+      if (!didProcessActiveGroupBy) {
+        didProcessActiveGroupBy = true;
+        return;
+      }
+      selection.select(0);
+      scrollRef?.scrollTo(0);
+    },
   );
 
   // ── Scroll sync ───────────────────────────────────────────────────────────

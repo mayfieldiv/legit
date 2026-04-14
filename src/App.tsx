@@ -1,6 +1,5 @@
-import { createSignal, createMemo, createEffect, on, onMount, onCleanup } from "./lib/solid-compat";
+import { createSignal, createMemo, createEffect, onSettled, onCleanup } from "solid-js";
 import type { JSX as OpenTuiJSX } from "@opentui/solid";
-import { createEffect as solidCreateEffect } from "solid-js";
 import { execFile } from "child_process";
 import {
   QueryClient,
@@ -99,7 +98,7 @@ function AppInner(props: AppInnerProps) {
     };
   });
 
-  onMount(() => {
+  onSettled(() => {
     setHttpNetworkStats(props.app.githubNetworkStats);
     const unsubHttp = props.app.subscribeGitHubNetworkStats(() => {
       setHttpNetworkStats(props.app.githubNetworkStats);
@@ -189,7 +188,8 @@ function AppInner(props: AppInnerProps) {
   // retry runs in parallel with enrichment queries instead of blocking them.
   const mergeableRetried = new Set<string>();
   createEffect(
-    on(settledRepos, (settled) => {
+    () => settledRepos(),
+    (settled) => {
       const repos = repoTabs();
       for (let i = 0; i < repos.length; i++) {
         const repo = repos[i]!;
@@ -204,7 +204,7 @@ function AppInner(props: AppInnerProps) {
           onCleanup(() => clearTimeout(timer));
         }
       }
-    }),
+    },
   );
 
   // ── Per-PR enrichment queries (threads, checks, reviews) ──────────────
@@ -274,11 +274,12 @@ function AppInner(props: AppInnerProps) {
 
   // Auto-select first PR when list loads
   createEffect(
-    on(visiblePRs, (prs) => {
+    () => visiblePRs(),
+    (prs) => {
       if (!selectedPr() && prs.length > 0) {
         setSelectedPr(prs[0]);
       }
-    }),
+    },
   );
 
   function selectPr(pr: PR) {
@@ -316,21 +317,17 @@ function AppInner(props: AppInnerProps) {
   const [filesData, setFilesData] = createSignal<FileCategorization | undefined>();
 
   createEffect(
-    on(
-      () => selectedPr(),
-      () => {
-        setFilesData(undefined);
-      },
-    ),
+    () => selectedPr(),
+    () => {
+      setFilesData(undefined);
+    },
   );
 
   createEffect(
-    on(
-      () => filesQuery()?.data,
-      (data) => {
-        setFilesData(data ?? undefined);
-      },
-    ),
+    () => filesQuery()?.data,
+    (data) => {
+      setFilesData(data ?? undefined);
+    },
   );
 
   // ── Detail view queries ───────────────────────────────────────────────
@@ -351,12 +348,9 @@ function AppInner(props: AppInnerProps) {
     detailController?.abort();
   });
 
-  solidCreateEffect(
-    () => {
-      const pr = detailPr();
-      const refreshKey = detailRefreshKey();
-      void refreshKey;
-
+  createEffect(
+    () => ({ pr: detailPr(), refreshKey: detailRefreshKey() }),
+    ({ pr }) => {
       detailController?.abort();
       detailController = undefined;
 
@@ -396,7 +390,6 @@ function AppInner(props: AppInnerProps) {
           setDetailError(error instanceof Error ? error.message : String(error));
         });
     },
-    () => undefined,
   );
 
   // ── Refresh handlers ──────────────────────────────────────────────────

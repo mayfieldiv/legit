@@ -1,4 +1,5 @@
-import { Show, For, createMemo } from "../lib/solid-compat";
+import { Show, For } from "@opentui/solid";
+import { createMemo } from "solid-js";
 import type { Accessor } from "solid-js";
 import type {
   PR,
@@ -191,12 +192,12 @@ export function SummaryPanel(props: SummaryPanelProps) {
                   <text truncate={true}>
                     <span>
                       {"  "}
-                      {cat}:{" "}
+                      {cat()}:{" "}
                     </span>
                     <span>
                       {formatSize(
-                        props.files!.breakdown[cat].additions,
-                        props.files!.breakdown[cat].deletions,
+                        props.files!.breakdown[cat()].additions,
+                        props.files!.breakdown[cat()].deletions,
                       )}
                     </span>
                   </text>
@@ -214,14 +215,14 @@ export function SummaryPanel(props: SummaryPanelProps) {
             </box>
             <For each={props.reviews!}>
               {(review) => {
-                const ri = reviewIcon(review.state);
+                const ri = () => reviewIcon(review().state);
                 return (
                   <box height={1} width="100%">
                     <text truncate={true}>
                       <span>{"  "}</span>
-                      <span style={{ fg: ri.fg }}>{ri.icon}</span>
-                      <span> {review.user} </span>
-                      <span style={{ fg: theme.muted }}>{formatReviewState(review.state)}</span>
+                      <span style={{ fg: ri().fg }}>{ri().icon}</span>
+                      <span> {review().user} </span>
+                      <span style={{ fg: theme.muted }}>{formatReviewState(review().state)}</span>
                     </text>
                   </box>
                 );
@@ -242,7 +243,7 @@ export function SummaryPanel(props: SummaryPanelProps) {
                   <text truncate={true}>
                     <span>{"  "}</span>
                     <span style={{ fg: theme.warning }}>○</span>
-                    <span> {reviewer} </span>
+                    <span> {reviewer()} </span>
                     <span style={{ fg: theme.muted }}>pending</span>
                   </text>
                 </box>
@@ -280,13 +281,13 @@ export function SummaryPanel(props: SummaryPanelProps) {
                   </box>
                   <For each={visible()}>
                     {(check) => {
-                      const ci = checkIcon(check);
+                      const ci = () => checkIcon(check());
                       return (
                         <box height={1} width="100%">
                           <text truncate={true}>
                             <span>{"  "}</span>
-                            <span style={{ fg: ci.fg }}>{ci.icon}</span>
-                            <span> {check.name}</span>
+                            <span style={{ fg: ci().fg }}>{ci().icon}</span>
+                            <span> {check().name}</span>
                           </text>
                         </box>
                       );
