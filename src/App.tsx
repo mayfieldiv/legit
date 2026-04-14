@@ -286,18 +286,20 @@ function AppInner(props: AppInnerProps) {
   // ── Selection state ───────────────────────────────────────────────────
   const [selectedPr, setSelectedPr] = createSignal<PR | undefined>();
 
-  // Auto-select first PR when list loads
-  createEffect(
-    () => visiblePRs(),
-    (prs) => {
-      if (!selectedPr() && prs.length > 0) {
-        setSelectedPr(prs[0]);
-      }
-    },
-  );
-
+  // Debounce selection changes from ListView. Without this, switching
+  // tabs triggers: onSelectionChange → setSelectedPr → filesQuery
+  // cache mutation → enrichment reorder → list regrouped → different
+  // PR at index 0 → onSelectionChange again → infinite oscillation.
+  let pendingSelect: PR | undefined;
+  let selectQueued = false;
   function selectPr(pr: PR) {
-    setSelectedPr(pr);
+    pendingSelect = pr;
+    if (selectQueued) return;
+    selectQueued = true;
+    queueMicrotask(() => {
+      selectQueued = false;
+      setSelectedPr(pendingSelect);
+    });
   }
 
   function changeTab(index: number) {

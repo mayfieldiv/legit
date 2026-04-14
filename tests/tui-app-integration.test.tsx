@@ -288,7 +288,7 @@ describe("App integration", () => {
   // Solid roots — each testRender accumulates listeners on the shared
   // TerminalConsoleCache that renderer.destroy() doesn't remove.
   // Run individually via: bun test --only "opens detail view"
-  test.skip("opens detail view after pressing Enter from the list", async () => {
+  test("opens detail view after pressing Enter from the list", async () => {
     const detailPr = { ...makeSampleRestPR(1), body: "Detail body" };
     const detailFetch = async (url: string, init?: RequestInit) => {
       if (/\/repos\/acme\/widgets\/pulls\?state=open/.test(url)) {
@@ -387,7 +387,7 @@ describe("App integration", () => {
     expect(frame).not.toContain("Loading PR detail");
   });
 
-  test.skip("selection resets to first PR when switching back to a tab", async () => {
+  test("selection resets to first PR when switching back to a tab", async () => {
     const { fetch } = createMockFetch([
       {
         url: /\/repos\/acme\/widgets\/pulls\?/,
