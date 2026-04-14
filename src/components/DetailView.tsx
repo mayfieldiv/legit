@@ -28,8 +28,7 @@ import {
 } from "../lib/format";
 import type { FullReviewThread, IssueComment, PRDetail, ReviewComment } from "../lib/types";
 import { classifyThread } from "../lib/blocker-engine";
-import type { MouseEvent } from "@opentui/core";
-import type { ScrollBoxRenderable } from "@opentui/core";
+import type { BorderCharacters, MouseEvent, ScrollBoxRenderable } from "@opentui/core";
 import type { GitHubNetworkStats } from "../lib/concurrency";
 import { StatusBar } from "./StatusBar";
 import { theme } from "../lib/theme";
@@ -62,6 +61,34 @@ export type FocusableItem =
   | { kind: "reply"; comment: ReviewComment; url: string }
   | { kind: "comment"; comment: IssueComment; url: string };
 
+const ROUNDED_BORDER = {
+  topLeft: "╭",
+  topRight: "╮",
+  bottomLeft: "╰",
+  bottomRight: "╯",
+  horizontal: "─",
+  vertical: "│",
+  topT: "┬",
+  bottomT: "┴",
+  leftT: "├",
+  rightT: "┤",
+  cross: "┼",
+} satisfies BorderCharacters;
+
+const INVISIBLE_BORDER = {
+  topLeft: " ",
+  topRight: " ",
+  bottomLeft: " ",
+  bottomRight: " ",
+  horizontal: " ",
+  vertical: " ",
+  topT: " ",
+  bottomT: " ",
+  leftT: " ",
+  rightT: " ",
+  cross: " ",
+} satisfies BorderCharacters;
+
 function FocusableCard(props: {
   focused: boolean;
   id: string;
@@ -73,12 +100,13 @@ function FocusableCard(props: {
   return (
     <box
       id={props.id}
-      border={props.focused}
-      borderStyle={props.focused ? "rounded" : undefined}
-      borderColor={props.focused ? theme.border : undefined}
+      border={true}
+      borderStyle="rounded"
+      customBorderChars={props.focused ? ROUNDED_BORDER : INVISIBLE_BORDER}
+      borderColor={theme.border}
       width="100%"
       flexDirection="column"
-      marginTop={props.focused && !props.first ? -1 : 0}
+      marginTop={props.first ? 0 : -1}
       paddingLeft={props.indent ?? 0}
       zIndex={props.focused ? 1 : 0}
       onMouseDown={(e: MouseEvent) => {
