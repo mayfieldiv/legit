@@ -62,8 +62,25 @@ export function useQueriesLite<TData = unknown, TError = Error>(
   // Get initial optimistic result
   const [, getCombinedResult] = observer.getOptimisticResult(defaultedQueries(), undefined);
 
+  // QueriesObserver fires on every internal state transition (not just data
+  // changes). The signal uses structural equality on the query-observable
+  // surface (data, status, fetchStatus) so that no-op observer notifications
+  // don't cascade through the reactive graph — without this, downstream
+  // memos that produce new array references (e.g. allPRs sorting) create
+  // an infinite microtask loop.
+  const queryResultsEqual = (
+    prev: IndexedQueryObserverResult[],
+    next: IndexedQueryObserverResult[],
+  ): boolean =>
+    prev.length === next.length &&
+    prev.every((p, i) => {
+      const n = next[i]!;
+      return p.data === n.data && p.status === n.status && p.fetchStatus === n.fetchStatus;
+    });
+
   const [state, setState] = createSignal<IndexedQueryObserverResult[]>(
     withQueryIndex(getCombinedResult()),
+    { equals: queryResultsEqual },
   );
 
   // Subscribe to observer updates. Use a signal-backed array proxy instead of
@@ -85,7 +102,7 @@ export function useQueriesLite<TData = unknown, TError = Error>(
     });
 
   unsubscribe = subscribeToObserver();
-  onCleanup(() => queueMicrotask(unsubscribe));
+  onCleanup(() => unsubscribe());
 
   // Sync observer when query options change.
   createEffect(

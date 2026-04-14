@@ -1,7 +1,25 @@
-import { describe, test, expect } from "bun:test";
+import { describe, test, expect, afterEach } from "bun:test";
 import { testRender } from "@opentui/solid";
+import type { CliRenderer } from "@opentui/core";
 import { ListView, computeScrollTarget } from "../src/components/ListView";
 import { makePR } from "./helpers";
+
+// Destroy the renderer after each test to prevent leaked Solid roots
+// from accumulating across the test suite.
+let activeRenderer: CliRenderer | undefined;
+afterEach(() => {
+  activeRenderer?.destroy();
+  activeRenderer = undefined;
+});
+
+async function testRenderTracked(
+  ...args: Parameters<typeof testRender>
+): ReturnType<typeof testRender> {
+  activeRenderer?.destroy();
+  const result = await testRender(...args);
+  activeRenderer = result.renderer;
+  return result;
+}
 
 describe("ListView", () => {
   test("renders PR list", async () => {
@@ -10,7 +28,7 @@ describe("ListView", () => {
       makePR({ number: 2, title: "Second PR" }),
     ];
 
-    const { renderOnce, captureCharFrame } = await testRender(
+    const { renderOnce, captureCharFrame } = await testRenderTracked(
       () => (
         <ListView
           prs={prs}
@@ -35,7 +53,7 @@ describe("ListView", () => {
       makePR({ number: 3, title: "Third PR" }),
     ];
 
-    const { renderOnce, captureCharFrame, mockInput } = await testRender(
+    const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
       () => (
         <ListView
           prs={prs}
@@ -69,7 +87,7 @@ describe("ListView", () => {
       makePR({ number: 2, title: "Second PR" }),
     ];
 
-    const { renderOnce, mockInput } = await testRender(
+    const { renderOnce, mockInput } = await testRenderTracked(
       () => (
         <ListView
           prs={prs}
@@ -90,7 +108,7 @@ describe("ListView", () => {
   test("r key triggers onRefreshSelected", async () => {
     let refreshedSelected = false;
 
-    const { renderOnce, mockInput } = await testRender(
+    const { renderOnce, mockInput } = await testRenderTracked(
       () => (
         <ListView
           prs={[makePR()]}
@@ -114,7 +132,7 @@ describe("ListView", () => {
   test("R key triggers onRefreshAll", async () => {
     let refreshedAll = false;
 
-    const { renderOnce, mockInput } = await testRender(
+    const { renderOnce, mockInput } = await testRenderTracked(
       () => (
         <ListView
           prs={[makePR()]}
@@ -138,7 +156,7 @@ describe("ListView", () => {
   test("uppercase R triggers onRefreshAll", async () => {
     let refreshedAll = false;
 
-    const { renderOnce, mockInput } = await testRender(
+    const { renderOnce, mockInput } = await testRenderTracked(
       () => (
         <ListView
           prs={[makePR()]}
@@ -163,7 +181,7 @@ describe("ListView", () => {
     let navigatedPr: unknown = null;
     const pr = makePR({ number: 42, title: "Test PR" });
 
-    const { renderOnce, mockInput } = await testRender(
+    const { renderOnce, mockInput } = await testRenderTracked(
       () => (
         <ListView
           prs={[pr]}
@@ -185,7 +203,7 @@ describe("ListView", () => {
   });
 
   test("shows empty state when no PRs", async () => {
-    const { renderOnce, captureCharFrame } = await testRender(
+    const { renderOnce, captureCharFrame } = await testRenderTracked(
       () => (
         <ListView
           prs={[]}
@@ -203,7 +221,7 @@ describe("ListView", () => {
   });
 
   test("j/k does nothing on empty list", async () => {
-    const { renderOnce, captureCharFrame, mockInput } = await testRender(
+    const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
       () => (
         <ListView
           prs={[]}
@@ -231,7 +249,7 @@ describe("ListView", () => {
     ];
     const selections: number[] = [];
 
-    const { renderOnce, mockInput } = await testRender(
+    const { renderOnce, mockInput } = await testRenderTracked(
       () => (
         <ListView
           prs={prs}
@@ -258,7 +276,7 @@ describe("ListView", () => {
     let openedPr: any = null;
     const pr = makePR({ number: 42 });
 
-    const { renderOnce, mockInput } = await testRender(
+    const { renderOnce, mockInput } = await testRenderTracked(
       () => (
         <ListView
           prs={[pr]}
@@ -282,7 +300,7 @@ describe("ListView", () => {
   });
 
   test("o key does nothing when no onOpenInBrowser handler", async () => {
-    const { renderOnce, mockInput } = await testRender(
+    const { renderOnce, mockInput } = await testRenderTracked(
       () => (
         <ListView
           prs={[makePR()]}
@@ -310,7 +328,7 @@ describe("ListView — filter", () => {
       makePR({ number: 2, title: "Add feature" }),
     ];
 
-    const { renderOnce, captureCharFrame, mockInput } = await testRender(
+    const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
       () => (
         <ListView
           prs={prs}
@@ -337,7 +355,7 @@ describe("ListView — filter", () => {
       makePR({ number: 2, title: "Add feature" }),
     ];
 
-    const { renderOnce, captureCharFrame, mockInput } = await testRender(
+    const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
       () => (
         <ListView
           prs={prs}
@@ -370,7 +388,7 @@ describe("ListView — filter", () => {
       makePR({ number: 2, title: "Add feature" }),
     ];
 
-    const { renderOnce, captureCharFrame, mockInput } = await testRender(
+    const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
       () => (
         <ListView
           prs={prs}
@@ -406,7 +424,7 @@ describe("ListView — filter", () => {
       makePR({ number: 2, title: "Add feature" }),
     ];
 
-    const { renderOnce, captureCharFrame, mockInput } = await testRender(
+    const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
       () => (
         <ListView
           prs={prs}
@@ -444,7 +462,7 @@ describe("ListView — filter", () => {
     const prs = [makePR({ number: 1, title: "project-j" }), makePR({ number: 2, title: "Fix B" })];
     const selections: number[] = [];
 
-    const { renderOnce, captureCharFrame, mockInput } = await testRender(
+    const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
       () => (
         <ListView
           prs={prs}
@@ -476,7 +494,7 @@ describe("ListView — filter", () => {
     const prs = [makePR({ number: 1, title: "PR one" }), makePR({ number: 2, title: "PR two" })];
     const tabCalls: number[] = [];
 
-    const { renderOnce, captureCharFrame, mockInput } = await testRender(
+    const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
       () => (
         <ListView
           prs={prs}
@@ -509,7 +527,7 @@ describe("ListView — filter", () => {
     const prs = [makePR({ number: 1, title: "hello" })];
     const tabCalls: number[] = [];
 
-    const { renderOnce, captureCharFrame, mockInput } = await testRender(
+    const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
       () => (
         <ListView
           prs={prs}
@@ -540,7 +558,7 @@ describe("ListView — filter", () => {
     const prs = [makePR({ number: 1, title: "PR one" })];
     const tabCalls: number[] = [];
 
-    const { renderOnce, mockInput } = await testRender(
+    const { renderOnce, mockInput } = await testRenderTracked(
       () => (
         <ListView
           prs={prs}
@@ -568,7 +586,7 @@ describe("ListView — filter", () => {
   test("no match shows empty state message", async () => {
     const prs = [makePR({ number: 1, title: "Fix bug" })];
 
-    const { renderOnce, captureCharFrame, mockInput } = await testRender(
+    const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
       () => (
         <ListView
           prs={prs}
@@ -597,7 +615,7 @@ describe("ListView — filter", () => {
 
 describe("ListView — grouping panel", () => {
   test("g key opens grouping panel", async () => {
-    const { renderOnce, captureCharFrame, mockInput } = await testRender(
+    const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
       () => (
         <ListView
           prs={[makePR()]}
@@ -619,7 +637,7 @@ describe("ListView — grouping panel", () => {
   });
 
   test("Escape closes grouping panel", async () => {
-    const { renderOnce, captureCharFrame, mockInput } = await testRender(
+    const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
       () => (
         <ListView
           prs={[makePR()]}
@@ -651,7 +669,7 @@ describe("ListView — grouping panel", () => {
       makePR({ number: 2, author: "bob", title: "PR beta" }),
     ];
 
-    const { renderOnce, captureCharFrame, mockInput } = await testRender(
+    const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
       () => (
         <ListView
           prs={prs}
@@ -691,7 +709,7 @@ describe("ListView — grouped rendering", () => {
       makePR({ number: 2, title: "Waiting", isDraft: true }),
     ];
 
-    const { renderOnce, captureCharFrame } = await testRender(
+    const { renderOnce, captureCharFrame } = await testRenderTracked(
       () => (
         <ListView
           prs={prs}
@@ -717,7 +735,7 @@ describe("ListView — grouped rendering", () => {
       makePR({ number: 2, author: "bob", title: "Bob PR" }),
     ];
 
-    const { renderOnce, captureCharFrame } = await testRender(
+    const { renderOnce, captureCharFrame } = await testRenderTracked(
       () => (
         <ListView
           prs={prs}

@@ -25,12 +25,14 @@ async function renderDetail(
     showResolved: false,
     showBotComments: true,
   };
-  const { renderOnce, captureCharFrame } = await testRender(
+  const { renderOnce, captureCharFrame, renderer } = await testRender(
     () => <DetailView {...defaults} {...props} />,
     { width, height },
   );
   await renderOnce();
-  return captureCharFrame();
+  const frame = captureCharFrame();
+  renderer.destroy();
+  return frame;
 }
 
 describe("DetailView", () => {

@@ -1,16 +1,25 @@
-import { describe, test, expect } from "bun:test";
+import { describe, test, expect, afterEach } from "bun:test";
 import { testRender } from "@opentui/solid";
+import type { CliRenderer } from "@opentui/core";
 import { MarkdownBody, collectInlineText, classifyHtmlTag } from "../src/lib/markdown";
 import { createDetailsController, DetailsCtx } from "../src/lib/details-store";
 
+let activeRenderer: CliRenderer | undefined;
+afterEach(() => {
+  activeRenderer?.destroy();
+  activeRenderer = undefined;
+});
+
 /** Render markdown source and return the captured character frame. */
 async function renderMarkdown(source: string, width = 60, height = 30): Promise<string> {
-  const { renderOnce, captureCharFrame } = await testRender(
+  const { renderOnce, captureCharFrame, renderer } = await testRender(
     () => <MarkdownBody source={source} />,
     { width, height },
   );
   await renderOnce();
-  return captureCharFrame();
+  const frame = captureCharFrame();
+  renderer.destroy();
+  return frame;
 }
 
 describe("MarkdownBody — block nodes", () => {
@@ -163,10 +172,11 @@ describe("MarkdownBody — details/summary", () => {
   });
 
   test("click toggles expansion", async () => {
-    const { renderOnce, captureCharFrame, mockMouse } = await testRender(
+    const { renderOnce, captureCharFrame, mockMouse, renderer } = await testRender(
       () => <MarkdownBody source={detailsSource} />,
       { width: 60, height: 30 },
     );
+    activeRenderer = renderer;
     await renderOnce();
     let frame = captureCharFrame();
     expect(frame).toContain("\u25b6"); // collapsed
@@ -211,7 +221,7 @@ describe("MarkdownBody — details/summary", () => {
     ].join("\n");
 
     const ctrl = createDetailsController();
-    const { renderOnce, captureCharFrame } = await testRender(
+    const setup = await testRender(
       () => (
         <DetailsCtx value={ctrl}>
           <MarkdownBody source={twoDetails} />
@@ -219,6 +229,8 @@ describe("MarkdownBody — details/summary", () => {
       ),
       { width: 60, height: 30 },
     );
+    activeRenderer = setup.renderer;
+    const { renderOnce, captureCharFrame } = setup;
     await renderOnce();
     let frame = captureCharFrame();
     expect(frame).not.toContain("Content A.");
@@ -257,7 +269,7 @@ describe("MarkdownBody — details/summary", () => {
     ].join("\n");
 
     const ctrl = createDetailsController();
-    const { renderOnce, captureCharFrame, mockMouse } = await testRender(
+    const setup2 = await testRender(
       () => (
         <DetailsCtx value={ctrl}>
           <MarkdownBody source={twoDetails} />
@@ -265,6 +277,8 @@ describe("MarkdownBody — details/summary", () => {
       ),
       { width: 60, height: 30 },
     );
+    activeRenderer = setup2.renderer;
+    const { renderOnce, captureCharFrame, mockMouse } = setup2;
     await renderOnce();
 
     // Click to expand only the first one
