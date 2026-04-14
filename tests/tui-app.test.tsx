@@ -171,6 +171,33 @@ describe("AppShell", () => {
     expect(lines[2]).not.toContain("middleware");
   });
 
+  test("restores the selected PR when the list remounts", async () => {
+    const prs = [makePR({ number: 1 }), makePR({ number: 2 }), makePR({ number: 3 })];
+    const entered: number[] = [];
+
+    const { renderOnce, mockInput } = await testRender(
+      () => (
+        <AppShell
+          view={{ view: "list" }}
+          onEnterDetail={(pr) => entered.push(pr.number)}
+          prs={prs}
+          loading={false}
+          repoSlug="acme/widgets"
+          selectedPr={prs[2]}
+          onRefreshSelected={() => {}}
+          onRefreshAllActive={() => {}}
+        />
+      ),
+      { width: 130, height: 20 },
+    );
+
+    await renderOnce();
+    mockInput.pressEnter();
+    await renderOnce();
+
+    expect(entered).toEqual([3]);
+  });
+
   test("renders tab bar with All and repo tabs", async () => {
     const { renderOnce, captureCharFrame } = await testRender(
       () => (

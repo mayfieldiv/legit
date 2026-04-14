@@ -146,6 +146,7 @@ export function AppShell(props: AppShellProps) {
             <box flexDirection="row" flexGrow={1} width="100%">
               <ListView
                 prs={props.prs}
+                selectedPr={props.selectedPr}
                 showRepo={props.showRepo}
                 currentUser={props.currentUser}
                 groupBy={props.groupBy ?? "smart-status"}

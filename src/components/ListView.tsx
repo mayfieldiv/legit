@@ -15,6 +15,7 @@ import { theme } from "../lib/theme";
 
 interface ListViewProps {
   prs: PR[];
+  selectedPr?: PR;
   showRepo?: boolean;
   currentUser?: string;
   /** Initial grouping key. Default: "none". */
@@ -81,6 +82,10 @@ export function computeScrollTarget({
   return null;
 }
 
+function samePr(a: PR | undefined, b: PR | undefined): boolean {
+  return !!a && !!b && a.number === b.number && a.repoSlug === b.repoSlug;
+}
+
 export function ListView(props: ListViewProps) {
   // ── Filter state ──────────────────────────────────────────────────────────
   const [filterText, setFilterText] = createSignal("");
@@ -144,6 +149,26 @@ export function ListView(props: ListViewProps) {
 
   /** The currently selected PR, derived reactively from the index + display list. */
   const selectedPR = createMemo(() => selection.selectedItem(displayPRs()));
+
+  // Restore a parent-owned PR selection (e.g. when exiting detail view).
+  createEffect(
+    () => ({ prs: displayPRs(), selectedPr: props.selectedPr }),
+    ({ prs, selectedPr }) => {
+      if (!selectedPr) return;
+      const current = selection.selectedItem(prs);
+      if (samePr(current, selectedPr)) return;
+
+      const idx = prs.findIndex((pr) => samePr(pr, selectedPr));
+      if (idx < 0) return;
+
+      const prevIdx = selection.index();
+      selection.select(idx);
+      _anchor = { repoSlug: selectedPr.repoSlug, number: selectedPr.number };
+      if (scrollRef) {
+        ensureVisible(idx >= prevIdx ? "down" : "up");
+      }
+    },
+  );
 
   // Notify parent whenever the selected PR changes identity.
   createEffect(
@@ -437,6 +462,7 @@ export function ListView(props: ListViewProps) {
             ref={(el: ScrollBoxRenderable) => {
               scrollRef = el;
               el.focusable = false;
+              queueMicrotask(() => ensureVisible("down"));
             }}
             flexGrow={1}
             width="100%"
