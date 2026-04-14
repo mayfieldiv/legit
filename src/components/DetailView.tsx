@@ -15,6 +15,7 @@
  */
 
 import { Show, For, useKeyboard } from "@opentui/solid";
+import type { JSX as OpenTuiJSX } from "@opentui/solid";
 import { createMemo, createSignal, createEffect } from "solid-js";
 import { MarkdownBody } from "../lib/markdown";
 import { createDetailsController, DetailsCtx, type DetailsController } from "../lib/details-store";
@@ -26,7 +27,13 @@ import {
   checkIcon,
   checksSummary,
 } from "../lib/format";
-import type { FullReviewThread, IssueComment, PRDetail, ReviewComment } from "../lib/types";
+import type {
+  CheckRun,
+  FullReviewThread,
+  IssueComment,
+  PRDetail,
+  ReviewComment,
+} from "../lib/types";
 import { classifyThread } from "../lib/blocker-engine";
 import type { BorderCharacters, MouseEvent, ScrollBoxRenderable } from "@opentui/core";
 import type { GitHubNetworkStats } from "../lib/concurrency";
@@ -38,6 +45,7 @@ import type { Accessor } from "solid-js";
 
 export interface DetailViewProps {
   pr: PRDetail | undefined;
+  checks?: CheckRun[];
   threads: FullReviewThread[];
   comments: IssueComment[];
   loading: boolean;
@@ -95,7 +103,7 @@ function FocusableCard(props: {
   first?: boolean;
   indent?: number;
   onMouseDown?: () => void;
-  children: any;
+  children: OpenTuiJSX.Element;
 }) {
   return (
     <box
@@ -211,11 +219,7 @@ function CommentRow(props: { comment: ReviewComment | IssueComment }) {
 // ── Component ───────────────────────────────────────────────────────────────
 
 export function DetailView(props: DetailViewProps) {
-  const checks = createMemo(() => {
-    const pr = props.pr;
-    if (!pr || !("checks" in pr)) return [];
-    return sortCheckRuns((pr as any).checks ?? []);
-  });
+  const checks = createMemo(() => sortCheckRuns(props.checks ?? []));
 
   const counts = createMemo(() => checksSummary(checks()));
 

@@ -50,24 +50,31 @@ export type ElementProps<TRenderable = unknown> = {
   ref?: Ref<TRenderable>;
 };
 
-/** Base type for any renderable constructor */
+/**
+ * Base type for any renderable constructor.
+ *
+ * The catalogue maps tag names to constructors with heterogeneous option types
+ * (BoxOptions, CodeOptions, etc.), so the options param must be `any` to allow
+ * all constructors to be assignable.
+ */
+// oxlint-disable-next-line typescript/no-explicit-any
 export type RenderableConstructor<TRenderable extends BaseRenderable = BaseRenderable> = new (
   ctx: RenderContext,
-  options: any,
+  options: any, // eslint-disable-line @typescript-eslint/no-explicit-any
 ) => TRenderable;
 
 /** Extract the options type from a renderable constructor */
 type ExtractRenderableOptions<TConstructor> = TConstructor extends new (
   ctx: RenderContext,
   options: infer TOptions,
-) => any
+) => BaseRenderable
   ? TOptions
   : never;
 
 /** Extract the renderable type from a constructor */
 type ExtractRenderable<TConstructor> = TConstructor extends new (
   ctx: RenderContext,
-  options: any,
+  ...args: unknown[]
 ) => infer TRenderable
   ? TRenderable
   : never;

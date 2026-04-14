@@ -1,4 +1,4 @@
-export const log = (...args: any[]) => {
+export const log = (...args: unknown[]) => {
   if (process.env.DEBUG) {
     console.log("[Reconciler]", ...args);
   }

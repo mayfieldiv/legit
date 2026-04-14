@@ -55,37 +55,33 @@ export const Switch = solidSwitch as unknown as (props: {
   children: JSX.Element;
 }) => JSX.Element;
 
+// Mount a Solid root into a CliRenderer, deferring any destroy/dispose
+// calls that happen synchronously during the initial render.
 const mountSolidRoot = (renderer: CliRenderer, node: () => JSX.Element) => {
   let dispose: DisposeFn | undefined;
-  let disposeRequested = false;
-  let disposed = false;
   let mounting = true;
-  let destroyRequested = false;
+  let deferredDispose = false;
+  let deferredDestroy = false;
 
   const originalDestroy = renderer.destroy.bind(renderer);
 
-  const runDispose = () => {
-    if (disposed) {
-      return;
+  // Dispose the Solid root when the renderer is destroyed. If the event
+  // fires during mount (before dispose is available), defer until after.
+  renderer.once("destroy", () => {
+    if (dispose) {
+      dispose();
+    } else {
+      deferredDispose = true;
     }
+  });
 
-    if (!dispose) {
-      disposeRequested = true;
-      return;
-    }
-
-    disposed = true;
-    dispose();
-  };
-
-  renderer.once("destroy", runDispose);
-
+  // Defer renderer.destroy() calls during mount to avoid tearing down
+  // the renderer while renderJsx is still synchronously executing.
   renderer.destroy = () => {
     if (mounting) {
-      destroyRequested = true;
+      deferredDestroy = true;
       return;
     }
-
     originalDestroy();
   };
 
@@ -113,13 +109,8 @@ const mountSolidRoot = (renderer: CliRenderer, node: () => JSX.Element) => {
     renderer.destroy = originalDestroy;
   }
 
-  if (disposeRequested) {
-    runDispose();
-  }
-
-  if (destroyRequested) {
-    originalDestroy();
-  }
+  if (deferredDispose) dispose();
+  if (deferredDestroy) originalDestroy();
 };
 
 export const render = async (

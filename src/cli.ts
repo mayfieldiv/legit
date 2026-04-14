@@ -335,8 +335,8 @@ if (import.meta.main) {
     } else if (result.output !== undefined) {
       console.log(JSON.stringify(result.output, null, "\t"));
     }
-  } catch (err: any) {
-    console.error(err.message ?? String(err));
+  } catch (err: unknown) {
+    console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
   }
 }

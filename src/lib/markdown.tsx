@@ -17,6 +17,7 @@ import type { MouseEvent as OtuiMouseEvent } from "@opentui/core";
 import { theme } from "./theme";
 import type {
   Nodes,
+  Html,
   Heading,
   Paragraph,
   Code,
@@ -141,13 +142,13 @@ function groupDetailsBlocks(nodes: Nodes[]): BlockOrDetails[] {
   let i = 0;
   while (i < nodes.length) {
     const node = nodes[i]!;
-    if (node.type === "html" && isDetailsOpen((node as any).value ?? "")) {
-      const summary = extractSummary((node as any).value ?? "");
+    if (node.type === "html" && isDetailsOpen((node as Html).value)) {
+      const summary = extractSummary((node as Html).value);
       const content: Nodes[] = [];
       i++;
       while (i < nodes.length) {
         const n = nodes[i]!;
-        if (n.type === "html" && isDetailsClose((n as any).value ?? "")) {
+        if (n.type === "html" && isDetailsClose((n as Html).value)) {
           i++;
           break;
         }
@@ -261,7 +262,7 @@ function MdBlock(props: MdBlockProps) {
         <MdThematicBreak />
       </Match>
       <Match when={props.node.type === "html"}>
-        <BlockHtml value={(props.node as any).value ?? ""} />
+        <BlockHtml value={(props.node as Html).value} />
       </Match>
     </Switch>
   );

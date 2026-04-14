@@ -106,11 +106,6 @@ export const usePaste = (callback: (event: PasteEvent) => void) => {
   });
 };
 
-/**
- * @deprecated renamed to useKeyboard
- */
-export const useKeyHandler = useKeyboard;
-
 export const onFocus = (callback: () => void) => {
   const renderer = useRenderer();
 

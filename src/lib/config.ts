@@ -37,8 +37,9 @@ export function loadConfig(configPath: string): LegitConfig {
   let raw: string;
   try {
     raw = readFileSync(configPath, "utf-8");
-  } catch (e: any) {
-    if (e.code === "ENOENT") return structuredClone(DEFAULT_CONFIG);
+  } catch (e: unknown) {
+    if (e instanceof Error && "code" in e && e.code === "ENOENT")
+      return structuredClone(DEFAULT_CONFIG);
     throw e;
   }
   const partial = JSON.parse(raw);

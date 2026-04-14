@@ -216,14 +216,20 @@ export const {
     textNode.replace(decodeHTML(value), 0);
   },
 
-  setProperty(node: DomNode, name: string, value: any, prev: any): void {
+  // Property values originate from Solid compiler-generated JSX and are
+  // inherently dynamic. We accept `unknown` and narrow per-case.
+  setProperty(node: DomNode, name: string, value: unknown, prev: unknown): void {
+    // Dynamic property bag — used in cases where we set arbitrary
+    // properties on the node that BaseRenderable's type doesn't expose.
+    const dynNode = node as unknown as Record<string, unknown>;
+
     if (name.startsWith("on:")) {
       const eventName = name.slice(3);
       if (value) {
-        node.on(eventName, value);
+        node.on(eventName, value as (...args: unknown[]) => void);
       }
       if (prev) {
-        node.off(eventName, prev);
+        node.off(eventName, prev as (...args: unknown[]) => void);
       }
 
       return;
@@ -231,14 +237,15 @@ export const {
 
     if (isTextNodeRenderable(node)) {
       if (name === "href") {
-        node.link = { url: value };
+        node.link = { url: value as string };
         return;
       }
 
       if (name === "style") {
-        node.attributes |= createTextAttributes(value);
-        node.fg = value.fg ? parseColor(value.fg) : node.fg;
-        node.bg = value.bg ? parseColor(value.bg) : node.bg;
+        const style = value as Record<string, string>;
+        node.attributes |= createTextAttributes(style);
+        node.fg = style.fg ? parseColor(style.fg) : node.fg;
+        node.bg = style.bg ? parseColor(style.bg) : node.bg;
         return;
       }
 
@@ -248,7 +255,7 @@ export const {
     switch (name) {
       case "id":
         log("Id mapped", node.id, "=", value);
-        node[name] = value;
+        node[name] = value as string;
         break;
       case "focused":
         if (!(node instanceof Renderable)) return;
@@ -258,7 +265,7 @@ export const {
           node.blur();
         }
         break;
-      case "onChange":
+      case "onChange": {
         let event: string | undefined = undefined;
         if (node instanceof SelectRenderable) {
           event = SelectRenderableEvents.SELECTION_CHANGED;
@@ -270,20 +277,21 @@ export const {
         if (!event) break;
 
         if (value) {
-          node.on(event, value);
+          node.on(event, value as (...args: unknown[]) => void);
         }
         if (prev) {
-          node.off(event, prev);
+          node.off(event, prev as (...args: unknown[]) => void);
         }
         break;
+      }
       case "onInput":
         if (node instanceof InputRenderable) {
           if (value) {
-            node.on(InputRenderableEvents.INPUT, value);
+            node.on(InputRenderableEvents.INPUT, value as (...args: unknown[]) => void);
           }
 
           if (prev) {
-            node.off(InputRenderableEvents.INPUT, prev);
+            node.off(InputRenderableEvents.INPUT, prev as (...args: unknown[]) => void);
           }
         }
 
@@ -291,56 +299,55 @@ export const {
       case "onSubmit":
         if (node instanceof InputRenderable) {
           if (value) {
-            node.on(InputRenderableEvents.ENTER, value);
+            node.on(InputRenderableEvents.ENTER, value as (...args: unknown[]) => void);
           }
 
           if (prev) {
-            node.off(InputRenderableEvents.ENTER, prev);
+            node.off(InputRenderableEvents.ENTER, prev as (...args: unknown[]) => void);
           }
         } else {
-          // @ts-expect-error todo validate if prop is actually settable
-          node[name] = value;
+          dynNode[name] = value;
         }
         break;
       case "onSelect":
         if (node instanceof SelectRenderable) {
           if (value) {
-            node.on(SelectRenderableEvents.ITEM_SELECTED, value);
+            node.on(SelectRenderableEvents.ITEM_SELECTED, value as (...args: unknown[]) => void);
           }
 
           if (prev) {
-            node.off(SelectRenderableEvents.ITEM_SELECTED, prev);
+            node.off(SelectRenderableEvents.ITEM_SELECTED, prev as (...args: unknown[]) => void);
           }
         } else if (node instanceof TabSelectRenderable) {
           if (value) {
-            node.on(TabSelectRenderableEvents.ITEM_SELECTED, value);
+            node.on(TabSelectRenderableEvents.ITEM_SELECTED, value as (...args: unknown[]) => void);
           }
 
           if (prev) {
-            node.off(TabSelectRenderableEvents.ITEM_SELECTED, prev);
+            node.off(TabSelectRenderableEvents.ITEM_SELECTED, prev as (...args: unknown[]) => void);
           }
         }
         break;
-      case "style":
-        for (const prop in value) {
-          const propVal = value[prop];
-          if (prev !== undefined && propVal === prev[prop]) continue;
-          // @ts-expect-error todo validate if prop is actually settable
-          node[prop] = propVal;
+      case "style": {
+        const styleValue = value as Record<string, unknown>;
+        const stylePrev = prev as Record<string, unknown> | undefined;
+        for (const prop in styleValue) {
+          const propVal = styleValue[prop];
+          if (stylePrev !== undefined && propVal === stylePrev[prop]) continue;
+          dynNode[prop] = propVal;
         }
         break;
+      }
       case "text":
       case "content": {
         const textValue =
           typeof value === "string" ? value : Array.isArray(value) ? value.join("") : `${value}`;
-        // @ts-expect-error todo validate if prop is actually settable
-        node[name] = decodeHTML(textValue);
+        dynNode[name] = decodeHTML(textValue);
         break;
       }
 
       default:
-        // @ts-expect-error todo validate if prop is actually settable
-        node[name] = value;
+        dynNode[name] = value;
     }
   },
 

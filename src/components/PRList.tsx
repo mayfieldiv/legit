@@ -1,4 +1,5 @@
 import { For, Show, useTerminalDimensions } from "@opentui/solid";
+import type { JSX as OpenTuiJSX } from "@opentui/solid";
 import { createMemo } from "solid-js";
 import type { Accessor } from "solid-js";
 import type { PR, CommentCounts } from "../lib/types";
@@ -217,7 +218,7 @@ function Cell(props: {
   flexGrow?: number;
   minWidth?: number;
   paddingRight?: number;
-  children: any;
+  children: OpenTuiJSX.Element;
 }) {
   return (
     <box

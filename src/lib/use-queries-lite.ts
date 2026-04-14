@@ -4,9 +4,9 @@
  *
  * The upstream useQueries (v5) calls `unwrap()` on every query result in
  * the array whenever *any* single query resolves, causing O(N²) deep proxy
- * traversals during the enrichment burst. This wrapper replaces that with
- * `reconcile()`, which structurally diffs and only touches store nodes
- * that actually changed — matching the approach used in the v6 rewrite.
+ * traversals during the enrichment burst. This wrapper uses a signal-backed
+ * array proxy with microtask-coalesced updates instead, avoiding per-element
+ * unwrap overhead entirely.
  */
 
 import { QueriesObserver, noop } from "@tanstack/query-core";
@@ -16,7 +16,7 @@ import type { QueryClient, UseQueryResult } from "@tanstack/solid-query";
 import { createMemo, createEffect, onCleanup, createSignal, type Accessor } from "solid-js";
 
 /**
- * Lightweight useQueries using reconcile() instead of per-element unwrap().
+ * Lightweight useQueries backed by a signal + microtask coalescing.
  *
  * Type signature mirrors @tanstack/solid-query useQueries — accepts the same
  * options accessor and returns a store array of query results.
@@ -96,10 +96,6 @@ export function useQueriesLite<TData = unknown, TError = Error>(
   const proxy = new Proxy([] as IndexedQueryObserverResult[], {
     get(_target, prop) {
       const current = state();
-      if (typeof prop === "symbol") {
-        const value = Reflect.get(current, prop, current);
-        return typeof value === "function" ? value.bind(current) : value;
-      }
       const value = Reflect.get(current, prop, current);
       return typeof value === "function" ? value.bind(current) : value;
     },

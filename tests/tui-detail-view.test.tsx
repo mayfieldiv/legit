@@ -82,8 +82,7 @@ describe("DetailView", () => {
       { name: "lint", status: "completed", conclusion: "failure" },
       { name: "deploy", status: "in_progress", conclusion: null },
     ];
-    const pr = { ...makeDetail(), checks } as any;
-    const frame = await renderDetail({ pr });
+    const frame = await renderDetail({ pr: makeDetail(), checks });
     expect(frame).toContain("CI Checks");
     expect(frame).toContain("1/3 passed");
     expect(frame).toContain("1 failed");

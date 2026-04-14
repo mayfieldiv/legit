@@ -231,7 +231,7 @@ export function createGitHubTransport(
             .join(" ");
           const query = `query($owner: String!, $repo: String!) { repository(owner: $owner, name: $repo) { ${aliases} } }`;
           return graphql(query, { owner, repo }, signal) as Promise<{
-            data?: { repository?: Record<string, any> };
+            data?: { repository?: Record<string, unknown> };
           }>;
         }),
       );
@@ -246,7 +246,16 @@ export function createGitHubTransport(
 
         const batch = batches[b]!;
         for (let idx = 0; idx < batch.length; idx++) {
-          const pr = repoData[`pr${idx}`];
+          const pr = repoData[`pr${idx}`] as
+            | {
+                number: number;
+                additions?: number;
+                deletions?: number;
+                reviewDecision?: string;
+                mergeable?: string;
+                commits: RawPRReviewStatus["commits"];
+              }
+            | undefined;
           if (pr) {
             yield {
               prNumber: pr.number,
@@ -255,7 +264,7 @@ export function createGitHubTransport(
               reviewDecision: pr.reviewDecision ?? null,
               mergeable: pr.mergeable ?? "UNKNOWN",
               commits: pr.commits,
-            } as RawPRReviewStatus;
+            } satisfies RawPRReviewStatus;
           }
         }
       }

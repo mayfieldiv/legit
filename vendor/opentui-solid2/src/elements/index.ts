@@ -33,8 +33,8 @@ export const textNodeKeys = ["span", "b", "strong", "i", "em", "u", "a"] as cons
 export type TextNodeKey = (typeof textNodeKeys)[number];
 
 class TextModifierRenderable extends SpanRenderable {
-  constructor(options: any, modifier?: TextNodeKey) {
-    super(null, options);
+  constructor(ctx: RenderContext | null, options: TextNodeOptions, modifier?: TextNodeKey) {
+    super(ctx, options);
 
     // Set appropriate attributes based on modifier type
     if (modifier === "b" || modifier === "strong") {
@@ -48,20 +48,20 @@ class TextModifierRenderable extends SpanRenderable {
 }
 
 export class BoldSpanRenderable extends TextModifierRenderable {
-  constructor(options: any) {
-    super(options, "b");
+  constructor(ctx: RenderContext | null, options: TextNodeOptions) {
+    super(ctx, options, "b");
   }
 }
 
 export class ItalicSpanRenderable extends TextModifierRenderable {
-  constructor(options: any) {
-    super(options, "i");
+  constructor(ctx: RenderContext | null, options: TextNodeOptions) {
+    super(ctx, options, "i");
   }
 }
 
 export class UnderlineSpanRenderable extends TextModifierRenderable {
-  constructor(options: any) {
-    super(options, "u");
+  constructor(ctx: RenderContext | null, options: TextNodeOptions) {
+    super(ctx, options, "u");
   }
 }
 

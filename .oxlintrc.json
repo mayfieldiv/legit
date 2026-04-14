@@ -1,5 +1,5 @@
 {
-  "plugins": null,
+  "plugins": ["typescript"],
   "categories": {
     "correctness": "error",
     "suspicious": "warn",
@@ -7,7 +7,17 @@
     "style": "off",
     "nursery": "off"
   },
-  "rules": {},
+  "rules": {
+    "typescript/no-explicit-any": "warn"
+  },
+  "overrides": [
+    {
+      "files": ["tests/**"],
+      "rules": {
+        "typescript/no-explicit-any": "off"
+      }
+    }
+  ],
   "settings": {
     "react": {
       "formComponents": [],
@@ -20,5 +30,5 @@
     "builtin": true
   },
   "globals": {},
-  "ignorePatterns": [".tmp"]
+  "ignorePatterns": [".tmp", "vendor/solid-js-browser"]
 }

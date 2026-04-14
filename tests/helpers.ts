@@ -126,7 +126,7 @@ export function createMockTransport(overrides: Partial<GitHubTransport> = {}): G
   return {
     async *listOpenPRs() {},
     async getPR() {
-      return SAMPLE_REST_PR as any;
+      return SAMPLE_REST_PR satisfies RawRestPR;
     },
     async *listPRFiles() {},
     async *fetchReviewStatus() {},
@@ -216,7 +216,7 @@ export function makeSampleRestPR(n: number) {
  * Convenience mock: returns the given REST PRs from the list endpoint,
  * and matching GraphQL metadata from the graphql endpoint.
  */
-export function mockHttpFetch(restPRs: unknown[] = []): HttpFetch {
+export function mockHttpFetch(restPRs: any[] = []): HttpFetch {
   const { fetch } = createMockFetch([
     {
       url: /\/pulls\?/,
@@ -228,7 +228,7 @@ export function mockHttpFetch(restPRs: unknown[] = []): HttpFetch {
       response: {
         status: 200,
         body: makeGraphQLResponse(
-          restPRs.map((pr: any, _i: number) => ({
+          restPRs.map((pr: any) => ({
             ...SAMPLE_GQL_META,
             number: pr.number,
           })),

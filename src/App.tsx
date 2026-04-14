@@ -531,6 +531,7 @@ function AppInner(props: AppInnerProps) {
         const pr = detailPr();
         return { ...data, repoSlug: pr?.repoSlug ?? props.app.repoSlug };
       })()}
+      detailChecks={summaryChecks()}
       detailThreads={detailThreadsData()}
       detailComments={detailCommentsData()}
       detailLoading={detailLoading()}

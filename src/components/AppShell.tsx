@@ -49,6 +49,7 @@ interface AppShellProps {
   getBlockerData?: (pr: PR) => BlockerOptions | undefined;
   // Detail view
   detailPr?: PRDetail;
+  detailChecks?: CheckRun[];
   detailThreads?: FullReviewThread[];
   detailComments?: IssueComment[];
   detailLoading?: boolean;
@@ -185,6 +186,7 @@ export function AppShell(props: AppShellProps) {
           <Match when={props.view.view === "detail"}>
             <DetailView
               pr={props.detailPr}
+              checks={props.detailChecks}
               threads={props.detailThreads ?? []}
               comments={props.detailComments ?? []}
               loading={props.detailLoading ?? false}
