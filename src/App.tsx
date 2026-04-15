@@ -9,7 +9,7 @@ import {
 } from "@tanstack/solid-query";
 import { useQueriesLite as useQueries } from "./lib/use-queries-lite";
 import { createAbortableAsyncEffect } from "./lib/create-abortable-async-effect";
-import { findPrIndex, samePr } from "./lib/pr-identity";
+import { samePr } from "./lib/pr-identity";
 import { AppShell } from "./components/AppShell";
 import { createUIState } from "./lib/ui-state";
 import type { Legit } from "./lib/legit";
@@ -203,6 +203,23 @@ function AppInner(props: AppInnerProps) {
     },
   );
 
+  /**
+   * Delay list-view enrichment until the current tab's base PR set is stable.
+   * On single-repo tabs this matches that repo's settled state. On the "All"
+   * tab we wait for every tracked repo to finish streaming before threads,
+   * reviews, and checks start reshaping smart-status groups.
+   */
+  const enrichmentReady = createMemo(() => {
+    const tab = ui.activeTab();
+    if (tab === 0) {
+      const repos = repoTabs();
+      return repos.length > 0 && repos.every((repo) => settledRepos().has(repo));
+    }
+
+    const repo = repoTabs()[tab - 1];
+    return !!repo && settledRepos().has(repo);
+  });
+
   // ── Retry UNKNOWN mergeable status after settlement ─────────────────
   // GitHub computes mergeability lazily — the initial fetch triggers
   // background computation but returns UNKNOWN.  Once the PR list
@@ -237,10 +254,16 @@ function AppInner(props: AppInnerProps) {
         queryKey: ["threads", repo, pr.number] as const,
         queryFn: async ({ signal }: { signal: AbortSignal }) =>
           props.app.fetchFullReviewThreads(repo, pr.number, signal),
-        enabled: settledRepos().has(repo),
+        enabled: enrichmentReady(),
       };
     }),
   }));
+
+  const threadsQueryVersion = createMemo(() =>
+    threadsQueries
+      .map((query) => `${query.status}:${query.fetchStatus}:${query.dataUpdatedAt}`)
+      .join("|"),
+  );
 
   const uniqueChecks = createMemo(() => {
     const checks = new Map<
@@ -260,7 +283,7 @@ function AppInner(props: AppInnerProps) {
         key,
         repo,
         headCommitSha,
-        enabled: settledRepos().has(repo),
+        enabled: enrichmentReady(),
       });
     }
 
@@ -300,31 +323,56 @@ function AppInner(props: AppInnerProps) {
         queryKey: ["reviews", repo, pr.number] as const,
         queryFn: async ({ signal }: { signal: AbortSignal }) =>
           props.app.fetchReviews(repo, pr.number, signal),
-        enabled: settledRepos().has(repo),
+        enabled: enrichmentReady(),
       };
     }),
   }));
 
+  const reviewsQueryVersion = createMemo(() =>
+    reviewsQueries
+      .map((query) => `${query.status}:${query.fetchStatus}:${query.dataUpdatedAt}`)
+      .join("|"),
+  );
+
+  const threadsForPr = (pr: PR): FullReviewThread[] | undefined => {
+    threadsQueryVersion();
+    const repo = pr.repoSlug ?? props.app.repoSlug;
+    return props.queryClient.getQueryData<FullReviewThread[]>(["threads", repo, pr.number]);
+  };
+
+  const reviewsForPr = (pr: PR): Review[] | undefined => {
+    reviewsQueryVersion();
+    const repo = pr.repoSlug ?? props.app.repoSlug;
+    return props.queryClient.getQueryData<Review[]>(["reviews", repo, pr.number]);
+  };
+
+  const threadStateForPr = (pr: PR) => {
+    threadsQueryVersion();
+    const repo = pr.repoSlug ?? props.app.repoSlug;
+    return props.queryClient.getQueryState<FullReviewThread[]>(["threads", repo, pr.number]);
+  };
+
+  const reviewStateForPr = (pr: PR) => {
+    reviewsQueryVersion();
+    const repo = pr.repoSlug ?? props.app.repoSlug;
+    return props.queryClient.getQueryState<Review[]>(["reviews", repo, pr.number]);
+  };
+
   // ── Blocker data lookup for grouping engine ───────────────────────────
   const getBlockerData = (pr: PR): BlockerOptions | undefined => {
-    const prs = visiblePRs();
-    const idx = findPrIndex(prs, pr);
-    if (idx < 0) return undefined;
-
-    const tq = threadsQueries[idx];
-    const rq = reviewsQueries[idx];
+    const threads = threadsForPr(pr);
+    const reviews = reviewsForPr(pr);
     const checks = checksForPr(pr);
 
-    if (!tq || !rq) return undefined;
     // Threads and reviews always become enabled once the repo settles, so
     // undefined data means "not yet loaded." Checks can be permanently
     // disabled (null headCommitSha) — treat missing checks data as empty.
-    if (tq.data === undefined || rq.data === undefined) return undefined;
+    if (threads === undefined || reviews === undefined) return undefined;
 
     return {
-      threads: tq.data,
+      threads,
       checks: checks ?? [],
-      reviews: rq.data,
+      reviews,
     };
   };
 
@@ -473,10 +521,7 @@ function AppInner(props: AppInnerProps) {
   const summaryThreads = (): FullReviewThread[] | undefined => {
     const pr = selectedPr();
     if (!pr) return undefined;
-    const prs = visiblePRs();
-    const idx = findPrIndex(prs, pr);
-    if (idx < 0) return undefined;
-    return threadsQueries[idx]?.data;
+    return threadsForPr(pr);
   };
 
   const summaryChecks = (): CheckRun[] | undefined => {
@@ -489,10 +534,7 @@ function AppInner(props: AppInnerProps) {
   const summaryReviews = (): Review[] | undefined => {
     const pr = selectedPr();
     if (!pr) return undefined;
-    const prs = visiblePRs();
-    const idx = findPrIndex(prs, pr);
-    if (idx < 0) return undefined;
-    return reviewsQueries[idx]?.data;
+    return reviewsForPr(pr);
   };
 
   const summaryFiles = (): FileCategorization | undefined => {
@@ -502,12 +544,11 @@ function AppInner(props: AppInnerProps) {
   const summaryLoading = (): boolean => {
     const pr = selectedPr();
     if (!pr) return false;
-    const prs = visiblePRs();
-    const idx = findPrIndex(prs, pr);
-    if (idx < 0) return false;
+    const threadState = threadStateForPr(pr);
+    const reviewState = reviewStateForPr(pr);
     return (
-      threadsQueries[idx]?.data === undefined ||
-      reviewsQueries[idx]?.data === undefined ||
+      threadState?.data === undefined ||
+      reviewState?.data === undefined ||
       filesData() === undefined
     );
   };

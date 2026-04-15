@@ -328,7 +328,14 @@ function PRRow(props: {
       </Show>
       <Show when={props.currentUser && props.visibleColumns?.blocker !== false}>
         <Cell width={COL.blocker}>
-          <Show when={blockerCell()}>
+          <Show
+            when={!enrichmentLoading() && blockerCell()}
+            fallback={
+              <Show when={enrichmentLoading()}>
+                <span style={{ fg: theme.muted }}>…</span>
+              </Show>
+            }
+          >
             {(display: Accessor<{ text: string; fg: string }>) => (
               <span style={{ fg: props.selected ? theme.selectedFg : display().fg }}>
                 {display().text}
