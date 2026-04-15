@@ -283,11 +283,6 @@ describe("App integration", () => {
     expect(frame).not.toContain("No PR selected");
   });
 
-  // These tests pass individually but OOM when run in-suite because
-  // OpenTUI's global `engine` singleton leaks event listeners across
-  // Solid roots — each testRender accumulates listeners on the shared
-  // TerminalConsoleCache that renderer.destroy() doesn't remove.
-  // Run individually via: bun test --only "opens detail view"
   test("opens detail view after pressing Enter from the list", async () => {
     const detailPr = { ...makeSampleRestPR(1), body: "Detail body" };
     const detailFetch = async (url: string, init?: RequestInit) => {

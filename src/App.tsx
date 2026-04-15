@@ -125,47 +125,33 @@ function AppInner(props: AppInnerProps) {
     })),
   }));
 
-  // Structural equality for PR lists — prevents downstream reactive cascades
-  // when the observer re-fires but the actual PR identity hasn't changed.
-  const prListEquals = (prev: PR[], next: PR[]): boolean =>
-    prev.length === next.length &&
-    prev.every((p, i) => p.number === next[i]!.number && p.repoSlug === next[i]!.repoSlug);
-
   /** All PRs across repos, with repoSlug stamped. */
-  const allPRs = createMemo<PR[]>(
-    () => {
-      const repos = repoTabs();
-      const merged: PR[] = [];
-      for (let i = 0; i < repos.length; i++) {
-        const q = prQueries[i];
-        const data = q?.data ?? [];
-        const repo = repos[i]!;
-        for (const pr of data) {
-          merged.push(pr.repoSlug ? pr : { ...pr, repoSlug: repo });
-        }
+  const allPRs = createMemo<PR[]>(() => {
+    const repos = repoTabs();
+    const merged: PR[] = [];
+    for (let i = 0; i < repos.length; i++) {
+      const q = prQueries[i];
+      const data = q?.data ?? [];
+      const repo = repos[i]!;
+      for (const pr of data) {
+        merged.push(pr.repoSlug ? pr : { ...pr, repoSlug: repo });
       }
-      merged.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      return merged;
-    },
-    [] as PR[],
-    { equals: prListEquals },
-  );
+    }
+    merged.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return merged;
+  });
 
   /** PRs visible for current tab. */
-  const visiblePRs = createMemo<PR[]>(
-    () => {
-      const tab = ui.activeTab();
-      if (tab === 0) return allPRs();
-      const repo = repoTabs()[tab - 1];
-      if (!repo) return [];
-      const idx = repoTabs().indexOf(repo);
-      const q = prQueries[idx];
-      const data = q?.data ?? [];
-      return data.map((pr) => (pr.repoSlug ? pr : { ...pr, repoSlug: repo }));
-    },
-    [] as PR[],
-    { equals: prListEquals },
-  );
+  const visiblePRs = createMemo<PR[]>(() => {
+    const tab = ui.activeTab();
+    if (tab === 0) return allPRs();
+    const repo = repoTabs()[tab - 1];
+    if (!repo) return [];
+    const idx = repoTabs().indexOf(repo);
+    const q = prQueries[idx];
+    const data = q?.data ?? [];
+    return data.map((pr) => (pr.repoSlug ? pr : { ...pr, repoSlug: repo }));
+  });
 
   /** True while any PR query is still pending (no data yet). */
   const loading = createMemo(() => prQueries.some((q) => q.isPending));
@@ -286,10 +272,14 @@ function AppInner(props: AppInnerProps) {
   // ── Selection state ───────────────────────────────────────────────────
   const [selectedPr, setSelectedPr] = createSignal<PR | undefined>();
 
-  // Debounce selection changes from ListView. Without this, switching
-  // tabs triggers: onSelectionChange → setSelectedPr → filesQuery
-  // cache mutation → enrichment reorder → list regrouped → different
-  // PR at index 0 → onSelectionChange again → infinite oscillation.
+  // Debounce selection changes from ListView via microtask. Without
+  // this, switching tabs triggers a synchronous reactive loop:
+  // onSelectionChange -> setSelectedPr -> filesQuery setQueries ->
+  // cache broadcast -> enrichment reorder -> display list regroups ->
+  // different PR at index 0 -> onSelectionChange again.
+  // Deferring to a microtask lets Solid's flush complete so the
+  // display list stabilizes before selectedPr triggers downstream
+  // queries.
   let pendingSelect: PR | undefined;
   let selectQueued = false;
   function selectPr(pr: PR) {
