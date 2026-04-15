@@ -45,6 +45,10 @@ function sameStringSet(a: Set<string> | undefined, b: Set<string> | undefined): 
   return true;
 }
 
+function checksLookupKey(repo: string, headCommitSha: string): string {
+  return JSON.stringify([repo, headCommitSha]);
+}
+
 export interface AppProps {
   app: Legit;
 }
@@ -238,19 +242,56 @@ function AppInner(props: AppInnerProps) {
     }),
   }));
 
-  const checksQueries = useQueries<CheckRun[]>(() => ({
-    queries: visiblePRs().map((pr) => {
+  const uniqueChecks = createMemo(() => {
+    const checks = new Map<
+      string,
+      { key: string; repo: string; headCommitSha: string; enabled: boolean }
+    >();
+
+    for (const pr of visiblePRs()) {
       const repo = pr.repoSlug ?? props.app.repoSlug;
-      return {
-        queryKey: ["checks", repo, pr.headCommitSha ?? `missing-${pr.number}`] as const,
-        queryFn: async ({ signal }: { signal: AbortSignal }) =>
-          pr.headCommitSha
-            ? props.app.fetchCheckRuns(repo, pr.headCommitSha, signal)
-            : ([] as CheckRun[]),
-        enabled: !!pr.headCommitSha && settledRepos().has(repo),
-      };
-    }),
+      const headCommitSha = pr.headCommitSha;
+      if (!headCommitSha) continue;
+
+      const key = checksLookupKey(repo, headCommitSha);
+      if (checks.has(key)) continue;
+
+      checks.set(key, {
+        key,
+        repo,
+        headCommitSha,
+        enabled: settledRepos().has(repo),
+      });
+    }
+
+    return Array.from(checks.values());
+  });
+
+  const checksQueries = useQueries<CheckRun[]>(() => ({
+    queries: uniqueChecks().map(({ repo, headCommitSha, enabled }) => ({
+      queryKey: ["checks", repo, headCommitSha] as const,
+      queryFn: async ({ signal }: { signal: AbortSignal }) =>
+        props.app.fetchCheckRuns(repo, headCommitSha, signal),
+      enabled,
+    })),
   }));
+
+  const checksByKey = createMemo(() => {
+    const map = new Map<string, CheckRun[] | undefined>();
+    const checks = uniqueChecks();
+
+    for (let i = 0; i < checks.length; i++) {
+      map.set(checks[i]!.key, checksQueries[i]?.data);
+    }
+
+    return map;
+  });
+
+  const checksForPr = (pr: PR): CheckRun[] | undefined => {
+    if (!pr.headCommitSha) return [];
+    const repo = pr.repoSlug ?? props.app.repoSlug;
+    return checksByKey().get(checksLookupKey(repo, pr.headCommitSha));
+  };
 
   const reviewsQueries = useQueries<Review[]>(() => ({
     queries: visiblePRs().map((pr) => {
@@ -271,10 +312,10 @@ function AppInner(props: AppInnerProps) {
     if (idx < 0) return undefined;
 
     const tq = threadsQueries[idx];
-    const cq = checksQueries[idx];
     const rq = reviewsQueries[idx];
+    const checks = checksForPr(pr);
 
-    if (!tq || !cq || !rq) return undefined;
+    if (!tq || !rq) return undefined;
     // Threads and reviews always become enabled once the repo settles, so
     // undefined data means "not yet loaded." Checks can be permanently
     // disabled (null headCommitSha) — treat missing checks data as empty.
@@ -282,7 +323,7 @@ function AppInner(props: AppInnerProps) {
 
     return {
       threads: tq.data,
-      checks: cq.data ?? [],
+      checks: checks ?? [],
       reviews: rq.data,
     };
   };
@@ -441,11 +482,8 @@ function AppInner(props: AppInnerProps) {
   const summaryChecks = (): CheckRun[] | undefined => {
     const pr = selectedPr();
     if (!pr) return undefined;
-    const prs = visiblePRs();
-    const idx = findPrIndex(prs, pr);
-    if (idx < 0) return undefined;
     // Checks query can be permanently disabled (null headCommitSha) — treat as empty.
-    return checksQueries[idx]?.data ?? [];
+    return checksForPr(pr) ?? [];
   };
 
   const summaryReviews = (): Review[] | undefined => {
