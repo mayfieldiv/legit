@@ -86,6 +86,10 @@ function samePr(a: PR | undefined, b: PR | undefined): boolean {
   return !!a && !!b && a.number === b.number && a.repoSlug === b.repoSlug;
 }
 
+function samePrKey(pr: PR, key: { repoSlug: string | undefined; number: number } | null): boolean {
+  return key !== null && pr.number === key.number && pr.repoSlug === key.repoSlug;
+}
+
 export function ListView(props: ListViewProps) {
   // ── Filter state ──────────────────────────────────────────────────────────
   const [filterText, setFilterText] = createSignal("");
@@ -146,9 +150,24 @@ export function ListView(props: ListViewProps) {
   const selection = createListSelection(() => displayPRs().length);
   let scrollRef: ScrollBoxRenderable | undefined;
   let _anchor: { repoSlug: string | undefined; number: number } | null = null;
+  const [displayVersion, setDisplayVersion] = createSignal(0);
+  let lastNotifiedPr: { repoSlug: string | undefined; number: number } | null = null;
+  let lastNotifiedDisplayVersion = -1;
 
   /** The currently selected PR, derived reactively from the index + display list. */
   const selectedPR = createMemo(() => selection.selectedItem(displayPRs()));
+
+  let didTrackDisplayPRs = false;
+  createEffect(
+    () => displayPRs(),
+    () => {
+      if (!didTrackDisplayPRs) {
+        didTrackDisplayPRs = true;
+        return;
+      }
+      setDisplayVersion((v) => v + 1);
+    },
+  );
 
   // Restore a parent-owned PR selection (e.g. when exiting detail view).
   createEffect(
@@ -172,10 +191,20 @@ export function ListView(props: ListViewProps) {
 
   // Notify parent whenever the selected PR changes identity.
   createEffect(
-    () => selectedPR(),
-    (pr) => {
+    () => ({ prs: displayPRs(), pr: selectedPR(), version: displayVersion() }),
+    ({ prs, pr, version }) => {
       if (pr) {
+        const anchoredIdx = _anchor === null ? -1 : prs.findIndex(prMatchesAnchor);
+        if (anchoredIdx >= 0 && !prMatchesAnchor(pr) && version !== lastNotifiedDisplayVersion) {
+          return;
+        }
+        if (samePrKey(pr, lastNotifiedPr)) {
+          lastNotifiedDisplayVersion = version;
+          return;
+        }
         _anchor = { repoSlug: pr.repoSlug, number: pr.number };
+        lastNotifiedPr = _anchor;
+        lastNotifiedDisplayVersion = version;
         props.onSelectionChange?.(pr);
       }
     },

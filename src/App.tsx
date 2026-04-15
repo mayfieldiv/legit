@@ -33,6 +33,22 @@ export function devinUrl(repoSlug: string, number: number): string {
   return `https://app.devin.ai/review/${owner}/${repo}/pull/${number}`;
 }
 
+function samePr(a: PR | undefined, b: PR | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return a === b;
+  return a.number === b.number && a.repoSlug === b.repoSlug;
+}
+
+function sameStringSet(a: Set<string> | undefined, b: Set<string> | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return a === b;
+  if (a.size !== b.size) return false;
+  for (const value of a) {
+    if (!b.has(value)) return false;
+  }
+  return true;
+}
+
 export interface AppProps {
   app: Legit;
 }
@@ -171,15 +187,21 @@ function AppInner(props: AppInnerProps) {
    * per-PR queries flood the concurrency semaphore and starve the
    * still-running PR-list pagination & reviewStatus batches.
    */
-  const settledRepos = createMemo(() => {
-    const settled = new Set<string>();
-    const repos = repoTabs();
-    for (let i = 0; i < repos.length; i++) {
-      const q = prQueries[i];
-      if (q && !q.isFetching) settled.add(repos[i]!);
-    }
-    return settled;
-  });
+  const settledRepos = createMemo(
+    () => {
+      const settled = new Set<string>();
+      const repos = repoTabs();
+      for (let i = 0; i < repos.length; i++) {
+        const q = prQueries[i];
+        if (q && !q.isFetching) settled.add(repos[i]!);
+      }
+      return settled;
+    },
+    undefined,
+    {
+      equals: sameStringSet,
+    },
+  );
 
   // ── Retry UNKNOWN mergeable status after settlement ─────────────────
   // GitHub computes mergeability lazily — the initial fetch triggers
@@ -270,26 +292,12 @@ function AppInner(props: AppInnerProps) {
   };
 
   // ── Selection state ───────────────────────────────────────────────────
-  const [selectedPr, setSelectedPr] = createSignal<PR | undefined>();
+  const [selectedPr, setSelectedPr] = createSignal<PR | undefined>(undefined, {
+    equals: samePr,
+  });
 
-  // Debounce selection changes from ListView via microtask. Without
-  // this, switching tabs triggers a synchronous reactive loop:
-  // onSelectionChange -> setSelectedPr -> filesQuery setQueries ->
-  // cache broadcast -> enrichment reorder -> display list regroups ->
-  // different PR at index 0 -> onSelectionChange again.
-  // Deferring to a microtask lets Solid's flush complete so the
-  // display list stabilizes before selectedPr triggers downstream
-  // queries.
-  let pendingSelect: PR | undefined;
-  let selectQueued = false;
   function selectPr(pr: PR) {
-    pendingSelect = pr;
-    if (selectQueued) return;
-    selectQueued = true;
-    queueMicrotask(() => {
-      selectQueued = false;
-      setSelectedPr(pendingSelect);
-    });
+    setSelectedPr(pr);
   }
 
   function changeTab(index: number) {
@@ -298,41 +306,36 @@ function AppInner(props: AppInnerProps) {
   }
 
   // ── Summary panel queries ─────────────────────────────────────────────
-  const filesQueries = useQueries<FileCategorization | undefined>(() => ({
-    queries: [
-      {
-        queryKey: [
-          "files",
-          selectedPr()?.repoSlug ?? props.app.repoSlug,
-          selectedPr()?.number ?? 0,
-        ] as const,
-        queryFn: async ({ signal }: { signal: AbortSignal }) => {
-          const pr = selectedPr();
-          if (!pr) return undefined;
-          return props.app.fetchCategorizedFiles(
-            pr.repoSlug ?? props.app.repoSlug,
-            pr.number,
-            signal,
-          );
-        },
-        enabled: !!selectedPr(),
-      },
-    ],
-  }));
-  const filesQuery = () => filesQueries[0];
   const [filesData, setFilesData] = createSignal<FileCategorization | undefined>();
+  const [filesRefreshKey, setFilesRefreshKey] = createSignal(0);
+  let filesController: AbortController | undefined;
+
+  onCleanup(() => {
+    filesController?.abort();
+  });
 
   createEffect(
-    () => selectedPr(),
-    () => {
+    () => ({ pr: selectedPr(), refreshKey: filesRefreshKey() }),
+    ({ pr }) => {
+      filesController?.abort();
+      filesController = undefined;
       setFilesData(undefined);
-    },
-  );
 
-  createEffect(
-    () => filesQuery()?.data,
-    (data) => {
-      setFilesData(data ?? undefined);
+      if (!pr) return;
+
+      const repo = pr.repoSlug ?? props.app.repoSlug;
+      const controller = new AbortController();
+      filesController = controller;
+
+      void props.app
+        .fetchCategorizedFiles(repo, pr.number, controller.signal)
+        .then((data) => {
+          if (controller.signal.aborted || filesController !== controller) return;
+          setFilesData(data);
+        })
+        .catch(() => {
+          if (controller.signal.aborted || filesController !== controller) return;
+        });
     },
   );
 
@@ -414,9 +417,7 @@ function AppInner(props: AppInnerProps) {
     void props.queryClient.invalidateQueries({
       queryKey: ["reviews", repo, pr.number],
     });
-    void props.queryClient.invalidateQueries({
-      queryKey: ["files", repo, pr.number],
-    });
+    setFilesRefreshKey((n) => n + 1);
   }
 
   function refreshAll() {
