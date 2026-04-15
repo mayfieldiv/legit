@@ -1,5 +1,5 @@
 import { Show, useKeyboard } from "@opentui/solid";
-import { createSignal, createMemo, createEffect } from "solid-js";
+import { createSignal, createMemo, createEffect, type Accessor } from "solid-js";
 import { PRList, PRListHeader, buildFlatItems, prIndexToDisplayRow } from "./PRList";
 import type { FlatItem, VisibleColumns } from "./PRList";
 import { GroupPanel, GROUP_BY_OPTIONS } from "./GroupPanel";
@@ -150,48 +150,34 @@ export function ListView(props: ListViewProps) {
     ensureVisible,
   });
 
-  // Reset when tab/dataset changes — clear anchor so it reinitialises to the new first PR.
-  let didProcessResetKey = false;
-  createEffect(
-    () => props.resetKey,
-    () => {
-      if (!didProcessResetKey) {
-        didProcessResetKey = true;
+  function resetSelectionToTop(clearAnchor = false) {
+    if (clearAnchor) anchoredSelection.clearAnchor();
+    selection.select(0);
+    scrollRef?.scrollTo(0);
+  }
+
+  function resetSelectionAfterFirstChange(
+    source: Accessor<unknown>,
+    options: { clearAnchor?: boolean } = {},
+  ) {
+    let didRun = false;
+    createEffect(source, () => {
+      if (!didRun) {
+        didRun = true;
         return;
       }
-      anchoredSelection.clearAnchor();
-      selection.select(0);
-      scrollRef?.scrollTo(0);
-    },
-  );
+      resetSelectionToTop(options.clearAnchor ?? false);
+    });
+  }
+
+  // Reset when tab/dataset changes — clear anchor so it reinitialises to the new first PR.
+  resetSelectionAfterFirstChange(() => props.resetKey, { clearAnchor: true });
 
   // Reset when filter changes — try to keep the same PR, fall back to index 0.
-  let didProcessFilterText = false;
-  createEffect(
-    () => filterText(),
-    () => {
-      if (!didProcessFilterText) {
-        didProcessFilterText = true;
-        return;
-      }
-      selection.select(0);
-      scrollRef?.scrollTo(0);
-    },
-  );
+  resetSelectionAfterFirstChange(filterText);
 
   // Reset when groupBy changes
-  let didProcessActiveGroupBy = false;
-  createEffect(
-    () => activeGroupBy(),
-    () => {
-      if (!didProcessActiveGroupBy) {
-        didProcessActiveGroupBy = true;
-        return;
-      }
-      selection.select(0);
-      scrollRef?.scrollTo(0);
-    },
-  );
+  resetSelectionAfterFirstChange(activeGroupBy);
 
   // ── Scroll sync ───────────────────────────────────────────────────────────
 
