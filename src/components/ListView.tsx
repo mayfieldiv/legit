@@ -6,6 +6,7 @@ import { GroupPanel, GROUP_BY_OPTIONS } from "./GroupPanel";
 import { createListSelection } from "../lib/list-selection";
 import { processPRList } from "../lib/group-filter-engine";
 import type { GroupByKey } from "../lib/group-filter-engine";
+import { findPrIndex, prKey, samePr, samePrKey, type PRIdentity } from "../lib/pr-identity";
 import type { PR } from "../lib/types";
 import type { BlockerOptions } from "../lib/blocker-engine";
 import type { GitHubNetworkStats } from "../lib/concurrency";
@@ -82,14 +83,6 @@ export function computeScrollTarget({
   return null;
 }
 
-function samePr(a: PR | undefined, b: PR | undefined): boolean {
-  return !!a && !!b && a.number === b.number && a.repoSlug === b.repoSlug;
-}
-
-function samePrKey(pr: PR, key: { repoSlug: string | undefined; number: number } | null): boolean {
-  return key !== null && pr.number === key.number && pr.repoSlug === key.repoSlug;
-}
-
 export function ListView(props: ListViewProps) {
   // ── Filter state ──────────────────────────────────────────────────────────
   const [filterText, setFilterText] = createSignal("");
@@ -149,9 +142,9 @@ export function ListView(props: ListViewProps) {
   // ── Selection ─────────────────────────────────────────────────────────────
   const selection = createListSelection(() => displayPRs().length);
   let scrollRef: ScrollBoxRenderable | undefined;
-  let _anchor: { repoSlug: string | undefined; number: number } | null = null;
+  let _anchor: PRIdentity | null = null;
   const [displayVersion, setDisplayVersion] = createSignal(0);
-  let lastNotifiedPr: { repoSlug: string | undefined; number: number } | null = null;
+  let lastNotifiedPr: PRIdentity | null = null;
   let lastNotifiedDisplayVersion = -1;
 
   /** The currently selected PR, derived reactively from the index + display list. */
@@ -177,12 +170,12 @@ export function ListView(props: ListViewProps) {
       const current = selection.selectedItem(prs);
       if (samePr(current, selectedPr)) return;
 
-      const idx = prs.findIndex((pr) => samePr(pr, selectedPr));
+      const idx = findPrIndex(prs, selectedPr);
       if (idx < 0) return;
 
       const prevIdx = selection.index();
       selection.select(idx);
-      _anchor = { repoSlug: selectedPr.repoSlug, number: selectedPr.number };
+      _anchor = prKey(selectedPr);
       if (scrollRef) {
         ensureVisible(idx >= prevIdx ? "down" : "up");
       }
@@ -202,7 +195,7 @@ export function ListView(props: ListViewProps) {
           lastNotifiedDisplayVersion = version;
           return;
         }
-        _anchor = { repoSlug: pr.repoSlug, number: pr.number };
+        _anchor = prKey(pr);
         lastNotifiedPr = _anchor;
         lastNotifiedDisplayVersion = version;
         props.onSelectionChange?.(pr);
@@ -216,7 +209,7 @@ export function ListView(props: ListViewProps) {
   // `_anchor` is set whenever the user explicitly changes selection and is
   // cleared on tab/reset so a fresh selection can be established.
   function prMatchesAnchor(pr: PR): boolean {
-    return _anchor !== null && pr.number === _anchor.number && pr.repoSlug === _anchor.repoSlug;
+    return samePrKey(pr, _anchor);
   }
 
   // Re-anchor the selection index whenever the displayed list changes.
@@ -235,7 +228,7 @@ export function ListView(props: ListViewProps) {
       if (current && prMatchesAnchor(current)) return;
 
       // Find the anchored PR in the (possibly re-ordered) list and move to it.
-      const idx = prs.findIndex(prMatchesAnchor);
+      const idx = _anchor === null ? -1 : findPrIndex(prs, _anchor);
       if (idx >= 0 && idx !== selection.index()) {
         const prevIdx = selection.index();
         selection.select(idx);

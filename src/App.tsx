@@ -8,6 +8,8 @@ import {
   experimental_streamedQuery as streamedQuery,
 } from "@tanstack/solid-query";
 import { useQueriesLite as useQueries } from "./lib/use-queries-lite";
+import { createAbortableAsyncEffect } from "./lib/create-abortable-async-effect";
+import { findPrIndex, samePr } from "./lib/pr-identity";
 import { AppShell } from "./components/AppShell";
 import { createUIState } from "./lib/ui-state";
 import type { Legit } from "./lib/legit";
@@ -31,12 +33,6 @@ export function prUrl(repoSlug: string, number: number): string {
 export function devinUrl(repoSlug: string, number: number): string {
   const [owner, repo] = repoSlug.split("/");
   return `https://app.devin.ai/review/${owner}/${repo}/pull/${number}`;
-}
-
-function samePr(a: PR | undefined, b: PR | undefined): boolean {
-  if (a === b) return true;
-  if (!a || !b) return a === b;
-  return a.number === b.number && a.repoSlug === b.repoSlug;
 }
 
 function sameStringSet(a: Set<string> | undefined, b: Set<string> | undefined): boolean {
@@ -271,7 +267,7 @@ function AppInner(props: AppInnerProps) {
   // ── Blocker data lookup for grouping engine ───────────────────────────
   const getBlockerData = (pr: PR): BlockerOptions | undefined => {
     const prs = visiblePRs();
-    const idx = prs.findIndex((p) => p.number === pr.number && p.repoSlug === pr.repoSlug);
+    const idx = findPrIndex(prs, pr);
     if (idx < 0) return undefined;
 
     const tq = threadsQueries[idx];
@@ -308,35 +304,19 @@ function AppInner(props: AppInnerProps) {
   // ── Summary panel queries ─────────────────────────────────────────────
   const [filesData, setFilesData] = createSignal<FileCategorization | undefined>();
   const [filesRefreshKey, setFilesRefreshKey] = createSignal(0);
-  let filesController: AbortController | undefined;
-
-  onCleanup(() => {
-    filesController?.abort();
-  });
-
-  createEffect(
+  createAbortableAsyncEffect(
     () => ({ pr: selectedPr(), refreshKey: filesRefreshKey() }),
-    ({ pr }) => {
-      filesController?.abort();
-      filesController = undefined;
+    async ({ pr }, signal, isCurrent) => {
       setFilesData(undefined);
 
       if (!pr) return;
 
       const repo = pr.repoSlug ?? props.app.repoSlug;
-      const controller = new AbortController();
-      filesController = controller;
-
-      void props.app
-        .fetchCategorizedFiles(repo, pr.number, controller.signal)
-        .then((data) => {
-          if (controller.signal.aborted || filesController !== controller) return;
-          setFilesData(data);
-        })
-        .catch(() => {
-          if (controller.signal.aborted || filesController !== controller) return;
-        });
+      const data = await props.app.fetchCategorizedFiles(repo, pr.number, signal);
+      if (!isCurrent()) return;
+      setFilesData(data);
     },
+    () => {},
   );
 
   // ── Detail view queries ───────────────────────────────────────────────
@@ -351,18 +331,9 @@ function AppInner(props: AppInnerProps) {
   const [detailLoading, setDetailLoading] = createSignal(false);
   const [detailError, setDetailError] = createSignal("");
   const [detailRefreshKey, setDetailRefreshKey] = createSignal(0);
-  let detailController: AbortController | undefined;
-
-  onCleanup(() => {
-    detailController?.abort();
-  });
-
-  createEffect(
+  createAbortableAsyncEffect(
     () => ({ pr: detailPr(), refreshKey: detailRefreshKey() }),
-    ({ pr }) => {
-      detailController?.abort();
-      detailController = undefined;
-
+    async ({ pr }, signal, isCurrent) => {
       setDetailPrData(undefined);
       setDetailThreadsData([]);
       setDetailCommentsData([]);
@@ -374,30 +345,26 @@ function AppInner(props: AppInnerProps) {
       }
 
       const repo = pr.repoSlug ?? props.app.repoSlug;
-      const controller = new AbortController();
-      detailController = controller;
       setDetailLoading(true);
 
-      void Promise.all([
-        props.app.fetchPR(repo, pr.number, controller.signal),
-        props.app.fetchFullReviewThreads(repo, pr.number, controller.signal),
-        props.app.fetchIssueComments(repo, pr.number, controller.signal),
-      ])
-        .then(([nextPr, threads, comments]) => {
-          if (controller.signal.aborted || detailController !== controller) return;
-          props.queryClient.setQueryData(["pr-detail", repo, pr.number], nextPr);
-          props.queryClient.setQueryData(["threads", repo, pr.number], threads);
-          props.queryClient.setQueryData(["issue-comments", repo, pr.number], comments);
-          setDetailPrData(nextPr);
-          setDetailThreadsData(threads);
-          setDetailCommentsData(comments);
-          setDetailLoading(false);
-        })
-        .catch((error: unknown) => {
-          if (controller.signal.aborted || detailController !== controller) return;
-          setDetailLoading(false);
-          setDetailError(error instanceof Error ? error.message : String(error));
-        });
+      const [nextPr, threads, comments] = await Promise.all([
+        props.app.fetchPR(repo, pr.number, signal),
+        props.app.fetchFullReviewThreads(repo, pr.number, signal),
+        props.app.fetchIssueComments(repo, pr.number, signal),
+      ]);
+      if (!isCurrent()) return;
+
+      props.queryClient.setQueryData(["pr-detail", repo, pr.number], nextPr);
+      props.queryClient.setQueryData(["threads", repo, pr.number], threads);
+      props.queryClient.setQueryData(["issue-comments", repo, pr.number], comments);
+      setDetailPrData(nextPr);
+      setDetailThreadsData(threads);
+      setDetailCommentsData(comments);
+      setDetailLoading(false);
+    },
+    (error) => {
+      setDetailLoading(false);
+      setDetailError(error instanceof Error ? error.message : String(error));
     },
   );
 
@@ -466,7 +433,7 @@ function AppInner(props: AppInnerProps) {
     const pr = selectedPr();
     if (!pr) return undefined;
     const prs = visiblePRs();
-    const idx = prs.findIndex((p) => p.number === pr.number && p.repoSlug === pr.repoSlug);
+    const idx = findPrIndex(prs, pr);
     if (idx < 0) return undefined;
     return threadsQueries[idx]?.data;
   };
@@ -475,7 +442,7 @@ function AppInner(props: AppInnerProps) {
     const pr = selectedPr();
     if (!pr) return undefined;
     const prs = visiblePRs();
-    const idx = prs.findIndex((p) => p.number === pr.number && p.repoSlug === pr.repoSlug);
+    const idx = findPrIndex(prs, pr);
     if (idx < 0) return undefined;
     // Checks query can be permanently disabled (null headCommitSha) — treat as empty.
     return checksQueries[idx]?.data ?? [];
@@ -485,7 +452,7 @@ function AppInner(props: AppInnerProps) {
     const pr = selectedPr();
     if (!pr) return undefined;
     const prs = visiblePRs();
-    const idx = prs.findIndex((p) => p.number === pr.number && p.repoSlug === pr.repoSlug);
+    const idx = findPrIndex(prs, pr);
     if (idx < 0) return undefined;
     return reviewsQueries[idx]?.data;
   };
@@ -498,7 +465,7 @@ function AppInner(props: AppInnerProps) {
     const pr = selectedPr();
     if (!pr) return false;
     const prs = visiblePRs();
-    const idx = prs.findIndex((p) => p.number === pr.number && p.repoSlug === pr.repoSlug);
+    const idx = findPrIndex(prs, pr);
     if (idx < 0) return false;
     return (
       threadsQueries[idx]?.data === undefined ||
