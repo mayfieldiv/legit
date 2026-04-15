@@ -3,10 +3,10 @@ import { createSignal, createMemo, createEffect } from "solid-js";
 import { PRList, PRListHeader, buildFlatItems, prIndexToDisplayRow } from "./PRList";
 import type { FlatItem, VisibleColumns } from "./PRList";
 import { GroupPanel, GROUP_BY_OPTIONS } from "./GroupPanel";
+import { createAnchoredSelection } from "../lib/create-anchored-selection";
 import { createListSelection } from "../lib/list-selection";
 import { processPRList } from "../lib/group-filter-engine";
 import type { GroupByKey } from "../lib/group-filter-engine";
-import { findPrIndex, prKey, samePr, samePrKey, type PRIdentity } from "../lib/pr-identity";
 import type { PR } from "../lib/types";
 import type { BlockerOptions } from "../lib/blocker-engine";
 import type { GitHubNetworkStats } from "../lib/concurrency";
@@ -142,100 +142,13 @@ export function ListView(props: ListViewProps) {
   // ── Selection ─────────────────────────────────────────────────────────────
   const selection = createListSelection(() => displayPRs().length);
   let scrollRef: ScrollBoxRenderable | undefined;
-  let _anchor: PRIdentity | null = null;
-  const [displayVersion, setDisplayVersion] = createSignal(0);
-  let lastNotifiedPr: PRIdentity | null = null;
-  let lastNotifiedDisplayVersion = -1;
-
-  /** The currently selected PR, derived reactively from the index + display list. */
-  const selectedPR = createMemo(() => selection.selectedItem(displayPRs()));
-
-  let didTrackDisplayPRs = false;
-  createEffect(
-    () => displayPRs(),
-    () => {
-      if (!didTrackDisplayPRs) {
-        didTrackDisplayPRs = true;
-        return;
-      }
-      setDisplayVersion((v) => v + 1);
-    },
-  );
-
-  // Restore a parent-owned PR selection (e.g. when exiting detail view).
-  createEffect(
-    () => ({ prs: displayPRs(), selectedPr: props.selectedPr }),
-    ({ prs, selectedPr }) => {
-      if (!selectedPr) return;
-      const current = selection.selectedItem(prs);
-      if (samePr(current, selectedPr)) return;
-
-      const idx = findPrIndex(prs, selectedPr);
-      if (idx < 0) return;
-
-      const prevIdx = selection.index();
-      selection.select(idx);
-      _anchor = prKey(selectedPr);
-      if (scrollRef) {
-        ensureVisible(idx >= prevIdx ? "down" : "up");
-      }
-    },
-  );
-
-  // Notify parent whenever the selected PR changes identity.
-  createEffect(
-    () => ({ prs: displayPRs(), pr: selectedPR(), version: displayVersion() }),
-    ({ prs, pr, version }) => {
-      if (pr) {
-        const anchoredIdx = _anchor === null ? -1 : prs.findIndex(prMatchesAnchor);
-        if (anchoredIdx >= 0 && !prMatchesAnchor(pr) && version !== lastNotifiedDisplayVersion) {
-          return;
-        }
-        if (samePrKey(pr, lastNotifiedPr)) {
-          lastNotifiedDisplayVersion = version;
-          return;
-        }
-        _anchor = prKey(pr);
-        lastNotifiedPr = _anchor;
-        lastNotifiedDisplayVersion = version;
-        props.onSelectionChange?.(pr);
-      }
-    },
-  );
-
-  // ── Selection anchoring ────────────────────────────────────────────────────
-  // When background data arrives and re-groups the list, keep the highlight on
-  // the same PR by identity (repo slug + number) rather than the same index.
-  // `_anchor` is set whenever the user explicitly changes selection and is
-  // cleared on tab/reset so a fresh selection can be established.
-  function prMatchesAnchor(pr: PR): boolean {
-    return samePrKey(pr, _anchor);
-  }
-
-  // Re-anchor the selection index whenever the displayed list changes.
-  let didProcessDisplayPRs = false;
-  createEffect(
-    () => displayPRs(),
-    (prs) => {
-      if (!didProcessDisplayPRs) {
-        didProcessDisplayPRs = true;
-        return;
-      }
-      if (_anchor === null) return;
-
-      // If the current selection already points to the right PR, nothing to do.
-      const current = selection.selectedItem(prs);
-      if (current && prMatchesAnchor(current)) return;
-
-      // Find the anchored PR in the (possibly re-ordered) list and move to it.
-      const idx = _anchor === null ? -1 : findPrIndex(prs, _anchor);
-      if (idx >= 0 && idx !== selection.index()) {
-        const prevIdx = selection.index();
-        selection.select(idx);
-        ensureVisible(idx >= prevIdx ? "down" : "up");
-      }
-    },
-  );
+  const anchoredSelection = createAnchoredSelection({
+    items: displayPRs,
+    selection,
+    parentSelectedItem: () => props.selectedPr,
+    onSelectionChange: props.onSelectionChange,
+    ensureVisible,
+  });
 
   // Reset when tab/dataset changes — clear anchor so it reinitialises to the new first PR.
   let didProcessResetKey = false;
@@ -246,7 +159,7 @@ export function ListView(props: ListViewProps) {
         didProcessResetKey = true;
         return;
       }
-      _anchor = null;
+      anchoredSelection.clearAnchor();
       selection.select(0);
       scrollRef?.scrollTo(0);
     },

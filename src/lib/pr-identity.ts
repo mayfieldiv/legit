@@ -16,6 +16,6 @@ export function samePrKey(pr: PRIdentity, key: PRIdentity | null | undefined): b
   return key !== null && key !== undefined && samePr(pr, key);
 }
 
-export function findPrIndex(prs: PR[], target: PRIdentity): number {
+export function findPrIndex<T extends PRIdentity>(prs: T[], target: PRIdentity): number {
   return prs.findIndex((pr) => samePr(pr, target));
 }
