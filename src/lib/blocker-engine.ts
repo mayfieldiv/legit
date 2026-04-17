@@ -9,6 +9,7 @@
  */
 
 import type { PR, CheckRun, Review, FullReviewThread, ReviewComment } from "./types";
+import { aggregateReviewState } from "./review-state";
 
 // ── Public types ─────────────────────────────────────────────────────────────
 
@@ -191,6 +192,7 @@ export function computeBlocker(pr: PR, currentUser: string, opts?: BlockerOption
 function _computeBlockerCore(pr: PR, currentUser: string, opts?: BlockerOptions): BlockerResult {
   const checks = opts?.checks ?? [];
   const reviews = opts?.reviews ?? [];
+  const aggregateReview = aggregateReviewState(pr, reviews);
 
   // Effective author: when the current user is an assignee but the original
   // author is not, the current user has taken over responsibility for the PR.
@@ -258,9 +260,11 @@ function _computeBlockerCore(pr: PR, currentUser: string, opts?: BlockerOptions)
     }
   }
 
-  // 6. Approved — the PR has the green light; author's turn to merge (or fix
-  //    whatever is blocking the merge, e.g. a conflict that appeared after approval).
-  if (pr.reviewDecision === "APPROVED") {
+  // 6. Approved — either GitHub's aggregate decision or the loaded individual
+  //    reviews indicate the PR has the green light. The author's turn to merge
+  //    (or fix whatever is blocking the merge, e.g. a conflict that appeared
+  //    after approval).
+  if (aggregateReview === "APPROVED") {
     return {
       blocker: effectiveAuthor,
       tier: "waiting-on-author",

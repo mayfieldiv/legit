@@ -173,12 +173,12 @@ describe("computeBlocker — individual reviews", () => {
     expect(result.blocker).toBe(AUTHOR);
   });
 
-  test("APPROVED review by current user, no other issues → needs-review", () => {
+  test("APPROVED review by current user, no other issues → waiting-on-author", () => {
     const pr = makePR({ author: AUTHOR });
     const result = computeBlocker(pr, ME, {
       reviews: [review(ME, "APPROVED")],
     });
-    expect(result.tier).toBe("needs-review");
+    expect(result.tier).toBe("waiting-on-author");
   });
 
   test("COMMENTED review does not affect tier", () => {
@@ -393,12 +393,35 @@ describe("computeBlocker — approved review decision", () => {
     expect(result.reason.toLowerCase()).toContain("thread");
   });
 
-  test("individual APPROVED review (not reviewDecision) does not trigger waiting-on-author", () => {
-    // reviewDecision is empty — only one person reviewed but GitHub hasn't
-    // set the overall decision to APPROVED yet.
+  test("individual APPROVED review (not reviewDecision) still counts as approved", () => {
+    // reviewDecision is empty — GitHub's aggregate field hasn't caught up yet,
+    // but the loaded reviews show that someone already approved.
     const pr = makePR({ author: AUTHOR });
     const result = computeBlocker(pr, ME, { reviews: [{ user: OTHER, state: "APPROVED" }] });
-    expect(result.tier).toBe("needs-review");
+    expect(result.tier).toBe("waiting-on-author");
+    expect(result.blocker).toBe(AUTHOR);
+  });
+
+  test("current user's APPROVED review removes it from their review queue", () => {
+    const pr = makePR({
+      author: AUTHOR,
+      requestedReviewers: [OTHER],
+    });
+    const result = computeBlocker(pr, ME, { reviews: [{ user: ME, state: "APPROVED" }] });
+    expect(result.tier).toBe("waiting-on-author");
+    expect(result.blocker).toBe(AUTHOR);
+    expect(result.reason).toContain("Approved");
+  });
+
+  test("current user's APPROVED review still counts as approved with awaiting-reviewer threads", () => {
+    const pr = makePR({ author: AUTHOR });
+    const threads = [makeThread([makeComment(ME), makeComment(AUTHOR)])];
+    const result = computeBlocker(pr, ME, {
+      reviews: [{ user: ME, state: "APPROVED" }],
+      threads,
+    });
+    expect(result.tier).toBe("waiting-on-author");
+    expect(result.blocker).toBe(AUTHOR);
   });
 });
 
