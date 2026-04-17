@@ -14,8 +14,8 @@ import type {
 } from "../lib/types";
 import type { GroupByKey } from "../lib/group-filter-engine";
 import type { ViewTarget } from "../lib/ui-state";
-import type { BlockerOptions } from "../lib/blocker-engine";
 import type { GitHubNetworkStats } from "../lib/concurrency";
+import type { PRDerivedState } from "../lib/pr-state";
 import { theme } from "../lib/theme";
 import { computeVisibleColumns } from "./PRList";
 
@@ -45,8 +45,9 @@ interface AppShellProps {
   summaryReviews?: Review[];
   summaryFiles?: FileCategorization;
   summaryLoading?: boolean;
-  /** Blocker data lookup for grouping engine. */
-  getBlockerData?: (pr: PR) => BlockerOptions | undefined;
+  /** Derived state lookup shared by list/grouping/rendering. */
+  getPRState?: (pr: PR) => PRDerivedState;
+  summaryState?: PRDerivedState;
   // Detail view
   detailPr?: PRDetail;
   detailChecks?: CheckRun[];
@@ -152,7 +153,7 @@ export function AppShell(props: AppShellProps) {
                 currentUser={props.currentUser}
                 groupBy={props.groupBy ?? "smart-status"}
                 resetKey={props.resetKey}
-                getBlockerData={props.getBlockerData}
+                getPRState={props.getPRState}
                 onRefreshSelected={props.onRefreshSelected}
                 onRefreshAll={props.onRefreshAllActive}
                 onEnterDetail={props.onEnterDetail}
@@ -178,6 +179,7 @@ export function AppShell(props: AppShellProps) {
                     reviews={props.summaryReviews}
                     files={props.summaryFiles}
                     loading={props.summaryLoading}
+                    prState={props.summaryState}
                   />
                 </box>
               </Show>

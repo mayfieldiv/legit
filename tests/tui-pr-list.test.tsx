@@ -1,6 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import { testRender } from "@opentui/solid";
 import { PRList, PRListHeader, computeVisibleColumns } from "../src/components/PRList";
+import { derivePRState } from "../src/lib/pr-state";
 import { makePR } from "./helpers";
 
 describe("PRList", () => {
@@ -97,6 +98,60 @@ describe("PRList", () => {
     await renderOnce();
     const frame = captureCharFrame();
     expect(frame).toMatch(/approved/i);
+  });
+
+  test("shows the current user's review state when overall decision is empty", async () => {
+    const prs = [makePR({ author: "alice", reviewDecision: "" })];
+
+    const { renderOnce, captureCharFrame } = await testRender(
+      () => (
+        <PRList
+          prs={prs}
+          selectedIndex={0}
+          currentUser="me"
+          getPRState={(pr) =>
+            derivePRState(pr, {
+              currentUser: "me",
+              checks: [],
+              threads: [],
+              reviews: [{ user: "me", state: "APPROVED" }],
+            })
+          }
+        />
+      ),
+      { width: 140, height: 20 },
+    );
+
+    await renderOnce();
+    const frame = captureCharFrame();
+    expect(frame).toContain("approved");
+  });
+
+  test("shows approved when another reviewer approved but reviewDecision is empty", async () => {
+    const prs = [makePR({ author: "alice", reviewDecision: "" })];
+
+    const { renderOnce, captureCharFrame } = await testRender(
+      () => (
+        <PRList
+          prs={prs}
+          selectedIndex={0}
+          currentUser="me"
+          getPRState={(pr) =>
+            derivePRState(pr, {
+              currentUser: "me",
+              checks: [],
+              threads: [],
+              reviews: [{ user: "someone-else", state: "APPROVED" }],
+            })
+          }
+        />
+      ),
+      { width: 140, height: 20 },
+    );
+
+    await renderOnce();
+    const frame = captureCharFrame();
+    expect(frame).toContain("approved");
   });
 
   test("renders empty state when no PRs", async () => {
@@ -245,7 +300,21 @@ describe("PRList", () => {
     const prs = [makePR({ number: 1, requestedReviewers: ["alice"] })];
 
     const { renderOnce, captureCharFrame } = await testRender(
-      () => <PRList prs={prs} selectedIndex={0} currentUser="alice" />,
+      () => (
+        <PRList
+          prs={prs}
+          selectedIndex={0}
+          currentUser="alice"
+          getPRState={(pr) =>
+            derivePRState(pr, {
+              currentUser: "alice",
+              checks: [],
+              threads: [],
+              reviews: [],
+            })
+          }
+        />
+      ),
       { width: 140, height: 8 },
     );
 
@@ -258,7 +327,21 @@ describe("PRList", () => {
     const prs = [makePR({ number: 1, author: "alice", isDraft: true })];
 
     const { renderOnce, captureCharFrame } = await testRender(
-      () => <PRList prs={prs} selectedIndex={0} currentUser="alice" />,
+      () => (
+        <PRList
+          prs={prs}
+          selectedIndex={0}
+          currentUser="alice"
+          getPRState={(pr) =>
+            derivePRState(pr, {
+              currentUser: "alice",
+              checks: [],
+              threads: [],
+              reviews: [],
+            })
+          }
+        />
+      ),
       { width: 140, height: 8 },
     );
 
@@ -275,7 +358,21 @@ describe("PRList", () => {
     const prs = [makePR({ number: 1, requestedReviewers: ["bob"] })];
 
     const { renderOnce, captureCharFrame } = await testRender(
-      () => <PRList prs={prs} selectedIndex={0} currentUser="alice" />,
+      () => (
+        <PRList
+          prs={prs}
+          selectedIndex={0}
+          currentUser="alice"
+          getPRState={(pr) =>
+            derivePRState(pr, {
+              currentUser: "alice",
+              checks: [],
+              threads: [],
+              reviews: [],
+            })
+          }
+        />
+      ),
       { width: 140, height: 8 },
     );
 

@@ -8,13 +8,9 @@
  */
 
 import type { PR } from "./types";
-import {
-  computeBlocker,
-  compareTiers,
-  tierLabel,
-  type Tier,
-  type BlockerOptions,
-} from "./blocker-engine";
+import { compareTiers, type Tier } from "./blocker-engine";
+import type { PRDerivedState } from "./pr-state";
+import { derivePRState } from "./pr-state";
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -35,11 +31,10 @@ export interface ProcessOptions {
   /** Current user login — required for smart-status grouping. */
   currentUser?: string;
   /**
-   * Lookup function that returns enrichment data for a PR.
-   * Returns `BlockerOptions` when data is loaded, `undefined` when still loading.
+   * Lookup function that returns derived state for a PR.
    * Used by smart-status grouping to classify PRs or place them in "Loading details…".
    */
-  getBlockerData?: (pr: PR) => BlockerOptions | undefined;
+  getPRState?: (pr: PR) => PRDerivedState;
 }
 
 export interface PRGroup {
@@ -125,7 +120,7 @@ function groupByKey(
   prs: PR[],
   key: GroupByKey,
   currentUser?: string,
-  getBlockerData?: (pr: PR) => BlockerOptions | undefined,
+  getPRState?: (pr: PR) => PRDerivedState,
 ): PRGroup[] {
   switch (key) {
     case "none": {
@@ -195,30 +190,27 @@ function groupByKey(
     }
 
     case "smart-status": {
-      const user = currentUser ?? "";
       const tierMap = new Map<Tier, PR[]>();
+      const tierLabels = new Map<Tier, string>();
       const loadingPrs: PR[] = [];
       for (const pr of prs) {
-        if (getBlockerData) {
-          const opts = getBlockerData(pr);
-          if (opts === undefined) {
-            loadingPrs.push(pr);
-            continue;
-          }
-          const { tier } = computeBlocker(pr, user, opts);
-          if (!tierMap.has(tier)) tierMap.set(tier, []);
-          tierMap.get(tier)!.push(pr);
-        } else {
-          const { tier } = computeBlocker(pr, user);
-          if (!tierMap.has(tier)) tierMap.set(tier, []);
-          tierMap.get(tier)!.push(pr);
+        const state = getPRState ? getPRState(pr) : derivePRState(pr, { currentUser });
+        if (state.loading) {
+          loadingPrs.push(pr);
+          continue;
         }
+
+        const smartStatus = state.smartStatus;
+        if (!smartStatus) continue;
+        if (!tierMap.has(smartStatus.key)) tierMap.set(smartStatus.key, []);
+        tierLabels.set(smartStatus.key, smartStatus.label);
+        tierMap.get(smartStatus.key)!.push(pr);
       }
       const groups: PRGroup[] = [...tierMap.entries()]
         .toSorted(([a], [b]) => compareTiers(a, b))
         .map(([tier, list]) => ({
           key: tier,
-          label: tierLabel(tier),
+          label: tierLabels.get(tier) ?? tier,
           prs: list,
         }));
       if (loadingPrs.length > 0) {
@@ -250,14 +242,14 @@ export function processPRList(prs: PR[], options: ProcessOptions = {}): GroupedR
     sortDir = "desc",
     filterText = "",
     currentUser,
-    getBlockerData,
+    getPRState,
   } = options;
 
   // Step 1: Filter
   const matched = prs.filter((pr) => matchesPR(pr, filterText));
 
   // Step 2: Group
-  const groups = groupByKey(matched, groupBy, currentUser, getBlockerData);
+  const groups = groupByKey(matched, groupBy, currentUser, getPRState);
 
   // Step 3: Sort within each group
   const sortedGroups =

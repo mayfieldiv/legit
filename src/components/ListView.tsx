@@ -8,11 +8,11 @@ import { createListSelection } from "../lib/list-selection";
 import { processPRList } from "../lib/group-filter-engine";
 import type { GroupByKey } from "../lib/group-filter-engine";
 import type { PR } from "../lib/types";
-import type { BlockerOptions } from "../lib/blocker-engine";
 import type { GitHubNetworkStats } from "../lib/concurrency";
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { StatusBar } from "./StatusBar";
 import { theme } from "../lib/theme";
+import type { PRDerivedState } from "../lib/pr-state";
 
 interface ListViewProps {
   prs: PR[];
@@ -23,8 +23,8 @@ interface ListViewProps {
   groupBy?: GroupByKey;
   /** When this value changes, the selection resets to index 0. */
   resetKey?: number | string;
-  /** Lookup function for enrichment data (threads/checks/reviews). */
-  getBlockerData?: (pr: PR) => BlockerOptions | undefined;
+  /** Lookup function for shared derived PR state. */
+  getPRState?: (pr: PR) => PRDerivedState;
   onRefreshSelected: () => void;
   onRefreshAll: () => void;
   onEnterDetail: (pr: PR) => void;
@@ -98,7 +98,7 @@ export function ListView(props: ListViewProps) {
 
   // ── Processed PR list ─────────────────────────────────────────────────────
   // The memo computes grouping/filtering/sorting. For smart-status grouping
-  // it reads getBlockerData which is reactive to enrichment queries. A custom
+  // it reads getPRState which is reactive to enrichment queries. A custom
   // equals function prevents downstream propagation (and thus full <For>
   // rebuilds) when only enrichment data changed but the group structure
   // (which PRs are in which group, in what order) stayed the same.
@@ -108,7 +108,7 @@ export function ListView(props: ListViewProps) {
         groupBy: activeGroupBy(),
         filterText: filterText(),
         currentUser: props.currentUser,
-        getBlockerData: props.getBlockerData,
+        getPRState: props.getPRState,
       }),
     undefined,
     {
@@ -395,7 +395,7 @@ export function ListView(props: ListViewProps) {
               currentUser={props.currentUser}
               onSelect={selectIndex}
               visibleColumns={props.visibleColumns}
-              getBlockerData={props.getBlockerData}
+              getPRState={props.getPRState}
             />
           </scrollbox>
         </Show>

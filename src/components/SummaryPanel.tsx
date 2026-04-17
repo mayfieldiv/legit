@@ -9,7 +9,6 @@ import type {
   FileCategorization,
   FileCategory,
 } from "../lib/types";
-import { computeCommentCounts } from "../lib/types";
 import {
   formatAge,
   formatSize,
@@ -21,8 +20,9 @@ import {
   blockerTierColor,
   checksSummary,
 } from "../lib/format";
-import { computeBlocker, tierLabel } from "../lib/blocker-engine";
+import type { BlockerResult } from "../lib/blocker-engine";
 import { theme } from "../lib/theme";
+import { derivePRState, type PRDerivedState } from "../lib/pr-state";
 
 /** Max number of individual check lines to show before collapsing. */
 const MAX_VISIBLE_CHECKS = 6;
@@ -35,29 +35,43 @@ interface SummaryPanelProps {
   reviews?: Review[];
   files?: FileCategorization;
   loading?: boolean;
+  prState?: PRDerivedState;
 }
 
 export function SummaryPanel(props: SummaryPanelProps) {
   const pr = () => props.pr;
 
-  const comments = createMemo(() => {
-    if (!props.threads) return undefined;
-    return computeCommentCounts(props.threads);
-  });
-
   const hasEnrichment = () =>
     props.threads !== undefined && props.checks !== undefined && props.reviews !== undefined;
 
-  /** Blocker result — null when enrichment not loaded or currentUser absent. */
-  const blockerResult = createMemo(() => {
+  const prState = createMemo(() => {
     const p = pr();
-    const u = props.currentUser;
-    if (!p || !u || !hasEnrichment()) return null;
-    return computeBlocker(p, u, {
-      checks: props.checks ?? [],
-      reviews: props.reviews ?? [],
-      threads: props.threads ?? [],
-    });
+    if (!p) return undefined;
+    return (
+      props.prState ??
+      derivePRState(p, {
+        currentUser: props.currentUser,
+        loading: props.loading ?? false,
+        checks: props.checks ?? [],
+        reviews: props.reviews,
+        threads: props.threads,
+      })
+    );
+  });
+
+  const comments = createMemo(() => prState()?.commentCounts);
+
+  /** Blocker result — shown only when the current user is known and state is ready. */
+  const blockerResult = createMemo(() => {
+    const state = prState();
+    if (!props.currentUser || state?.loading) return null;
+    return state?.blockerResult ?? null;
+  });
+
+  const blockerLabel = createMemo(() => {
+    const state = prState();
+    if (!state?.smartStatus) return "";
+    return state.smartStatus.label;
   });
 
   const sizeCategories = (): FileCategory[] => {
@@ -151,11 +165,11 @@ export function SummaryPanel(props: SummaryPanelProps) {
 
         {/* --- Blocker (only when enrichment loaded and currentUser known) --- */}
         <Show when={blockerResult()}>
-          {(b: Accessor<ReturnType<typeof computeBlocker>>) => (
+          {(b: Accessor<BlockerResult>) => (
             <box height={1} width="100%">
               <text truncate={true}>
                 <span style={{ fg: theme.muted }}>blocker: </span>
-                <span style={{ fg: blockerTierColor(b().tier) }}>{tierLabel(b().tier)}</span>
+                <span style={{ fg: blockerTierColor(b().tier) }}>{blockerLabel()}</span>
                 <Show when={b().blocker}>
                   <span style={{ fg: theme.muted }}> ({b().blocker})</span>
                 </Show>

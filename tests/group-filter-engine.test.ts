@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { processPRList } from "../src/lib/group-filter-engine";
+import { derivePRState } from "../src/lib/pr-state";
 import { makePR } from "./helpers";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -248,6 +249,54 @@ describe("processPRList — groupBy: smart-status", () => {
     const meBlocking = result.groups.find((g) => g.label === "Me blocking");
     expect(meBlocking?.prs).toHaveLength(1);
     expect(meBlocking?.prs[0]!.number).toBe(1);
+  });
+
+  test("current user's APPROVED review moves PR out of needs-review", () => {
+    const approvedByMe = makePR({ number: 1, author: "alice", requestedReviewers: ["bob"] });
+    const untouched = makePR({ number: 2, author: "alice", requestedReviewers: ["carol"] });
+
+    const result = processPRList([approvedByMe, untouched], {
+      groupBy: "smart-status",
+      currentUser: "me",
+      getPRState: (pr) =>
+        derivePRState(pr, {
+          currentUser: "me",
+          checks: [],
+          threads: [],
+          reviews: pr.number === 1 ? [{ user: "me", state: "APPROVED" }] : [],
+        }),
+    });
+
+    expect(
+      result.groups.find((g) => g.label === "Needs review")?.prs.map((pr) => pr.number),
+    ).toEqual([2]);
+    expect(
+      result.groups.find((g) => g.label === "Waiting on author")?.prs.map((pr) => pr.number),
+    ).toEqual([1]);
+  });
+
+  test("another reviewer's APPROVED review also moves PR out of needs-review", () => {
+    const approved = makePR({ number: 1, author: "alice", requestedReviewers: ["bob"] });
+    const untouched = makePR({ number: 2, author: "alice", requestedReviewers: ["carol"] });
+
+    const result = processPRList([approved, untouched], {
+      groupBy: "smart-status",
+      currentUser: "me",
+      getPRState: (pr) =>
+        derivePRState(pr, {
+          currentUser: "me",
+          checks: [],
+          threads: [],
+          reviews: pr.number === 1 ? [{ user: "someone-else", state: "APPROVED" }] : [],
+        }),
+    });
+
+    expect(
+      result.groups.find((g) => g.label === "Needs review")?.prs.map((pr) => pr.number),
+    ).toEqual([2]);
+    expect(
+      result.groups.find((g) => g.label === "Waiting on author")?.prs.map((pr) => pr.number),
+    ).toEqual([1]);
   });
 });
 

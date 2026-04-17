@@ -1,7 +1,9 @@
 import { describe, test, expect, afterEach } from "bun:test";
 import { testRender } from "@opentui/solid";
 import type { CliRenderer } from "@opentui/core";
+import { createSignal } from "solid-js";
 import { ListView, computeScrollTarget } from "../src/components/ListView";
+import { derivePRState } from "../src/lib/pr-state";
 import { makePR } from "./helpers";
 
 // Destroy the renderer after each test to prevent leaked Solid roots
@@ -316,6 +318,42 @@ describe("ListView", () => {
     // Should not throw
     mockInput.pressKey("o");
     await renderOnce();
+  });
+
+  test("updates visible review text when PR status changes without regrouping", async () => {
+    const [reviewDecision, setReviewDecision] = createSignal("");
+    const prs = [makePR({ number: 1, reviewDecision: "" })];
+
+    const { renderOnce, captureCharFrame } = await testRenderTracked(
+      () => (
+        <ListView
+          prs={prs}
+          getPRState={(pr) =>
+            derivePRState({ ...pr, reviewDecision: reviewDecision() }, { currentUser: "me" })
+          }
+          visibleColumns={{
+            author: true,
+            size: true,
+            age: true,
+            review: true,
+            threads: false,
+            blocker: false,
+          }}
+          onRefreshSelected={() => {}}
+          onRefreshAll={() => {}}
+          onEnterDetail={() => {}}
+        />
+      ),
+      { width: 140, height: 20 },
+    );
+
+    await renderOnce();
+    expect(captureCharFrame()).not.toContain("approved");
+
+    setReviewDecision("APPROVED");
+    await renderOnce();
+
+    expect(captureCharFrame()).toContain("approved");
   });
 });
 

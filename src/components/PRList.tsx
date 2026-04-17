@@ -3,12 +3,10 @@ import type { JSX as OpenTuiJSX } from "@opentui/solid";
 import { createMemo } from "solid-js";
 import type { Accessor } from "solid-js";
 import type { PR, CommentCounts } from "../lib/types";
-import { computeCommentCounts } from "../lib/types";
 import type { MouseEvent } from "@opentui/core";
-import { formatAge, formatSize, formatReviewDecision, formatRepoShort } from "../lib/format";
-import { computeBlocker } from "../lib/blocker-engine";
-import type { Tier, BlockerOptions } from "../lib/blocker-engine";
+import { formatAge, formatSize, formatRepoShort } from "../lib/format";
 import { theme } from "../lib/theme";
+import { derivePRState, type BlockerDisplayTone, type PRDerivedState } from "../lib/pr-state";
 
 // ── Flat item type (group headers + PR rows) ─────────────────────────────────
 
@@ -60,8 +58,8 @@ interface PRListProps {
   onSelect?: (index: number) => void;
   /** Which optional columns are visible (responsive). Shows all if omitted. */
   visibleColumns?: VisibleColumns;
-  /** Lookup function for enrichment data per PR. */
-  getBlockerData?: (pr: PR) => BlockerOptions | undefined;
+  /** Lookup function for derived PR state. */
+  getPRState?: (pr: PR) => PRDerivedState;
 }
 
 // Column widths — fixed columns; title gets remaining space via flexGrow
@@ -168,14 +166,6 @@ function threadParts(
   return parts;
 }
 
-/** Compute the text content of the review column. */
-function reviewCellText(pr: PR): string {
-  const conflict = pr.mergeable === "CONFLICTING" ? "! " : "";
-  const draft = pr.isDraft ? "draft " : "";
-  const decision = formatReviewDecision(pr.reviewDecision);
-  return conflict + draft + decision;
-}
-
 /** Compute the fg color for the review column (priority: conflict > draft > default). */
 function reviewCellFg(pr: PR, selected: boolean): string | undefined {
   if (selected) return theme.selectedFg;
@@ -184,22 +174,14 @@ function reviewCellFg(pr: PR, selected: boolean): string | undefined {
   return undefined;
 }
 
-function blockerDisplay(
-  tier: Tier,
-  blocker: string,
-  currentUser: string,
-): { text: string; fg: string } | null {
-  const isMe = blocker === currentUser;
-  switch (tier) {
-    case "me-blocking":
-      return { text: "you", fg: theme.selfHighlight };
-    case "waiting-on-author":
-      return {
-        text: isMe ? "you" : blocker || "author",
-        fg: isMe ? theme.selfHighlight : theme.warning,
-      };
-    case "needs-review":
-      return blocker ? { text: blocker, fg: theme.muted } : null;
+function blockerToneColor(tone: BlockerDisplayTone): string {
+  switch (tone) {
+    case "self":
+      return theme.selfHighlight;
+    case "warning":
+      return theme.warning;
+    case "muted":
+      return theme.muted;
   }
 }
 
@@ -244,20 +226,24 @@ function PRRow(props: {
   id: string;
   onMouseDown?: (e: MouseEvent) => void;
   visibleColumns?: VisibleColumns;
-  blockerData?: BlockerOptions;
+  getPRState?: (pr: PR) => PRDerivedState;
 }) {
   const fg = () => (props.selected ? theme.selectedFg : undefined);
-  const blockerCell = () => {
-    if (!props.currentUser) return null;
-    const b = computeBlocker(props.pr, props.currentUser, props.blockerData);
-    return blockerDisplay(b.tier, b.blocker, props.currentUser);
+  const prState = createMemo(
+    () =>
+      props.getPRState?.(props.pr) ??
+      derivePRState(props.pr, {
+        currentUser: props.currentUser,
+      }),
+  );
+  const reviewText = () => {
+    const conflict = props.pr.mergeable === "CONFLICTING" ? "! " : "";
+    const draft = props.pr.isDraft ? "draft " : "";
+    return conflict + draft + prState().reviewText;
   };
-  const comments = (): CommentCounts | undefined => {
-    const data = props.blockerData;
-    if (!data?.threads) return undefined;
-    return computeCommentCounts(data.threads);
-  };
-  const enrichmentLoading = () => props.blockerData === undefined;
+  const comments = (): CommentCounts | undefined => prState().commentCounts;
+  const blockerCell = () => prState().blockerDisplay;
+  const enrichmentLoading = () => prState().loading;
   return (
     <box
       id={props.id}
@@ -305,9 +291,7 @@ function PRRow(props: {
       </Show>
       <Show when={props.visibleColumns?.review !== false}>
         <Cell width={COL.review} paddingRight={1}>
-          <span style={{ fg: reviewCellFg(props.pr, props.selected) }}>
-            {reviewCellText(props.pr)}
-          </span>
+          <span style={{ fg: reviewCellFg(props.pr, props.selected) }}>{reviewText()}</span>
         </Cell>
       </Show>
       <Show when={props.visibleColumns?.threads !== false}>
@@ -336,8 +320,12 @@ function PRRow(props: {
               </Show>
             }
           >
-            {(display: Accessor<{ text: string; fg: string }>) => (
-              <span style={{ fg: props.selected ? theme.selectedFg : display().fg }}>
+            {(display: Accessor<{ text: string; tone: BlockerDisplayTone }>) => (
+              <span
+                style={{
+                  fg: props.selected ? theme.selectedFg : blockerToneColor(display().tone),
+                }}
+              >
                 {display().text}
               </span>
             )}
@@ -437,7 +425,7 @@ export function PRList(props: PRListProps) {
                 showRepo={props.showRepo}
                 currentUser={props.currentUser}
                 visibleColumns={resolvedVisibleColumns()}
-                blockerData={props.getBlockerData?.(row.pr)}
+                getPRState={props.getPRState}
                 onMouseDown={(e: MouseEvent) => {
                   e.preventDefault();
                   props.onSelect?.(row.prIndex);

@@ -23,7 +23,7 @@ import type {
   IssueComment,
   FileCategorization,
 } from "./lib/types";
-import type { BlockerOptions } from "./lib/blocker-engine";
+import { derivePRState, type PRDerivedState } from "./lib/pr-state";
 /** Build a GitHub PR URL from a repo slug and PR number. */
 export function prUrl(repoSlug: string, number: number): string {
   return `https://github.com/${repoSlug}/pull/${number}`;
@@ -358,22 +358,19 @@ function AppInner(props: AppInnerProps) {
     return props.queryClient.getQueryState<Review[]>(["reviews", repo, pr.number]);
   };
 
-  // ── Blocker data lookup for grouping engine ───────────────────────────
-  const getBlockerData = (pr: PR): BlockerOptions | undefined => {
+  // ── Shared derived PR state lookup ────────────────────────────────────
+  const getPRState = (pr: PR): PRDerivedState => {
     const threads = threadsForPr(pr);
     const reviews = reviewsForPr(pr);
     const checks = checksForPr(pr);
 
-    // Threads and reviews always become enabled once the repo settles, so
-    // undefined data means "not yet loaded." Checks can be permanently
-    // disabled (null headCommitSha) — treat missing checks data as empty.
-    if (threads === undefined || reviews === undefined) return undefined;
-
-    return {
+    return derivePRState(pr, {
+      currentUser: props.app.currentUser,
+      loading: threads === undefined || reviews === undefined,
       threads,
       checks: checks ?? [],
       reviews,
-    };
+    });
   };
 
   // ── Selection state ───────────────────────────────────────────────────
@@ -553,6 +550,11 @@ function AppInner(props: AppInnerProps) {
     );
   };
 
+  const summaryState = (): PRDerivedState | undefined => {
+    const pr = selectedPr();
+    return pr ? getPRState(pr) : undefined;
+  };
+
   return (
     <AppShell
       view={ui.view()}
@@ -572,7 +574,8 @@ function AppInner(props: AppInnerProps) {
       summaryReviews={summaryReviews()}
       summaryFiles={summaryFiles()}
       summaryLoading={summaryLoading()}
-      getBlockerData={getBlockerData}
+      getPRState={getPRState}
+      summaryState={summaryState()}
       onSelectionChange={selectPr}
       onTabChange={changeTab}
       onRefreshAllActive={refreshAll}
