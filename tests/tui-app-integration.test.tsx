@@ -382,6 +382,206 @@ describe("App integration", () => {
     expect(frame).not.toContain("Loading PR detail");
   });
 
+  test("r key refreshes a single PR without leaving it in Loading details", async () => {
+    // Reusable fetch handler that serves enough endpoints to satisfy the
+    // streamed list, per-PR refetch, threads, reviews, and checks queries
+    // without exhausting any single-shot mock route.
+    const listBody = [makeSampleRestPR(1)];
+    const prDetailBody = { ...makeSampleRestPR(1), body: "body" };
+    const fetch = async (url: string, init?: RequestInit) => {
+      if (/\/repos\/acme\/widgets\/pulls\?state=open/.test(url)) {
+        return new Response(JSON.stringify(listBody), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/repos/acme/widgets/pulls/1")) {
+        return new Response(JSON.stringify(prDetailBody), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (/\/repos\/acme\/widgets\/pulls\/1\/reviews/.test(url)) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (/\/repos\/acme\/widgets\/pulls\/1\/files/.test(url)) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (/\/repos\/acme\/widgets\/commits\/.+\/check-runs/.test(url)) {
+        return new Response(JSON.stringify({ check_runs: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/graphql")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { query?: string };
+        const query = body.query ?? "";
+        if (query.includes("reviewThreads")) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    reviewThreads: {
+                      pageInfo: { hasNextPage: false, endCursor: null },
+                      nodes: [],
+                    },
+                  },
+                },
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response(
+          JSON.stringify(
+            makeGraphQLResponse([{ ...SAMPLE_GQL_META, number: 1, mergeable: "MERGEABLE" }]),
+          ),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ message: "Not Found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+    const app = createTestLegit({ httpFetch: fetch });
+
+    const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
+      () => <App app={app} />,
+      { width: 180, height: 20 },
+    );
+
+    // Initial load + enrichment.
+    await new Promise((r) => setTimeout(r, 120));
+    await renderOnce();
+
+    let frame = captureCharFrame();
+    expect(frame).toContain("PR #1");
+    expect(frame).not.toContain("Loading details");
+
+    // Select the PR and press r.
+    mockInput.pressKey("j");
+    await renderOnce();
+    mockInput.pressKey("r");
+
+    // Give the per-PR refetch + enrichment invalidations time to resolve.
+    await new Promise((r) => setTimeout(r, 200));
+    await renderOnce();
+
+    frame = captureCharFrame();
+    expect(frame).toContain("PR #1");
+    expect(frame).not.toContain("Loading details");
+  });
+
+  test("r key does not strand PR in Loading details group when files fetch is slow", async () => {
+    // Simulate the user's scenario: per-PR refetch + enrichment invalidation
+    // happen quickly, but the files endpoint is slow. The list grouping must
+    // not depend on files, so the PR should not move into "Loading details...".
+    const listBody = [makeSampleRestPR(1)];
+    const prDetailBody = { ...makeSampleRestPR(1), body: "body" };
+    let filesCall = 0;
+    const fetch = async (url: string, init?: RequestInit) => {
+      if (/\/repos\/acme\/widgets\/pulls\?state=open/.test(url)) {
+        return new Response(JSON.stringify(listBody), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/repos/acme/widgets/pulls/1")) {
+        return new Response(JSON.stringify(prDetailBody), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (/\/repos\/acme\/widgets\/pulls\/1\/reviews/.test(url)) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (/\/repos\/acme\/widgets\/pulls\/1\/files/.test(url)) {
+        filesCall++;
+        // First call: prompt. Second call (after r): slow.
+        if (filesCall > 1) {
+          await new Promise((r) => setTimeout(r, 500));
+        }
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (/\/repos\/acme\/widgets\/commits\/.+\/check-runs/.test(url)) {
+        return new Response(JSON.stringify({ check_runs: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/graphql")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { query?: string };
+        const query = body.query ?? "";
+        if (query.includes("reviewThreads")) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    reviewThreads: {
+                      pageInfo: { hasNextPage: false, endCursor: null },
+                      nodes: [],
+                    },
+                  },
+                },
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response(
+          JSON.stringify(
+            makeGraphQLResponse([{ ...SAMPLE_GQL_META, number: 1, mergeable: "MERGEABLE" }]),
+          ),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ message: "Not Found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+    const app = createTestLegit({ httpFetch: fetch });
+
+    const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
+      () => <App app={app} />,
+      { width: 180, height: 20 },
+    );
+
+    await new Promise((r) => setTimeout(r, 120));
+    await renderOnce();
+
+    mockInput.pressKey("j");
+    await renderOnce();
+    mockInput.pressKey("r");
+
+    // 50ms is enough for enrichment to refresh but NOT enough for the slow files fetch.
+    await new Promise((r) => setTimeout(r, 50));
+    await renderOnce();
+
+    const frame = captureCharFrame();
+    // Neither the list group header nor the summary panel should flash
+    // "Loading details…" while the files refetch is still in flight —
+    // the files cache preserves prior data through invalidation.
+    expect(frame).not.toContain("Loading details");
+  });
+
   test("selection resets to first PR when switching back to a tab", async () => {
     const { fetch } = createMockFetch([
       {

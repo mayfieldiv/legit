@@ -444,23 +444,39 @@ function AppInner(props: AppInnerProps) {
     setSelectedPr(undefined);
   }
 
-  // ── Summary panel queries ─────────────────────────────────────────────
-  const [filesData, setFilesData] = createSignal<FileCategorization | undefined>();
-  const [filesRefreshKey, setFilesRefreshKey] = createSignal(0);
-  createAbortableAsyncEffect(
-    () => ({ pr: selectedPr(), refreshKey: filesRefreshKey() }),
-    async ({ pr }, signal, isCurrent) => {
-      setFilesData(undefined);
+  // ── Summary panel: files query ────────────────────────────────────────
+  // Files live in the query cache so a refresh invalidation preserves the
+  // last-known data during refetch (no summary flicker), and so the cache
+  // remains the single source of truth.
+  const filesQueries = useQueries<FileCategorization>(() => {
+    const pr = selectedPr();
+    if (!pr) return { queries: [] };
+    const repo = pr.repoSlug ?? props.app.repoSlug;
+    return {
+      queries: [
+        {
+          queryKey: ["files", repo, pr.number] as const,
+          queryFn: async ({ signal }: { signal: AbortSignal }) =>
+            props.app.fetchCategorizedFiles(repo, pr.number, signal),
+          staleTime: Infinity,
+        },
+      ],
+    };
+  });
 
-      if (!pr) return;
-
-      const repo = pr.repoSlug ?? props.app.repoSlug;
-      const data = await props.app.fetchCategorizedFiles(repo, pr.number, signal);
-      if (!isCurrent()) return;
-      setFilesData(data);
-    },
-    () => {},
+  const filesQueryVersion = createMemo(() =>
+    filesQueries
+      .map((query) => `${query.status}:${query.fetchStatus}:${query.dataUpdatedAt}`)
+      .join("|"),
   );
+
+  const filesData = (): FileCategorization | undefined => {
+    filesQueryVersion();
+    const pr = selectedPr();
+    if (!pr) return undefined;
+    const repo = pr.repoSlug ?? props.app.repoSlug;
+    return props.queryClient.getQueryData<FileCategorization>(["files", repo, pr.number]);
+  };
 
   // ── Detail view queries ───────────────────────────────────────────────
   const detailPr = () => {
@@ -535,6 +551,7 @@ function AppInner(props: AppInnerProps) {
       queryKey: ["checks", repo, pr.headCommitSha ?? ""],
     });
     void props.queryClient.invalidateQueries({ queryKey: ["reviews", repo, pr.number] });
+    void props.queryClient.invalidateQueries({ queryKey: ["files", repo, pr.number] });
   }
 
   function refreshSelected() {
@@ -542,7 +559,6 @@ function AppInner(props: AppInnerProps) {
     if (!pr) return;
     const repo = pr.repoSlug ?? props.app.repoSlug;
     invalidatePr(repo, pr);
-    setFilesRefreshKey((n) => n + 1);
   }
 
   function refreshAll() {
@@ -555,6 +571,7 @@ function AppInner(props: AppInnerProps) {
     void props.queryClient.invalidateQueries({ queryKey: ["threads"] });
     void props.queryClient.invalidateQueries({ queryKey: ["reviews"] });
     void props.queryClient.invalidateQueries({ queryKey: ["checks"] });
+    void props.queryClient.invalidateQueries({ queryKey: ["files"] });
   }
 
   function refreshDetail() {
