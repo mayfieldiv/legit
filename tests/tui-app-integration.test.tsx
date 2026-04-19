@@ -582,6 +582,114 @@ describe("App integration", () => {
     expect(frame).not.toContain("Loading details");
   });
 
+  test("r key does not strand a PR from a non-cwd repo in Loading details", async () => {
+    // cwd repo is acme/widgets (createTestLegit default). The selected PR
+    // lives in acme/gadgets — a different tracked repo. After pressing r,
+    // the per-PR refetch must preserve the PR's repoSlug so downstream
+    // enrichment lookups (threads/reviews) find the right cache entries.
+    const prDetailBody = { ...makeSampleRestPR(1), body: "body" };
+    let singlePrFetchCount = 0;
+    const fetch = async (url: string, init?: RequestInit) => {
+      if (/\/repos\/acme\/widgets\/pulls\?state=open/.test(url)) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (/\/repos\/acme\/gadgets\/pulls\?state=open/.test(url)) {
+        return new Response(JSON.stringify([makeSampleRestPR(1)]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/repos/acme/gadgets/pulls/1")) {
+        singlePrFetchCount++;
+        return new Response(JSON.stringify(prDetailBody), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (/\/repos\/acme\/gadgets\/pulls\/1\/reviews/.test(url)) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (/\/repos\/acme\/gadgets\/pulls\/1\/files/.test(url)) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (/\/repos\/acme\/gadgets\/commits\/.+\/check-runs/.test(url)) {
+        return new Response(JSON.stringify({ check_runs: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/graphql")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { query?: string };
+        const query = body.query ?? "";
+        if (query.includes("reviewThreads")) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    reviewThreads: {
+                      pageInfo: { hasNextPage: false, endCursor: null },
+                      nodes: [],
+                    },
+                  },
+                },
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response(
+          JSON.stringify(
+            makeGraphQLResponse([{ ...SAMPLE_GQL_META, number: 1, mergeable: "MERGEABLE" }]),
+          ),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ message: "Not Found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+    const app = createTestLegit({ httpFetch: fetch });
+    app.config.repos = ["acme/gadgets"];
+
+    const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
+      () => <App app={app} />,
+      { width: 200, height: 20 },
+    );
+
+    // Initial load + enrichment across all tracked repos.
+    await new Promise((r) => setTimeout(r, 300));
+    await renderOnce();
+
+    mockInput.pressKey("j");
+    await renderOnce();
+
+    let frame = captureCharFrame();
+    expect(frame).toContain("PR #1");
+    expect(frame).not.toContain("Loading details");
+
+    mockInput.pressKey("r");
+    await new Promise((r) => setTimeout(r, 400));
+    await renderOnce();
+
+    frame = captureCharFrame();
+    expect(frame).toContain("PR #1");
+    expect(frame).not.toContain("Loading details");
+    // Refetch must actually fire (initial load does not hit the single-PR endpoint).
+    expect(singlePrFetchCount).toBeGreaterThan(0);
+  });
+
   test("selection resets to first PR when switching back to a tab", async () => {
     const { fetch } = createMockFetch([
       {

@@ -189,11 +189,16 @@ function AppInner(props: AppInnerProps) {
   // Fan-out per-PR queries over the visible index. Initial hydration comes
   // from the streamed list seeding the cache via setQueryData, so these
   // queryFns only fire when an entry is explicitly invalidated (e.g. `r`).
+  // The queryFn stamps `repoSlug` onto the fetched PRDetail so cache reads
+  // by repoSlug-keyed lookups (threads, reviews, checks) stay correct after
+  // a refetch — `legit.fetchPR` returns a PR without repoSlug.
   const prQueries = useQueries<PRDetail>(() => ({
     queries: visibleIndex().map(({ repoSlug, number }) => ({
       queryKey: ["pr", repoSlug, number] as const,
-      queryFn: async ({ signal }: { signal: AbortSignal }) =>
-        props.app.fetchPR(repoSlug, number, signal),
+      queryFn: async ({ signal }: { signal: AbortSignal }) => {
+        const next = await props.app.fetchPR(repoSlug, number, signal);
+        return { ...next, repoSlug };
+      },
       staleTime: Infinity,
     })),
   }));
