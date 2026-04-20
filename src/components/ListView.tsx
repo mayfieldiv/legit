@@ -13,6 +13,7 @@ import type { ScrollBoxRenderable } from "@opentui/core";
 import { StatusBar } from "./StatusBar";
 import { theme } from "../lib/theme";
 import type { PRDerivedState } from "../lib/pr-state";
+import type { StatusMessage } from "../lib/ui-state";
 
 interface ListViewProps {
   prs: PR[];
@@ -31,9 +32,11 @@ interface ListViewProps {
   onSelectionChange?: (pr: PR) => void;
   onOpenInBrowser?: (pr: PR) => void;
   onOpenInDevin?: (pr: PR) => void;
+  onCreateWorktree?: (pr: PR) => void;
   /** Which optional columns are visible (responsive). */
   visibleColumns?: VisibleColumns;
   networkStats?: GitHubNetworkStats;
+  statusMessage?: StatusMessage | null;
   /** Repo tab labels (e.g. ["All", "acme/widgets"]). */
   tabs?: string[];
   /** Currently active tab index. */
@@ -304,6 +307,9 @@ export function ListView(props: ListViewProps) {
     } else if (name === "d") {
       const pr = selection.selectedItem(displayPRs());
       if (pr) props.onOpenInDevin?.(pr);
+    } else if (name === "w") {
+      const pr = selection.selectedItem(displayPRs());
+      if (pr) props.onCreateWorktree?.(pr);
     } else if (name === "/") {
       setFilterEditing(true);
     } else if (name === "g") {
@@ -402,7 +408,9 @@ export function ListView(props: ListViewProps) {
       </Show>
 
       {/* ── Status bar ──────────────────────────────────────── */}
-      <StatusBar networkStats={props.networkStats}>{" · "}/ filter · g group</StatusBar>
+      <StatusBar networkStats={props.networkStats} statusMessage={props.statusMessage}>
+        {" · "}/ filter · g group · w worktree
+      </StatusBar>
     </box>
   );
 }

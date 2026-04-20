@@ -20,6 +20,7 @@ import {
   blockerTierColor,
   checksSummary,
 } from "../lib/format";
+import { WorktreeRow } from "./WorktreeRow";
 import type { BlockerResult } from "../lib/blocker-engine";
 import { theme } from "../lib/theme";
 import { derivePRState, type PRDerivedState } from "../lib/pr-state";
@@ -132,6 +133,11 @@ export function SummaryPanel(props: SummaryPanelProps) {
             <span>{formatAge(pr()!.updatedAt)}</span>
           </text>
         </box>
+
+        {/* Worktree — only when one exists for this PR */}
+        <Show when={prState()?.worktree}>
+          {(wt) => <WorktreeRow path={wt().path} maxWidth={42} />}
+        </Show>
 
         {/* Merge status */}
         <box height={1} width="100%">

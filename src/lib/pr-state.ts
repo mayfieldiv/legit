@@ -21,6 +21,13 @@ export interface SmartStatusState {
   label: string;
 }
 
+export interface WorktreeInfo {
+  /** Absolute path to the worktree directory. */
+  path: string;
+  /** Short branch name the worktree has checked out, if any. */
+  branch?: string;
+}
+
 export interface PRDerivedState {
   loading: boolean;
   reviewText: string;
@@ -29,11 +36,14 @@ export interface PRDerivedState {
   blockerResult: BlockerResult | undefined;
   blockerDisplay: BlockerDisplayState | null;
   smartStatus: SmartStatusState | undefined;
+  /** Local worktree attached to this PR's branch, if legit knows about one. */
+  worktree?: WorktreeInfo;
 }
 
 export interface PRDerivedOptions extends BlockerOptions {
   currentUser?: string;
   loading?: boolean;
+  worktree?: WorktreeInfo;
 }
 
 function blockerDisplay(
@@ -81,6 +91,7 @@ export function derivePRState(pr: PR, options: PRDerivedOptions = {}): PRDerived
       blockerResult: undefined,
       blockerDisplay: null,
       smartStatus: undefined,
+      worktree: options.worktree,
     };
   }
 
@@ -101,5 +112,6 @@ export function derivePRState(pr: PR, options: PRDerivedOptions = {}): PRDerived
       key: blockerResult.tier,
       label: tierLabel(blockerResult.tier),
     },
+    worktree: options.worktree,
   };
 }

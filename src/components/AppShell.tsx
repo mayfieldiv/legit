@@ -13,9 +13,9 @@ import type {
   FileCategorization,
 } from "../lib/types";
 import type { GroupByKey } from "../lib/group-filter-engine";
-import type { ViewTarget } from "../lib/ui-state";
+import type { StatusMessage, ViewTarget } from "../lib/ui-state";
 import type { GitHubNetworkStats } from "../lib/concurrency";
-import type { PRDerivedState } from "../lib/pr-state";
+import type { PRDerivedState, WorktreeInfo } from "../lib/pr-state";
 import { theme } from "../lib/theme";
 import { computeVisibleColumns } from "./PRList";
 
@@ -37,6 +37,7 @@ interface AppShellProps {
   onSelectionChange?: (pr: PR) => void;
   onOpenInBrowser?: (pr: PR) => void;
   onOpenInDevin?: (pr: PR) => void;
+  onCreateWorktree?: (pr: PR) => void;
   onEnterDetail: (pr: PR) => void;
   selectedPr?: PR;
   // Summary panel data (individual queries, no PRSummary)
@@ -66,6 +67,10 @@ interface AppShellProps {
   onTabChange?: (index: number) => void;
   /** GitHub HTTP concurrency (shown in status bar). */
   githubNetworkStats?: GitHubNetworkStats;
+  /** Transient status-bar message for async work (worktree create, clipboard, etc.). */
+  statusMessage?: StatusMessage | null;
+  /** Worktree backing the PR shown in the detail view, if any. */
+  detailWorktree?: WorktreeInfo;
 }
 
 /** Summary panel width: full at wide widths, narrower when tight, hidden when very narrow. */
@@ -160,8 +165,10 @@ export function AppShell(props: AppShellProps) {
                 onSelectionChange={props.onSelectionChange}
                 onOpenInBrowser={props.onOpenInBrowser}
                 onOpenInDevin={props.onOpenInDevin}
+                onCreateWorktree={props.onCreateWorktree}
                 visibleColumns={visibleColumns()}
                 networkStats={props.githubNetworkStats}
+                statusMessage={props.statusMessage}
                 tabs={props.tabs}
                 activeTab={props.activeTab}
                 onTabChange={props.onTabChange}
@@ -205,9 +212,15 @@ export function AppShell(props: AppShellProps) {
                 const pr = props.detailPr;
                 if (pr) props.onOpenInDevin?.(pr);
               }}
+              onCreateWorktree={() => {
+                const pr = props.detailPr;
+                if (pr) props.onCreateWorktree?.(pr);
+              }}
               onOpenUrl={props.onOpenUrl}
               onRefresh={props.onRefreshDetail}
               networkStats={props.githubNetworkStats}
+              statusMessage={props.statusMessage}
+              worktree={props.detailWorktree}
             />
           </Match>
         </Switch>

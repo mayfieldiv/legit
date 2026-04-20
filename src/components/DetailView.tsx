@@ -40,6 +40,8 @@ import type { GitHubNetworkStats } from "../lib/concurrency";
 import { StatusBar } from "./StatusBar";
 import { theme } from "../lib/theme";
 import type { Accessor } from "solid-js";
+import type { StatusMessage } from "../lib/ui-state";
+import { WorktreeRow } from "./WorktreeRow";
 
 // ── Props ───────────────────────────────────────────────────────────────────
 
@@ -56,9 +58,16 @@ export interface DetailViewProps {
   onToggleBotComments?: () => void;
   onOpenInBrowser?: () => void;
   onOpenInDevin?: () => void;
+  onCreateWorktree?: () => void;
   onOpenUrl?: (url: string) => void;
   onRefresh?: () => void;
   networkStats?: GitHubNetworkStats;
+  statusMessage?: StatusMessage | null;
+  /**
+   * Worktree attached to this PR, if any. Rendered as a header row and used
+   * for the `\ue725` indicator.
+   */
+  worktree?: { path: string };
 }
 
 // ── Focus selection model ───────────────────────────────────────────────────
@@ -379,6 +388,8 @@ export function DetailView(props: DetailViewProps) {
       }
     } else if (name === "d") {
       props.onOpenInDevin?.();
+    } else if (name === "w") {
+      props.onCreateWorktree?.();
     } else if (name === "r" && !event.shift) {
       props.onRefresh?.();
     } else if (name === "return") {
@@ -454,6 +465,9 @@ export function DetailView(props: DetailViewProps) {
                   })()}
                 </text>
               </box>
+            </Show>
+            <Show when={props.worktree}>
+              {(wt) => <WorktreeRow path={wt().path} maxWidth={80} />}
             </Show>
             <box width="100%" height={1}>
               <text>
@@ -644,9 +658,9 @@ export function DetailView(props: DetailViewProps) {
 
       {/* ── Status bar ────────────────────────────────────── */}
       <Show when={props.pr}>
-        <StatusBar networkStats={props.networkStats}>
+        <StatusBar networkStats={props.networkStats} statusMessage={props.statusMessage}>
           {" · "}Esc back · t {props.showResolved ? "hide" : "show"} resolved · b{" "}
-          {props.showBotComments ? "hide" : "show"} bots
+          {props.showBotComments ? "hide" : "show"} bots · w worktree
         </StatusBar>
       </Show>
     </box>

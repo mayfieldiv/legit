@@ -390,7 +390,8 @@ describe("PRList", () => {
     await renderOnce();
     const line = captureCharFrame().split("\n")[0] ?? "";
 
-    expect(line).toMatch(/^PR\s+Title\s+/);
+    // Leading whitespace is the worktree indicator column (empty when no worktree).
+    expect(line).toMatch(/^\s*PR\s+Title\s+/);
   });
 
   test("shows blocker header when currentUser is provided", async () => {

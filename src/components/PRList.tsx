@@ -7,6 +7,7 @@ import type { MouseEvent } from "@opentui/core";
 import { formatAge, formatSize, formatRepoShort } from "../lib/format";
 import { theme } from "../lib/theme";
 import { derivePRState, type BlockerDisplayTone, type PRDerivedState } from "../lib/pr-state";
+import { WORKTREE_GLYPH } from "./WorktreeRow";
 
 // ── Flat item type (group headers + PR rows) ─────────────────────────────────
 
@@ -64,6 +65,7 @@ interface PRListProps {
 
 // Column widths — fixed columns; title gets remaining space via flexGrow
 const COL = {
+  worktree: 2,
   pr: 7,
   repo: 14,
   author: 14,
@@ -90,8 +92,8 @@ export interface VisibleColumns {
  *   blocker → threads → review → size → author → age
  */
 export function computeVisibleColumns(listWidth: number, showRepo: boolean): VisibleColumns {
-  // Base: PR(7) + Title(30 min) = 37, plus Repo(14) if shown
-  const base = COL.pr + 30 + (showRepo ? COL.repo : 0);
+  // Base: Worktree(2) + PR(7) + Title(30 min) = 39, plus Repo(14) if shown
+  const base = COL.worktree + COL.pr + 30 + (showRepo ? COL.repo : 0);
   let budget = listWidth - base;
 
   // Add columns in priority order (most important first)
@@ -253,6 +255,13 @@ function PRRow(props: {
       backgroundColor={props.selected ? theme.selectedBg : undefined}
       onMouseDown={props.onMouseDown}
     >
+      <Cell width={COL.worktree} paddingRight={1}>
+        <Show when={prState().worktree}>
+          <span style={{ fg: props.selected ? theme.selectedFg : theme.accent }}>
+            {WORKTREE_GLYPH}
+          </span>
+        </Show>
+      </Cell>
       <Cell width={COL.pr} paddingRight={1}>
         <span style={{ fg: props.selected ? theme.selectedFg : theme.accent }}>
           #{props.pr.number}
@@ -343,6 +352,9 @@ export function PRListHeader(props: {
 }) {
   return (
     <box flexDirection="row" width="100%" height={1}>
+      <Cell width={COL.worktree} paddingRight={1}>
+        <span />
+      </Cell>
       <Cell width={COL.pr} paddingRight={1}>
         <b>PR</b>
       </Cell>

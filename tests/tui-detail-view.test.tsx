@@ -14,7 +14,7 @@ function makeDetail(overrides: Partial<PRDetail> = {}): PRDetail {
 
 async function renderDetail(
   props: Partial<Parameters<typeof DetailView>[0]> = {},
-  width = 80,
+  width = 120,
   height = 40,
 ) {
   const defaults = {
@@ -506,12 +506,12 @@ describe("DetailView", () => {
   });
 
   test("status bar shows 'hide bots' when showBotComments is true", async () => {
-    const frame = await renderDetail({ showBotComments: true }, 100);
+    const frame = await renderDetail({ showBotComments: true }, 120);
     expect(frame).toContain("hide bots");
   });
 
   test("status bar shows 'show bots' when showBotComments is false", async () => {
-    const frame = await renderDetail({ showBotComments: false }, 100);
+    const frame = await renderDetail({ showBotComments: false }, 120);
     expect(frame).toContain("show bots");
   });
 

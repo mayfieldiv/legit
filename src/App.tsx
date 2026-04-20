@@ -23,7 +23,8 @@ import type {
   IssueComment,
   FileCategorization,
 } from "./lib/types";
-import { derivePRState, type PRDerivedState } from "./lib/pr-state";
+import { derivePRState, type PRDerivedState, type WorktreeInfo } from "./lib/pr-state";
+import { createWorktreeController } from "./lib/worktree-controller";
 /** Build a GitHub PR URL from a repo slug and PR number. */
 export function prUrl(repoSlug: string, number: number): string {
   return `https://github.com/${repoSlug}/pull/${number}`;
@@ -420,6 +421,14 @@ function AppInner(props: AppInnerProps) {
     return props.queryClient.getQueryState<Review[]>(["reviews", repo, pr.number]);
   };
 
+  const worktreeController = createWorktreeController({
+    app: props.app,
+    queryClient: props.queryClient,
+    repoTabs,
+    setStatusMessage: ui.setStatusMessage,
+  });
+  const { worktreeForPr, createWorktree: handleCreateWorktree } = worktreeController;
+
   // ── Shared derived PR state lookup ────────────────────────────────────
   const getPRState = (pr: PR): PRDerivedState => {
     const threads = threadsForPr(pr);
@@ -432,6 +441,7 @@ function AppInner(props: AppInnerProps) {
       threads,
       checks: checks ?? [],
       reviews,
+      worktree: worktreeForPr(pr),
     });
   };
 
@@ -657,6 +667,11 @@ function AppInner(props: AppInnerProps) {
     return pr ? getPRState(pr) : undefined;
   };
 
+  const detailWorktree = (): WorktreeInfo | undefined => {
+    const pr = detailPr();
+    return pr ? worktreeForPr(pr) : undefined;
+  };
+
   return (
     <AppShell
       view={ui.view()}
@@ -697,6 +712,9 @@ function AppInner(props: AppInnerProps) {
       onOpenInBrowser={handleOpenInBrowser}
       onOpenInDevin={handleOpenInDevin}
       onOpenUrl={handleOpenUrl}
+      onCreateWorktree={handleCreateWorktree}
+      statusMessage={ui.statusMessage()}
+      detailWorktree={detailWorktree()}
     />
   );
 }
