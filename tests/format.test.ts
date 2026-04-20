@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import {
   formatAge,
   formatSize,
@@ -9,6 +9,8 @@ import {
   formatMergeable,
   blockerTierColor,
   checksSummary,
+  abbreviateHome,
+  truncateMiddle,
 } from "../src/lib/format";
 import { theme } from "../src/lib/theme";
 import type { CheckRun } from "../src/lib/types";
@@ -283,5 +285,51 @@ describe("checksSummary", () => {
       makeCheck("completed", "skipped"),
     ];
     expect(checksSummary(checks)).toEqual({ passed: 2, failed: 1, pending: 1, total: 4 });
+  });
+});
+
+describe("abbreviateHome", () => {
+  const originalHome = process.env.HOME;
+  beforeEach(() => {
+    process.env.HOME = "/Users/me";
+  });
+  afterEach(() => {
+    process.env.HOME = originalHome;
+  });
+
+  test("replaces $HOME prefix with ~", () => {
+    expect(abbreviateHome("/Users/me/.legit/worktrees/acme/widgets/1-foo")).toBe(
+      "~/.legit/worktrees/acme/widgets/1-foo",
+    );
+  });
+
+  test("replaces exact $HOME with ~", () => {
+    expect(abbreviateHome("/Users/me")).toBe("~");
+  });
+
+  test("leaves paths outside $HOME unchanged", () => {
+    expect(abbreviateHome("/srv/worktrees/foo")).toBe("/srv/worktrees/foo");
+  });
+
+  test("does not abbreviate a partial $HOME match", () => {
+    expect(abbreviateHome("/Users/meet/thing")).toBe("/Users/meet/thing");
+  });
+});
+
+describe("truncateMiddle", () => {
+  test("returns unchanged when already fits", () => {
+    expect(truncateMiddle("short", 10)).toBe("short");
+  });
+
+  test("collapses middle with ellipsis", () => {
+    expect(truncateMiddle("aaaaaabbbbbbcccccc", 9)).toBe("aaaa…cccc");
+  });
+
+  test("handles odd widths", () => {
+    expect(truncateMiddle("abcdefghij", 5).length).toBe(5);
+  });
+
+  test("zero or negative width falls back to empty-ish", () => {
+    expect(truncateMiddle("anything", 0)).toBe("");
   });
 });

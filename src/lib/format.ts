@@ -181,6 +181,32 @@ export function blockerTierColor(tier: Tier): string {
 }
 
 /**
+ * Replace a leading `$HOME` with `~`. Leaves absolute paths outside `$HOME`
+ * unchanged, and returns relative paths as-is.
+ */
+export function abbreviateHome(absolutePath: string): string {
+  const home = process.env.HOME;
+  if (!home) return absolutePath;
+  if (absolutePath === home) return "~";
+  if (absolutePath.startsWith(home + "/")) return "~" + absolutePath.slice(home.length);
+  return absolutePath;
+}
+
+/**
+ * Truncate a string from the middle to fit within `maxWidth`. Uses `…` as the
+ * ellipsis. Intended for path-like strings where both ends (start + tail) carry
+ * meaning. Returns the string unchanged if it already fits.
+ */
+export function truncateMiddle(s: string, maxWidth: number): string {
+  if (maxWidth <= 1) return s.slice(0, Math.max(0, maxWidth));
+  if (s.length <= maxWidth) return s;
+  const keep = maxWidth - 1; // room for "…"
+  const head = Math.ceil(keep / 2);
+  const tail = keep - head;
+  return s.slice(0, head) + "…" + s.slice(s.length - tail);
+}
+
+/**
  * Summarize check run counts by outcome.
  */
 export function checksSummary(checks: CheckRun[]): {
