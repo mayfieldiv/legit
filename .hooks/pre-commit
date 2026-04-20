@@ -1,16 +1,31 @@
 #!/bin/sh
 
-# Save unstaged changes so checks run against exactly what's being committed.
-# Uses a patch file instead of git stash --keep-index (which conflicts on pop).
+# Save unstaged + untracked changes so checks run against exactly what's being
+# committed. Uses patch files and a temp dir instead of `git stash --keep-index`
+# (which conflicts on pop and doesn't reliably cover untracked files).
+
 UNSTAGED_PATCH=$(mktemp)
+UNTRACKED_DIR=$(mktemp -d)
 HAS_UNSTAGED=0
+HAS_UNTRACKED=0
+
 if ! git diff --quiet; then
 	git diff > "$UNSTAGED_PATCH"
 	git checkout -- .
 	HAS_UNSTAGED=1
 fi
 
-restore_unstaged() {
+UNTRACKED_FILES=$(git ls-files --others --exclude-standard)
+if [ -n "$UNTRACKED_FILES" ]; then
+	HAS_UNTRACKED=1
+	echo "$UNTRACKED_FILES" | while IFS= read -r f; do
+		[ -z "$f" ] && continue
+		mkdir -p "$UNTRACKED_DIR/$(dirname "$f")"
+		mv "$f" "$UNTRACKED_DIR/$f"
+	done
+fi
+
+restore_changes() {
 	if [ "$HAS_UNSTAGED" -eq 1 ]; then
 		if ! git apply "$UNSTAGED_PATCH" 2>/dev/null; then
 			if ! git apply --3way "$UNSTAGED_PATCH" 2>/dev/null; then
@@ -19,6 +34,15 @@ restore_unstaged() {
 			fi
 		fi
 	fi
+	if [ "$HAS_UNTRACKED" -eq 1 ]; then
+		# Move untracked files back to their original paths.
+		(cd "$UNTRACKED_DIR" && find . -type f) | while IFS= read -r f; do
+			rel=${f#./}
+			mkdir -p "$(dirname "$rel")"
+			mv "$UNTRACKED_DIR/$rel" "$rel"
+		done
+		rm -rf "$UNTRACKED_DIR"
+	fi
 	rm -f "$UNSTAGED_PATCH"
 }
 
@@ -26,7 +50,7 @@ echo "Running formatting, linting, and type checking..."
 bun run check
 if [ $? -ne 0 ]; then
 	echo "Checks failed. Please fix the errors before committing."
-	restore_unstaged
+	restore_changes
 	exit 1
 fi
 
@@ -36,6 +60,6 @@ git diff --cached --name-only | while IFS= read -r file; do
 	fi
 done
 
-restore_unstaged
+restore_changes
 
 echo "All pre-commit checks passed."
