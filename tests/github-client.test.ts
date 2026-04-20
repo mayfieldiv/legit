@@ -32,7 +32,7 @@ describe("parsing", () => {
         labels: [{ name: "bug" }],
         requested_reviewers: [{ login: "bob" }],
         assignees: [{ login: "alice" }],
-        head: { ref: "fix-bug" },
+        head: { ref: "fix-bug", repo: { owner: { login: "alice" } } },
         base: { ref: "main" },
       };
       const parsed = parseRestPR(raw);
@@ -50,7 +50,24 @@ describe("parsing", () => {
         assignees: ["alice"],
         headRef: "fix-bug",
         baseRef: "main",
+        headRepositoryOwner: "alice",
       });
+    });
+
+    test("deleted fork repo maps headRepositoryOwner to empty string", () => {
+      const raw: RawRestPR = {
+        number: 7,
+        title: "From deleted fork",
+        user: { login: "alice" },
+        created_at: "",
+        updated_at: "",
+        draft: false,
+        labels: [],
+        requested_reviewers: [],
+        assignees: [],
+        head: { ref: "patch-1", repo: null },
+      };
+      expect(parseRestPR(raw).headRepositoryOwner).toBe("");
     });
 
     test("null user maps to ghost", () => {

@@ -26,6 +26,7 @@ const pr: PRDetail = {
   headCommitSha: "deadbeef",
   headRef: "feature/detail-layout",
   baseRef: "main",
+  headRepositoryOwner: "acme",
   body: "",
 };
 

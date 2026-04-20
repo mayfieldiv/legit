@@ -20,7 +20,7 @@ export interface RawRestPR {
   labels: Array<{ name: string }>;
   requested_reviewers: Array<{ login: string }>;
   assignees: Array<{ login: string }>;
-  head?: { ref: string };
+  head?: { ref: string; repo?: { owner?: { login: string } } | null };
   base?: { ref: string };
 }
 

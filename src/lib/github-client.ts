@@ -58,6 +58,7 @@ export interface RestPR {
   assignees: string[];
   headRef: string;
   baseRef: string;
+  headRepositoryOwner: string;
 }
 
 export interface ReviewStatus {
@@ -86,6 +87,7 @@ export function parseRestPR(raw: RawRestPR): RestPR {
     assignees: (raw.assignees ?? []).map((a) => a.login),
     headRef: raw.head?.ref ?? "",
     baseRef: raw.base?.ref ?? "",
+    headRepositoryOwner: raw.head?.repo?.owner?.login ?? "",
   };
 }
 

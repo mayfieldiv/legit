@@ -286,6 +286,7 @@ export function makePR(overrides: Partial<PR> = {}): PR {
     headCommitSha: "abc123def456",
     headRef: "my-branch",
     baseRef: "main",
+    headRepositoryOwner: "acme",
     ...overrides,
   };
 }

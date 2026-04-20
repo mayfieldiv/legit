@@ -29,6 +29,12 @@ export interface PR {
   headRef: string;
   /** Target branch name (e.g. "main"). */
   baseRef: string;
+  /**
+   * Owner of the head repository. Equals the PR's own repo owner for same-repo
+   * PRs; differs when the PR comes from a fork. Empty string if GitHub omitted
+   * `head.repo` (happens for PRs whose fork was deleted).
+   */
+  headRepositoryOwner: string;
 }
 
 export interface PRDetail extends PR {
