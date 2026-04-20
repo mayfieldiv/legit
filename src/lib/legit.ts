@@ -1,5 +1,6 @@
 import { execFileSync } from "child_process";
-import { loadConfig, saveConfig, addRepo, type LegitConfig } from "./config";
+import { resolve } from "path";
+import { loadConfig, saveConfig, addRepo, type LegitConfig, type RepoConfig } from "./config";
 import { createGitHubTransport, type HttpFetch } from "./github-transport";
 import { createGitHubClient, type GitHubClient } from "./github-client";
 import {
@@ -89,7 +90,7 @@ function detectRepo(cwd?: string): RepoInfo {
  * Strips GITHUB_TOKEN and GH_TOKEN so gh uses its own keyring auth
  * rather than potentially polluted env vars (e.g. 1Password op:// refs).
  */
-function cleanGhEnv(): Record<string, string | undefined> {
+export function cleanGhEnv(): Record<string, string | undefined> {
   const env = { ...process.env };
   delete env.GITHUB_TOKEN;
   delete env.GH_TOKEN;
@@ -126,13 +127,34 @@ function resolveAuth(exec: AuthExecutor = defaultExecutor): AuthInfo {
 
 // ── Legit session ───────────────────────────────────────────────────────────
 
-const DEFAULT_CONFIG_PATH = `${process.env.HOME}/.config/legit/config.json`;
+const DEFAULT_CONFIG_PATH = `${process.env.HOME}/.legit/config.json`;
+const DEFAULT_WORKTREE_BASE = `${process.env.HOME}/.legit/worktrees`;
+
+/**
+ * Sanitize a git branch name into a filesystem-safe directory segment.
+ * Replaces `/` with `-`, strips characters outside `[A-Za-z0-9._-]`, collapses
+ * runs of `-`, and caps length at 80.
+ */
+export function sanitizeBranchForPath(branch: string): string {
+  const replaced = branch.replace(/\//g, "-");
+  const stripped = replaced.replace(/[^A-Za-z0-9._-]/g, "-").replace(/-+/g, "-");
+  const trimmed = stripped.replace(/^-+|-+$/g, "");
+  return trimmed.slice(0, 80);
+}
+
+/** Expand a leading `~` to `$HOME`. Returns absolute paths unchanged. */
+function expandHome(p: string): string {
+  if (p === "~") return process.env.HOME ?? "~";
+  if (p.startsWith("~/")) return `${process.env.HOME ?? ""}/${p.slice(2)}`;
+  return p;
+}
 
 export class Legit {
   private _options: LegitOptions;
   private _repo?: RepoInfo;
   private _auth?: AuthInfo;
   private _config?: LegitConfig;
+  private _repoConfigIndex?: Map<string, RepoConfig>;
   private _client?: GitHubClient;
   private _concurrencyLimited?: ConcurrencyLimitedFetch;
 
@@ -173,6 +195,7 @@ export class Legit {
       }
 
       this._config = config;
+      this._repoConfigIndex = undefined;
     }
     return this._config;
   }
@@ -180,6 +203,7 @@ export class Legit {
   /** Re-read config from disk, clearing the in-memory cache. */
   reloadConfig(): LegitConfig {
     this._config = undefined;
+    this._repoConfigIndex = undefined;
     return this.config;
   }
 
@@ -217,9 +241,51 @@ export class Legit {
 
   /** All tracked repos (from config + current repo), deduplicated. */
   trackedRepos(): string[] {
-    const repos = new Set<string>(this.config.repos);
+    const repos = new Set<string>(this.config.repos.map((r) => r.slug));
     repos.add(this.repoSlug);
     return [...repos];
+  }
+
+  /** Find the config entry for a repo slug, or undefined if untracked. */
+  repoConfig(slug: string): RepoConfig | undefined {
+    if (!this._repoConfigIndex) {
+      this._repoConfigIndex = new Map(this.config.repos.map((r) => [r.slug, r]));
+    }
+    return this._repoConfigIndex.get(slug);
+  }
+
+  /**
+   * Absolute path to the source clone for a repo, or undefined if none is
+   * configured. `~` is expanded. Worktree-creating operations should treat
+   * `undefined` as an error condition ("no sourceClone configured").
+   */
+  resolveSourceClone(slug: string): string | undefined {
+    const entry = this.repoConfig(slug);
+    if (!entry?.sourceClone) return undefined;
+    return resolve(expandHome(entry.sourceClone));
+  }
+
+  /**
+   * Absolute directory under which this repo's worktrees live. Precedence:
+   * per-repo `worktreeRoot` > global `worktreeRoot` > `~/.legit/worktrees/<owner>/<repo>`.
+   */
+  resolveWorktreeRoot(slug: string): string {
+    const entry = this.repoConfig(slug);
+    if (entry?.worktreeRoot) return resolve(expandHome(entry.worktreeRoot));
+    if (this.config.worktreeRoot) {
+      return resolve(expandHome(this.config.worktreeRoot), slug);
+    }
+    return resolve(DEFAULT_WORKTREE_BASE, slug);
+  }
+
+  /**
+   * Absolute path where legit would create a worktree for this PR. This is the
+   * deterministic target regardless of whether the worktree exists yet.
+   */
+  resolveWorktreePath(slug: string, prNumber: number, headRef: string): string {
+    const root = this.resolveWorktreeRoot(slug);
+    const segment = `${prNumber}-${sanitizeBranchForPath(headRef)}`;
+    return resolve(root, segment);
   }
 
   /**

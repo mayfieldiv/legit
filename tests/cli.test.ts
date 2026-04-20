@@ -236,9 +236,9 @@ describe("runCommand", () => {
 
   test("repos returns tracked repos from config", async () => {
     const app = createTestLegit();
-    app.config.repos = ["acme/widgets"];
+    app.config.repos = [{ slug: "acme/widgets" }];
     const result = await runCommand(["repos"], app);
-    expect(result.output).toEqual(["acme/widgets"]);
+    expect(result.output).toEqual([{ slug: "acme/widgets" }]);
   });
 
   test("prs --repo=<slug> fetches PRs for explicit repo", async () => {
@@ -251,7 +251,7 @@ describe("runCommand", () => {
 
   test("prs --all fetches PRs for all tracked repos", async () => {
     const app = createTestLegit();
-    app.config.repos = ["acme/widgets"];
+    app.config.repos = [{ slug: "acme/widgets" }];
     const result = await runCommand(["prs", "--all"], app);
     const output = result.output as any;
     expect(output).toEqual({

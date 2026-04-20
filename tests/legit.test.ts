@@ -236,7 +236,7 @@ describe("Legit.fetchPRs", () => {
 
     const { readFileSync } = require("fs");
     const saved = JSON.parse(readFileSync(configPath, "utf-8"));
-    expect(saved.repos).toContain("acme/widgets");
+    expect(saved.repos).toContainEqual({ slug: "acme/widgets" });
   });
 
   test("with explicit repo overrides detected repo", async () => {
@@ -282,5 +282,52 @@ describe("Legit.repoSlug", () => {
   test("returns owner/repo string", () => {
     const app = createTestLegit();
     expect(app.repoSlug).toBe("acme/widgets");
+  });
+});
+
+describe("Legit worktree path resolution", () => {
+  test("resolveWorktreePath defaults to ~/.legit/worktrees/<slug>/<n>-<branch>", () => {
+    const app = createTestLegit();
+    // Seed the tracked repo so repoConfig returns something
+    app.reloadConfig();
+    const p = app.resolveWorktreePath("acme/widgets", 1234, "feature/foo");
+    expect(p).toBe(`${process.env.HOME}/.legit/worktrees/acme/widgets/1234-feature-foo`);
+  });
+
+  test("per-repo worktreeRoot overrides global default", () => {
+    const configPath = tmpConfigPath();
+    const { saveConfig } = require("../src/lib/config");
+    saveConfig(configPath, {
+      ...require("../src/lib/config").DEFAULT_CONFIG,
+      repos: [{ slug: "acme/widgets", worktreeRoot: "/wts/widgets" }],
+    });
+    const app = createTestLegit({ configPath });
+    const p = app.resolveWorktreePath("acme/widgets", 7, "main");
+    expect(p).toBe("/wts/widgets/7-main");
+  });
+
+  test("global worktreeRoot joins <slug> under the root", () => {
+    const configPath = tmpConfigPath();
+    const { saveConfig } = require("../src/lib/config");
+    saveConfig(configPath, {
+      ...require("../src/lib/config").DEFAULT_CONFIG,
+      worktreeRoot: "/srv/wts",
+      repos: [{ slug: "acme/widgets" }],
+    });
+    const app = createTestLegit({ configPath });
+    expect(app.resolveWorktreePath("acme/widgets", 7, "main")).toBe("/srv/wts/acme/widgets/7-main");
+  });
+
+  test("resolveSourceClone returns absolute path or undefined", () => {
+    const configPath = tmpConfigPath();
+    const { saveConfig } = require("../src/lib/config");
+    saveConfig(configPath, {
+      ...require("../src/lib/config").DEFAULT_CONFIG,
+      repos: [{ slug: "acme/widgets", sourceClone: "~/src/widgets" }, { slug: "acme/gadgets" }],
+    });
+    const app = createTestLegit({ configPath });
+    expect(app.resolveSourceClone("acme/widgets")).toBe(`${process.env.HOME}/src/widgets`);
+    expect(app.resolveSourceClone("acme/gadgets")).toBeUndefined();
+    expect(app.resolveSourceClone("acme/unknown")).toBeUndefined();
   });
 });

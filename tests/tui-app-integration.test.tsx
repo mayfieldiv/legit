@@ -210,7 +210,7 @@ describe("App integration", () => {
       },
     ]);
     const app = createTestLegit({ httpFetch: fetch });
-    app.config.repos = ["acme/widgets", "acme/gadgets"];
+    app.config.repos = [{ slug: "acme/widgets" }, { slug: "acme/gadgets" }];
 
     const { renderOnce, captureCharFrame } = await testRenderTracked(() => <App app={app} />, {
       // Wide enough to show title column with Threads + Blocker + Repo columns.
@@ -261,7 +261,7 @@ describe("App integration", () => {
       },
     ]);
     const app = createTestLegit({ httpFetch: fetch });
-    app.config.repos = ["acme/widgets", "acme/gadgets"];
+    app.config.repos = [{ slug: "acme/widgets" }, { slug: "acme/gadgets" }];
 
     const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
       () => <App app={app} />,
@@ -661,7 +661,7 @@ describe("App integration", () => {
     };
 
     const app = createTestLegit({ httpFetch: fetch });
-    app.config.repos = ["acme/gadgets"];
+    app.config.repos = [{ slug: "acme/gadgets" }];
 
     const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
       () => <App app={app} />,
@@ -731,7 +731,7 @@ describe("App integration", () => {
       },
     ]);
     const app = createTestLegit({ httpFetch: fetch });
-    app.config.repos = ["acme/widgets", "acme/gadgets"];
+    app.config.repos = [{ slug: "acme/widgets" }, { slug: "acme/gadgets" }];
 
     const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
       () => <App app={app} />,

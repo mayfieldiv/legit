@@ -7,11 +7,25 @@ export interface FileRule {
   category: FileCategory;
 }
 
+/**
+ * Per-repo configuration. `slug` is the GitHub `owner/repo`. When
+ * `sourceClone` is set, legit can create git worktrees for that repo's PRs;
+ * when absent, worktree-related features error out for that repo.
+ * `worktreeRoot` overrides the global default worktree root for this repo.
+ */
+export interface RepoConfig {
+  slug: string;
+  sourceClone?: string;
+  worktreeRoot?: string;
+}
+
 export interface LegitConfig {
   user: string;
-  repos: string[];
+  repos: RepoConfig[];
   botLogins: string[];
   fileRules: FileRule[];
+  /** Global default worktree root. Per-repo `worktreeRoot` takes precedence. */
+  worktreeRoot?: string;
   ui: {
     defaultGroupBy: string;
     defaultSortBy: string;
@@ -29,6 +43,23 @@ export const DEFAULT_CONFIG: LegitConfig = {
   },
 };
 
+function parseRepoEntry(entry: unknown): RepoConfig | null {
+  if (typeof entry === "string") {
+    // tolerate legacy string form while reading; caller will rewrite on save
+    return entry.includes("/") ? { slug: entry } : null;
+  }
+  if (entry && typeof entry === "object" && "slug" in entry) {
+    const obj = entry as Record<string, unknown>;
+    const slug = obj.slug;
+    if (typeof slug !== "string" || !slug.includes("/")) return null;
+    const result: RepoConfig = { slug };
+    if (typeof obj.sourceClone === "string") result.sourceClone = obj.sourceClone;
+    if (typeof obj.worktreeRoot === "string") result.worktreeRoot = obj.worktreeRoot;
+    return result;
+  }
+  return null;
+}
+
 /**
  * Load config from disk. Returns defaults if file doesn't exist.
  * Merges partial configs with defaults so missing fields get filled in.
@@ -44,9 +75,13 @@ export function loadConfig(configPath: string): LegitConfig {
   }
   const partial = JSON.parse(raw);
 
-  return {
+  const repos: RepoConfig[] = Array.isArray(partial.repos)
+    ? partial.repos.map(parseRepoEntry).filter((r: RepoConfig | null): r is RepoConfig => r != null)
+    : [...DEFAULT_CONFIG.repos];
+
+  const config: LegitConfig = {
     user: partial.user ?? DEFAULT_CONFIG.user,
-    repos: partial.repos ?? [...DEFAULT_CONFIG.repos],
+    repos,
     botLogins: partial.botLogins ?? [...DEFAULT_CONFIG.botLogins],
     fileRules: partial.fileRules ?? [...DEFAULT_CONFIG.fileRules],
     ui: {
@@ -54,6 +89,9 @@ export function loadConfig(configPath: string): LegitConfig {
       defaultSortBy: partial.ui?.defaultSortBy ?? DEFAULT_CONFIG.ui.defaultSortBy,
     },
   };
+
+  if (typeof partial.worktreeRoot === "string") config.worktreeRoot = partial.worktreeRoot;
+  return config;
 }
 
 /**
@@ -66,19 +104,21 @@ export function saveConfig(configPath: string, config: LegitConfig): void {
 
 /**
  * Add a repo to the config. Returns a new config (immutable).
+ * Existing entries are preserved untouched so user-edited fields like
+ * `sourceClone` are not clobbered by auto-add-on-query.
  */
-export function addRepo(config: LegitConfig, repo: string): LegitConfig {
-  if (config.repos.includes(repo)) {
+export function addRepo(config: LegitConfig, slug: string): LegitConfig {
+  if (config.repos.some((r) => r.slug === slug)) {
     return config;
   }
-  return { ...config, repos: [...config.repos, repo] };
+  return { ...config, repos: [...config.repos, { slug }] };
 }
 
 /**
  * Remove a repo from the config. Returns a new config (immutable).
  */
-export function removeRepo(config: LegitConfig, repo: string): LegitConfig {
-  const filtered = config.repos.filter((r) => r !== repo);
+export function removeRepo(config: LegitConfig, slug: string): LegitConfig {
+  const filtered = config.repos.filter((r) => r.slug !== slug);
   if (filtered.length === config.repos.length) {
     return config;
   }
