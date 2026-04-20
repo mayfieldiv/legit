@@ -567,6 +567,10 @@ function AppInner(props: AppInnerProps) {
     });
     void props.queryClient.invalidateQueries({ queryKey: ["reviews", repo, pr.number] });
     void props.queryClient.invalidateQueries({ queryKey: ["files", repo, pr.number] });
+    const sourceClone = props.app.resolveSourceClone(repo);
+    if (sourceClone) {
+      void props.queryClient.invalidateQueries({ queryKey: ["worktrees", sourceClone] });
+    }
   }
 
   function refreshSelected() {
@@ -587,6 +591,7 @@ function AppInner(props: AppInnerProps) {
     void props.queryClient.invalidateQueries({ queryKey: ["reviews"] });
     void props.queryClient.invalidateQueries({ queryKey: ["checks"] });
     void props.queryClient.invalidateQueries({ queryKey: ["files"] });
+    void props.queryClient.invalidateQueries({ queryKey: ["worktrees"] });
   }
 
   function refreshDetail() {
