@@ -15,7 +15,7 @@ describe("AppShell", () => {
           loading={true}
           repoSlug="acme/widgets"
           onRefreshSelected={() => {}}
-          onRefreshAllActive={() => {}}
+          onRefreshAll={() => {}}
         />
       ),
       { width: 130, height: 20 },
@@ -41,7 +41,7 @@ describe("AppShell", () => {
           loading={false}
           repoSlug="acme/widgets"
           onRefreshSelected={() => {}}
-          onRefreshAllActive={() => {}}
+          onRefreshAll={() => {}}
         />
       ),
       // Wide enough to accommodate the Threads column without squeezing the title.
@@ -64,7 +64,7 @@ describe("AppShell", () => {
           loading={false}
           repoSlug="acme/widgets"
           onRefreshSelected={() => {}}
-          onRefreshAllActive={() => {}}
+          onRefreshAll={() => {}}
         />
       ),
       { width: 130, height: 20 },
@@ -86,7 +86,7 @@ describe("AppShell", () => {
           repoSlug="acme/widgets"
           error="Network timeout"
           onRefreshSelected={() => {}}
-          onRefreshAllActive={() => {}}
+          onRefreshAll={() => {}}
         />
       ),
       { width: 130, height: 20 },
@@ -113,7 +113,7 @@ describe("AppShell", () => {
           loading={false}
           repoSlug="acme/widgets"
           onRefreshSelected={() => {}}
-          onRefreshAllActive={() => {}}
+          onRefreshAll={() => {}}
         />
       ),
       { width: 130, height: 20 },
@@ -153,7 +153,7 @@ describe("AppShell", () => {
           summaryChecks={[]}
           summaryReviews={[]}
           onRefreshSelected={() => {}}
-          onRefreshAllActive={() => {}}
+          onRefreshAll={() => {}}
         />
       ),
       { width: 156, height: 17 },
@@ -185,7 +185,7 @@ describe("AppShell", () => {
           repoSlug="acme/widgets"
           selectedPr={prs[2]}
           onRefreshSelected={() => {}}
-          onRefreshAllActive={() => {}}
+          onRefreshAll={() => {}}
         />
       ),
       { width: 130, height: 20 },
@@ -211,7 +211,7 @@ describe("AppShell", () => {
           activeTab={0}
           onTabChange={() => {}}
           onRefreshSelected={() => {}}
-          onRefreshAllActive={() => {}}
+          onRefreshAll={() => {}}
         />
       ),
       { width: 130, height: 20 },
@@ -238,7 +238,7 @@ describe("AppShell", () => {
           activeTab={1}
           onTabChange={(index) => calls.push(index)}
           onRefreshSelected={() => {}}
-          onRefreshAllActive={() => {}}
+          onRefreshAll={() => {}}
         />
       ),
       { width: 130, height: 20 },
@@ -273,7 +273,7 @@ describe("AppShell", () => {
           activeTab={2}
           onTabChange={(index) => calls.push(index)}
           onRefreshSelected={() => {}}
-          onRefreshAllActive={() => {}}
+          onRefreshAll={() => {}}
         />
       ),
       { width: 130, height: 20 },

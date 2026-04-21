@@ -5,9 +5,10 @@
  */
 
 import { createSignal, type Accessor } from "solid-js";
+import { prKey, type PRIdentity } from "./pr-identity";
 import type { PR } from "./types";
 
-export type ViewTarget = { view: "list" } | { view: "detail"; pr: PR };
+export type ViewTarget = { view: "list" } | { view: "detail"; pr: PRIdentity };
 
 /**
  * A transient message shown in the status bar. `info` has no auto-expire (it
@@ -63,7 +64,7 @@ export function createUIState(): UIState {
   }
 
   function enterDetail(pr: PR) {
-    setView({ view: "detail", pr });
+    setView({ view: "detail", pr: prKey(pr) });
   }
 
   function exitDetail() {

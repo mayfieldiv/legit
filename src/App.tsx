@@ -9,7 +9,7 @@ import {
 } from "@tanstack/solid-query";
 import { useQueriesLite as useQueries } from "./lib/use-queries-lite";
 import { createAbortableAsyncEffect } from "./lib/create-abortable-async-effect";
-import { samePr } from "./lib/pr-identity";
+import { samePr, prKey, type PRIdentity } from "./lib/pr-identity";
 import { AppShell } from "./components/AppShell";
 import { createUIState } from "./lib/ui-state";
 import type { Legit } from "./lib/legit";
@@ -410,25 +410,25 @@ function AppInner(props: AppInnerProps) {
       .join("|"),
   );
 
-  const threadsForPr = (pr: PR): FullReviewThread[] | undefined => {
+  const threadsForPr = (pr: PRIdentity): FullReviewThread[] | undefined => {
     threadsQueryVersion();
     const repo = pr.repoSlug ?? props.app.repoSlug;
     return props.queryClient.getQueryData<FullReviewThread[]>(["threads", repo, pr.number]);
   };
 
-  const reviewsForPr = (pr: PR): Review[] | undefined => {
+  const reviewsForPr = (pr: PRIdentity): Review[] | undefined => {
     reviewsQueryVersion();
     const repo = pr.repoSlug ?? props.app.repoSlug;
     return props.queryClient.getQueryData<Review[]>(["reviews", repo, pr.number]);
   };
 
-  const threadStateForPr = (pr: PR) => {
+  const threadStateForPr = (pr: PRIdentity) => {
     threadsQueryVersion();
     const repo = pr.repoSlug ?? props.app.repoSlug;
     return props.queryClient.getQueryState<FullReviewThread[]>(["threads", repo, pr.number]);
   };
 
-  const reviewStateForPr = (pr: PR) => {
+  const reviewStateForPr = (pr: PRIdentity) => {
     reviewsQueryVersion();
     const repo = pr.repoSlug ?? props.app.repoSlug;
     return props.queryClient.getQueryState<Review[]>(["reviews", repo, pr.number]);
@@ -459,12 +459,15 @@ function AppInner(props: AppInnerProps) {
   };
 
   // ── Selection state ───────────────────────────────────────────────────
-  const [selectedPr, setSelectedPr] = createSignal<PR | undefined>(undefined, {
+  // Holds only the PR identity. Full PR data (which changes on refresh)
+  // is derived on demand from the per-PR cache via `selectedPrDetail` —
+  // storing the PR object here would go stale behind samePr equality.
+  const [selectedPr, setSelectedPr] = createSignal<PRIdentity | undefined>(undefined, {
     equals: samePr,
   });
 
   function selectPr(pr: PR) {
-    setSelectedPr(pr);
+    setSelectedPr(prKey(pr));
   }
 
   function changeTab(index: number) {
@@ -498,7 +501,7 @@ function AppInner(props: AppInnerProps) {
       .join("|"),
   );
 
-  const filesData = (): FileCategorization | undefined => {
+  const selectedFiles = (): FileCategorization | undefined => {
     filesQueryVersion();
     const pr = selectedPr();
     if (!pr) return undefined;
@@ -512,14 +515,14 @@ function AppInner(props: AppInnerProps) {
     return v.view === "detail" ? v.pr : undefined;
   };
 
-  const [detailCommentsData, setDetailCommentsData] = createSignal<IssueComment[]>([]);
+  const [detailComments, setDetailComments] = createSignal<IssueComment[]>([]);
   const [detailLoading, setDetailLoading] = createSignal(false);
   const [detailError, setDetailError] = createSignal("");
   const [detailRefreshKey, setDetailRefreshKey] = createSignal(0);
   createAbortableAsyncEffect(
     () => ({ pr: detailPr(), refreshKey: detailRefreshKey() }),
     async ({ pr }, signal, isCurrent) => {
-      setDetailCommentsData([]);
+      setDetailComments([]);
       setDetailError("");
 
       if (!pr) {
@@ -544,7 +547,7 @@ function AppInner(props: AppInnerProps) {
       }));
       props.queryClient.setQueryData(["threads", repo, pr.number], threads);
       prunePrIndexIfClosed(repo, nextPr);
-      setDetailCommentsData(comments);
+      setDetailComments(comments);
       setDetailLoading(false);
     },
     (error) => {
@@ -553,29 +556,24 @@ function AppInner(props: AppInnerProps) {
     },
   );
 
-  /** Read the freshest PRDetail for a PR from the per-PR cache. Reactive
-   *  via prQueryVersion so consumers re-render when any PR refetches. */
-  function cachedPr(pr: PR | undefined): PRDetail | undefined {
+  /** Read the freshest PRDetail for a PR identity from the per-PR cache.
+   *  Reactive via prQueryVersion so consumers re-render when any PR
+   *  refetches. */
+  function cachedPr(pr: PRIdentity | undefined): PRDetail | undefined {
     prQueryVersion();
     if (!pr) return undefined;
     const repo = pr.repoSlug ?? props.app.repoSlug;
     return props.queryClient.getQueryData<PRDetail>(["pr", repo, pr.number]);
   }
 
-  const detailPrValue = (): PRDetail | undefined => cachedPr(detailPr());
+  const detailPrDetail = (): PRDetail | undefined => cachedPr(detailPr());
 
-  /** Selected PR, always fresh from cache. Needed because `selectedPr`'s
-   *  samePr equality skips emissions when cache data changes but identity
-   *  doesn't — so reading the signal alone leaves the summary panel stale
-   *  after a refresh (e.g. resolved merge conflict). Memoized because two
-   *  render consumers read this each tick. */
-  const selectedPrValue = createMemo<PR | undefined>(() => {
-    const pr = selectedPr();
-    return cachedPr(pr) ?? pr;
-  });
+  /** Full data for the selected PR, derived from the cache. Memoized since
+   *  several render consumers read it each tick. */
+  const selectedPrDetail = createMemo<PRDetail | undefined>(() => cachedPr(selectedPr()));
 
   /** Detail view threads read from the threads cache; reactive via threadsQueryVersion. */
-  const detailThreadsValue = (): FullReviewThread[] | undefined => {
+  const detailThreads = (): FullReviewThread[] | undefined => {
     threadsQueryVersion();
     const pr = detailPr();
     if (!pr) return undefined;
@@ -600,7 +598,7 @@ function AppInner(props: AppInnerProps) {
   }
 
   function refreshSelected() {
-    const pr = selectedPr();
+    const pr = selectedPrDetail();
     if (!pr) return;
     const repo = pr.repoSlug ?? props.app.repoSlug;
     invalidatePr(repo, pr);
@@ -621,7 +619,7 @@ function AppInner(props: AppInnerProps) {
   }
 
   function refreshDetail() {
-    const pr = detailPr();
+    const pr = detailPrDetail();
     if (!pr) return;
     const repo = pr.repoSlug ?? props.app.repoSlug;
     invalidatePr(repo, pr);
@@ -665,7 +663,7 @@ function AppInner(props: AppInnerProps) {
   };
 
   const summaryChecks = (): CheckRun[] | undefined => {
-    const pr = selectedPr();
+    const pr = selectedPrDetail();
     if (!pr) return undefined;
     // Checks query can be permanently disabled (null headCommitSha) — treat as empty.
     return checksForPr(pr) ?? [];
@@ -677,10 +675,6 @@ function AppInner(props: AppInnerProps) {
     return reviewsForPr(pr);
   };
 
-  const summaryFiles = (): FileCategorization | undefined => {
-    return filesData();
-  };
-
   const summaryLoading = (): boolean => {
     const pr = selectedPr();
     if (!pr) return false;
@@ -689,17 +683,17 @@ function AppInner(props: AppInnerProps) {
     return (
       threadState?.data === undefined ||
       reviewState?.data === undefined ||
-      filesData() === undefined
+      selectedFiles() === undefined
     );
   };
 
   const summaryState = (): PRDerivedState | undefined => {
-    const pr = selectedPrValue();
+    const pr = selectedPrDetail();
     return pr ? getPRState(pr) : undefined;
   };
 
   const detailWorktree = (): WorktreeInfo | undefined => {
-    const pr = detailPr();
+    const pr = detailPrDetail();
     return pr ? worktreeForPr(pr) : undefined;
   };
 
@@ -716,23 +710,23 @@ function AppInner(props: AppInnerProps) {
       error={prError() || detailError() || browserError()}
       tabs={tabs()}
       activeTab={ui.activeTab()}
-      selectedPr={selectedPrValue()}
+      selectedPr={selectedPrDetail()}
       summaryThreads={summaryThreads()}
       summaryChecks={summaryChecks()}
       summaryReviews={summaryReviews()}
-      summaryFiles={summaryFiles()}
+      summaryFiles={selectedFiles()}
       summaryLoading={summaryLoading()}
       getPRState={getPRState}
       summaryState={summaryState()}
       onSelectionChange={selectPr}
       onTabChange={changeTab}
-      onRefreshAllActive={refreshAll}
+      onRefreshAll={refreshAll}
       onRefreshSelected={refreshSelected}
       onEnterDetail={(pr: PR) => ui.enterDetail(pr)}
-      detailPr={detailPrValue()}
+      detailPr={detailPrDetail()}
       detailChecks={summaryChecks()}
-      detailThreads={detailThreadsValue()}
-      detailComments={detailCommentsData()}
+      detailThreads={detailThreads()}
+      detailComments={detailComments()}
       detailLoading={detailLoading()}
       showResolved={ui.showResolved()}
       showBotComments={ui.showBotComments()}

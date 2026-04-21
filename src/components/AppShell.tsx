@@ -33,7 +33,7 @@ interface AppShellProps {
   view: ViewTarget;
   error?: string;
   onRefreshSelected: () => void;
-  onRefreshAllActive: () => void;
+  onRefreshAll: () => void;
   onSelectionChange?: (pr: PR) => void;
   onOpenInBrowser?: (pr: PR) => void;
   onOpenInDevin?: (pr: PR) => void;
@@ -160,7 +160,7 @@ export function AppShell(props: AppShellProps) {
                 resetKey={props.resetKey}
                 getPRState={props.getPRState}
                 onRefreshSelected={props.onRefreshSelected}
-                onRefreshAll={props.onRefreshAllActive}
+                onRefreshAll={props.onRefreshAll}
                 onEnterDetail={props.onEnterDetail}
                 onSelectionChange={props.onSelectionChange}
                 onOpenInBrowser={props.onOpenInBrowser}
