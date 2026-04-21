@@ -553,14 +553,26 @@ function AppInner(props: AppInnerProps) {
     },
   );
 
-  /** Detail view PR read from the per-PR cache; reactive via prQueryVersion. */
-  const detailPrValue = (): PRDetail | undefined => {
+  /** Read the freshest PRDetail for a PR from the per-PR cache. Reactive
+   *  via prQueryVersion so consumers re-render when any PR refetches. */
+  function cachedPr(pr: PR | undefined): PRDetail | undefined {
     prQueryVersion();
-    const pr = detailPr();
     if (!pr) return undefined;
     const repo = pr.repoSlug ?? props.app.repoSlug;
     return props.queryClient.getQueryData<PRDetail>(["pr", repo, pr.number]);
-  };
+  }
+
+  const detailPrValue = (): PRDetail | undefined => cachedPr(detailPr());
+
+  /** Selected PR, always fresh from cache. Needed because `selectedPr`'s
+   *  samePr equality skips emissions when cache data changes but identity
+   *  doesn't — so reading the signal alone leaves the summary panel stale
+   *  after a refresh (e.g. resolved merge conflict). Memoized because two
+   *  render consumers read this each tick. */
+  const selectedPrValue = createMemo<PR | undefined>(() => {
+    const pr = selectedPr();
+    return cachedPr(pr) ?? pr;
+  });
 
   /** Detail view threads read from the threads cache; reactive via threadsQueryVersion. */
   const detailThreadsValue = (): FullReviewThread[] | undefined => {
@@ -682,7 +694,7 @@ function AppInner(props: AppInnerProps) {
   };
 
   const summaryState = (): PRDerivedState | undefined => {
-    const pr = selectedPr();
+    const pr = selectedPrValue();
     return pr ? getPRState(pr) : undefined;
   };
 
@@ -704,7 +716,7 @@ function AppInner(props: AppInnerProps) {
       error={prError() || detailError() || browserError()}
       tabs={tabs()}
       activeTab={ui.activeTab()}
-      selectedPr={selectedPr()}
+      selectedPr={selectedPrValue()}
       summaryThreads={summaryThreads()}
       summaryChecks={summaryChecks()}
       summaryReviews={summaryReviews()}

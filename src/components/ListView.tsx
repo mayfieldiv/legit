@@ -105,6 +105,11 @@ export function ListView(props: ListViewProps) {
   // equals function prevents downstream propagation (and thus full <For>
   // rebuilds) when only enrichment data changed but the group structure
   // (which PRs are in which group, in what order) stayed the same.
+  // Enrichment (threads/reviews/checks) lives in separate cache keys, so
+  // it never replaces the PR object reference — only a real PR refetch
+  // does. Comparing by reference therefore distinguishes "enrichment
+  // changed" (same PR refs) from "PR data changed" (new PR refs), which
+  // matters for fields read directly off the PR like `mergeable`.
   const processedResult = createMemo(
     () =>
       processPRList(props.prs, {
@@ -126,9 +131,7 @@ export function ListView(props: ListViewProps) {
           if (pg.key !== ng.key) return false;
           if (pg.prs.length !== ng.prs.length) return false;
           for (let j = 0; j < pg.prs.length; j++) {
-            const pp = pg.prs[j]!;
-            const np = ng.prs[j]!;
-            if (pp.number !== np.number || pp.repoSlug !== np.repoSlug) return false;
+            if (pg.prs[j] !== ng.prs[j]) return false;
           }
         }
         return true;
