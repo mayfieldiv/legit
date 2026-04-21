@@ -46,6 +46,7 @@ export interface LegitOptions {
   cwd?: string;
   authExec?: AuthExecutor;
   httpFetch?: HttpFetch;
+  currentUserOverride?: string;
 }
 
 // ── Internal: repo detection ────────────────────────────────────────────────
@@ -157,9 +158,11 @@ export class Legit {
   private _repoConfigIndex?: Map<string, RepoConfig>;
   private _client?: GitHubClient;
   private _concurrencyLimited?: ConcurrencyLimitedFetch;
+  private _currentUserOverride?: string;
 
   constructor(options?: LegitOptions) {
     this._options = options ?? {};
+    this._currentUserOverride = options?.currentUserOverride?.trim() || undefined;
   }
 
   get configPath(): string {
@@ -234,9 +237,14 @@ export class Legit {
     return `${this.repo.owner}/${this.repo.repo}`;
   }
 
-  /** Current user login — prefers config, falls back to gh auth. */
+  /** Current user login — prefers CLI override, then config, then gh auth. */
   get currentUser(): string {
-    return this.config.user || this.auth.user;
+    return this._currentUserOverride ?? this.config.user ?? this.auth.user;
+  }
+
+  /** Override the current user login for this process only. */
+  setCurrentUserOverride(user?: string): void {
+    this._currentUserOverride = user?.trim() || undefined;
   }
 
   /** All tracked repos (from config + current repo), deduplicated. */

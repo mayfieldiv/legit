@@ -185,6 +185,55 @@ describe("runCommand", () => {
     expect(result.launchTui).toBe(true);
   });
 
+  test("--as overrides current user before launching TUI", async () => {
+    const app = createTestLegit();
+    const result = await runCommand(["--as=grill-me"], app);
+    expect(result.launchTui).toBe(true);
+    expect(app.currentUser).toBe("grill-me");
+  });
+
+  test("--as overrides blocker perspective for CLI commands", async () => {
+    const { fetch } = createMockFetch([
+      {
+        url: /\/pulls\?/,
+        response: {
+          status: 200,
+          body: [
+            {
+              ...makeSampleRestPR(42),
+              requested_reviewers: [{ login: "grill-me" }],
+            },
+          ],
+        },
+      },
+      {
+        url: /\/graphql/,
+        method: "POST",
+        response: {
+          status: 200,
+          body: makeGraphQLResponse([
+            {
+              ...SAMPLE_GQL_META,
+              number: 42,
+              reviewDecision: "",
+            },
+          ]),
+        },
+      },
+    ]);
+    const app = createTestLegit({ httpFetch: fetch });
+    const result = await runCommand(["prs", "--with-blockers", "--as", "grill-me"], app);
+    const output = result.output as Array<{ tier: string; blocker: string }>;
+    expect(output).toHaveLength(1);
+    expect(output[0]).toMatchObject({ tier: "me-blocking", blocker: "grill-me" });
+  });
+
+  test("--as without a login returns an error", async () => {
+    const app = createTestLegit();
+    const result = await runCommand(["prs", "--as"], app);
+    expect(result.error).toContain("--as requires a GitHub login");
+  });
+
   test("files <number> returns categorized file list with breakdown", async () => {
     const { fetch } = createMockFetch([
       {

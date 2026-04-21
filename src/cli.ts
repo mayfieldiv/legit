@@ -32,7 +32,14 @@ export interface CommandResult {
  * The thin entry point below handles printing and process.exit.
  */
 export async function runCommand(args: string[], app: Legit): Promise<CommandResult> {
-  const command = args[0];
+  const parsed = parseGlobalArgs(args);
+  if (parsed.error) {
+    return { error: parsed.error };
+  }
+  app.setCurrentUserOverride(parsed.currentUserOverride);
+
+  const commandArgs = parsed.args;
+  const command = commandArgs[0];
 
   switch (command) {
     case "detect":
@@ -50,7 +57,7 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
       return { output: app.config.repos };
 
     case "prs": {
-      const options = parsePrsArgs(args.slice(1));
+      const options = parsePrsArgs(commandArgs.slice(1));
       if (options.error) {
         return { error: options.error };
       }
@@ -109,7 +116,7 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
     }
 
     case "pr": {
-      const rawNumber = args[1];
+      const rawNumber = commandArgs[1];
       if (!rawNumber || !/^[1-9]\d*$/.test(rawNumber)) {
         return { error: "Usage: legit pr <number>" };
       }
@@ -135,7 +142,7 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
     }
 
     case "files": {
-      const rawNumber = args[1];
+      const rawNumber = commandArgs[1];
       if (!rawNumber || !/^[1-9]\d*$/.test(rawNumber)) {
         return { error: "Usage: legit files <number>" };
       }
@@ -148,7 +155,7 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
     }
 
     case "comments": {
-      const rawNumber = args[1];
+      const rawNumber = commandArgs[1];
       if (!rawNumber || !/^[1-9]\d*$/.test(rawNumber)) {
         return { error: "Usage: legit comments <number>" };
       }
@@ -162,7 +169,7 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
     }
 
     case "blocker": {
-      const rawNumber = args[1];
+      const rawNumber = commandArgs[1];
       if (!rawNumber || !/^[1-9]\d*$/.test(rawNumber)) {
         return { error: "Usage: legit blocker <number>" };
       }
@@ -185,13 +192,56 @@ export async function runCommand(args: string[], app: Legit): Promise<CommandRes
 
     default:
       return {
-        error: `Unknown command: ${command}\n\nUsage: legit [detect|auth|config|repos|prs [--repo=<owner/repo>|--all]|pr <number>|files <number>|blocker <number>|comments <number>]`,
+        error: `Unknown command: ${command}\n\nUsage: legit [--as <login>] [detect|auth|config|repos|prs [--repo=<owner/repo>|--all]|pr <number>|files <number>|blocker <number>|comments <number>]`,
       };
   }
 }
 
 function trackedRepos(app: Legit): string[] {
   return app.trackedRepos();
+}
+
+function parseGlobalArgs(args: string[]): {
+  args: string[];
+  currentUserOverride?: string;
+  error?: string;
+} {
+  const commandArgs: string[] = [];
+  let currentUserOverride: string | undefined;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    let nextOverride: string | undefined;
+
+    if (arg === "--as") {
+      nextOverride = args[i + 1];
+      i++;
+    } else if (arg.startsWith("--as=")) {
+      nextOverride = arg.slice("--as=".length);
+    } else {
+      commandArgs.push(arg);
+      continue;
+    }
+
+    if (!nextOverride || nextOverride.startsWith("-")) {
+      return {
+        args: [],
+        error:
+          "--as requires a GitHub login. Usage: legit [--as <login>] [detect|auth|config|repos|prs|pr|files|blocker|comments]",
+      };
+    }
+
+    if (currentUserOverride !== undefined && currentUserOverride !== nextOverride) {
+      return {
+        args: [],
+        error: `--as provided multiple times with different values: ${currentUserOverride}, ${nextOverride}`,
+      };
+    }
+
+    currentUserOverride = nextOverride;
+  }
+
+  return { args: commandArgs, currentUserOverride };
 }
 
 const VALID_GROUP_BY: GroupByKey[] = [
@@ -212,7 +262,7 @@ const VALID_SORT_BY: SortByKey[] = ["size", "age", "updated"];
 const VALID_SORT_DIR: SortDir[] = ["asc", "desc"];
 
 const USAGE_PRS =
-  "Usage: legit prs [--repo=<owner/repo>|--all] [--with-blockers] [--group-by=<key>] [--sort-by=<size|age|updated>] [--sort-dir=<asc|desc>] [--filter=<text>]";
+  "Usage: legit [--as <login>] prs [--repo=<owner/repo>|--all] [--with-blockers] [--group-by=<key>] [--sort-by=<size|age|updated>] [--sort-dir=<asc|desc>] [--filter=<text>]";
 
 function parsePrsArgs(args: string[]): {
   repo?: string;
