@@ -51,7 +51,28 @@ describe("parsing", () => {
         headRef: "fix-bug",
         baseRef: "main",
         headRepositoryOwner: "alice",
+        state: "OPEN",
       });
+    });
+
+    test("state maps closed+merged_at to MERGED and closed without merged_at to CLOSED", () => {
+      const base: RawRestPR = {
+        number: 1,
+        title: "X",
+        user: { login: "a" },
+        created_at: "",
+        updated_at: "",
+        draft: false,
+        labels: [],
+        requested_reviewers: [],
+        assignees: [],
+      };
+      expect(
+        parseRestPR({ ...base, state: "closed", merged_at: "2026-03-15T00:00:00Z" }).state,
+      ).toBe("MERGED");
+      expect(parseRestPR({ ...base, state: "closed", merged_at: null }).state).toBe("CLOSED");
+      expect(parseRestPR({ ...base, state: "open" }).state).toBe("OPEN");
+      expect(parseRestPR(base).state).toBe("OPEN");
     });
 
     test("deleted fork repo maps headRepositoryOwner to empty string", () => {

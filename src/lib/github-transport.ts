@@ -22,6 +22,10 @@ export interface RawRestPR {
   assignees: Array<{ login: string }>;
   head?: { ref: string; repo?: { owner?: { login: string } } | null };
   base?: { ref: string };
+  /** REST state: "open" or "closed". Omitted for the list endpoint (always open). */
+  state?: "open" | "closed";
+  /** ISO timestamp the PR was merged, or null if never merged. */
+  merged_at?: string | null;
 }
 
 export interface RawPRReviewStatus {

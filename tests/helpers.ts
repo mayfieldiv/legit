@@ -287,6 +287,7 @@ export function makePR(overrides: Partial<PR> = {}): PR {
     headRef: "my-branch",
     baseRef: "main",
     headRepositoryOwner: "acme",
+    state: "OPEN",
     ...overrides,
   };
 }

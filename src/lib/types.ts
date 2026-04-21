@@ -8,6 +8,8 @@
  * do with the GitHub API.
  */
 
+export type PRState = "OPEN" | "MERGED" | "CLOSED";
+
 export interface PR {
   number: number;
   repoSlug?: string;
@@ -35,6 +37,13 @@ export interface PR {
    * `head.repo` (happens for PRs whose fork was deleted).
    */
   headRepositoryOwner: string;
+  /**
+   * Lifecycle state. "OPEN" while the PR is active; flips to "MERGED" or
+   * "CLOSED" once it's no longer actionable. The list endpoint only yields
+   * OPEN PRs — this field changes after a single-PR refresh detects a PR
+   * that's been merged or closed since the list was fetched.
+   */
+  state: PRState;
 }
 
 export interface PRDetail extends PR {

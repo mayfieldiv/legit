@@ -187,6 +187,17 @@ function AppInner(props: AppInnerProps) {
     return prIndexQueries[idx]?.data ?? [];
   });
 
+  /** Drop a merged/closed PR from the repo's pr-index so the list re-renders
+   *  without it. No-op when the PR is open or already absent — returning the
+   *  same reference keeps setQueryData from notifying observers. */
+  function prunePrIndexIfClosed(repo: string, pr: Pick<PR, "number" | "state">): void {
+    if (pr.state === "OPEN") return;
+    props.queryClient.setQueryData<PRIndexEntry[]>(["pr-index", repo], (prev) => {
+      if (!prev || !prev.some((e) => e.number === pr.number)) return prev;
+      return prev.filter((e) => e.number !== pr.number);
+    });
+  }
+
   // Fan-out per-PR queries over the visible index. Initial hydration comes
   // from the streamed list seeding the cache via setQueryData, so these
   // queryFns only fire when an entry is explicitly invalidated (e.g. `r`).
@@ -198,7 +209,9 @@ function AppInner(props: AppInnerProps) {
       queryKey: ["pr", repoSlug, number] as const,
       queryFn: async ({ signal }: { signal: AbortSignal }) => {
         const next = await props.app.fetchPR(repoSlug, number, signal);
-        return { ...next, repoSlug };
+        const pr = { ...next, repoSlug };
+        prunePrIndexIfClosed(repoSlug, pr);
+        return pr;
       },
       staleTime: Infinity,
     })),
@@ -530,6 +543,7 @@ function AppInner(props: AppInnerProps) {
         repoSlug: repo,
       }));
       props.queryClient.setQueryData(["threads", repo, pr.number], threads);
+      prunePrIndexIfClosed(repo, nextPr);
       setDetailCommentsData(comments);
       setDetailLoading(false);
     },

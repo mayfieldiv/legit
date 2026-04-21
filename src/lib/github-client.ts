@@ -12,6 +12,7 @@ import type {
 import type {
   PR,
   PRDetail,
+  PRState,
   FileChange,
   CheckRun,
   Review,
@@ -59,6 +60,7 @@ export interface RestPR {
   headRef: string;
   baseRef: string;
   headRepositoryOwner: string;
+  state: PRState;
 }
 
 export interface ReviewStatus {
@@ -73,6 +75,11 @@ export interface ReviewStatus {
 // ── Pure parsing functions ──────────────────────────────────────────────────
 
 export function parseRestPR(raw: RawRestPR): RestPR {
+  // GitHub reports merged PRs as state: "closed" with merged_at set —
+  // split them into a distinct MERGED state so the UI can distinguish them
+  // from PRs that were closed without being merged. The list endpoint omits
+  // `state` entirely, so default to OPEN when absent.
+  const state: PRState = raw.state === "closed" ? (raw.merged_at ? "MERGED" : "CLOSED") : "OPEN";
   return {
     number: raw.number,
     title: raw.title,
@@ -88,6 +95,7 @@ export function parseRestPR(raw: RawRestPR): RestPR {
     headRef: raw.head?.ref ?? "",
     baseRef: raw.base?.ref ?? "",
     headRepositoryOwner: raw.head?.repo?.owner?.login ?? "",
+    state,
   };
 }
 
@@ -214,8 +222,10 @@ export function createGitHubClient(
         status = parseReviewStatus(rawStatus);
       }
 
-      // Retry once if mergeable is UNKNOWN (GitHub lazy computation)
-      if (!status || status.mergeable === "UNKNOWN") {
+      // Retry once if mergeable is UNKNOWN (GitHub lazy computation). Skip
+      // the retry for merged/closed PRs — they always report UNKNOWN and
+      // the retry just burns 3s with no hope of a better answer.
+      if (rest.state === "OPEN" && (!status || status.mergeable === "UNKNOWN")) {
         await new Promise((r) => setTimeout(r, MERGEABLE_RETRY_DELAY_MS));
         signal?.throwIfAborted();
         for await (const rawStatus of transport.fetchReviewStatus(

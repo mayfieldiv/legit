@@ -27,6 +27,7 @@ const pr: PRDetail = {
   headRef: "feature/detail-layout",
   baseRef: "main",
   headRepositoryOwner: "acme",
+  state: "OPEN",
   body: "",
 };
 
