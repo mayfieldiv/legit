@@ -133,31 +133,371 @@ describe("App integration", () => {
     expect(frame).toContain("500");
   });
 
-  test("R key triggers full refetch", async () => {
-    const { fetch, calls } = createMockFetch([
-      { url: /pulls/, response: { status: 200, body: [] } },
-    ]);
+  test("R key refreshes only the current repo tab", async () => {
+    const calls: string[] = [];
+    const fetch = async (url: string, init?: RequestInit) => {
+      calls.push(url);
+      if (/\/repos\/acme\/widgets\/pulls\?/.test(url)) {
+        return new Response(JSON.stringify([makeSampleRestPR(1)]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (/\/repos\/acme\/gadgets\/pulls\?/.test(url)) {
+        return new Response(JSON.stringify([makeSampleRestPR(2)]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/graphql")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { query?: string };
+        const query = body.query ?? "";
+        if (query.includes("number: 2")) {
+          return new Response(
+            JSON.stringify(makeGraphQLResponse([{ ...SAMPLE_GQL_META, number: 2 }])),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response(
+          JSON.stringify(makeGraphQLResponse([{ ...SAMPLE_GQL_META, number: 1 }])),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ message: "Not Found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
 
     const app = createTestLegit({ httpFetch: fetch });
+    app.config.repos = [{ slug: "acme/widgets" }, { slug: "acme/gadgets" }];
 
     const { renderOnce, mockInput } = await testRenderTracked(() => <App app={app} />, {
       width: 160,
       height: 20,
     });
 
-    // Wait for initial fetch
-    await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 120));
     await renderOnce();
 
-    const initialCount = calls.filter((c) => c.url.includes("/pulls")).length;
+    const initialWidgets = calls.filter((url) => url.includes("/repos/acme/widgets/pulls")).length;
+    const initialGadgets = calls.filter((url) => url.includes("/repos/acme/gadgets/pulls")).length;
 
-    // Press R (shift+R) to refetch all
+    mockInput.pressKey("1");
+    await new Promise((r) => setTimeout(r, 20));
+    await renderOnce();
+
     mockInput.pressKey("r", { shift: true });
-    await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 120));
     await renderOnce();
 
-    const newCount = calls.filter((c) => c.url.includes("/pulls")).length;
-    expect(newCount).toBeGreaterThan(initialCount);
+    const nextWidgets = calls.filter((url) => url.includes("/repos/acme/widgets/pulls")).length;
+    const nextGadgets = calls.filter((url) => url.includes("/repos/acme/gadgets/pulls")).length;
+    expect(nextWidgets).toBeGreaterThan(initialWidgets);
+    expect(nextGadgets).toBe(initialGadgets);
+  });
+
+  test("R key refreshes every tracked repo from the All tab", async () => {
+    const calls: string[] = [];
+    const fetch = async (url: string, init?: RequestInit) => {
+      calls.push(url);
+      if (/\/repos\/acme\/widgets\/pulls\?/.test(url)) {
+        return new Response(JSON.stringify([makeSampleRestPR(1)]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (/\/repos\/acme\/gadgets\/pulls\?/.test(url)) {
+        return new Response(JSON.stringify([makeSampleRestPR(2)]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/graphql")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { query?: string };
+        const query = body.query ?? "";
+        if (query.includes("number: 2")) {
+          return new Response(
+            JSON.stringify(makeGraphQLResponse([{ ...SAMPLE_GQL_META, number: 2 }])),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response(
+          JSON.stringify(makeGraphQLResponse([{ ...SAMPLE_GQL_META, number: 1 }])),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ message: "Not Found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+    const app = createTestLegit({ httpFetch: fetch });
+    app.config.repos = [{ slug: "acme/widgets" }, { slug: "acme/gadgets" }];
+
+    const { renderOnce, mockInput } = await testRenderTracked(() => <App app={app} />, {
+      width: 160,
+      height: 20,
+    });
+
+    await new Promise((r) => setTimeout(r, 120));
+    await renderOnce();
+
+    const initialWidgets = calls.filter((url) => url.includes("/repos/acme/widgets/pulls")).length;
+    const initialGadgets = calls.filter((url) => url.includes("/repos/acme/gadgets/pulls")).length;
+
+    mockInput.pressKey("0");
+    await new Promise((r) => setTimeout(r, 20));
+    await renderOnce();
+
+    mockInput.pressKey("r", { shift: true });
+    await new Promise((r) => setTimeout(r, 120));
+    await renderOnce();
+
+    const nextWidgets = calls.filter((url) => url.includes("/repos/acme/widgets/pulls")).length;
+    const nextGadgets = calls.filter((url) => url.includes("/repos/acme/gadgets/pulls")).length;
+    expect(nextWidgets).toBeGreaterThan(initialWidgets);
+    expect(nextGadgets).toBeGreaterThan(initialGadgets);
+  });
+
+  test("R key keeps current rows visible while refresh-all is in flight", async () => {
+    const listBody = [makeSampleRestPR(1)];
+    let resolvePrRefresh: (() => void) | undefined;
+    const prRefreshGate = new Promise<void>((resolve) => {
+      resolvePrRefresh = resolve;
+    });
+    let listFetchCount = 0;
+
+    const fetch = async (url: string, init?: RequestInit) => {
+      if (/\/repos\/acme\/widgets\/pulls\?state=open/.test(url)) {
+        listFetchCount++;
+        return new Response(JSON.stringify(listBody), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/repos/acme/widgets/pulls/1")) {
+        if (listFetchCount > 1) {
+          await prRefreshGate;
+        }
+        return new Response(JSON.stringify({ ...listBody[0], body: "body" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (/\/repos\/acme\/widgets\/pulls\/1\/reviews/.test(url)) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (/\/repos\/acme\/widgets\/pulls\/1\/files/.test(url)) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (/\/repos\/acme\/widgets\/commits\/.+\/check-runs/.test(url)) {
+        return new Response(JSON.stringify({ check_runs: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/graphql")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { query?: string };
+        const query = body.query ?? "";
+        if (query.includes("reviewThreads")) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    reviewThreads: {
+                      pageInfo: { hasNextPage: false, endCursor: null },
+                      nodes: [],
+                    },
+                  },
+                },
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response(
+          JSON.stringify(makeGraphQLResponse([{ ...SAMPLE_GQL_META, number: 1 }])),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ message: "Not Found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+    const app = createTestLegit({ httpFetch: fetch });
+
+    const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
+      () => <App app={app} />,
+      { width: 180, height: 20 },
+    );
+
+    await new Promise((r) => setTimeout(r, 120));
+    await renderOnce();
+
+    mockInput.pressKey("r", { shift: true });
+    await renderOnce();
+
+    const pendingFrame = captureCharFrame();
+    expect(pendingFrame).toContain("PR #1");
+    expect(pendingFrame).not.toContain("Loading pull requests");
+    expect(pendingFrame).toMatch(/[◌⟳]/);
+
+    resolvePrRefresh?.();
+    await new Promise((r) => setTimeout(r, 120));
+    await renderOnce();
+
+    const settledFrame = captureCharFrame();
+    expect(settledFrame).toContain("PR #1");
+  });
+
+  test("manual r jumps ahead of queued refresh-all work", async () => {
+    const pr1 = { ...makeSampleRestPR(1), requested_reviewers: [{ login: "testuser" }] };
+    const pr2 = makeSampleRestPR(2);
+    const pr3 = { ...makeSampleRestPR(3), draft: true };
+    const pr4 = { ...makeSampleRestPR(4), draft: true };
+    const prs = [pr1, pr2, pr3, pr4];
+
+    let resolvePr1: (() => void) | undefined;
+    const pr1Gate = new Promise<void>((resolve) => {
+      resolvePr1 = resolve;
+    });
+    let resolvePr2: (() => void) | undefined;
+    const pr2Gate = new Promise<void>((resolve) => {
+      resolvePr2 = resolve;
+    });
+    const refreshOrder: number[] = [];
+
+    async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+      const start = Date.now();
+      while (!predicate()) {
+        if (Date.now() - start > timeoutMs) {
+          throw new Error(`Timed out after ${timeoutMs}ms`);
+        }
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    }
+
+    const fetch = async (url: string, init?: RequestInit) => {
+      if (/\/repos\/acme\/widgets\/pulls\?state=open/.test(url)) {
+        return new Response(JSON.stringify(prs), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      const prMatch = url.match(/\/repos\/acme\/widgets\/pulls\/(\d+)$/);
+      if (prMatch) {
+        const number = Number(prMatch[1]);
+        refreshOrder.push(number);
+        if (number === 1) {
+          await pr1Gate;
+        } else if (number === 2) {
+          await pr2Gate;
+        }
+        return new Response(
+          JSON.stringify({ ...(prs[number - 1] ?? prs[0]), body: `body ${number}` }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      if (/\/repos\/acme\/widgets\/pulls\/\d+\/reviews/.test(url)) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (/\/repos\/acme\/widgets\/pulls\/\d+\/files/.test(url)) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (/\/repos\/acme\/widgets\/commits\/.+\/check-runs/.test(url)) {
+        return new Response(JSON.stringify({ check_runs: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/graphql")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { query?: string };
+        const query = body.query ?? "";
+        if (query.includes("reviewThreads")) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    reviewThreads: {
+                      pageInfo: { hasNextPage: false, endCursor: null },
+                      nodes: [],
+                    },
+                  },
+                },
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        const numbers = Array.from(query.matchAll(/number: (\d+)/g), (match) => Number(match[1]));
+        return new Response(
+          JSON.stringify(
+            makeGraphQLResponse(
+              numbers.map((number) => ({
+                ...SAMPLE_GQL_META,
+                number,
+                reviewDecision: "REVIEW_REQUIRED",
+                mergeable: "MERGEABLE",
+              })),
+            ),
+          ),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ message: "Not Found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+    const app = createTestLegit({ httpFetch: fetch });
+
+    const { renderOnce, mockInput } = await testRenderTracked(() => <App app={app} />, {
+      width: 180,
+      height: 20,
+    });
+
+    await new Promise((r) => setTimeout(r, 150));
+    await renderOnce();
+
+    mockInput.pressKey("r", { shift: true });
+    await waitFor(() => refreshOrder.length >= 2);
+    expect(refreshOrder.slice(0, 2)).toEqual([1, 2]);
+
+    mockInput.pressKey("j");
+    mockInput.pressKey("j");
+    mockInput.pressKey("j");
+    await renderOnce();
+    mockInput.pressKey("r");
+
+    resolvePr1?.();
+    await waitFor(() => refreshOrder.length >= 3);
+    expect(refreshOrder[2]).toBe(4);
+
+    resolvePr2?.();
+    await waitFor(() => refreshOrder.length >= 4);
+    expect(refreshOrder).toEqual([1, 2, 4, 3]);
   });
 
   test("split layout renders list and summary panel separator", async () => {

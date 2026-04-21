@@ -48,6 +48,8 @@ interface AppShellProps {
   summaryLoading?: boolean;
   /** Derived state lookup shared by list/grouping/rendering. */
   getPRState?: (pr: PR) => PRDerivedState;
+  /** Queue/refresh marker state for list rows. */
+  getRefreshState?: (pr: PR) => "queued" | "refreshing" | undefined;
   summaryState?: PRDerivedState;
   // Detail view
   detailPr?: PRDetail;
@@ -159,6 +161,7 @@ export function AppShell(props: AppShellProps) {
                 groupBy={props.groupBy ?? "smart-status"}
                 resetKey={props.resetKey}
                 getPRState={props.getPRState}
+                getRefreshState={props.getRefreshState}
                 onRefreshSelected={props.onRefreshSelected}
                 onRefreshAll={props.onRefreshAll}
                 onEnterDetail={props.onEnterDetail}

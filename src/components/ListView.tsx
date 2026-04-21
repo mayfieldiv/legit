@@ -26,6 +26,8 @@ interface ListViewProps {
   resetKey?: number | string;
   /** Lookup function for shared derived PR state. */
   getPRState?: (pr: PR) => PRDerivedState;
+  /** Queue/refresh marker state for list rows. */
+  getRefreshState?: (pr: PR) => "queued" | "refreshing" | undefined;
   onRefreshSelected: () => void;
   onRefreshAll: () => void;
   onEnterDetail: (pr: PR) => void;
@@ -405,6 +407,7 @@ export function ListView(props: ListViewProps) {
               onSelect={selectIndex}
               visibleColumns={props.visibleColumns}
               getPRState={props.getPRState}
+              getRefreshState={props.getRefreshState}
             />
           </scrollbox>
         </Show>
@@ -412,7 +415,7 @@ export function ListView(props: ListViewProps) {
 
       {/* ── Status bar ──────────────────────────────────────── */}
       <StatusBar networkStats={props.networkStats} statusMessage={props.statusMessage}>
-        {" · "}/ filter · g group · w worktree
+        {" · "}R refresh tab · / filter · g group · w worktree
       </StatusBar>
     </box>
   );

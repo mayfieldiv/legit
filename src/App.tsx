@@ -572,6 +572,16 @@ function AppInner(props: AppInnerProps) {
    *  several render consumers read it each tick. */
   const selectedPrDetail = createMemo<PRDetail | undefined>(() => cachedPr(selectedPr()));
 
+  function selectedPrForRefresh(): PRIdentity | undefined {
+    const identity = selectedPr();
+    if (identity) {
+      const live = cachedPr(identity) ?? visiblePRs().find((pr) => samePr(pr, identity));
+      return live ? prKey(live) : identity;
+    }
+    const firstVisible = visiblePRs()[0];
+    return firstVisible ? prKey(firstVisible) : undefined;
+  }
+
   /** Detail view threads read from the threads cache; reactive via threadsQueryVersion. */
   const detailThreads = (): FullReviewThread[] | undefined => {
     threadsQueryVersion();
@@ -582,47 +592,268 @@ function AppInner(props: AppInnerProps) {
   };
 
   // ── Refresh handlers ──────────────────────────────────────────────────
-  function invalidatePr(repo: string, pr: PR) {
-    mergeableRetried.delete(`${repo}:${pr.number}`);
-    void props.queryClient.invalidateQueries({ queryKey: ["pr", repo, pr.number] });
-    void props.queryClient.invalidateQueries({ queryKey: ["threads", repo, pr.number] });
-    void props.queryClient.invalidateQueries({
-      queryKey: ["checks", repo, pr.headCommitSha ?? ""],
+  type RefreshPhase = "queued" | "refreshing";
+  type RefreshPriority = 0 | 1 | 2 | 3 | 4;
+
+  interface QueuedRefresh {
+    repo: string;
+    number: number;
+    phase: RefreshPhase;
+    priority: RefreshPriority;
+    order: number;
+    includeFiles: boolean;
+  }
+
+  const [queuedRefreshes, setQueuedRefreshes] = createSignal<Map<string, QueuedRefresh>>(new Map());
+  let nextRefreshOrder = 0;
+  let activeRefreshes = 0;
+  const activeRepoRefreshes = new Set<string>();
+  const MAX_ACTIVE_REFRESHES = 2;
+
+  function refreshKey(pr: PRIdentity): string {
+    return `${pr.repoSlug ?? props.app.repoSlug}#${pr.number}`;
+  }
+
+  function refreshPriorityForPr(pr: PR): RefreshPriority {
+    const tier = getPRState(pr).smartStatus?.key;
+    switch (tier) {
+      case "me-blocking":
+        return 1;
+      case "needs-review":
+        return 2;
+      case "waiting-on-author":
+        return 3;
+      default:
+        return 4;
+    }
+  }
+
+  function refreshStateForPr(pr: PRIdentity): RefreshPhase | undefined {
+    return queuedRefreshes().get(refreshKey(pr))?.phase;
+  }
+
+  function formatRefreshError(prefix: string, error: unknown): string {
+    const message = error instanceof Error ? error.message : String(error);
+    return `${prefix}: ${message.split("\n")[0]}`;
+  }
+
+  function nextQueuedRefresh(): QueuedRefresh | undefined {
+    let next: QueuedRefresh | undefined;
+    for (const refresh of queuedRefreshes().values()) {
+      if (refresh.phase !== "queued") continue;
+      if (
+        !next ||
+        refresh.priority < next.priority ||
+        (refresh.priority === next.priority && refresh.order < next.order)
+      ) {
+        next = refresh;
+      }
+    }
+    return next;
+  }
+
+  function setRefreshPhase(key: string, phase: RefreshPhase): void {
+    setQueuedRefreshes((prev) => {
+      const current = prev.get(key);
+      if (!current || current.phase === phase) return prev;
+      const next = new Map(prev);
+      next.set(key, { ...current, phase });
+      return next;
     });
-    void props.queryClient.invalidateQueries({ queryKey: ["reviews", repo, pr.number] });
-    void props.queryClient.invalidateQueries({ queryKey: ["files", repo, pr.number] });
+  }
+
+  function clearQueuedRefresh(key: string): void {
+    setQueuedRefreshes((prev) => {
+      if (!prev.has(key)) return prev;
+      const next = new Map(prev);
+      next.delete(key);
+      return next;
+    });
+  }
+
+  function queuePrRefresh(
+    pr: PRIdentity,
+    options: { priority: RefreshPriority; includeFiles: boolean },
+  ): void {
+    const repo = pr.repoSlug ?? props.app.repoSlug;
+    const key = refreshKey({ ...pr, repoSlug: repo });
+    let changed = false;
+
+    setQueuedRefreshes((prev) => {
+      const existing = prev.get(key);
+      if (existing?.phase === "refreshing") {
+        return prev;
+      }
+
+      const next = new Map(prev);
+      const nextRefresh: QueuedRefresh = {
+        repo,
+        number: pr.number,
+        phase: "queued",
+        priority: existing
+          ? (Math.min(existing.priority, options.priority) as RefreshPriority)
+          : options.priority,
+        order: existing?.order ?? nextRefreshOrder++,
+        includeFiles: options.includeFiles || existing?.includeFiles === true,
+      };
+
+      if (
+        existing &&
+        existing.priority === nextRefresh.priority &&
+        existing.includeFiles === nextRefresh.includeFiles
+      ) {
+        return prev;
+      }
+
+      next.set(key, nextRefresh);
+      changed = true;
+      return next;
+    });
+
+    if (changed) {
+      queueMicrotask(() => pumpRefreshQueue());
+    }
+  }
+
+  async function refreshRepoIndex(repo: string): Promise<void> {
+    if (activeRepoRefreshes.has(repo)) return;
+    activeRepoRefreshes.add(repo);
+
+    try {
+      let latestSnapshot: PR[] = [];
+      for await (const snapshot of props.app.fetchPRs(repo)) {
+        latestSnapshot = snapshot;
+        for (const pr of snapshot) {
+          const slug = pr.repoSlug ?? repo;
+          props.queryClient.setQueryData<PRDetail>(["pr", slug, pr.number], (prev) => ({
+            body: prev?.body ?? "",
+            ...(prev ?? {}),
+            ...pr,
+            repoSlug: slug,
+          }));
+        }
+      }
+
+      props.queryClient.setQueryData<PRIndexEntry[]>(
+        ["pr-index", repo],
+        latestSnapshot.map((pr) => ({
+          number: pr.number,
+          createdAt: pr.createdAt,
+          repoSlug: pr.repoSlug ?? repo,
+        })),
+      );
+    } catch (error) {
+      ui.setStatusMessage({
+        text: formatRefreshError(`refresh failed for ${repo}`, error),
+        kind: "error",
+      });
+    } finally {
+      activeRepoRefreshes.delete(repo);
+    }
+  }
+
+  async function runQueuedRefresh(refresh: QueuedRefresh): Promise<void> {
+    const { repo, number, includeFiles } = refresh;
+    mergeableRetried.delete(`${repo}:${number}`);
+
+    const [nextPr, threads, reviews] = await Promise.all([
+      props.app.fetchPR(repo, number),
+      props.app.fetchFullReviewThreads(repo, number),
+      props.app.fetchReviews(repo, number),
+    ]);
+
+    props.queryClient.setQueryData<PRDetail>(["pr", repo, number], (prev) => ({
+      ...(prev ?? {}),
+      ...nextPr,
+      repoSlug: repo,
+    }));
+    props.queryClient.setQueryData(["threads", repo, number], threads);
+    props.queryClient.setQueryData(["reviews", repo, number], reviews);
+    prunePrIndexIfClosed(repo, nextPr);
+
+    if (nextPr.headCommitSha) {
+      const checks = await props.app.fetchCheckRuns(repo, nextPr.headCommitSha);
+      props.queryClient.setQueryData(["checks", repo, nextPr.headCommitSha], checks);
+    }
+
+    if (includeFiles) {
+      const files = await props.app.fetchCategorizedFiles(repo, number);
+      props.queryClient.setQueryData(["files", repo, number], files);
+    }
+
     const sourceClone = props.app.resolveSourceClone(repo);
     if (sourceClone) {
       void props.queryClient.invalidateQueries({ queryKey: ["worktrees", sourceClone] });
     }
   }
 
+  function pumpRefreshQueue(): void {
+    while (activeRefreshes < MAX_ACTIVE_REFRESHES) {
+      const next = nextQueuedRefresh();
+      if (!next) return;
+
+      const key = `${next.repo}#${next.number}`;
+      next.phase = "refreshing";
+      activeRefreshes++;
+      setRefreshPhase(key, "refreshing");
+
+      void runQueuedRefresh(next)
+        .catch((error) => {
+          ui.setStatusMessage({
+            text: formatRefreshError(`refresh failed for #${next.number}`, error),
+            kind: "error",
+          });
+        })
+        .finally(() => {
+          activeRefreshes--;
+          clearQueuedRefresh(key);
+          pumpRefreshQueue();
+        });
+    }
+  }
+
   function refreshSelected() {
-    const pr = selectedPrDetail();
+    const pr = selectedPrForRefresh();
     if (!pr) return;
-    const repo = pr.repoSlug ?? props.app.repoSlug;
-    invalidatePr(repo, pr);
+    queuePrRefresh(pr, { priority: 0, includeFiles: true });
   }
 
   function refreshAll() {
+    const currentRepos = repoTabs();
+    const activeTab = ui.activeTab();
+
     props.app.reloadConfig();
-    setRepoTabs(props.app.trackedRepos());
-    mergeableRetried.clear();
-    // Re-stream indexes; the reducer re-seeds per-PR caches, so we do not
-    // separately invalidate ["pr", ...] (that would produce N extra fetches).
-    void props.queryClient.invalidateQueries({ queryKey: ["pr-index"] });
-    void props.queryClient.invalidateQueries({ queryKey: ["threads"] });
-    void props.queryClient.invalidateQueries({ queryKey: ["reviews"] });
-    void props.queryClient.invalidateQueries({ queryKey: ["checks"] });
-    void props.queryClient.invalidateQueries({ queryKey: ["files"] });
-    void props.queryClient.invalidateQueries({ queryKey: ["worktrees"] });
+    const nextRepos = props.app.trackedRepos();
+    setRepoTabs(nextRepos);
+
+    const currentTabRepo =
+      activeTab === 0 ? undefined : (currentRepos[activeTab - 1] ?? nextRepos[activeTab - 1]);
+    const targetRepos =
+      activeTab === 0
+        ? Array.from(new Set([...currentRepos, ...nextRepos]))
+        : currentTabRepo
+          ? [currentTabRepo]
+          : [];
+    const targetRepoSet = new Set(targetRepos);
+
+    for (const repo of targetRepos) {
+      void refreshRepoIndex(repo);
+    }
+
+    for (const pr of visiblePRs()) {
+      const repo = pr.repoSlug ?? props.app.repoSlug;
+      if (!targetRepoSet.has(repo)) continue;
+      queuePrRefresh(prKey(pr), {
+        priority: refreshPriorityForPr(pr),
+        includeFiles: false,
+      });
+    }
   }
 
   function refreshDetail() {
-    const pr = detailPrDetail();
+    const pr = detailPr() ?? detailPrDetail();
     if (!pr) return;
-    const repo = pr.repoSlug ?? props.app.repoSlug;
-    invalidatePr(repo, pr);
+    queuePrRefresh(prKey(pr), { priority: 0, includeFiles: true });
     setDetailRefreshKey((n) => n + 1);
   }
 
@@ -717,6 +948,7 @@ function AppInner(props: AppInnerProps) {
       summaryFiles={selectedFiles()}
       summaryLoading={summaryLoading()}
       getPRState={getPRState}
+      getRefreshState={refreshStateForPr}
       summaryState={summaryState()}
       onSelectionChange={selectPr}
       onTabChange={changeTab}

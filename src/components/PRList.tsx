@@ -61,6 +61,8 @@ interface PRListProps {
   visibleColumns?: VisibleColumns;
   /** Lookup function for derived PR state. */
   getPRState?: (pr: PR) => PRDerivedState;
+  /** Queue/refresh marker state for this PR row. */
+  getRefreshState?: (pr: PR) => "queued" | "refreshing" | undefined;
 }
 
 // Column widths — fixed columns; title gets remaining space via flexGrow
@@ -229,6 +231,7 @@ function PRRow(props: {
   onMouseDown?: (e: MouseEvent) => void;
   visibleColumns?: VisibleColumns;
   getPRState?: (pr: PR) => PRDerivedState;
+  getRefreshState?: (pr: PR) => "queued" | "refreshing" | undefined;
 }) {
   const fg = () => (props.selected ? theme.selectedFg : undefined);
   const prState = createMemo(
@@ -246,6 +249,7 @@ function PRRow(props: {
   const comments = (): CommentCounts | undefined => prState().commentCounts;
   const blockerCell = () => prState().blockerDisplay;
   const enrichmentLoading = () => prState().loading;
+  const refreshState = () => props.getRefreshState?.(props.pr);
   return (
     <box
       id={props.id}
@@ -256,10 +260,29 @@ function PRRow(props: {
       onMouseDown={props.onMouseDown}
     >
       <Cell width={COL.worktree} paddingRight={1}>
-        <Show when={prState().worktree}>
-          <span style={{ fg: props.selected ? theme.selectedFg : theme.accent }}>
-            {WORKTREE_GLYPH}
-          </span>
+        <Show
+          when={refreshState()}
+          fallback={
+            <Show when={prState().worktree}>
+              <span style={{ fg: props.selected ? theme.selectedFg : theme.accent }}>
+                {WORKTREE_GLYPH}
+              </span>
+            </Show>
+          }
+        >
+          {(state) => (
+            <span
+              style={{
+                fg: props.selected
+                  ? theme.selectedFg
+                  : state() === "refreshing"
+                    ? theme.accent
+                    : theme.warning,
+              }}
+            >
+              {state() === "refreshing" ? "⟳" : "◌"}
+            </span>
+          )}
         </Show>
       </Cell>
       <Cell width={COL.pr} paddingRight={1}>
@@ -438,6 +461,7 @@ export function PRList(props: PRListProps) {
                 currentUser={props.currentUser}
                 visibleColumns={resolvedVisibleColumns()}
                 getPRState={props.getPRState}
+                getRefreshState={props.getRefreshState}
                 onMouseDown={(e: MouseEvent) => {
                   e.preventDefault();
                   props.onSelect?.(row.prIndex);
