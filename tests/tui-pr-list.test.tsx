@@ -1,6 +1,11 @@
 import { describe, test, expect } from "bun:test";
 import { testRender } from "@opentui/solid";
-import { PRList, PRListHeader, computeVisibleColumns } from "../src/components/PRList";
+import {
+  PRList,
+  PRListHeader,
+  buildFlatItems,
+  computeVisibleColumns,
+} from "../src/components/PRList";
 import { derivePRState } from "../src/lib/pr-state";
 import { makePR } from "./helpers";
 
@@ -152,6 +157,29 @@ describe("PRList", () => {
     await renderOnce();
     const frame = captureCharFrame();
     expect(frame).toContain("approved");
+  });
+
+  test("renders lookup-backed items without recreating row PR wrappers", async () => {
+    const prs = [
+      makePR({ number: 1, title: "First PR", author: "alice", repoSlug: "acme/widgets" }),
+      makePR({ number: 2, title: "Second PR", author: "bob", repoSlug: "acme/widgets" }),
+    ];
+    const flatItems = buildFlatItems([
+      { label: "", prKeys: prs.map((pr) => `${pr.repoSlug}#${pr.number}`) },
+    ]);
+    const lookup = new Map(prs.map((pr) => [`${pr.repoSlug}#${pr.number}`, pr]));
+
+    const { renderOnce, captureCharFrame } = await testRender(
+      () => <PRList items={flatItems} getPRByKey={(key) => lookup.get(key)} selectedIndex={0} />,
+      { width: 120, height: 20 },
+    );
+
+    await renderOnce();
+    const frame = captureCharFrame();
+    expect(frame).toContain("#1");
+    expect(frame).toContain("#2");
+    expect(frame).toContain("First PR");
+    expect(frame).toContain("Second PR");
   });
 
   test("renders empty state when no PRs", async () => {

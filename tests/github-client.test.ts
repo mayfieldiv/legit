@@ -333,6 +333,73 @@ describe("GitHubClient", () => {
       expect(snapshots[0]).toHaveLength(1);
       expect(snapshots[1]).toHaveLength(2);
     });
+
+    test("batches open PR snapshots after the first eager update", async () => {
+      const prs = Array.from({ length: 5 }, (_, index) => ({
+        ...SAMPLE_REST_PR,
+        number: index + 1,
+        title: `PR ${index + 1}`,
+      }));
+      const transport = createMockTransport({
+        async *listOpenPRs() {
+          for (const pr of prs) {
+            yield pr;
+          }
+        },
+        async *fetchReviewStatus() {},
+      });
+      const client = createGitHubClient(transport, { openPrRestSnapshotBatchSize: 2 });
+      const snapshots = await collectAll(client.fetchOpenPRs("acme/widgets"));
+
+      expect(snapshots.map((snapshot) => snapshot.length)).toEqual([1, 3, 5]);
+    });
+
+    test("batches enrichment snapshots after the first eager update", async () => {
+      const prs = Array.from({ length: 5 }, (_, index) => ({
+        ...SAMPLE_REST_PR,
+        number: index + 1,
+        title: `PR ${index + 1}`,
+      }));
+      const transport = createMockTransport({
+        async *listOpenPRs() {
+          for (const pr of prs) {
+            yield pr;
+          }
+        },
+        async *fetchReviewStatus(_owner, _repo, prNumbers) {
+          for (const prNumber of prNumbers) {
+            yield {
+              prNumber,
+              additions: prNumber * 10,
+              deletions: prNumber,
+              reviewDecision: prNumber === 5 ? "APPROVED" : "",
+              mergeable: "MERGEABLE",
+              commits: {
+                nodes: [
+                  {
+                    commit: {
+                      oid: `sha-${prNumber}`,
+                      committedDate: "2026-03-14T00:00:00Z",
+                    },
+                  },
+                ],
+              },
+            };
+          }
+        },
+      });
+      const client = createGitHubClient(transport, {
+        openPrRestSnapshotBatchSize: 100,
+        openPrStatusSnapshotBatchSize: 2,
+      });
+      const snapshots = await collectAll(client.fetchOpenPRs("acme/widgets"));
+
+      expect(snapshots.map((snapshot) => snapshot.length)).toEqual([1, 5, 5, 5, 5]);
+      expect(snapshots[2]![0]!.additions).toBe(10);
+      expect(snapshots[3]![2]!.additions).toBe(30);
+      expect(snapshots[3]![4]!.reviewDecision).toBe("");
+      expect(snapshots[4]![4]!.reviewDecision).toBe("APPROVED");
+    });
   });
 
   describe("fetchPR", () => {

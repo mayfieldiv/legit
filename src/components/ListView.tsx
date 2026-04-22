@@ -172,15 +172,14 @@ export function ListView(props: ListViewProps) {
   });
 
   /** Full flat items list including group headers. */
-  const flatItems = createMemo<FlatItem[]>(() => {
-    const lookup = prByKey();
-    return buildFlatItems(
+  const flatItems = createMemo<FlatItem[]>(() =>
+    buildFlatItems(
       processedStructure().groups.map((group) => ({
         label: group.label,
-        prs: group.prKeys.map((key) => lookup.get(key)).filter((pr): pr is PR => pr !== undefined),
+        prKeys: group.prKeys,
       })),
-    );
-  });
+    ),
+  );
 
   // ── Selection ─────────────────────────────────────────────────────────────
   const selection = createListSelection(() => displayPRs().length);
@@ -436,6 +435,7 @@ export function ListView(props: ListViewProps) {
           >
             <PRList
               items={flatItems()}
+              getPRByKey={(key) => prByKey().get(key)}
               selectedIndex={selection.index()}
               showRepo={props.showRepo}
               currentUser={props.currentUser}

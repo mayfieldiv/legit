@@ -160,6 +160,18 @@ export interface GitHubClientOptions {
    * Default: 3000.
    */
   mergeableRetryDelayMs?: number;
+  /**
+   * Max number of newly discovered PRs to accumulate before yielding a fresh
+   * open-PR snapshot after the initial eager snapshot.
+   * Default: 20.
+   */
+  openPrRestSnapshotBatchSize?: number;
+  /**
+   * Max number of enrichment updates to accumulate before yielding a fresh
+   * open-PR snapshot after the initial eager snapshot.
+   * Default: 25.
+   */
+  openPrStatusSnapshotBatchSize?: number;
 }
 
 function parseOwnerRepo(repo: string): [string, string] {
@@ -173,24 +185,53 @@ export function createGitHubClient(
   options?: GitHubClientOptions,
 ): GitHubClient {
   const MERGEABLE_RETRY_DELAY_MS = options?.mergeableRetryDelayMs ?? 3_000;
+  const OPEN_PR_REST_SNAPSHOT_BATCH_SIZE = options?.openPrRestSnapshotBatchSize ?? 20;
+  const OPEN_PR_STATUS_SNAPSHOT_BATCH_SIZE = options?.openPrStatusSnapshotBatchSize ?? 25;
+
+  const shouldFlushSnapshotBatch = (
+    totalItems: number,
+    pendingItems: number,
+    batchSize: number,
+  ): boolean => {
+    return totalItems === 1 || pendingItems >= batchSize;
+  };
+
   return {
     async *fetchOpenPRs(repo: string, signal?: AbortSignal) {
       const [owner, repoName] = parseOwnerRepo(repo);
 
-      // Phase 1: yield PRs as they stream in from REST (no review status yet)
+      // Phase 1: yield PRs as they stream in from REST (no review status yet).
+      // Yield the first item eagerly so the UI can render immediately, then
+      // batch later additions to avoid hundreds of whole-list re-renders.
       const restPRs: RestPR[] = [];
       const prs: PR[] = [];
+      let pendingRestUpdates = 0;
 
       for await (const raw of transport.listOpenPRs(owner, repoName, signal)) {
         const rest = parseRestPR(raw);
         restPRs.push(rest);
         prs.push(mergePR(rest));
+        pendingRestUpdates++;
+
+        if (
+          shouldFlushSnapshotBatch(prs.length, pendingRestUpdates, OPEN_PR_REST_SNAPSHOT_BATCH_SIZE)
+        ) {
+          yield [...prs];
+          pendingRestUpdates = 0;
+        }
+      }
+
+      if (pendingRestUpdates > 0) {
         yield [...prs];
       }
 
       if (prs.length === 0) return;
 
-      // Phase 2: enrich with review status as it streams in
+      // Phase 2: enrich with review status as it streams in. Apply the same
+      // eager-first-then-batched strategy so review/check metadata doesn't
+      // thrash the list view with one full snapshot per PR.
+      let pendingStatusUpdates = 0;
+      let totalStatusUpdates = 0;
       for await (const rawStatus of transport.fetchReviewStatus(
         owner,
         repoName,
@@ -199,10 +240,26 @@ export function createGitHubClient(
       )) {
         const status = parseReviewStatus(rawStatus);
         const idx = restPRs.findIndex((r) => r.number === rawStatus.prNumber);
-        if (idx !== -1) {
-          prs[idx] = mergePR(restPRs[idx]!, status);
+        if (idx === -1) continue;
+
+        prs[idx] = mergePR(restPRs[idx]!, status);
+        pendingStatusUpdates++;
+        totalStatusUpdates++;
+
+        if (
+          shouldFlushSnapshotBatch(
+            totalStatusUpdates,
+            pendingStatusUpdates,
+            OPEN_PR_STATUS_SNAPSHOT_BATCH_SIZE,
+          )
+        ) {
           yield [...prs];
+          pendingStatusUpdates = 0;
         }
+      }
+
+      if (pendingStatusUpdates > 0) {
+        yield [...prs];
       }
     },
 

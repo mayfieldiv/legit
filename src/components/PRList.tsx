@@ -3,6 +3,7 @@ import type { JSX as OpenTuiJSX } from "@opentui/solid";
 import { createMemo } from "solid-js";
 import type { Accessor } from "solid-js";
 import type { PR, CommentCounts } from "../lib/types";
+import type { PRIdentity } from "../lib/pr-identity";
 import type { MouseEvent } from "@opentui/core";
 import { formatAge, formatSize, formatRepoShort } from "../lib/format";
 import { theme } from "../lib/theme";
@@ -12,21 +13,27 @@ import { WORKTREE_GLYPH } from "./WorktreeRow";
 // ── Flat item type (group headers + PR rows) ─────────────────────────────────
 
 /** A single display item in the PR list: either a group header or a PR row. */
-export type FlatItem = { kind: "header"; label: string } | { kind: "pr"; pr: PR; prIndex: number };
+export type FlatItem =
+  | { kind: "header"; label: string }
+  | { kind: "pr"; prIndex: number; prKey: string; pr?: PR };
+
+function prLookupKey(pr: PRIdentity): string {
+  return `${pr.repoSlug ?? ""}#${pr.number}`;
+}
 
 /**
  * Build a flat display list from groups (including headers).
  * Groups with empty labels (i.e. "none" grouping) produce no header row.
  */
-export function buildFlatItems(groups: Array<{ label: string; prs: PR[] }>): FlatItem[] {
+export function buildFlatItems(groups: Array<{ label: string; prKeys: string[] }>): FlatItem[] {
   const items: FlatItem[] = [];
   let prIndex = 0;
   for (const group of groups) {
     if (group.label) {
       items.push({ kind: "header", label: group.label });
     }
-    for (const pr of group.prs) {
-      items.push({ kind: "pr", pr, prIndex: prIndex++ });
+    for (const prKey of group.prKeys) {
+      items.push({ kind: "pr", prKey, prIndex: prIndex++ });
     }
   }
   return items;
@@ -53,6 +60,8 @@ interface PRListProps {
   prs?: PR[];
   /** Pre-built flat items list (with optional group headers). Overrides `prs`. */
   items?: FlatItem[];
+  /** Lookup used by `items` rows to resolve the live PR object for a stable key. */
+  getPRByKey?: (key: string) => PR | undefined;
   selectedIndex: number;
   showRepo?: boolean;
   currentUser?: string;
@@ -433,8 +442,17 @@ export function PRList(props: PRListProps) {
   // Resolve flat items — prefer `items` prop; fall back to converting `prs`
   const resolvedItems = createMemo((): FlatItem[] => {
     if (props.items) return props.items;
-    return (props.prs ?? []).map((pr, i) => ({ kind: "pr", pr, prIndex: i }));
+    return (props.prs ?? []).map((pr, i) => ({
+      kind: "pr",
+      pr,
+      prKey: prLookupKey(pr),
+      prIndex: i,
+    }));
   });
+
+  const resolvePr = (item: Extract<FlatItem, { kind: "pr" }>): PR | undefined => {
+    return item.pr ?? props.getPRByKey?.(item.prKey);
+  };
 
   const resolvedVisibleColumns = createMemo<VisibleColumns>(() => {
     if (props.visibleColumns) return props.visibleColumns;
@@ -452,10 +470,12 @@ export function PRList(props: PRListProps) {
             if (row.kind === "header") {
               return <GroupHeaderRow label={row.label} />;
             }
+            const pr = resolvePr(row);
+            if (!pr) return null;
             return (
               <PRRow
-                id={`pr-row-${row.prIndex}`}
-                pr={row.pr}
+                id={`pr-row-${row.prKey}`}
+                pr={pr}
                 selected={row.prIndex === props.selectedIndex}
                 showRepo={props.showRepo}
                 currentUser={props.currentUser}
