@@ -13,7 +13,7 @@ import { samePr, prKey, type PRIdentity } from "./lib/pr-identity";
 import { AppShell } from "./components/AppShell";
 import { createUIState } from "./lib/ui-state";
 import type { Legit } from "./lib/legit";
-import type { GitHubNetworkStats } from "./lib/concurrency";
+import { GITHUB_HTTP_MAX_CONCURRENT_REQUESTS, type GitHubNetworkStats } from "./lib/concurrency";
 import type {
   PR,
   PRDetail,
@@ -608,7 +608,9 @@ function AppInner(props: AppInnerProps) {
   let nextRefreshOrder = 0;
   let activeRefreshes = 0;
   const activeRepoRefreshes = new Set<string>();
-  const MAX_ACTIVE_REFRESHES = 2;
+  // Keep the app-level refresh queue aligned with the shared HTTP semaphore so
+  // bulk refreshes can fully saturate available request capacity.
+  const MAX_ACTIVE_REFRESHES = GITHUB_HTTP_MAX_CONCURRENT_REQUESTS;
 
   function refreshKey(pr: PRIdentity): string {
     return `${pr.repoSlug ?? props.app.repoSlug}#${pr.number}`;

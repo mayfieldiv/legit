@@ -7,6 +7,8 @@ import { join } from "path";
 import type { HttpFetch } from "./github-transport";
 import { createLogWriter, type LogWriter } from "./log-writer";
 
+export const GITHUB_HTTP_MAX_CONCURRENT_REQUESTS = 10;
+
 export interface GitHubNetworkStats {
   /** Requests currently executing (HTTP in flight). */
   inFlight: number;

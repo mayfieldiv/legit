@@ -4,6 +4,7 @@ import { loadConfig, saveConfig, addRepo, type LegitConfig, type RepoConfig } fr
 import { createGitHubTransport, type HttpFetch } from "./github-transport";
 import { createGitHubClient, type GitHubClient } from "./github-client";
 import {
+  GITHUB_HTTP_MAX_CONCURRENT_REQUESTS,
   withConcurrencyLimit,
   type ConcurrencyLimitedFetch,
   type GitHubNetworkStats,
@@ -213,7 +214,7 @@ export class Legit {
   get client(): GitHubClient {
     if (!this._client) {
       this._concurrencyLimited = withConcurrencyLimit(
-        10,
+        GITHUB_HTTP_MAX_CONCURRENT_REQUESTS,
         this._options.httpFetch ?? globalThis.fetch,
       );
       const transport = createGitHubTransport(this.auth.token, this._concurrencyLimited.fetch);
