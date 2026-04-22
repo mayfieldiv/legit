@@ -8,6 +8,7 @@ import { createListSelection } from "../lib/list-selection";
 import { processPRList } from "../lib/group-filter-engine";
 import type { GroupByKey } from "../lib/group-filter-engine";
 import type { PR } from "../lib/types";
+import type { PRIdentity } from "../lib/pr-identity";
 import type { GitHubNetworkStats } from "../lib/concurrency";
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { StatusBar } from "./StatusBar";
@@ -88,6 +89,10 @@ export function computeScrollTarget({
   return null;
 }
 
+function prLookupKey(pr: PRIdentity): string {
+  return `${pr.repoSlug ?? ""}#${pr.number}`;
+}
+
 export function ListView(props: ListViewProps) {
   // ── Filter state ──────────────────────────────────────────────────────────
   const [filterText, setFilterText] = createSignal("");
@@ -102,24 +107,36 @@ export function ListView(props: ListViewProps) {
   const [panelIndex, setPanelIndex] = createSignal(0);
 
   // ── Processed PR list ─────────────────────────────────────────────────────
-  // The memo computes grouping/filtering/sorting. For smart-status grouping
-  // it reads getPRState which is reactive to enrichment queries. A custom
-  // equals function prevents downstream propagation (and thus full <For>
-  // rebuilds) when only enrichment data changed but the group structure
-  // (which PRs are in which group, in what order) stayed the same.
-  // Enrichment (threads/reviews/checks) lives in separate cache keys, so
-  // it never replaces the PR object reference — only a real PR refetch
-  // does. Comparing by reference therefore distinguishes "enrichment
-  // changed" (same PR refs) from "PR data changed" (new PR refs), which
-  // matters for fields read directly off the PR like `mergeable`.
-  const processedResult = createMemo(
-    () =>
-      processPRList(props.prs, {
+  // Grouping/filtering determines only the list structure (group labels and
+  // PR order). Row rendering must still read the live PR objects from the
+  // current `props.prs` array so field updates like `mergeable` propagate even
+  // when the grouping itself is unchanged.
+  const prByKey = createMemo(() => {
+    const map = new Map<string, PR>();
+    for (const pr of props.prs) {
+      map.set(prLookupKey(pr), pr);
+    }
+    return map;
+  });
+
+  const processedStructure = createMemo(
+    () => {
+      const result = processPRList(props.prs, {
         groupBy: activeGroupBy(),
         filterText: filterText(),
         currentUser: props.currentUser,
         getPRState: props.getPRState,
-      }),
+      });
+
+      return {
+        totalMatched: result.totalMatched,
+        groups: result.groups.map((group) => ({
+          key: group.key,
+          label: group.label,
+          prKeys: group.prs.map((pr) => prLookupKey(pr)),
+        })),
+      };
+    },
     undefined,
     {
       equals(prev, next) {
@@ -130,10 +147,10 @@ export function ListView(props: ListViewProps) {
         for (let i = 0; i < prev.groups.length; i++) {
           const pg = prev.groups[i]!;
           const ng = next.groups[i]!;
-          if (pg.key !== ng.key) return false;
-          if (pg.prs.length !== ng.prs.length) return false;
-          for (let j = 0; j < pg.prs.length; j++) {
-            if (pg.prs[j] !== ng.prs[j]) return false;
+          if (pg.key !== ng.key || pg.label !== ng.label) return false;
+          if (pg.prKeys.length !== ng.prKeys.length) return false;
+          for (let j = 0; j < pg.prKeys.length; j++) {
+            if (pg.prKeys[j] !== ng.prKeys[j]) return false;
           }
         }
         return true;
@@ -142,10 +159,28 @@ export function ListView(props: ListViewProps) {
   );
 
   /** Flat list of matched PRs (for selection tracking). */
-  const displayPRs = createMemo<PR[]>(() => processedResult().groups.flatMap((g) => g.prs));
+  const displayPRs = createMemo<PR[]>(() => {
+    const prs: PR[] = [];
+    const lookup = prByKey();
+    for (const group of processedStructure().groups) {
+      for (const key of group.prKeys) {
+        const pr = lookup.get(key);
+        if (pr) prs.push(pr);
+      }
+    }
+    return prs;
+  });
 
   /** Full flat items list including group headers. */
-  const flatItems = createMemo<FlatItem[]>(() => buildFlatItems(processedResult().groups));
+  const flatItems = createMemo<FlatItem[]>(() => {
+    const lookup = prByKey();
+    return buildFlatItems(
+      processedStructure().groups.map((group) => ({
+        label: group.label,
+        prs: group.prKeys.map((key) => lookup.get(key)).filter((pr): pr is PR => pr !== undefined),
+      })),
+    );
+  });
 
   // ── Selection ─────────────────────────────────────────────────────────────
   const selection = createListSelection(() => displayPRs().length);
