@@ -366,23 +366,26 @@ function AppInner(props: AppInnerProps) {
     return Array.from(checks.values());
   });
 
-  const checksQueries = useQueries<CheckRun[]>(() => ({
+  const checksQueries = useQueries<{ key: string; checks: CheckRun[] }>(() => ({
     queries: uniqueChecks().map(({ repo, headCommitSha, enabled }) => ({
       queryKey: ["checks", repo, headCommitSha] as const,
       queryFn: async ({ signal }: { signal: AbortSignal }) =>
         props.app.fetchCheckRuns(repo, headCommitSha, signal),
+      select: (data) => ({
+        key: checksLookupKey(repo, headCommitSha),
+        checks: data as CheckRun[],
+      }),
       enabled,
     })),
   }));
 
   const checksByKey = createMemo(() => {
-    const map = new Map<string, CheckRun[] | undefined>();
-    const checks = uniqueChecks();
-
-    for (let i = 0; i < checks.length; i++) {
-      map.set(checks[i]!.key, checksQueries[i]?.data);
+    const map = new Map<string, CheckRun[]>();
+    for (const query of checksQueries) {
+      const data = query.data;
+      if (!data) continue;
+      map.set(data.key, data.checks);
     }
-
     return map;
   });
 

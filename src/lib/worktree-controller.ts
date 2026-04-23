@@ -65,26 +65,30 @@ export function createWorktreeController(deps: WorktreeControllerDeps): Worktree
     return [...set];
   });
 
-  const worktreeQueries = useQueries<WorktreeEntry[]>(() => ({
+  const worktreeQueries = useQueries<{ sourceClone: string; entries: WorktreeEntry[] }>(() => ({
     queries: uniqueSourceClones().map((sourceClone) => ({
       queryKey: ["worktrees", sourceClone] as const,
       queryFn: () => listWorktrees(sourceClone),
+      select: (data) => ({ sourceClone, entries: data as WorktreeEntry[] }),
       staleTime: Infinity,
     })),
   }));
 
-  const queryVersion = createMemo(() =>
-    worktreeQueries
-      .map((query) => `${query.status}:${query.fetchStatus}:${query.dataUpdatedAt}`)
-      .join("|"),
-  );
+  const worktreesBySourceClone = createMemo(() => {
+    const map = new Map<string, WorktreeEntry[]>();
+    for (const query of worktreeQueries) {
+      const data = query.data;
+      if (!data) continue;
+      map.set(data.sourceClone, data.entries);
+    }
+    return map;
+  });
 
   function worktreeForPr(pr: PR): WorktreeInfo | undefined {
-    queryVersion();
     const slug = pr.repoSlug ?? app.repoSlug;
     const sourceClone = app.resolveSourceClone(slug);
     if (!sourceClone) return undefined;
-    const entries = queryClient.getQueryData<WorktreeEntry[]>(["worktrees", sourceClone]);
+    const entries = worktreesBySourceClone().get(sourceClone);
     if (!entries) return undefined;
     const [owner] = slug.split("/");
     const expectedBranch = expectedBranchForPR(pr, owner ?? "");
