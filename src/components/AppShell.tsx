@@ -32,7 +32,7 @@ interface AppShellProps {
   resetKey?: number | string;
   view: ViewTarget;
   error?: string;
-  onRefreshSelected: () => void;
+  onRefreshSelected: (pr?: PR) => void;
   onRefreshAll: () => void;
   onSelectionChange?: (pr: PR) => void;
   onOpenInBrowser?: (pr: PR) => void;

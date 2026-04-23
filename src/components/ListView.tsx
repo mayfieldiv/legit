@@ -29,7 +29,7 @@ interface ListViewProps {
   getPRState?: (pr: PR) => PRDerivedState;
   /** Queue/refresh marker state for list rows. */
   getRefreshState?: (pr: PR) => "queued" | "refreshing" | undefined;
-  onRefreshSelected: () => void;
+  onRefreshSelected: (pr?: PR) => void;
   onRefreshAll: () => void;
   onEnterDetail: (pr: PR) => void;
   onSelectionChange?: (pr: PR) => void;
@@ -332,7 +332,7 @@ export function ListView(props: ListViewProps) {
     } else if (name === "k" || name === "up") {
       navigate("up");
     } else if (name === "r" && !event.shift) {
-      props.onRefreshSelected();
+      props.onRefreshSelected(selection.selectedItem(displayPRs()));
     } else if ((name === "r" && event.shift) || name === "R") {
       props.onRefreshAll();
     } else if (name === "return") {

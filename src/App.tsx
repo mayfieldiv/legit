@@ -814,10 +814,10 @@ function AppInner(props: AppInnerProps) {
     }
   }
 
-  function refreshSelected() {
-    const pr = selectedPrForRefresh();
-    if (!pr) return;
-    queuePrRefresh(pr, { priority: 0, includeFiles: true });
+  function refreshSelected(pr?: PR) {
+    const target = pr ? prKey(pr) : selectedPrForRefresh();
+    if (!target) return;
+    queuePrRefresh(target, { priority: 0, includeFiles: true });
   }
 
   function refreshAll() {
