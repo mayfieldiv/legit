@@ -159,18 +159,15 @@ describe("PRList", () => {
     expect(frame).toContain("approved");
   });
 
-  test("renders lookup-backed items without recreating row PR wrappers", async () => {
+  test("renders pre-built flat items", async () => {
     const prs = [
       makePR({ number: 1, title: "First PR", author: "alice", repoSlug: "acme/widgets" }),
       makePR({ number: 2, title: "Second PR", author: "bob", repoSlug: "acme/widgets" }),
     ];
-    const flatItems = buildFlatItems([
-      { label: "", prKeys: prs.map((pr) => `${pr.repoSlug}#${pr.number}`) },
-    ]);
-    const lookup = new Map(prs.map((pr) => [`${pr.repoSlug}#${pr.number}`, pr]));
+    const flatItems = buildFlatItems([{ label: "", prs }]);
 
     const { renderOnce, captureCharFrame } = await testRender(
-      () => <PRList items={flatItems} getPRByKey={(key) => lookup.get(key)} selectedIndex={0} />,
+      () => <PRList items={flatItems} selectedIndex={0} />,
       { width: 120, height: 20 },
     );
 

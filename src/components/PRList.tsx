@@ -15,7 +15,7 @@ import { WORKTREE_GLYPH } from "./WorktreeRow";
 /** A single display item in the PR list: either a group header or a PR row. */
 export type FlatItem =
   | { kind: "header"; label: string }
-  | { kind: "pr"; prIndex: number; prKey: string; pr?: PR };
+  | { kind: "pr"; prIndex: number; prKey: string; pr: PR };
 
 function prLookupKey(pr: PRIdentity): string {
   return `${pr.repoSlug ?? ""}#${pr.number}`;
@@ -25,15 +25,15 @@ function prLookupKey(pr: PRIdentity): string {
  * Build a flat display list from groups (including headers).
  * Groups with empty labels (i.e. "none" grouping) produce no header row.
  */
-export function buildFlatItems(groups: Array<{ label: string; prKeys: string[] }>): FlatItem[] {
+export function buildFlatItems(groups: Array<{ label: string; prs: PR[] }>): FlatItem[] {
   const items: FlatItem[] = [];
   let prIndex = 0;
   for (const group of groups) {
     if (group.label) {
       items.push({ kind: "header", label: group.label });
     }
-    for (const prKey of group.prKeys) {
-      items.push({ kind: "pr", prKey, prIndex: prIndex++ });
+    for (const pr of group.prs) {
+      items.push({ kind: "pr", pr, prKey: prLookupKey(pr), prIndex: prIndex++ });
     }
   }
   return items;
@@ -60,8 +60,6 @@ interface PRListProps {
   prs?: PR[];
   /** Pre-built flat items list (with optional group headers). Overrides `prs`. */
   items?: FlatItem[];
-  /** Lookup used by `items` rows to resolve the live PR object for a stable key. */
-  getPRByKey?: (key: string) => PR | undefined;
   selectedIndex: number;
   showRepo?: boolean;
   currentUser?: string;
@@ -450,10 +448,6 @@ export function PRList(props: PRListProps) {
     }));
   });
 
-  const resolvePr = (item: Extract<FlatItem, { kind: "pr" }>): PR | undefined => {
-    return item.pr ?? props.getPRByKey?.(item.prKey);
-  };
-
   const resolvedVisibleColumns = createMemo<VisibleColumns>(() => {
     if (props.visibleColumns) return props.visibleColumns;
     return computeVisibleColumns(Math.max(0, dims().width - 12), props.showRepo ?? false);
@@ -470,12 +464,10 @@ export function PRList(props: PRListProps) {
             if (row.kind === "header") {
               return <GroupHeaderRow label={row.label} />;
             }
-            const pr = resolvePr(row);
-            if (!pr) return null;
             return (
               <PRRow
                 id={`pr-row-${row.prKey}`}
-                pr={pr}
+                pr={row.pr}
                 selected={row.prIndex === props.selectedIndex}
                 showRepo={props.showRepo}
                 currentUser={props.currentUser}
