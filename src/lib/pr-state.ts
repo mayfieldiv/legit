@@ -36,8 +36,23 @@ export interface PRDerivedState {
   blockerResult: BlockerResult | undefined;
   blockerDisplay: BlockerDisplayState | null;
   smartStatus: SmartStatusState | undefined;
+  /** Any check run with a failing conclusion (failure / timed_out / cancelled). */
+  hasFailingChecks: boolean;
   /** Local worktree attached to this PR's branch, if legit knows about one. */
   worktree?: WorktreeInfo;
+}
+
+const FAILING_CHECK_CONCLUSIONS = new Set<string>(["failure", "timed_out", "cancelled"]);
+
+function anyFailingChecks(
+  checks: readonly { status: string; conclusion: string | null }[],
+): boolean {
+  return checks.some(
+    (c) =>
+      c.status === "completed" &&
+      c.conclusion !== null &&
+      FAILING_CHECK_CONCLUSIONS.has(c.conclusion),
+  );
 }
 
 export interface PRDerivedOptions extends BlockerOptions {
@@ -81,6 +96,7 @@ export function derivePRState(pr: PR, options: PRDerivedOptions = {}): PRDerived
       : formatReviewDecision(pr.reviewDecision);
 
   const commentCounts = threads ? computeCommentCounts(threads) : undefined;
+  const hasFailingChecks = anyFailingChecks(checks);
 
   if (loading) {
     return {
@@ -91,6 +107,7 @@ export function derivePRState(pr: PR, options: PRDerivedOptions = {}): PRDerived
       blockerResult: undefined,
       blockerDisplay: null,
       smartStatus: undefined,
+      hasFailingChecks,
       worktree: options.worktree,
     };
   }
@@ -112,6 +129,7 @@ export function derivePRState(pr: PR, options: PRDerivedOptions = {}): PRDerived
       key: blockerResult.tier,
       label: tierLabel(blockerResult.tier),
     },
+    hasFailingChecks,
     worktree: options.worktree,
   };
 }

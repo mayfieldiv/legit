@@ -177,10 +177,10 @@ function threadParts(
   return parts;
 }
 
-/** Compute the fg color for the review column (priority: conflict > draft > default). */
-function reviewCellFg(pr: PR, selected: boolean): string | undefined {
+/** Compute the fg color for the review column (priority: conflict/failing > draft > default). */
+function reviewCellFg(pr: PR, selected: boolean, hasFailingChecks: boolean): string | undefined {
   if (selected) return theme.selectedFg;
-  if (pr.mergeable === "CONFLICTING") return theme.error;
+  if (pr.mergeable === "CONFLICTING" || hasFailingChecks) return theme.error;
   if (pr.isDraft) return theme.warning;
   return undefined;
 }
@@ -250,8 +250,9 @@ function PRRow(props: {
   );
   const reviewText = () => {
     const conflict = props.pr.mergeable === "CONFLICTING" ? "! " : "";
+    const failing = prState().hasFailingChecks ? "x " : "";
     const draft = props.pr.isDraft ? "draft " : "";
-    return conflict + draft + prState().reviewText;
+    return conflict + failing + draft + prState().reviewText;
   };
   const comments = (): CommentCounts | undefined => prState().commentCounts;
   const blockerCell = () => prState().blockerDisplay;
@@ -330,7 +331,9 @@ function PRRow(props: {
       </Show>
       <Show when={props.visibleColumns?.review !== false}>
         <Cell width={COL.review} paddingRight={1}>
-          <span style={{ fg: reviewCellFg(props.pr, props.selected) }}>{reviewText()}</span>
+          <span style={{ fg: reviewCellFg(props.pr, props.selected, prState().hasFailingChecks) }}>
+            {reviewText()}
+          </span>
         </Cell>
       </Show>
       <Show when={props.visibleColumns?.threads !== false}>

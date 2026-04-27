@@ -159,6 +159,36 @@ describe("PRList", () => {
     expect(frame).toContain("approved");
   });
 
+  test("prefixes review column with x when any check is failing", async () => {
+    const prs = [makePR({ author: "alice", reviewDecision: "APPROVED" })];
+
+    const { renderOnce, captureCharFrame } = await testRender(
+      () => (
+        <PRList
+          prs={prs}
+          selectedIndex={0}
+          currentUser="me"
+          getPRState={(pr) =>
+            derivePRState(pr, {
+              currentUser: "me",
+              checks: [
+                { name: "lint", status: "completed", conclusion: "success" },
+                { name: "build", status: "completed", conclusion: "failure" },
+              ],
+              threads: [],
+              reviews: [],
+            })
+          }
+        />
+      ),
+      { width: 140, height: 20 },
+    );
+
+    await renderOnce();
+    const frame = captureCharFrame();
+    expect(frame).toContain("x approved");
+  });
+
   test("renders pre-built flat items", async () => {
     const prs = [
       makePR({ number: 1, title: "First PR", author: "alice", repoSlug: "acme/widgets" }),
