@@ -362,20 +362,27 @@ describe("App integration", () => {
   });
 
   test("manual r jumps ahead of queued refresh-all work", async () => {
+    // Need more PRs than MAX_ACTIVE_REFRESHES (10) so the queue actually has
+    // waiting work for the manual refresh to jump ahead of.
     const pr1 = { ...makeSampleRestPR(1), requested_reviewers: [{ login: "testuser" }] };
     const pr2 = makeSampleRestPR(2);
-    const pr3 = { ...makeSampleRestPR(3), draft: true };
-    const pr4 = { ...makeSampleRestPR(4), draft: true };
-    const prs = [pr1, pr2, pr3, pr4];
+    const draftPRs = Array.from({ length: 10 }, (_, i) => ({
+      ...makeSampleRestPR(i + 3),
+      draft: true,
+    }));
+    const prs = [pr1, pr2, ...draftPRs];
 
-    let resolvePr1: (() => void) | undefined;
-    const pr1Gate = new Promise<void>((resolve) => {
-      resolvePr1 = resolve;
-    });
-    let resolvePr2: (() => void) | undefined;
-    const pr2Gate = new Promise<void>((resolve) => {
-      resolvePr2 = resolve;
-    });
+    // Gate every fetchPR call so all 10 active refreshes stall, leaving PRs
+    // 11 and 12 queued. We resolve gates one at a time to control which slot
+    // opens next.
+    const gates = new Map<number, { promise: Promise<void>; resolve: () => void }>();
+    for (const pr of prs) {
+      let resolveFn!: () => void;
+      const promise = new Promise<void>((resolve) => {
+        resolveFn = resolve;
+      });
+      gates.set(pr.number, { promise, resolve: resolveFn });
+    }
     const refreshOrder: number[] = [];
 
     async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
@@ -399,11 +406,7 @@ describe("App integration", () => {
       if (prMatch) {
         const number = Number(prMatch[1]);
         refreshOrder.push(number);
-        if (number === 1) {
-          await pr1Gate;
-        } else if (number === 2) {
-          await pr2Gate;
-        }
+        await gates.get(number)?.promise;
         return new Response(
           JSON.stringify({ ...(prs[number - 1] ?? prs[0]), body: `body ${number}` }),
           {
@@ -482,22 +485,29 @@ describe("App integration", () => {
     await renderOnce();
 
     mockInput.pressKey("r", { shift: true });
-    await waitFor(() => refreshOrder.length >= 2);
-    expect(refreshOrder.slice(0, 2)).toEqual([1, 2]);
+    // refresh-all queues all 12; the first 10 saturate the worker pool and
+    // record themselves in priority order (PR1 me-blocking, PR2 needs-review,
+    // then draft PRs 3-10 in insertion order). PRs 11 and 12 wait in queue.
+    await waitFor(() => refreshOrder.length >= 10);
+    expect(refreshOrder.slice(0, 10)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 
-    mockInput.pressKey("j");
-    mockInput.pressKey("j");
-    mockInput.pressKey("j");
+    // Navigate to PR 12 (last row) and trigger a manual refresh.
+    for (let i = 0; i < 11; i++) mockInput.pressKey("j");
     await renderOnce();
     mockInput.pressKey("r");
 
-    resolvePr1?.();
-    await waitFor(() => refreshOrder.length >= 3);
-    expect(refreshOrder[2]).toBe(4);
+    // Free a worker — PR 12 (manual, priority 0) should jump ahead of PR 11.
+    gates.get(1)!.resolve();
+    await waitFor(() => refreshOrder.length >= 11);
+    expect(refreshOrder[10]).toBe(12);
 
-    resolvePr2?.();
-    await waitFor(() => refreshOrder.length >= 4);
-    expect(refreshOrder).toEqual([1, 2, 4, 3]);
+    gates.get(2)!.resolve();
+    await waitFor(() => refreshOrder.length >= 12);
+    expect(refreshOrder[11]).toBe(11);
+
+    // Release remaining gates so in-flight refreshes can complete cleanly
+    // before the renderer is destroyed.
+    for (const gate of gates.values()) gate.resolve();
   });
 
   test("split layout renders list and summary panel separator", async () => {
