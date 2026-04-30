@@ -278,4 +278,134 @@ describe("mergeable refresh consistency", () => {
     expect(frame).toContain("Needs review");
     expect(frame).not.toContain("Waiting on author");
   });
+
+  test("list row reflects draft after refreshing from detail view", async () => {
+    const totalPrs = 60;
+    const targetPr = 30;
+    let pullDetailCalls = 0;
+    const fetch = async (url: string, init?: RequestInit) => {
+      if (/\/repos\/acme\/widgets\/pulls\?state=open/.test(url)) {
+        const list = Array.from({ length: totalPrs }, (_, i) => ({
+          ...makeSampleRestPR(i + 1),
+          title: `PR #${i + 1}`,
+          draft: false,
+        }));
+        return new Response(JSON.stringify(list), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      const pullMatch = url.match(/\/repos\/acme\/widgets\/pulls\/(\d+)$/);
+      if (pullMatch) {
+        const n = Number(pullMatch[1]);
+        if (n === targetPr) pullDetailCalls++;
+        const draft = n === targetPr && pullDetailCalls > 0;
+        return new Response(
+          JSON.stringify({ ...makeSampleRestPR(n), title: `PR #${n}`, body: "body", draft }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (/\/repos\/acme\/widgets\/pulls\/\d+\/(reviews|files)/.test(url)) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (/\/repos\/acme\/widgets\/issues\/\d+\/comments/.test(url)) {
+        return new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (/\/repos\/acme\/widgets\/commits\/.+\/check-runs/.test(url)) {
+        return new Response(JSON.stringify({ check_runs: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/graphql")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { query?: string };
+        const query = body.query ?? "";
+        if (query.includes("reviewThreads")) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    reviewThreads: {
+                      pageInfo: { hasNextPage: false, endCursor: null },
+                      nodes: [],
+                    },
+                  },
+                },
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        const numbers = Array.from(query.matchAll(/pullRequest\(number: (\d+)\)/g), (m) =>
+          Number(m[1]),
+        );
+        return new Response(
+          JSON.stringify(
+            makeGraphQLResponse(
+              numbers.map((n) => ({
+                ...SAMPLE_GQL_META,
+                number: n,
+                reviewDecision: "REVIEW_REQUIRED",
+              })),
+            ),
+          ),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ message: "Not Found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+    const app = createTestLegit({ httpFetch: fetch });
+    const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
+      () => <App app={app} />,
+      { width: 200, height: 80 },
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    await renderOnce();
+
+    let frame = captureCharFrame();
+    expect(frame).toContain(`PR #${targetPr}`);
+    expect(frame).toContain("Needs review");
+
+    // Navigate down to the target PR
+    for (let i = 0; i < targetPr - 1; i++) {
+      mockInput.pressKey("j");
+    }
+    await renderOnce();
+
+    // Enter detail view
+    mockInput.pressEnter();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await renderOnce();
+
+    // Refresh from detail view
+    mockInput.pressKey("r");
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    await renderOnce();
+
+    // Exit detail view (escape)
+    mockInput.pressEscape();
+    await renderOnce();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await renderOnce();
+
+    frame = captureCharFrame();
+    expect(pullDetailCalls).toBeGreaterThan(0);
+    // List should now show target PR in Waiting on author group with draft suffix
+    expect(frame).toContain("Waiting on author");
+    const targetTitle = `PR #${targetPr}`;
+    expect(frame.match(new RegExp(`Waiting on author[\\s\\S]*${targetTitle}\\b`))).toBeTruthy();
+    expect(frame.match(new RegExp(`${targetTitle}\\b[^\\n]*draft`))).toBeTruthy();
+  });
 });

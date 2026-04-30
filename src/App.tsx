@@ -217,21 +217,30 @@ function AppInner(props: AppInnerProps) {
     })),
   }));
 
-  const prQueryVersion = createMemo(() =>
-    prQueries
-      .map((query) => `${query.status}:${query.fetchStatus}:${query.dataUpdatedAt}`)
-      .join("|"),
-  );
+  /** Map of "repoSlug#number" → PRDetail for the current tab's visible PRs.
+   *  Built by iterating the source signal (visibleIndex) positionally and
+   *  reading the cache; tracking `prQueries[i].dataUpdatedAt` along the way
+   *  is the only reliable way to propagate Solid Store updates (see commit
+   *  048eb22). All consumers — visiblePRs, cachedPr — derive from this. */
+  const prByKey = createMemo(() => {
+    const index = visibleIndex();
+    const map = new Map<string, PRDetail>();
+    for (let i = 0; i < index.length; i++) {
+      void prQueries[i]?.dataUpdatedAt;
+      const entry = index[i]!;
+      const data = props.queryClient.getQueryData<PRDetail>(["pr", entry.repoSlug, entry.number]);
+      if (data) map.set(`${entry.repoSlug}#${entry.number}`, data);
+    }
+    return map;
+  });
 
-  /** PRs for the current tab, read from the per-PR cache by key. Reading
-   *  by (repo, number) avoids positional mismatches when visibleIndex and
-   *  prQueries.state are transiently out of sync during reconfiguration. */
+  /** PRs for the current tab, ordered by visibleIndex. */
   const visiblePRs = createMemo<PR[]>(() => {
-    prQueryVersion();
+    const map = prByKey();
     const prs: PR[] = [];
     for (const entry of visibleIndex()) {
-      const data = props.queryClient.getQueryData<PRDetail>(["pr", entry.repoSlug, entry.number]);
-      if (data) prs.push(data);
+      const pr = map.get(`${entry.repoSlug}#${entry.number}`);
+      if (pr) prs.push(pr);
     }
     return prs;
   });
@@ -335,11 +344,18 @@ function AppInner(props: AppInnerProps) {
     }),
   }));
 
-  const threadsQueryVersion = createMemo(() =>
-    threadsQueries
-      .map((query) => `${query.status}:${query.fetchStatus}:${query.dataUpdatedAt}`)
-      .join("|"),
-  );
+  const threadsByKey = createMemo(() => {
+    const prs = visiblePRs();
+    const map = new Map<string, FullReviewThread[]>();
+    for (let i = 0; i < prs.length; i++) {
+      void threadsQueries[i]?.dataUpdatedAt;
+      const pr = prs[i]!;
+      const repo = pr.repoSlug ?? props.app.repoSlug;
+      const data = props.queryClient.getQueryData<FullReviewThread[]>(["threads", repo, pr.number]);
+      if (data) map.set(`${repo}#${pr.number}`, data);
+    }
+    return map;
+  });
 
   const uniqueChecks = createMemo(() => {
     const checks = new Map<
@@ -402,34 +418,27 @@ function AppInner(props: AppInnerProps) {
     }),
   }));
 
-  const reviewsQueryVersion = createMemo(() =>
-    reviewsQueries
-      .map((query) => `${query.status}:${query.fetchStatus}:${query.dataUpdatedAt}`)
-      .join("|"),
-  );
+  const reviewsByKey = createMemo(() => {
+    const prs = visiblePRs();
+    const map = new Map<string, Review[]>();
+    for (let i = 0; i < prs.length; i++) {
+      void reviewsQueries[i]?.dataUpdatedAt;
+      const pr = prs[i]!;
+      const repo = pr.repoSlug ?? props.app.repoSlug;
+      const data = props.queryClient.getQueryData<Review[]>(["reviews", repo, pr.number]);
+      if (data) map.set(`${repo}#${pr.number}`, data);
+    }
+    return map;
+  });
 
   const threadsForPr = (pr: PRIdentity): FullReviewThread[] | undefined => {
-    threadsQueryVersion();
     const repo = pr.repoSlug ?? props.app.repoSlug;
-    return props.queryClient.getQueryData<FullReviewThread[]>(["threads", repo, pr.number]);
+    return threadsByKey().get(`${repo}#${pr.number}`);
   };
 
   const reviewsForPr = (pr: PRIdentity): Review[] | undefined => {
-    reviewsQueryVersion();
     const repo = pr.repoSlug ?? props.app.repoSlug;
-    return props.queryClient.getQueryData<Review[]>(["reviews", repo, pr.number]);
-  };
-
-  const threadStateForPr = (pr: PRIdentity) => {
-    threadsQueryVersion();
-    const repo = pr.repoSlug ?? props.app.repoSlug;
-    return props.queryClient.getQueryState<FullReviewThread[]>(["threads", repo, pr.number]);
-  };
-
-  const reviewStateForPr = (pr: PRIdentity) => {
-    reviewsQueryVersion();
-    const repo = pr.repoSlug ?? props.app.repoSlug;
-    return props.queryClient.getQueryState<Review[]>(["reviews", repo, pr.number]);
+    return reviewsByKey().get(`${repo}#${pr.number}`);
   };
 
   const worktreeController = createWorktreeController({
@@ -555,13 +564,12 @@ function AppInner(props: AppInnerProps) {
   );
 
   /** Read the freshest PRDetail for a PR identity from the per-PR cache.
-   *  Reactive via prQueryVersion so consumers re-render when any PR
-   *  refetches. */
+   *  Reactive via prByKey so consumers re-render when any visible PR
+   *  refetches. Returns undefined for PRs not in the current tab. */
   function cachedPr(pr: PRIdentity | undefined): PRDetail | undefined {
-    prQueryVersion();
     if (!pr) return undefined;
     const repo = pr.repoSlug ?? props.app.repoSlug;
-    return props.queryClient.getQueryData<PRDetail>(["pr", repo, pr.number]);
+    return prByKey().get(`${repo}#${pr.number}`);
   }
 
   const detailPrDetail = (): PRDetail | undefined => cachedPr(detailPr());
@@ -580,13 +588,11 @@ function AppInner(props: AppInnerProps) {
     return firstVisible ? prKey(firstVisible) : undefined;
   }
 
-  /** Detail view threads read from the threads cache; reactive via threadsQueryVersion. */
+  /** Detail view threads read from the threads cache; reactive via threadsByKey. */
   const detailThreads = (): FullReviewThread[] | undefined => {
-    threadsQueryVersion();
     const pr = detailPr();
     if (!pr) return undefined;
-    const repo = pr.repoSlug ?? props.app.repoSlug;
-    return props.queryClient.getQueryData<FullReviewThread[]>(["threads", repo, pr.number]);
+    return threadsForPr(pr);
   };
 
   // ── Refresh handlers ──────────────────────────────────────────────────
@@ -909,11 +915,9 @@ function AppInner(props: AppInnerProps) {
   const summaryLoading = (): boolean => {
     const pr = selectedPr();
     if (!pr) return false;
-    const threadState = threadStateForPr(pr);
-    const reviewState = reviewStateForPr(pr);
     return (
-      threadState?.data === undefined ||
-      reviewState?.data === undefined ||
+      threadsForPr(pr) === undefined ||
+      reviewsForPr(pr) === undefined ||
       selectedFiles() === undefined
     );
   };
