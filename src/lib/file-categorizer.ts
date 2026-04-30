@@ -23,6 +23,10 @@ const BUILT_IN_RULES: Array<{ glob: Bun.Glob; category: FileCategory }> = [
   { glob: new Bun.Glob("**/__tests__/**"), category: "test" },
   { glob: new Bun.Glob("**/*.test.*"), category: "test" },
   { glob: new Bun.Glob("**/*.spec.*"), category: "test" },
+  // .NET test conventions: project dirs like `Foo.UnitTests`, file names like `FooTests.cs`
+  { glob: new Bun.Glob("**/*Tests/**"), category: "test" },
+  { glob: new Bun.Glob("**/*Tests.cs"), category: "test" },
+  { glob: new Bun.Glob("**/*Test.cs"), category: "test" },
   // docs
   { glob: new Bun.Glob("**/*.md"), category: "docs" },
   { glob: new Bun.Glob("docs/**"), category: "docs" },

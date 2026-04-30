@@ -62,6 +62,18 @@ describe("categorizeFiles", () => {
       }
     });
 
+    test("categorizes .NET test files as test", () => {
+      const result = categorizeFiles([
+        file("backend/Immybot.Backend.UnitTests/ContextTests/TenantExtensionTests/BasicTests.cs"),
+        file("backend/Foo.IntegrationTests/SomeTests.cs"),
+        file("backend/Foo.Tests/Bar.cs"),
+        file("backend/Project/Module/SomeTest.cs"),
+      ]);
+      for (const f of result.files) {
+        expect(f.category).toBe("test");
+      }
+    });
+
     test("categorizes docs files as docs", () => {
       const result = categorizeFiles([
         file("README.md"),
