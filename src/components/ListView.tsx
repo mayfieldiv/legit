@@ -1,4 +1,5 @@
-import { Show, useKeyboard } from "@opentui/solid";
+import { Show, useKeyboard, usePaste } from "@opentui/solid";
+import { decodePasteBytes } from "@opentui/core";
 import { createSignal, createMemo, createEffect, type Accessor } from "solid-js";
 import { PRList, PRListHeader, buildFlatItems, prIndexToDisplayRow } from "./PRList";
 import type { FlatItem, VisibleColumns } from "./PRList";
@@ -374,6 +375,23 @@ export function ListView(props: ListViewProps) {
         }
       }
     }
+  });
+
+  // Pasted text (e.g. Cmd-V) lands here as a single bracketed-paste event
+  // rather than per-character keypresses, so the keyboard handler never sees it.
+  usePaste((event) => {
+    if (!filterEditing()) return;
+    const decoded = decodePasteBytes(event.bytes);
+    // Filter is single-line: collapse newlines/tabs to spaces and drop other
+    // control chars (anything below 0x20 or DEL) so they don't corrupt rendering.
+    let sanitized = "";
+    for (const ch of decoded) {
+      const code = ch.codePointAt(0);
+      if (code === undefined) continue;
+      if (code === 0x0a || code === 0x0d || code === 0x09) sanitized += " ";
+      else if (code >= 0x20 && code !== 0x7f) sanitized += ch;
+    }
+    if (sanitized) setFilterText((t) => t + sanitized);
   });
 
   // ── Render ────────────────────────────────────────────────────────────────
