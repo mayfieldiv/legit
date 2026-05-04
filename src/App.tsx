@@ -11,7 +11,7 @@ import { samePr, prKey, type PRIdentity } from "./lib/pr-identity";
 import { AppShell } from "./components/AppShell";
 import { createUIState } from "./lib/ui-state";
 import type { Legit } from "./lib/legit";
-import { GITHUB_HTTP_MAX_CONCURRENT_REQUESTS, type GitHubNetworkStats } from "./lib/concurrency";
+import type { GitHubNetworkStats } from "./lib/concurrency";
 import type {
   PR,
   PRDetail,
@@ -25,6 +25,7 @@ import { derivePRState, type PRDerivedState, type WorktreeInfo } from "./lib/pr-
 import { createWorktreeController } from "./lib/worktree-controller";
 import { createBrowserActions } from "./lib/browser-actions";
 import { createDetailState } from "./lib/detail-state";
+import { createRefreshQueue, type RefreshPriority } from "./lib/refresh-queue";
 
 export { prUrl, devinUrl } from "./lib/browser-actions";
 
@@ -156,6 +157,12 @@ function AppInner(props: AppInnerProps) {
           }));
         },
         initialValue: [] as PRIndexEntry[],
+        // Refresh-all routes through queryClient.invalidateQueries, which
+        // re-runs this streamFn. `replace` keeps the previously-cached
+        // index visible until the new stream finishes — matches the
+        // pre-refactor behaviour where a separate refreshRepoIndex helper
+        // accumulated the snapshot before writing.
+        refetchMode: "replace",
       }),
     })),
   }));
@@ -581,30 +588,6 @@ function AppInner(props: AppInnerProps) {
   };
 
   // ── Refresh handlers ──────────────────────────────────────────────────
-  type RefreshPhase = "queued" | "refreshing";
-  type RefreshPriority = 0 | 1 | 2 | 3 | 4;
-
-  interface QueuedRefresh {
-    repo: string;
-    number: number;
-    phase: RefreshPhase;
-    priority: RefreshPriority;
-    order: number;
-    includeFiles: boolean;
-  }
-
-  const [queuedRefreshes, setQueuedRefreshes] = createSignal<Map<string, QueuedRefresh>>(new Map());
-  let nextRefreshOrder = 0;
-  let activeRefreshes = 0;
-  const activeRepoRefreshes = new Set<string>();
-  // Keep the app-level refresh queue aligned with the shared HTTP semaphore so
-  // bulk refreshes can fully saturate available request capacity.
-  const MAX_ACTIVE_REFRESHES = GITHUB_HTTP_MAX_CONCURRENT_REQUESTS;
-
-  function refreshKey(pr: PRIdentity): string {
-    return `${pr.repoSlug ?? props.app.repoSlug}#${pr.number}`;
-  }
-
   function refreshPriorityForPr(pr: PR): RefreshPriority {
     const tier = getPRState(pr).smartStatus?.key;
     switch (tier) {
@@ -619,189 +602,48 @@ function AppInner(props: AppInnerProps) {
     }
   }
 
-  function refreshStateForPr(pr: PRIdentity): RefreshPhase | undefined {
-    return queuedRefreshes().get(refreshKey(pr))?.phase;
-  }
+  const [refreshQueueState, refreshQueueActions] = createRefreshQueue({
+    defaultRepoSlug: props.app.repoSlug,
+    runRefresh: async (item) => {
+      const { pr, includeFiles } = item;
+      const repo = pr.repoSlug ?? props.app.repoSlug;
+      mergeableRetried.delete(`${repo}:${pr.number}`);
 
-  function formatRefreshError(prefix: string, error: unknown): string {
-    const message = error instanceof Error ? error.message : String(error);
-    return `${prefix}: ${message.split("\n")[0]}`;
-  }
+      const [nextPr, threads, reviews] = await Promise.all([
+        props.app.fetchPR(repo, pr.number),
+        props.app.fetchFullReviewThreads(repo, pr.number),
+        props.app.fetchReviews(repo, pr.number),
+      ]);
 
-  function nextQueuedRefresh(): QueuedRefresh | undefined {
-    let next: QueuedRefresh | undefined;
-    for (const refresh of queuedRefreshes().values()) {
-      if (refresh.phase !== "queued") continue;
-      if (
-        !next ||
-        refresh.priority < next.priority ||
-        (refresh.priority === next.priority && refresh.order < next.order)
-      ) {
-        next = refresh;
-      }
-    }
-    return next;
-  }
+      props.queryClient.setQueryData<PRDetail>(["pr", repo, pr.number], (prev) => ({
+        ...(prev ?? {}),
+        ...nextPr,
+        repoSlug: repo,
+      }));
+      props.queryClient.setQueryData(["threads", repo, pr.number], threads);
+      props.queryClient.setQueryData(["reviews", repo, pr.number], reviews);
+      prunePrIndexIfClosed(repo, nextPr);
 
-  function setRefreshPhase(key: string, phase: RefreshPhase): void {
-    setQueuedRefreshes((prev) => {
-      const current = prev.get(key);
-      if (!current || current.phase === phase) return prev;
-      const next = new Map(prev);
-      next.set(key, { ...current, phase });
-      return next;
-    });
-  }
-
-  function clearQueuedRefresh(key: string): void {
-    setQueuedRefreshes((prev) => {
-      if (!prev.has(key)) return prev;
-      const next = new Map(prev);
-      next.delete(key);
-      return next;
-    });
-  }
-
-  function queuePrRefresh(
-    pr: PRIdentity,
-    options: { priority: RefreshPriority; includeFiles: boolean },
-  ): void {
-    const repo = pr.repoSlug ?? props.app.repoSlug;
-    const key = refreshKey({ ...pr, repoSlug: repo });
-    let changed = false;
-
-    setQueuedRefreshes((prev) => {
-      const existing = prev.get(key);
-      if (existing?.phase === "refreshing") {
-        return prev;
+      if (nextPr.headCommitSha) {
+        const checks = await props.app.fetchCheckRuns(repo, nextPr.headCommitSha);
+        props.queryClient.setQueryData(["checks", repo, nextPr.headCommitSha], checks);
       }
 
-      const next = new Map(prev);
-      const nextRefresh: QueuedRefresh = {
-        repo,
-        number: pr.number,
-        phase: "queued",
-        priority: existing
-          ? (Math.min(existing.priority, options.priority) as RefreshPriority)
-          : options.priority,
-        order: existing?.order ?? nextRefreshOrder++,
-        includeFiles: options.includeFiles || existing?.includeFiles === true,
-      };
-
-      if (
-        existing &&
-        existing.priority === nextRefresh.priority &&
-        existing.includeFiles === nextRefresh.includeFiles
-      ) {
-        return prev;
+      if (includeFiles) {
+        const files = await props.app.fetchCategorizedFiles(repo, pr.number);
+        props.queryClient.setQueryData(["files", repo, pr.number], files);
       }
 
-      next.set(key, nextRefresh);
-      changed = true;
-      return next;
-    });
-
-    if (changed) {
-      queueMicrotask(() => pumpRefreshQueue());
-    }
-  }
-
-  async function refreshRepoIndex(repo: string): Promise<void> {
-    if (activeRepoRefreshes.has(repo)) return;
-    activeRepoRefreshes.add(repo);
-
-    try {
-      let latestSnapshot: PR[] = [];
-      for await (const snapshot of props.app.fetchPRs(repo)) {
-        latestSnapshot = snapshot;
-        for (const pr of snapshot) {
-          const slug = pr.repoSlug ?? repo;
-          props.queryClient.setQueryData<PRDetail>(["pr", slug, pr.number], (prev) => ({
-            body: prev?.body ?? "",
-            ...(prev ?? {}),
-            ...pr,
-            repoSlug: slug,
-          }));
-        }
+      const sourceClone = props.app.resolveSourceClone(repo);
+      if (sourceClone) {
+        void props.queryClient.invalidateQueries({ queryKey: ["worktrees", sourceClone] });
       }
+    },
+    setStatusMessage: uiActions.setStatusMessage,
+  });
 
-      props.queryClient.setQueryData<PRIndexEntry[]>(
-        ["pr-index", repo],
-        latestSnapshot.map((pr) => ({
-          number: pr.number,
-          createdAt: pr.createdAt,
-          repoSlug: pr.repoSlug ?? repo,
-        })),
-      );
-    } catch (error) {
-      uiActions.setStatusMessage({
-        text: formatRefreshError(`refresh failed for ${repo}`, error),
-        kind: "error",
-      });
-    } finally {
-      activeRepoRefreshes.delete(repo);
-    }
-  }
-
-  async function runQueuedRefresh(refresh: QueuedRefresh): Promise<void> {
-    const { repo, number, includeFiles } = refresh;
-    mergeableRetried.delete(`${repo}:${number}`);
-
-    const [nextPr, threads, reviews] = await Promise.all([
-      props.app.fetchPR(repo, number),
-      props.app.fetchFullReviewThreads(repo, number),
-      props.app.fetchReviews(repo, number),
-    ]);
-
-    props.queryClient.setQueryData<PRDetail>(["pr", repo, number], (prev) => ({
-      ...(prev ?? {}),
-      ...nextPr,
-      repoSlug: repo,
-    }));
-    props.queryClient.setQueryData(["threads", repo, number], threads);
-    props.queryClient.setQueryData(["reviews", repo, number], reviews);
-    prunePrIndexIfClosed(repo, nextPr);
-
-    if (nextPr.headCommitSha) {
-      const checks = await props.app.fetchCheckRuns(repo, nextPr.headCommitSha);
-      props.queryClient.setQueryData(["checks", repo, nextPr.headCommitSha], checks);
-    }
-
-    if (includeFiles) {
-      const files = await props.app.fetchCategorizedFiles(repo, number);
-      props.queryClient.setQueryData(["files", repo, number], files);
-    }
-
-    const sourceClone = props.app.resolveSourceClone(repo);
-    if (sourceClone) {
-      void props.queryClient.invalidateQueries({ queryKey: ["worktrees", sourceClone] });
-    }
-  }
-
-  function pumpRefreshQueue(): void {
-    while (activeRefreshes < MAX_ACTIVE_REFRESHES) {
-      const next = nextQueuedRefresh();
-      if (!next) return;
-
-      const key = `${next.repo}#${next.number}`;
-      next.phase = "refreshing";
-      activeRefreshes++;
-      setRefreshPhase(key, "refreshing");
-
-      void runQueuedRefresh(next)
-        .catch((error) => {
-          uiActions.setStatusMessage({
-            text: formatRefreshError(`refresh failed for #${next.number}`, error),
-            kind: "error",
-          });
-        })
-        .finally(() => {
-          activeRefreshes--;
-          clearQueuedRefresh(key);
-          pumpRefreshQueue();
-        });
-    }
-  }
+  const refreshStateForPr = refreshQueueState.refreshStateForPr;
+  const queuePrRefresh = refreshQueueActions.queuePrRefresh;
 
   function refreshSelected(pr?: PR) {
     const target = pr ? prKey(pr) : selectedPrForRefresh();
@@ -827,8 +669,12 @@ function AppInner(props: AppInnerProps) {
           : [];
     const targetRepoSet = new Set(targetRepos);
 
+    // Re-run the streamed pr-index query for each target repo. The streamed
+    // reducer (defined alongside prIndexQueries above) seeds per-PR caches
+    // and rebuilds the index — invalidation lets us skip a parallel
+    // implementation that walks the same generator.
     for (const repo of targetRepos) {
-      void refreshRepoIndex(repo);
+      void props.queryClient.invalidateQueries({ queryKey: ["pr-index", repo] });
     }
 
     for (const pr of visiblePRs()) {
