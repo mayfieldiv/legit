@@ -1,11 +1,6 @@
-import { createSignal, createMemo, createEffect, onSettled } from "solid-js";
+import { createSignal, createMemo, onSettled } from "solid-js";
 import type { JSX as OpenTuiJSX } from "@opentui/solid";
-import {
-  QueryClient,
-  QueryClientProvider,
-  useIsFetching,
-  experimental_streamedQuery as streamedQuery,
-} from "@tanstack/solid-query";
+import { QueryClient, QueryClientProvider, useIsFetching } from "@tanstack/solid-query";
 import { useQueriesLite as useQueries } from "./lib/use-queries-lite";
 import { samePr, prKey, type PRIdentity } from "./lib/pr-identity";
 import { AppShell } from "./components/AppShell";
@@ -26,29 +21,12 @@ import { createWorktreeController } from "./lib/worktree-controller";
 import { createBrowserActions } from "./lib/browser-actions";
 import { createDetailState } from "./lib/detail-state";
 import { createRefreshQueue, type RefreshPriority } from "./lib/refresh-queue";
+import { createPRQueries } from "./lib/pr-queries";
 
 export { prUrl, devinUrl } from "./lib/browser-actions";
 
-function sameStringSet(a: Set<string> | undefined, b: Set<string> | undefined): boolean {
-  if (a === b) return true;
-  if (!a || !b) return a === b;
-  if (a.size !== b.size) return false;
-  for (const value of a) {
-    if (!b.has(value)) return false;
-  }
-  return true;
-}
-
 function checksLookupKey(repo: string, headCommitSha: string): string {
   return JSON.stringify([repo, headCommitSha]);
-}
-
-/** Lightweight index entry stored in ["pr-index", repo]. Per-repo data is
- *  seeded into ["pr", repo, number] caches by the streamed index query. */
-interface PRIndexEntry {
-  number: number;
-  createdAt: string;
-  repoSlug: string;
 }
 
 export interface AppProps {
@@ -124,231 +102,36 @@ function AppInner(props: AppInnerProps) {
     return unsubHttp;
   });
 
-  // ── Repo tabs ─────────────────────────────────────────────────────────
-  const [repoTabs, setRepoTabs] = createSignal<string[]>(props.app.trackedRepos());
-
-  const tabs = createMemo(() => ["All", ...repoTabs()]);
-
-  const showRepo = createMemo(() => uiState.activeTab === 0 && repoTabs().length > 1);
-
   // ── PR index + per-PR cache ───────────────────────────────────────────
   // The authoritative store for PR-shaped data is ["pr", repo, number].
-  // Per-repo streamed index queries seed those entries; downstream code
-  // reads PRs exclusively through the per-PR cache via `prQueries` below.
-  const prIndexQueries = useQueries<PRIndexEntry[]>(() => ({
-    queries: repoTabs().map((repo) => ({
-      queryKey: ["pr-index", repo] as const,
-      queryFn: streamedQuery({
-        streamFn: ({ signal }: { signal: AbortSignal }) => props.app.fetchPRs(repo, signal),
-        reducer: (_prev: PRIndexEntry[], snapshot: PR[]): PRIndexEntry[] => {
-          for (const pr of snapshot) {
-            const slug = pr.repoSlug ?? repo;
-            props.queryClient.setQueryData<PRDetail>(["pr", slug, pr.number], (prev) => ({
-              body: "",
-              ...(prev ?? {}),
-              ...pr,
-              repoSlug: slug,
-            }));
-          }
-          return snapshot.map((pr) => ({
-            number: pr.number,
-            createdAt: pr.createdAt,
-            repoSlug: pr.repoSlug ?? repo,
-          }));
-        },
-        initialValue: [] as PRIndexEntry[],
-        // Refresh-all routes through queryClient.invalidateQueries, which
-        // re-runs this streamFn. `replace` keeps the previously-cached
-        // index visible until the new stream finishes — matches the
-        // pre-refactor behaviour where a separate refreshRepoIndex helper
-        // accumulated the snapshot before writing.
-        refetchMode: "replace",
-      }),
-    })),
-  }));
-
-  /** Index entries for the currently visible tab (merged & sorted on "All"). */
-  const visibleIndex = createMemo<PRIndexEntry[]>(() => {
-    const tab = uiState.activeTab;
-    const repos = repoTabs();
-    if (tab === 0) {
-      const merged: PRIndexEntry[] = [];
-      for (let i = 0; i < repos.length; i++) {
-        const data = prIndexQueries[i]?.data ?? [];
-        merged.push(...data);
-      }
-      merged.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      return merged;
-    }
-    const repo = repos[tab - 1];
-    if (!repo) return [];
-    const idx = repos.indexOf(repo);
-    return prIndexQueries[idx]?.data ?? [];
+  // createPRQueries owns the streamed pr-index queries that seed those
+  // entries plus the derived state (visibleIndex, visiblePRs, prByKey,
+  // loading, error, settledRepos, enrichmentReady, mergeable retry).
+  const [prState, prActions] = createPRQueries({
+    app: props.app,
+    queryClient: props.queryClient,
+    activeTab: () => uiState.activeTab,
   });
 
-  /** Drop a merged/closed PR from the repo's pr-index so the list re-renders
-   *  without it. No-op when the PR is open or already absent — returning the
-   *  same reference keeps setQueryData from notifying observers. */
-  function prunePrIndexIfClosed(repo: string, pr: Pick<PR, "number" | "state">): void {
-    if (pr.state === "OPEN") return;
-    props.queryClient.setQueryData<PRIndexEntry[]>(["pr-index", repo], (prev) => {
-      if (!prev || !prev.some((e) => e.number === pr.number)) return prev;
-      return prev.filter((e) => e.number !== pr.number);
-    });
-  }
+  const tabs = createMemo(() => ["All", ...prState.repoTabs]);
 
-  // Fan-out per-PR queries over the visible index. Initial hydration comes
-  // from the streamed list seeding the cache via setQueryData, so these
-  // queryFns only fire when an entry is explicitly invalidated (e.g. `r`).
-  // The queryFn stamps `repoSlug` onto the fetched PRDetail so cache reads
-  // by repoSlug-keyed lookups (threads, reviews, checks) stay correct after
-  // a refetch — `legit.fetchPR` returns a PR without repoSlug.
-  const prQueries = useQueries<PRDetail>(() => ({
-    queries: visibleIndex().map(({ repoSlug, number }) => ({
-      queryKey: ["pr", repoSlug, number] as const,
-      queryFn: async ({ signal }: { signal: AbortSignal }) => {
-        const next = await props.app.fetchPR(repoSlug, number, signal);
-        const pr = { ...next, repoSlug };
-        prunePrIndexIfClosed(repoSlug, pr);
-        return pr;
-      },
-      staleTime: Infinity,
-    })),
-  }));
-
-  /** Map of "repoSlug#number" → PRDetail for the current tab's visible PRs.
-   *  Built by iterating the source signal (visibleIndex) positionally and
-   *  reading the cache; tracking `prQueries[i].dataUpdatedAt` along the way
-   *  is the only reliable way to propagate Solid Store updates (see commit
-   *  048eb22). All consumers — visiblePRs, cachedPr — derive from this. */
-  const prByKey = createMemo(() => {
-    const index = visibleIndex();
-    const map = new Map<string, PRDetail>();
-    for (let i = 0; i < index.length; i++) {
-      void prQueries[i]?.dataUpdatedAt;
-      const entry = index[i]!;
-      const data = props.queryClient.getQueryData<PRDetail>(["pr", entry.repoSlug, entry.number]);
-      if (data) map.set(`${entry.repoSlug}#${entry.number}`, data);
-    }
-    return map;
-  });
-
-  /** PRs for the current tab, ordered by visibleIndex. */
-  const visiblePRs = createMemo<PR[]>(() => {
-    const map = prByKey();
-    const prs: PR[] = [];
-    for (const entry of visibleIndex()) {
-      const pr = map.get(`${entry.repoSlug}#${entry.number}`);
-      if (pr) prs.push(pr);
-    }
-    return prs;
-  });
-
-  /** True while any repo's index is still pending (no data yet). */
-  const loading = createMemo(() => prIndexQueries.some((q) => q.isPending));
-
-  /** First error message, if any. */
-  const prError = createMemo(() => {
-    for (const q of prIndexQueries) {
-      if (q.error) return (q.error as Error).message ?? String(q.error);
-    }
-    return "";
-  });
-
-  // ── Track which repos have finished fetching (generator complete) ─────
-  /**
-   * Repos whose PR streamedQuery generator has finished. Until a repo
-   * settles, its PRs must NOT trigger enrichment — otherwise hundreds of
-   * per-PR queries flood the concurrency semaphore and starve the
-   * still-running PR-list pagination & reviewStatus batches.
-   */
-  const settledRepos = createMemo(
-    () => {
-      const settled = new Set<string>();
-      const repos = repoTabs();
-      for (let i = 0; i < repos.length; i++) {
-        const q = prIndexQueries[i];
-        if (q && !q.isFetching) settled.add(repos[i]!);
-      }
-      return settled;
-    },
-    undefined,
-    {
-      equals: sameStringSet,
-    },
-  );
-
-  /**
-   * Delay list-view enrichment until the current tab's base PR set is stable.
-   * On single-repo tabs this matches that repo's settled state. On the "All"
-   * tab we wait for every tracked repo to finish streaming before threads,
-   * reviews, and checks start reshaping smart-status groups.
-   */
-  const enrichmentReady = createMemo(() => {
-    const tab = uiState.activeTab;
-    if (tab === 0) {
-      const repos = repoTabs();
-      return repos.length > 0 && repos.every((repo) => settledRepos().has(repo));
-    }
-
-    const repo = repoTabs()[tab - 1];
-    return !!repo && settledRepos().has(repo);
-  });
-
-  // ── Retry UNKNOWN mergeable status after settlement ─────────────────
-  // GitHub computes mergeability lazily — the initial fetch triggers
-  // background computation but returns UNKNOWN. Once the index settles
-  // for a repo, schedule a delayed per-PR re-fetch for any UNKNOWN entries.
-  // Keyed (repo, number) so each PR retries independently and at most once.
-  const mergeableRetried = new Set<string>();
-  createEffect(
-    () => settledRepos(),
-    (settled) => {
-      const timers: ReturnType<typeof setTimeout>[] = [];
-      const repos = repoTabs();
-      for (let i = 0; i < repos.length; i++) {
-        const repo = repos[i]!;
-        if (!settled.has(repo)) continue;
-        const entries = prIndexQueries[i]?.data ?? [];
-        for (const entry of entries) {
-          const key = `${entry.repoSlug}:${entry.number}`;
-          if (mergeableRetried.has(key)) continue;
-          const data = props.queryClient.getQueryData<PRDetail>([
-            "pr",
-            entry.repoSlug,
-            entry.number,
-          ]);
-          if (data?.mergeable !== "UNKNOWN") continue;
-          mergeableRetried.add(key);
-          const timer = setTimeout(() => {
-            void props.queryClient.invalidateQueries({
-              queryKey: ["pr", entry.repoSlug, entry.number],
-            });
-          }, 3_000);
-          timers.push(timer);
-        }
-      }
-      return () => {
-        for (const timer of timers) clearTimeout(timer);
-      };
-    },
-  );
+  const showRepo = createMemo(() => uiState.activeTab === 0 && prState.repoTabs.length > 1);
 
   // ── Per-PR enrichment queries (threads, checks, reviews) ──────────────
   const threadsQueries = useQueries<FullReviewThread[]>(() => ({
-    queries: visiblePRs().map((pr) => {
+    queries: prState.visiblePRs.map((pr) => {
       const repo = pr.repoSlug ?? props.app.repoSlug;
       return {
         queryKey: ["threads", repo, pr.number] as const,
         queryFn: async ({ signal }: { signal: AbortSignal }) =>
           props.app.fetchFullReviewThreads(repo, pr.number, signal),
-        enabled: enrichmentReady(),
+        enabled: prState.enrichmentReady,
       };
     }),
   }));
 
   const threadsByKey = createMemo(() => {
-    const prs = visiblePRs();
+    const prs = prState.visiblePRs;
     const map = new Map<string, FullReviewThread[]>();
     for (let i = 0; i < prs.length; i++) {
       void threadsQueries[i]?.dataUpdatedAt;
@@ -366,7 +149,7 @@ function AppInner(props: AppInnerProps) {
       { key: string; repo: string; headCommitSha: string; enabled: boolean }
     >();
 
-    for (const pr of visiblePRs()) {
+    for (const pr of prState.visiblePRs) {
       const repo = pr.repoSlug ?? props.app.repoSlug;
       const headCommitSha = pr.headCommitSha;
       if (!headCommitSha) continue;
@@ -378,7 +161,7 @@ function AppInner(props: AppInnerProps) {
         key,
         repo,
         headCommitSha,
-        enabled: enrichmentReady(),
+        enabled: prState.enrichmentReady,
       });
     }
 
@@ -410,19 +193,19 @@ function AppInner(props: AppInnerProps) {
   };
 
   const reviewsQueries = useQueries<Review[]>(() => ({
-    queries: visiblePRs().map((pr) => {
+    queries: prState.visiblePRs.map((pr) => {
       const repo = pr.repoSlug ?? props.app.repoSlug;
       return {
         queryKey: ["reviews", repo, pr.number] as const,
         queryFn: async ({ signal }: { signal: AbortSignal }) =>
           props.app.fetchReviews(repo, pr.number, signal),
-        enabled: enrichmentReady(),
+        enabled: prState.enrichmentReady,
       };
     }),
   }));
 
   const reviewsByKey = createMemo(() => {
-    const prs = visiblePRs();
+    const prs = prState.visiblePRs;
     const map = new Map<string, Review[]>();
     for (let i = 0; i < prs.length; i++) {
       void reviewsQueries[i]?.dataUpdatedAt;
@@ -447,7 +230,7 @@ function AppInner(props: AppInnerProps) {
   const worktreeController = createWorktreeController({
     app: props.app,
     queryClient: props.queryClient,
-    repoTabs,
+    repoTabs: () => prState.repoTabs,
     setStatusMessage: uiActions.setStatusMessage,
   });
   const { worktreeForPr, createWorktree: handleCreateWorktree } = worktreeController;
@@ -544,7 +327,7 @@ function AppInner(props: AppInnerProps) {
         repoSlug: repo,
       }));
       props.queryClient.setQueryData(["threads", repo, pr.number], result.threads);
-      prunePrIndexIfClosed(repo, result.pr);
+      prActions.prunePrIndexIfClosed(repo, result.pr);
     },
     setStatusMessage: uiActions.setStatusMessage,
   });
@@ -561,7 +344,7 @@ function AppInner(props: AppInnerProps) {
   function cachedPr(pr: PRIdentity | undefined): PRDetail | undefined {
     if (!pr) return undefined;
     const repo = pr.repoSlug ?? props.app.repoSlug;
-    return prByKey().get(`${repo}#${pr.number}`);
+    return prState.prByKey.get(`${repo}#${pr.number}`);
   }
 
   const detailPrDetail = (): PRDetail | undefined => cachedPr(detailPr());
@@ -573,10 +356,10 @@ function AppInner(props: AppInnerProps) {
   function selectedPrForRefresh(): PRIdentity | undefined {
     const identity = selectedPr();
     if (identity) {
-      const live = cachedPr(identity) ?? visiblePRs().find((pr) => samePr(pr, identity));
+      const live = cachedPr(identity) ?? prState.visiblePRs.find((pr) => samePr(pr, identity));
       return live ? prKey(live) : identity;
     }
-    const firstVisible = visiblePRs()[0];
+    const firstVisible = prState.visiblePRs[0];
     return firstVisible ? prKey(firstVisible) : undefined;
   }
 
@@ -607,7 +390,7 @@ function AppInner(props: AppInnerProps) {
     runRefresh: async (item) => {
       const { pr, includeFiles } = item;
       const repo = pr.repoSlug ?? props.app.repoSlug;
-      mergeableRetried.delete(`${repo}:${pr.number}`);
+      prActions.notePrRefreshed(repo, pr.number);
 
       const [nextPr, threads, reviews] = await Promise.all([
         props.app.fetchPR(repo, pr.number),
@@ -622,7 +405,7 @@ function AppInner(props: AppInnerProps) {
       }));
       props.queryClient.setQueryData(["threads", repo, pr.number], threads);
       props.queryClient.setQueryData(["reviews", repo, pr.number], reviews);
-      prunePrIndexIfClosed(repo, nextPr);
+      prActions.prunePrIndexIfClosed(repo, nextPr);
 
       if (nextPr.headCommitSha) {
         const checks = await props.app.fetchCheckRuns(repo, nextPr.headCommitSha);
@@ -652,12 +435,12 @@ function AppInner(props: AppInnerProps) {
   }
 
   function refreshAll() {
-    const currentRepos = repoTabs();
+    const currentRepos = prState.repoTabs;
     const activeTab = uiState.activeTab;
 
     props.app.reloadConfig();
     const nextRepos = props.app.trackedRepos();
-    setRepoTabs(nextRepos);
+    prActions.setRepoTabs(nextRepos);
 
     const currentTabRepo =
       activeTab === 0 ? undefined : (currentRepos[activeTab - 1] ?? nextRepos[activeTab - 1]);
@@ -677,7 +460,7 @@ function AppInner(props: AppInnerProps) {
       void props.queryClient.invalidateQueries({ queryKey: ["pr-index", repo] });
     }
 
-    for (const pr of visiblePRs()) {
+    for (const pr of prState.visiblePRs) {
       const repo = pr.repoSlug ?? props.app.repoSlug;
       if (!targetRepoSet.has(repo)) continue;
       queuePrRefresh(prKey(pr), {
@@ -748,14 +531,14 @@ function AppInner(props: AppInnerProps) {
   return (
     <AppShell
       view={uiState.view}
-      prs={visiblePRs()}
-      loading={loading()}
+      prs={prState.visiblePRs}
+      loading={prState.loading}
       githubNetworkStats={githubNetworkStatsForBar()}
       repoSlug={displayRepoSlug()}
       showRepo={showRepo()}
       currentUser={props.app.currentUser}
       resetKey={uiState.activeTab}
-      error={prError()}
+      error={prState.error}
       tabs={tabs()}
       activeTab={uiState.activeTab}
       selectedPr={selectedPrDetail()}
