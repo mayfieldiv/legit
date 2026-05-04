@@ -99,7 +99,7 @@ interface AppInnerProps {
 }
 
 function AppInner(props: AppInnerProps) {
-  const ui = createUIState();
+  const [uiState, uiActions] = createUIState();
 
   /** HTTP concurrency (Legit fetch wrapper). */
   const [httpNetworkStats, setHttpNetworkStats] = createSignal<GitHubNetworkStats>({
@@ -136,7 +136,7 @@ function AppInner(props: AppInnerProps) {
 
   const tabs = createMemo(() => ["All", ...repoTabs()]);
 
-  const showRepo = createMemo(() => ui.activeTab() === 0 && repoTabs().length > 1);
+  const showRepo = createMemo(() => uiState.activeTab === 0 && repoTabs().length > 1);
 
   // ── PR index + per-PR cache ───────────────────────────────────────────
   // The authoritative store for PR-shaped data is ["pr", repo, number].
@@ -170,7 +170,7 @@ function AppInner(props: AppInnerProps) {
 
   /** Index entries for the currently visible tab (merged & sorted on "All"). */
   const visibleIndex = createMemo<PRIndexEntry[]>(() => {
-    const tab = ui.activeTab();
+    const tab = uiState.activeTab;
     const repos = repoTabs();
     if (tab === 0) {
       const merged: PRIndexEntry[] = [];
@@ -286,7 +286,7 @@ function AppInner(props: AppInnerProps) {
    * reviews, and checks start reshaping smart-status groups.
    */
   const enrichmentReady = createMemo(() => {
-    const tab = ui.activeTab();
+    const tab = uiState.activeTab;
     if (tab === 0) {
       const repos = repoTabs();
       return repos.length > 0 && repos.every((repo) => settledRepos().has(repo));
@@ -445,7 +445,7 @@ function AppInner(props: AppInnerProps) {
     app: props.app,
     queryClient: props.queryClient,
     repoTabs,
-    setStatusMessage: ui.setStatusMessage,
+    setStatusMessage: uiActions.setStatusMessage,
   });
   const { worktreeForPr, createWorktree: handleCreateWorktree } = worktreeController;
 
@@ -478,7 +478,7 @@ function AppInner(props: AppInnerProps) {
   }
 
   function changeTab(index: number) {
-    ui.changeTab(index);
+    uiActions.changeTab(index);
     setSelectedPr(undefined);
   }
 
@@ -518,7 +518,7 @@ function AppInner(props: AppInnerProps) {
 
   // ── Detail view queries ───────────────────────────────────────────────
   const detailPr = () => {
-    const v = ui.view();
+    const v = uiState.view;
     return v.view === "detail" ? v.pr : undefined;
   };
 
@@ -749,7 +749,7 @@ function AppInner(props: AppInnerProps) {
         })),
       );
     } catch (error) {
-      ui.setStatusMessage({
+      uiActions.setStatusMessage({
         text: formatRefreshError(`refresh failed for ${repo}`, error),
         kind: "error",
       });
@@ -805,7 +805,7 @@ function AppInner(props: AppInnerProps) {
 
       void runQueuedRefresh(next)
         .catch((error) => {
-          ui.setStatusMessage({
+          uiActions.setStatusMessage({
             text: formatRefreshError(`refresh failed for #${next.number}`, error),
             kind: "error",
           });
@@ -826,7 +826,7 @@ function AppInner(props: AppInnerProps) {
 
   function refreshAll() {
     const currentRepos = repoTabs();
-    const activeTab = ui.activeTab();
+    const activeTab = uiState.activeTab;
 
     props.app.reloadConfig();
     const nextRepos = props.app.trackedRepos();
@@ -888,7 +888,7 @@ function AppInner(props: AppInnerProps) {
   }
 
   const displayRepoSlug = () => {
-    const tab = ui.activeTab();
+    const tab = uiState.activeTab;
     return tab === 0 ? "All repos" : (tabs()[tab] ?? "All repos");
   };
 
@@ -934,17 +934,17 @@ function AppInner(props: AppInnerProps) {
 
   return (
     <AppShell
-      view={ui.view()}
+      view={uiState.view}
       prs={visiblePRs()}
       loading={loading()}
       githubNetworkStats={githubNetworkStatsForBar()}
       repoSlug={displayRepoSlug()}
       showRepo={showRepo()}
       currentUser={props.app.currentUser}
-      resetKey={ui.activeTab()}
+      resetKey={uiState.activeTab}
       error={prError() || detailError() || browserError()}
       tabs={tabs()}
-      activeTab={ui.activeTab()}
+      activeTab={uiState.activeTab}
       selectedPr={selectedPrDetail()}
       summaryThreads={summaryThreads()}
       summaryChecks={summaryChecks()}
@@ -958,23 +958,23 @@ function AppInner(props: AppInnerProps) {
       onTabChange={changeTab}
       onRefreshAll={refreshAll}
       onRefreshSelected={refreshSelected}
-      onEnterDetail={(pr: PR) => ui.enterDetail(pr)}
+      onEnterDetail={(pr: PR) => uiActions.enterDetail(pr)}
       detailPr={detailPrDetail()}
       detailChecks={summaryChecks()}
       detailThreads={detailThreads()}
       detailComments={detailComments()}
       detailLoading={detailLoading()}
-      showResolved={ui.showResolved()}
-      showBotComments={ui.showBotComments()}
-      onExitDetail={ui.exitDetail}
-      onToggleResolved={ui.toggleResolved}
-      onToggleBotComments={ui.toggleBotComments}
+      showResolved={uiState.showResolved}
+      showBotComments={uiState.showBotComments}
+      onExitDetail={uiActions.exitDetail}
+      onToggleResolved={uiActions.toggleResolved}
+      onToggleBotComments={uiActions.toggleBotComments}
       onRefreshDetail={refreshDetail}
       onOpenInBrowser={handleOpenInBrowser}
       onOpenInDevin={handleOpenInDevin}
       onOpenUrl={handleOpenUrl}
       onCreateWorktree={handleCreateWorktree}
-      statusMessage={ui.statusMessage()}
+      statusMessage={uiState.statusMessage}
       detailWorktree={detailWorktree()}
     />
   );

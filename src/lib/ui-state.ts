@@ -4,7 +4,7 @@
  * only view state, tab selection, and detail view toggles.
  */
 
-import { createSignal, type Accessor } from "solid-js";
+import { createSignal } from "solid-js";
 import { prKey, type PRIdentity } from "./pr-identity";
 import type { PR } from "./types";
 
@@ -20,13 +20,21 @@ export interface StatusMessage {
   kind: "info" | "success" | "error";
 }
 
+/**
+ * Reactive view-state slice. Every property is a getter, so reads track
+ * uniformly inside reactive scopes (no mixing of accessor calls and property
+ * reads). Pair this with `UIActions` via the `[state, actions]` tuple
+ * returned by `createUIState`.
+ */
 export interface UIState {
-  readonly view: Accessor<ViewTarget>;
-  readonly activeTab: Accessor<number>;
-  readonly showResolved: Accessor<boolean>;
-  readonly showBotComments: Accessor<boolean>;
-  readonly statusMessage: Accessor<StatusMessage | null>;
+  readonly view: ViewTarget;
+  readonly activeTab: number;
+  readonly showResolved: boolean;
+  readonly showBotComments: boolean;
+  readonly statusMessage: StatusMessage | null;
+}
 
+export interface UIActions {
   changeTab(index: number): void;
   enterDetail(pr: PR): void;
   exitDetail(): void;
@@ -44,7 +52,7 @@ const AUTO_EXPIRE_MS: Partial<Record<StatusMessage["kind"], number>> = {
   error: 8_000,
 };
 
-export function createUIState(): UIState {
+export function createUIState(): readonly [UIState, UIActions] {
   const [view, setView] = createSignal<ViewTarget>({ view: "list" });
   const [activeTab, setActiveTab] = createSignal(0);
   const [showResolved, setShowResolved] = createSignal(false);
@@ -59,53 +67,56 @@ export function createUIState(): UIState {
     }
   };
 
-  function changeTab(index: number) {
-    setActiveTab(index);
-  }
-
-  function enterDetail(pr: PR) {
-    setView({ view: "detail", pr: prKey(pr) });
-  }
-
-  function exitDetail() {
-    setView({ view: "list" });
-    setShowResolved(false);
-    setShowBotComments(true);
-  }
-
-  function toggleResolved() {
-    setShowResolved((v) => !v);
-  }
-
-  function toggleBotComments() {
-    setShowBotComments((v) => !v);
-  }
-
-  function setStatusMessage(message: StatusMessage | null): void {
-    clearTimer();
-    setStatusMessageSignal(message);
-    if (message) {
-      const ttl = AUTO_EXPIRE_MS[message.kind];
-      if (ttl !== undefined) {
-        expireTimer = setTimeout(() => {
-          expireTimer = undefined;
-          setStatusMessageSignal(null);
-        }, ttl);
-      }
-    }
-  }
-
-  return {
-    view,
-    activeTab,
-    showResolved,
-    showBotComments,
-    statusMessage,
-    changeTab,
-    enterDetail,
-    exitDetail,
-    toggleResolved,
-    toggleBotComments,
-    setStatusMessage,
+  const state: UIState = {
+    get view() {
+      return view();
+    },
+    get activeTab() {
+      return activeTab();
+    },
+    get showResolved() {
+      return showResolved();
+    },
+    get showBotComments() {
+      return showBotComments();
+    },
+    get statusMessage() {
+      return statusMessage();
+    },
   };
+
+  const actions: UIActions = {
+    changeTab(index: number) {
+      setActiveTab(index);
+    },
+    enterDetail(pr: PR) {
+      setView({ view: "detail", pr: prKey(pr) });
+    },
+    exitDetail() {
+      setView({ view: "list" });
+      setShowResolved(false);
+      setShowBotComments(true);
+    },
+    toggleResolved() {
+      setShowResolved((v) => !v);
+    },
+    toggleBotComments() {
+      setShowBotComments((v) => !v);
+    },
+    setStatusMessage(message: StatusMessage | null): void {
+      clearTimer();
+      setStatusMessageSignal(message);
+      if (message) {
+        const ttl = AUTO_EXPIRE_MS[message.kind];
+        if (ttl !== undefined) {
+          expireTimer = setTimeout(() => {
+            expireTimer = undefined;
+            setStatusMessageSignal(null);
+          }, ttl);
+        }
+      }
+    },
+  };
+
+  return [state, actions] as const;
 }
