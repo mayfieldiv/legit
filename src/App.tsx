@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider, useIsFetching } from "@tanstack/solid
 import { useQueriesLite as useQueries } from "./lib/use-queries-lite";
 import { samePr, prKey, type PRIdentity } from "./lib/pr-identity";
 import { AppShell } from "./components/AppShell";
+import { AppCtx, type AppContextValue } from "./app-context";
 import { createUIState } from "./lib/ui-state";
 import type { Legit } from "./lib/legit";
 import type { GitHubNetworkStats } from "./lib/concurrency";
@@ -375,51 +376,66 @@ function AppInner(props: AppInnerProps) {
     return pr ? worktreeForPr(pr) : undefined;
   };
 
+  const appContext: AppContextValue = {
+    prData: {
+      prs: () => prState.visiblePRs,
+      loading: () => prState.loading,
+      error: () => prState.error || undefined,
+      repoSlug: displayRepoSlug,
+      currentUser: () => props.app.currentUser,
+      selectedPr: selectedPrDetail,
+      tabs,
+      activeTab: () => uiState.activeTab,
+    },
+    summary: {
+      threads: summaryThreads,
+      checks: summaryChecks,
+      reviews: summaryReviews,
+      files: selectedFiles,
+      loading: summaryLoading,
+      state: summaryState,
+    },
+    detail: {
+      view: () => uiState.view,
+      pr: detailPrDetail,
+      checks: summaryChecks,
+      threads: detailThreads,
+      comments: detailComments,
+      loading: detailLoading,
+      showResolved: () => uiState.showResolved,
+      showBotComments: () => uiState.showBotComments,
+      worktree: detailWorktree,
+    },
+    status: {
+      networkStats: githubNetworkStatsForBar,
+      message: () => uiState.statusMessage,
+    },
+    derived: {
+      getPRState,
+      getRefreshState: refreshStateForPr,
+      worktreeForPr,
+    },
+    actions: {
+      selectPr,
+      changeTab,
+      refreshSelected,
+      refreshAll,
+      enterDetail: uiActions.enterDetail,
+      exitDetail: uiActions.exitDetail,
+      toggleResolved: uiActions.toggleResolved,
+      toggleBotComments: uiActions.toggleBotComments,
+      openInBrowser: browserActions.openInBrowser,
+      openInDevin: browserActions.openInDevin,
+      openUrl: browserActions.openUrl,
+      refreshDetail,
+      createWorktree: handleCreateWorktree,
+    },
+  };
+
   return (
-    <AppShell
-      view={uiState.view}
-      prs={prState.visiblePRs}
-      loading={prState.loading}
-      githubNetworkStats={githubNetworkStatsForBar()}
-      repoSlug={displayRepoSlug()}
-      showRepo={showRepo()}
-      currentUser={props.app.currentUser}
-      resetKey={uiState.activeTab}
-      error={prState.error}
-      tabs={tabs()}
-      activeTab={uiState.activeTab}
-      selectedPr={selectedPrDetail()}
-      summaryThreads={summaryThreads()}
-      summaryChecks={summaryChecks()}
-      summaryReviews={summaryReviews()}
-      summaryFiles={selectedFiles()}
-      summaryLoading={summaryLoading()}
-      getPRState={getPRState}
-      getRefreshState={refreshStateForPr}
-      summaryState={summaryState()}
-      onSelectionChange={selectPr}
-      onTabChange={changeTab}
-      onRefreshAll={refreshAll}
-      onRefreshSelected={refreshSelected}
-      onEnterDetail={(pr: PR) => uiActions.enterDetail(pr)}
-      detailPr={detailPrDetail()}
-      detailChecks={summaryChecks()}
-      detailThreads={detailThreads()}
-      detailComments={detailComments()}
-      detailLoading={detailLoading()}
-      showResolved={uiState.showResolved}
-      showBotComments={uiState.showBotComments}
-      onExitDetail={uiActions.exitDetail}
-      onToggleResolved={uiActions.toggleResolved}
-      onToggleBotComments={uiActions.toggleBotComments}
-      onRefreshDetail={refreshDetail}
-      onOpenInBrowser={browserActions.openInBrowser}
-      onOpenInDevin={browserActions.openInDevin}
-      onOpenUrl={browserActions.openUrl}
-      onCreateWorktree={handleCreateWorktree}
-      statusMessage={uiState.statusMessage}
-      detailWorktree={detailWorktree()}
-    />
+    <AppCtx value={appContext}>
+      <AppShell showRepo={showRepo()} />
+    </AppCtx>
   );
 }
 

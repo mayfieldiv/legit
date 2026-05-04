@@ -2,9 +2,76 @@ import { describe, test, expect, afterEach } from "bun:test";
 import { testRender } from "@opentui/solid";
 import type { CliRenderer } from "@opentui/core";
 import { createSignal } from "solid-js";
+import { AppCtx } from "../src/app-context";
 import { ListView, computeScrollTarget } from "../src/components/ListView";
-import { derivePRState } from "../src/lib/pr-state";
-import { makePR } from "./helpers";
+import type { VisibleColumns } from "../src/components/PRList";
+import type { GroupByKey } from "../src/lib/group-filter-engine";
+import { derivePRState, type PRDerivedState } from "../src/lib/pr-state";
+import type { PR, PRDetail } from "../src/lib/types";
+import { makeAppContextValue, makePR } from "./helpers";
+
+type TestListViewProps = {
+  prs: PR[];
+  selectedPr?: PR;
+  showRepo?: boolean;
+  currentUser?: string;
+  groupBy?: GroupByKey;
+  resetKey?: number | string;
+  getPRState?: (pr: PR) => PRDerivedState;
+  onRefreshSelected: (pr?: PR) => void;
+  onRefreshAll: () => void;
+  onEnterDetail: (pr: PR) => void;
+  onSelectionChange?: (pr: PR) => void;
+  onOpenInBrowser?: (pr: PR) => void;
+  onOpenInDevin?: (pr: PR) => void;
+  onCreateWorktree?: (pr: PR) => void;
+  visibleColumns?: VisibleColumns;
+  tabs?: string[];
+  activeTab?: number;
+  onTabChange?: (index: number) => void;
+};
+
+function asDetail(pr: PR | undefined): PRDetail | undefined {
+  return pr ? { body: "", ...pr } : undefined;
+}
+
+function ListViewWithContext(props: TestListViewProps) {
+  const context = makeAppContextValue({
+    prData: {
+      prs: () => props.prs,
+      currentUser: () => props.currentUser,
+      selectedPr: () => asDetail(props.selectedPr),
+      tabs: () => props.tabs ?? [],
+      activeTab: () => props.activeTab ?? 0,
+    },
+    derived: {
+      getPRState:
+        props.getPRState ??
+        ((pr) => derivePRState(pr, { currentUser: props.currentUser, loading: false })),
+    },
+    actions: {
+      selectPr: props.onSelectionChange ?? (() => {}),
+      changeTab: props.onTabChange ?? (() => {}),
+      refreshSelected: props.onRefreshSelected,
+      refreshAll: props.onRefreshAll,
+      enterDetail: props.onEnterDetail,
+      openInBrowser: props.onOpenInBrowser ?? (() => {}),
+      openInDevin: props.onOpenInDevin ?? (() => {}),
+      createWorktree: props.onCreateWorktree ?? (() => {}),
+    },
+  });
+
+  return (
+    <AppCtx value={context}>
+      <ListView
+        showRepo={props.showRepo}
+        groupBy={props.groupBy}
+        resetKey={props.resetKey}
+        visibleColumns={props.visibleColumns}
+      />
+    </AppCtx>
+  );
+}
 
 // Destroy the renderer after each test to prevent leaked Solid roots
 // from accumulating across the test suite.
@@ -32,7 +99,7 @@ describe("ListView", () => {
 
     const { renderOnce, captureCharFrame } = await testRenderTracked(
       () => (
-        <ListView
+        <ListViewWithContext
           prs={prs}
           onRefreshSelected={() => {}}
           onRefreshAll={() => {}}
@@ -57,7 +124,7 @@ describe("ListView", () => {
 
     const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
       () => (
-        <ListView
+        <ListViewWithContext
           prs={prs}
           onRefreshSelected={() => {}}
           onRefreshAll={() => {}}
@@ -91,7 +158,7 @@ describe("ListView", () => {
 
     const { renderOnce, mockInput } = await testRenderTracked(
       () => (
-        <ListView
+        <ListViewWithContext
           prs={prs}
           onRefreshSelected={() => {}}
           onRefreshAll={() => {}}
@@ -112,7 +179,7 @@ describe("ListView", () => {
 
     const { renderOnce, mockInput } = await testRenderTracked(
       () => (
-        <ListView
+        <ListViewWithContext
           prs={[makePR()]}
           onRefreshSelected={() => {
             refreshedSelected = true;
@@ -136,7 +203,7 @@ describe("ListView", () => {
 
     const { renderOnce, mockInput } = await testRenderTracked(
       () => (
-        <ListView
+        <ListViewWithContext
           prs={[makePR()]}
           onRefreshSelected={() => {}}
           onRefreshAll={() => {
@@ -160,7 +227,7 @@ describe("ListView", () => {
 
     const { renderOnce, mockInput } = await testRenderTracked(
       () => (
-        <ListView
+        <ListViewWithContext
           prs={[makePR()]}
           onRefreshSelected={() => {}}
           onRefreshAll={() => {
@@ -185,7 +252,7 @@ describe("ListView", () => {
 
     const { renderOnce, mockInput } = await testRenderTracked(
       () => (
-        <ListView
+        <ListViewWithContext
           prs={[pr]}
           onRefreshSelected={() => {}}
           onRefreshAll={() => {}}
@@ -207,7 +274,7 @@ describe("ListView", () => {
   test("shows empty state when no PRs", async () => {
     const { renderOnce, captureCharFrame } = await testRenderTracked(
       () => (
-        <ListView
+        <ListViewWithContext
           prs={[]}
           onRefreshSelected={() => {}}
           onRefreshAll={() => {}}
@@ -225,7 +292,7 @@ describe("ListView", () => {
   test("j/k does nothing on empty list", async () => {
     const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
       () => (
-        <ListView
+        <ListViewWithContext
           prs={[]}
           onRefreshSelected={() => {}}
           onRefreshAll={() => {}}
@@ -253,7 +320,7 @@ describe("ListView", () => {
 
     const { renderOnce, mockInput } = await testRenderTracked(
       () => (
-        <ListView
+        <ListViewWithContext
           prs={prs}
           onRefreshSelected={() => {}}
           onRefreshAll={() => {}}
@@ -280,7 +347,7 @@ describe("ListView", () => {
 
     const { renderOnce, mockInput } = await testRenderTracked(
       () => (
-        <ListView
+        <ListViewWithContext
           prs={[pr]}
           onRefreshSelected={() => {}}
           onRefreshAll={() => {}}
@@ -304,7 +371,7 @@ describe("ListView", () => {
   test("o key does nothing when no onOpenInBrowser handler", async () => {
     const { renderOnce, mockInput } = await testRenderTracked(
       () => (
-        <ListView
+        <ListViewWithContext
           prs={[makePR()]}
           onRefreshSelected={() => {}}
           onRefreshAll={() => {}}
@@ -326,7 +393,7 @@ describe("ListView", () => {
 
     const { renderOnce, captureCharFrame } = await testRenderTracked(
       () => (
-        <ListView
+        <ListViewWithContext
           prs={prs}
           getPRState={(pr) =>
             derivePRState({ ...pr, reviewDecision: reviewDecision() }, { currentUser: "me" })
@@ -368,7 +435,7 @@ describe("ListView — filter", () => {
 
     const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
       () => (
-        <ListView
+        <ListViewWithContext
           prs={prs}
           onRefreshSelected={() => {}}
           onRefreshAll={() => {}}
@@ -395,7 +462,7 @@ describe("ListView — filter", () => {
 
     const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
       () => (
-        <ListView
+        <ListViewWithContext
           prs={prs}
           onRefreshSelected={() => {}}
           onRefreshAll={() => {}}
@@ -428,7 +495,7 @@ describe("ListView — filter", () => {
 
     const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
       () => (
-        <ListView
+        <ListViewWithContext
           prs={prs}
           onRefreshSelected={() => {}}
           onRefreshAll={() => {}}
@@ -464,7 +531,7 @@ describe("ListView — filter", () => {
 
     const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
       () => (
-        <ListView
+        <ListViewWithContext
           prs={prs}
           onRefreshSelected={() => {}}
           onRefreshAll={() => {}}
@@ -502,7 +569,7 @@ describe("ListView — filter", () => {
 
     const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
       () => (
-        <ListView
+        <ListViewWithContext
           prs={prs}
           onRefreshSelected={() => {}}
           onRefreshAll={() => {}}
@@ -534,7 +601,7 @@ describe("ListView — filter", () => {
 
     const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
       () => (
-        <ListView
+        <ListViewWithContext
           prs={prs}
           onRefreshSelected={() => {}}
           onRefreshAll={() => {}}
@@ -567,7 +634,7 @@ describe("ListView — filter", () => {
 
     const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
       () => (
-        <ListView
+        <ListViewWithContext
           prs={prs}
           onRefreshSelected={() => {}}
           onRefreshAll={() => {}}
@@ -598,7 +665,7 @@ describe("ListView — filter", () => {
 
     const { renderOnce, mockInput } = await testRenderTracked(
       () => (
-        <ListView
+        <ListViewWithContext
           prs={prs}
           onRefreshSelected={() => {}}
           onRefreshAll={() => {}}
@@ -626,7 +693,7 @@ describe("ListView — filter", () => {
 
     const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
       () => (
-        <ListView
+        <ListViewWithContext
           prs={prs}
           onRefreshSelected={() => {}}
           onRefreshAll={() => {}}
@@ -655,7 +722,7 @@ describe("ListView — grouping panel", () => {
   test("g key opens grouping panel", async () => {
     const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
       () => (
-        <ListView
+        <ListViewWithContext
           prs={[makePR()]}
           onRefreshSelected={() => {}}
           onRefreshAll={() => {}}
@@ -677,7 +744,7 @@ describe("ListView — grouping panel", () => {
   test("Escape closes grouping panel", async () => {
     const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
       () => (
-        <ListView
+        <ListViewWithContext
           prs={[makePR()]}
           onRefreshSelected={() => {}}
           onRefreshAll={() => {}}
@@ -709,7 +776,7 @@ describe("ListView — grouping panel", () => {
 
     const { renderOnce, captureCharFrame, mockInput } = await testRenderTracked(
       () => (
-        <ListView
+        <ListViewWithContext
           prs={prs}
           onRefreshSelected={() => {}}
           onRefreshAll={() => {}}
@@ -749,7 +816,7 @@ describe("ListView — grouped rendering", () => {
 
     const { renderOnce, captureCharFrame } = await testRenderTracked(
       () => (
-        <ListView
+        <ListViewWithContext
           prs={prs}
           currentUser="me"
           groupBy="smart-status"
@@ -775,7 +842,7 @@ describe("ListView — grouped rendering", () => {
 
     const { renderOnce, captureCharFrame } = await testRenderTracked(
       () => (
-        <ListView
+        <ListViewWithContext
           prs={prs}
           groupBy="author"
           onRefreshSelected={() => {}}

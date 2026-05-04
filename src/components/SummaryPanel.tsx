@@ -1,14 +1,7 @@
 import { Show, For } from "@opentui/solid";
 import { createMemo } from "solid-js";
 import type { Accessor } from "solid-js";
-import type {
-  PR,
-  CheckRun,
-  Review,
-  FullReviewThread,
-  FileCategorization,
-  FileCategory,
-} from "../lib/types";
+import type { FileCategory } from "../lib/types";
 import {
   formatAge,
   formatSize,
@@ -23,41 +16,24 @@ import {
 import { WorktreeRow } from "./WorktreeRow";
 import type { BlockerResult } from "../lib/blocker-engine";
 import { theme } from "../lib/theme";
-import { derivePRState, type PRDerivedState } from "../lib/pr-state";
+import { useAppContext } from "../app-context";
 
 /** Max number of individual check lines to show before collapsing. */
 const MAX_VISIBLE_CHECKS = 6;
 
-interface SummaryPanelProps {
-  pr: PR | undefined;
-  currentUser?: string;
-  threads?: FullReviewThread[];
-  checks?: CheckRun[];
-  reviews?: Review[];
-  files?: FileCategorization;
-  loading?: boolean;
-  prState?: PRDerivedState;
-}
-
-export function SummaryPanel(props: SummaryPanelProps) {
-  const pr = () => props.pr;
+export function SummaryPanel() {
+  const app = useAppContext();
+  const pr = app.prData.selectedPr;
 
   const hasEnrichment = () =>
-    props.threads !== undefined && props.checks !== undefined && props.reviews !== undefined;
+    app.summary.threads() !== undefined &&
+    app.summary.checks() !== undefined &&
+    app.summary.reviews() !== undefined;
 
   const prState = createMemo(() => {
     const p = pr();
     if (!p) return undefined;
-    return (
-      props.prState ??
-      derivePRState(p, {
-        currentUser: props.currentUser,
-        loading: props.loading ?? false,
-        checks: props.checks ?? [],
-        reviews: props.reviews,
-        threads: props.threads,
-      })
-    );
+    return app.summary.state() ?? app.derived.getPRState(p);
   });
 
   const comments = createMemo(() => prState()?.commentCounts);
@@ -65,7 +41,7 @@ export function SummaryPanel(props: SummaryPanelProps) {
   /** Blocker result — shown only when the current user is known and state is ready. */
   const blockerResult = createMemo(() => {
     const state = prState();
-    if (!props.currentUser || state?.loading) return null;
+    if (!app.prData.currentUser() || state?.loading) return null;
     return state?.blockerResult ?? null;
   });
 
@@ -76,7 +52,7 @@ export function SummaryPanel(props: SummaryPanelProps) {
   });
 
   const sizeCategories = (): FileCategory[] => {
-    const f = props.files;
+    const f = app.summary.files();
     if (!f || f.breakdown.total.files === 0) return [];
     return (["code", "test", "generated", "docs", "config"] as const).filter(
       (cat) => f.breakdown[cat].files > 0,
@@ -216,8 +192,8 @@ export function SummaryPanel(props: SummaryPanelProps) {
                     </span>
                     <span>
                       {formatSize(
-                        props.files!.breakdown[cat()].additions,
-                        props.files!.breakdown[cat()].deletions,
+                        app.summary.files()!.breakdown[cat()].additions,
+                        app.summary.files()!.breakdown[cat()].deletions,
                       )}
                     </span>
                   </text>
@@ -227,13 +203,13 @@ export function SummaryPanel(props: SummaryPanelProps) {
           </Show>
 
           {/* Reviewers */}
-          <Show when={(props.reviews?.length ?? 0) > 0}>
+          <Show when={(app.summary.reviews()?.length ?? 0) > 0}>
             <box height={1} width="100%">
               <text>
                 <span style={{ fg: theme.muted }}>reviewers</span>
               </text>
             </box>
-            <For each={props.reviews!}>
+            <For each={app.summary.reviews()!}>
               {(review) => {
                 const ri = () => reviewIcon(review().state);
                 return (
@@ -272,9 +248,9 @@ export function SummaryPanel(props: SummaryPanelProps) {
           </Show>
 
           {/* CI Checks */}
-          <Show when={(props.checks?.length ?? 0) > 0}>
+          <Show when={(app.summary.checks()?.length ?? 0) > 0}>
             {(() => {
-              const sorted = createMemo(() => sortCheckRuns(props.checks!));
+              const sorted = createMemo(() => sortCheckRuns(app.summary.checks()!));
               const counts = createMemo(() => checksSummary(sorted()));
               const visible = createMemo(() => sorted().slice(0, MAX_VISIBLE_CHECKS));
               const overflow = createMemo(() => Math.max(0, counts().total - MAX_VISIBLE_CHECKS));
@@ -327,7 +303,7 @@ export function SummaryPanel(props: SummaryPanelProps) {
         </Show>
 
         {/* Loading indicator when enrichment not yet loaded */}
-        <Show when={props.loading && pr()}>
+        <Show when={app.summary.loading() && pr()}>
           <box height={1} width="100%">
             <text>
               <span style={{ fg: theme.muted }}>Loading details...</span>

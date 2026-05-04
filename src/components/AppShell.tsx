@@ -3,76 +3,17 @@ import { createMemo } from "solid-js";
 import { ListView } from "./ListView";
 import { SummaryPanel } from "./SummaryPanel";
 import { DetailView } from "./DetailView";
-import type {
-  PR,
-  PRDetail,
-  CheckRun,
-  Review,
-  FullReviewThread,
-  IssueComment,
-  FileCategorization,
-} from "../lib/types";
 import type { GroupByKey } from "../lib/group-filter-engine";
-import type { StatusMessage, ViewTarget } from "../lib/ui-state";
-import type { GitHubNetworkStats } from "../lib/concurrency";
-import type { PRDerivedState, WorktreeInfo } from "../lib/pr-state";
 import { theme } from "../lib/theme";
 import { computeVisibleColumns } from "./PRList";
+import { useAppContext } from "../app-context";
 
 export type { ViewTarget } from "../lib/ui-state";
 
 interface AppShellProps {
-  prs: PR[];
-  loading: boolean;
-  repoSlug: string;
   showRepo?: boolean;
-  currentUser?: string;
   /** Initial grouping key for the list view. Default: "smart-status". */
   groupBy?: GroupByKey;
-  resetKey?: number | string;
-  view: ViewTarget;
-  error?: string;
-  onRefreshSelected: (pr?: PR) => void;
-  onRefreshAll: () => void;
-  onSelectionChange?: (pr: PR) => void;
-  onOpenInBrowser?: (pr: PR) => void;
-  onOpenInDevin?: (pr: PR) => void;
-  onCreateWorktree?: (pr: PR) => void;
-  onEnterDetail: (pr: PR) => void;
-  selectedPr?: PR;
-  // Summary panel data (individual queries, no PRSummary)
-  summaryThreads?: FullReviewThread[];
-  summaryChecks?: CheckRun[];
-  summaryReviews?: Review[];
-  summaryFiles?: FileCategorization;
-  summaryLoading?: boolean;
-  /** Derived state lookup shared by list/grouping/rendering. */
-  getPRState?: (pr: PR) => PRDerivedState;
-  /** Queue/refresh marker state for list rows. */
-  getRefreshState?: (pr: PR) => "queued" | "refreshing" | undefined;
-  summaryState?: PRDerivedState;
-  // Detail view
-  detailPr?: PRDetail;
-  detailChecks?: CheckRun[];
-  detailThreads?: FullReviewThread[];
-  detailComments?: IssueComment[];
-  detailLoading?: boolean;
-  showResolved?: boolean;
-  showBotComments?: boolean;
-  onExitDetail?: () => void;
-  onToggleResolved?: () => void;
-  onToggleBotComments?: () => void;
-  onOpenUrl?: (url: string) => void;
-  onRefreshDetail?: () => void;
-  tabs?: string[];
-  activeTab?: number;
-  onTabChange?: (index: number) => void;
-  /** GitHub HTTP concurrency (shown in status bar). */
-  githubNetworkStats?: GitHubNetworkStats;
-  /** Transient status-bar message for async work (worktree create, clipboard, etc.). */
-  statusMessage?: StatusMessage | null;
-  /** Worktree backing the PR shown in the detail view, if any. */
-  detailWorktree?: WorktreeInfo;
 }
 
 /** Summary panel width: full at wide widths, narrower when tight, hidden when very narrow. */
@@ -83,8 +24,9 @@ const SUMMARY_DIVIDER = 1;
 const SUMMARY_MIN_TERM_WIDTH = 80;
 
 export function AppShell(props: AppShellProps) {
-  const tabCount = () => props.tabs?.length ?? 0;
-  const inListView = () => props.view.view === "list";
+  const app = useAppContext();
+  const tabCount = () => app.prData.tabs().length;
+  const inListView = () => app.detail.view().view === "list";
   const dims = useTerminalDimensions();
 
   /** Whether to show the summary panel. */
@@ -115,8 +57,8 @@ export function AppShell(props: AppShellProps) {
           <span style={{ fg: theme.accent, bold: true }}>legit</span>
           <Show when={inListView()}>
             <span> — </span>
-            <b>{props.repoSlug}</b>
-            <span> — {props.prs.length} open PRs</span>
+            <b>{app.prData.repoSlug()}</b>
+            <span> — {app.prData.prs().length} open PRs</span>
           </Show>
         </text>
       </box>
@@ -124,8 +66,8 @@ export function AppShell(props: AppShellProps) {
       <Show when={tabCount() > 0 && inListView()}>
         <box flexDirection="row" width="100%" height={1}>
           <text>
-            {props.tabs!.map((tab, i) => {
-              const selected = i === (props.activeTab ?? 0);
+            {app.prData.tabs().map((tab, i) => {
+              const selected = i === app.prData.activeTab();
               return `${selected ? "[" : " "}${tab}${selected ? "]" : " "} `;
             })}
           </text>
@@ -133,17 +75,17 @@ export function AppShell(props: AppShellProps) {
       </Show>
 
       {/* Error */}
-      <Show when={props.error}>
+      <Show when={app.prData.error()}>
         <text>
-          <span style={{ fg: theme.error }}>Error: {props.error}</span>
+          <span style={{ fg: theme.error }}>Error: {app.prData.error()}</span>
         </text>
       </Show>
 
       {/* Content — hide when error with no data (first-load failure) */}
       <Show
-        when={props.prs.length > 0 || (!props.loading && !props.error)}
+        when={app.prData.prs().length > 0 || (!app.prData.loading() && !app.prData.error())}
         fallback={
-          <Show when={props.loading}>
+          <Show when={app.prData.loading()}>
             <text>
               <span style={{ fg: theme.warning }}>Loading pull requests...</span>
             </text>
@@ -151,80 +93,26 @@ export function AppShell(props: AppShellProps) {
         }
       >
         <Switch>
-          <Match when={props.view.view === "list"}>
+          <Match when={app.detail.view().view === "list"}>
             <box flexDirection="row" flexGrow={1} width="100%">
               <ListView
-                prs={props.prs}
-                selectedPr={props.selectedPr}
                 showRepo={props.showRepo}
-                currentUser={props.currentUser}
                 groupBy={props.groupBy ?? "smart-status"}
-                resetKey={props.resetKey}
-                getPRState={props.getPRState}
-                getRefreshState={props.getRefreshState}
-                onRefreshSelected={props.onRefreshSelected}
-                onRefreshAll={props.onRefreshAll}
-                onEnterDetail={props.onEnterDetail}
-                onSelectionChange={props.onSelectionChange}
-                onOpenInBrowser={props.onOpenInBrowser}
-                onOpenInDevin={props.onOpenInDevin}
-                onCreateWorktree={props.onCreateWorktree}
+                resetKey={app.prData.activeTab()}
                 visibleColumns={visibleColumns()}
-                networkStats={props.githubNetworkStats}
-                statusMessage={props.statusMessage}
-                tabs={props.tabs}
-                activeTab={props.activeTab}
-                onTabChange={props.onTabChange}
               />
               <Show when={showSummary()}>
                 <box width={1} height="100%">
                   <text>│</text>
                 </box>
                 <box width={summaryWidth()}>
-                  <SummaryPanel
-                    pr={props.selectedPr}
-                    currentUser={props.currentUser}
-                    threads={props.summaryThreads}
-                    checks={props.summaryChecks}
-                    reviews={props.summaryReviews}
-                    files={props.summaryFiles}
-                    loading={props.summaryLoading}
-                    prState={props.summaryState}
-                  />
+                  <SummaryPanel />
                 </box>
               </Show>
             </box>
           </Match>
-          <Match when={props.view.view === "detail"}>
-            <DetailView
-              pr={props.detailPr}
-              checks={props.detailChecks}
-              threads={props.detailThreads ?? []}
-              comments={props.detailComments ?? []}
-              loading={props.detailLoading ?? false}
-              showResolved={props.showResolved ?? false}
-              showBotComments={props.showBotComments ?? true}
-              onExit={props.onExitDetail}
-              onToggleResolved={props.onToggleResolved}
-              onToggleBotComments={props.onToggleBotComments}
-              onOpenInBrowser={() => {
-                const pr = props.detailPr;
-                if (pr) props.onOpenInBrowser?.(pr);
-              }}
-              onOpenInDevin={() => {
-                const pr = props.detailPr;
-                if (pr) props.onOpenInDevin?.(pr);
-              }}
-              onCreateWorktree={() => {
-                const pr = props.detailPr;
-                if (pr) props.onCreateWorktree?.(pr);
-              }}
-              onOpenUrl={props.onOpenUrl}
-              onRefresh={props.onRefreshDetail}
-              networkStats={props.githubNetworkStats}
-              statusMessage={props.statusMessage}
-              worktree={props.detailWorktree}
-            />
+          <Match when={app.detail.view().view === "detail"}>
+            <DetailView />
           </Match>
         </Switch>
       </Show>

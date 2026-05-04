@@ -1,14 +1,77 @@
 import { describe, test, expect } from "bun:test";
 import { testRender } from "@opentui/solid";
 import { createSignal } from "solid-js";
+import { AppCtx } from "../src/app-context";
 import { AppShell } from "../src/components/AppShell";
-import { makePR } from "./helpers";
+import type { ViewTarget } from "../src/components/AppShell";
+import type { CheckRun, FileCategorization, FullReviewThread, PR, Review } from "../src/lib/types";
+import { makeAppContextValue, makePR } from "./helpers";
+
+type TestAppShellProps = {
+  prs: PR[];
+  loading: boolean;
+  repoSlug: string;
+  view: ViewTarget;
+  error?: string;
+  showRepo?: boolean;
+  currentUser?: string;
+  selectedPr?: PR;
+  summaryThreads?: FullReviewThread[];
+  summaryChecks?: CheckRun[];
+  summaryReviews?: Review[];
+  summaryFiles?: FileCategorization;
+  summaryLoading?: boolean;
+  onRefreshSelected: (pr?: PR) => void;
+  onRefreshAll: () => void;
+  onEnterDetail: (pr: PR) => void;
+  tabs?: string[];
+  activeTab?: number;
+  onTabChange?: (index: number) => void;
+};
+
+function AppShellWithContext(props: TestAppShellProps) {
+  const selectedPr = () => (props.selectedPr ? { body: "", ...props.selectedPr } : undefined);
+  const context = makeAppContextValue({
+    prData: {
+      prs: () => props.prs,
+      loading: () => props.loading,
+      error: () => props.error,
+      repoSlug: () => props.repoSlug,
+      currentUser: () => props.currentUser,
+      selectedPr,
+      tabs: () => props.tabs ?? [],
+      activeTab: () => props.activeTab ?? 0,
+    },
+    detail: {
+      view: () => props.view,
+    },
+    summary: {
+      threads: () => props.summaryThreads,
+      checks: () => props.summaryChecks,
+      reviews: () => props.summaryReviews,
+      files: () => props.summaryFiles,
+      loading: () => props.summaryLoading ?? false,
+    },
+    actions: {
+      refreshSelected: props.onRefreshSelected,
+      refreshAll: props.onRefreshAll,
+      enterDetail: props.onEnterDetail,
+      changeTab: props.onTabChange ?? (() => {}),
+    },
+  });
+
+  return (
+    <AppCtx value={context}>
+      <AppShell showRepo={props.showRepo} />
+    </AppCtx>
+  );
+}
 
 describe("AppShell", () => {
   test("shows loading state when loading is true", async () => {
     const { renderOnce, captureCharFrame } = await testRender(
       () => (
-        <AppShell
+        <AppShellWithContext
           view={{ view: "list" }}
           onEnterDetail={() => {}}
           prs={[]}
@@ -34,7 +97,7 @@ describe("AppShell", () => {
 
     const { renderOnce, captureCharFrame } = await testRender(
       () => (
-        <AppShell
+        <AppShellWithContext
           view={{ view: "list" }}
           onEnterDetail={() => {}}
           prs={prs}
@@ -57,7 +120,7 @@ describe("AppShell", () => {
   test("shows repo name in header", async () => {
     const { renderOnce, captureCharFrame } = await testRender(
       () => (
-        <AppShell
+        <AppShellWithContext
           view={{ view: "list" }}
           onEnterDetail={() => {}}
           prs={[]}
@@ -78,7 +141,7 @@ describe("AppShell", () => {
   test("shows error message when error is set", async () => {
     const { renderOnce, captureCharFrame } = await testRender(
       () => (
-        <AppShell
+        <AppShellWithContext
           view={{ view: "list" }}
           onEnterDetail={() => {}}
           prs={[]}
@@ -106,7 +169,7 @@ describe("AppShell", () => {
 
     const { renderOnce, captureCharFrame } = await testRender(
       () => (
-        <AppShell
+        <AppShellWithContext
           view={{ view: "list" }}
           onEnterDetail={() => {}}
           prs={prs}
@@ -142,7 +205,7 @@ describe("AppShell", () => {
     const [selectedPr, setSelectedPr] = createSignal(prs[0]);
     const { renderOnce, captureCharFrame } = await testRender(
       () => (
-        <AppShell
+        <AppShellWithContext
           view={{ view: "list" }}
           onEnterDetail={() => {}}
           prs={prs}
@@ -177,7 +240,7 @@ describe("AppShell", () => {
 
     const { renderOnce, mockInput } = await testRender(
       () => (
-        <AppShell
+        <AppShellWithContext
           view={{ view: "list" }}
           onEnterDetail={(pr) => entered.push(pr.number)}
           prs={prs}
@@ -201,7 +264,7 @@ describe("AppShell", () => {
   test("renders tab bar with All and repo tabs", async () => {
     const { renderOnce, captureCharFrame } = await testRender(
       () => (
-        <AppShell
+        <AppShellWithContext
           view={{ view: "list" }}
           onEnterDetail={() => {}}
           prs={[]}
@@ -228,7 +291,7 @@ describe("AppShell", () => {
     const calls: number[] = [];
     const { renderOnce, mockInput } = await testRender(
       () => (
-        <AppShell
+        <AppShellWithContext
           view={{ view: "list" }}
           onEnterDetail={() => {}}
           prs={[]}
@@ -263,7 +326,7 @@ describe("AppShell", () => {
     const calls: number[] = [];
     const { renderOnce, mockInput } = await testRender(
       () => (
-        <AppShell
+        <AppShellWithContext
           view={{ view: "list" }}
           onEnterDetail={() => {}}
           prs={[]}

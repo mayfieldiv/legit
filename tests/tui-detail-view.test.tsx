@@ -1,9 +1,10 @@
 import { describe, test, expect } from "bun:test";
 import { testRender } from "@opentui/solid";
 import { createSignal } from "solid-js";
+import { AppCtx } from "../src/app-context";
 import { DetailView } from "../src/components/DetailView";
 import type { PRDetail, CheckRun, FullReviewThread, IssueComment } from "../src/lib/types";
-import { makePR } from "./helpers";
+import { makeAppContextValue, makePR } from "./helpers";
 
 function makeDetail(overrides: Partial<PRDetail> = {}): PRDetail {
   return {
@@ -13,12 +14,53 @@ function makeDetail(overrides: Partial<PRDetail> = {}): PRDetail {
   };
 }
 
-async function renderDetail(
-  props: Partial<Parameters<typeof DetailView>[0]> = {},
-  width = 120,
-  height = 40,
-) {
-  const defaults = {
+type TestDetailViewProps = {
+  pr?: PRDetail;
+  checks?: CheckRun[];
+  threads?: FullReviewThread[];
+  comments?: IssueComment[];
+  loading?: boolean;
+  showResolved?: boolean;
+  showBotComments?: boolean;
+  onExit?: () => void;
+  onToggleResolved?: () => void;
+  onToggleBotComments?: () => void;
+  onOpenInBrowser?: () => void;
+  onOpenUrl?: (url: string) => void;
+  onRefresh?: () => void;
+};
+
+function DetailViewWithContext(props: TestDetailViewProps) {
+  const context = makeAppContextValue({
+    detail: {
+      view: () => ({ view: "detail", pr: props.pr ?? makeDetail() }),
+      pr: () => props.pr,
+      checks: () => props.checks,
+      threads: () => props.threads ?? [],
+      comments: () => props.comments ?? [],
+      loading: () => props.loading ?? false,
+      showResolved: () => props.showResolved ?? false,
+      showBotComments: () => props.showBotComments ?? true,
+    },
+    actions: {
+      exitDetail: props.onExit ?? (() => {}),
+      toggleResolved: props.onToggleResolved ?? (() => {}),
+      toggleBotComments: props.onToggleBotComments ?? (() => {}),
+      openInBrowser: props.onOpenInBrowser ? () => props.onOpenInBrowser!() : () => {},
+      openUrl: props.onOpenUrl ?? (() => {}),
+      refreshDetail: props.onRefresh ?? (() => {}),
+    },
+  });
+
+  return (
+    <AppCtx value={context}>
+      <DetailView />
+    </AppCtx>
+  );
+}
+
+async function renderDetail(props: Partial<TestDetailViewProps> = {}, width = 120, height = 40) {
+  const defaults: TestDetailViewProps = {
     pr: makeDetail(),
     threads: [],
     comments: [],
@@ -27,7 +69,7 @@ async function renderDetail(
     showBotComments: true,
   };
   const { renderOnce, captureCharFrame, renderer } = await testRender(
-    () => <DetailView {...defaults} {...props} />,
+    () => <DetailViewWithContext {...defaults} {...props} />,
     { width, height },
   );
   await renderOnce();
@@ -40,7 +82,7 @@ describe("DetailView", () => {
   test("shows loading state when no PR loaded", async () => {
     const { renderOnce, captureCharFrame } = await testRender(
       () => (
-        <DetailView
+        <DetailViewWithContext
           pr={undefined}
           threads={[]}
           comments={[]}
@@ -376,7 +418,7 @@ describe("DetailView", () => {
     let exited = false;
     const { renderOnce, mockInput } = await testRender(
       () => (
-        <DetailView
+        <DetailViewWithContext
           pr={makeDetail()}
           threads={[]}
           comments={[]}
@@ -401,7 +443,7 @@ describe("DetailView", () => {
     let toggled = false;
     const { renderOnce, mockInput } = await testRender(
       () => (
-        <DetailView
+        <DetailViewWithContext
           pr={makeDetail()}
           threads={[]}
           comments={[]}
@@ -425,7 +467,7 @@ describe("DetailView", () => {
     let toggled = false;
     const { renderOnce, mockInput } = await testRender(
       () => (
-        <DetailView
+        <DetailViewWithContext
           pr={makeDetail()}
           threads={[]}
           comments={[]}
@@ -449,7 +491,7 @@ describe("DetailView", () => {
     let opened = false;
     const { renderOnce, mockInput } = await testRender(
       () => (
-        <DetailView
+        <DetailViewWithContext
           pr={makeDetail()}
           threads={[]}
           comments={[]}
@@ -473,7 +515,7 @@ describe("DetailView", () => {
     let refreshed = false;
     const { renderOnce, mockInput } = await testRender(
       () => (
-        <DetailView
+        <DetailViewWithContext
           pr={makeDetail()}
           threads={[]}
           comments={[]}
@@ -572,7 +614,7 @@ describe("DetailView", () => {
   test("j moves focus to first thread and shows border", async () => {
     const { renderOnce, captureCharFrame, mockInput } = await testRender(
       () => (
-        <DetailView
+        <DetailViewWithContext
           pr={makeDetail()}
           threads={sampleThreads}
           comments={[]}
@@ -601,7 +643,7 @@ describe("DetailView", () => {
   test("k from first item unfocuses (index -1)", async () => {
     const { renderOnce, captureCharFrame, mockInput } = await testRender(
       () => (
-        <DetailView
+        <DetailViewWithContext
           pr={makeDetail()}
           threads={sampleThreads}
           comments={[]}
@@ -627,7 +669,7 @@ describe("DetailView", () => {
   test("j navigates through threads then to comments", async () => {
     const { renderOnce, captureCharFrame, mockInput } = await testRender(
       () => (
-        <DetailView
+        <DetailViewWithContext
           pr={makeDetail()}
           threads={sampleThreads}
           comments={sampleComments}
@@ -666,7 +708,7 @@ describe("DetailView", () => {
   test("j stops at last item", async () => {
     const { renderOnce, captureCharFrame, mockInput } = await testRender(
       () => (
-        <DetailView
+        <DetailViewWithContext
           pr={makeDetail()}
           threads={[sampleThreads[0]!]}
           comments={[]}
@@ -695,7 +737,7 @@ describe("DetailView", () => {
   test("down arrow also navigates focus", async () => {
     const { renderOnce, captureCharFrame, mockInput } = await testRender(
       () => (
-        <DetailView
+        <DetailViewWithContext
           pr={makeDetail()}
           threads={sampleThreads}
           comments={[]}
@@ -717,7 +759,7 @@ describe("DetailView", () => {
     let openedUrl = "";
     const { renderOnce, mockInput } = await testRender(
       () => (
-        <DetailView
+        <DetailViewWithContext
           pr={makeDetail()}
           threads={sampleThreads}
           comments={[]}
@@ -752,7 +794,7 @@ describe("DetailView", () => {
     let prOpened = false;
     const { renderOnce, mockInput } = await testRender(
       () => (
-        <DetailView
+        <DetailViewWithContext
           pr={makeDetail()}
           threads={sampleThreads}
           comments={[]}
@@ -786,7 +828,7 @@ describe("DetailView", () => {
     let openedUrl = "";
     const { renderOnce, mockInput } = await testRender(
       () => (
-        <DetailView
+        <DetailViewWithContext
           pr={makeDetail()}
           threads={sampleThreads}
           comments={[]}
@@ -817,7 +859,7 @@ describe("DetailView", () => {
     let openedUrl = "";
     const { renderOnce, mockInput } = await testRender(
       () => (
-        <DetailView
+        <DetailViewWithContext
           pr={makeDetail()}
           threads={sampleThreads}
           comments={sampleComments}
@@ -848,7 +890,7 @@ describe("DetailView", () => {
     let openedUrl = "";
     const { renderOnce, mockInput } = await testRender(
       () => (
-        <DetailView
+        <DetailViewWithContext
           pr={makeDetail()}
           threads={sampleThreads}
           comments={sampleComments}
@@ -880,7 +922,7 @@ describe("DetailView", () => {
   test("mouse click focuses a comment card", async () => {
     const { renderOnce, captureCharFrame, mockMouse } = await testRender(
       () => (
-        <DetailView
+        <DetailViewWithContext
           pr={makeDetail({ body: "" })}
           threads={[]}
           comments={sampleComments}
@@ -906,7 +948,7 @@ describe("DetailView", () => {
   test("only one item has a visible border at a time", async () => {
     const { renderOnce, captureCharFrame, mockInput } = await testRender(
       () => (
-        <DetailView
+        <DetailViewWithContext
           pr={makeDetail()}
           threads={sampleThreads}
           comments={[]}
@@ -959,7 +1001,7 @@ describe("DetailView", () => {
 
     const { renderOnce, captureCharFrame, mockInput } = await testRender(
       () => (
-        <DetailView
+        <DetailViewWithContext
           pr={makeDetail({ body: "" })}
           threads={[]}
           comments={commentWithDetails}
@@ -1012,7 +1054,7 @@ describe("DetailView", () => {
 
     const { renderOnce, captureCharFrame, mockInput } = await testRender(
       () => (
-        <DetailView
+        <DetailViewWithContext
           pr={pr()}
           threads={[]}
           comments={[]}

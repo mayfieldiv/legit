@@ -1,8 +1,41 @@
 import { describe, test, expect } from "bun:test";
 import { testRender } from "@opentui/solid";
+import { AppCtx } from "../src/app-context";
 import { SummaryPanel } from "../src/components/SummaryPanel";
-import { makePR } from "./helpers";
-import type { CheckRun, Review, FullReviewThread, FileCategorization } from "../src/lib/types";
+import { makeAppContextValue, makePR } from "./helpers";
+import type { CheckRun, Review, FullReviewThread, FileCategorization, PR } from "../src/lib/types";
+
+type TestSummaryPanelProps = {
+  pr: PR | undefined;
+  currentUser?: string;
+  threads?: FullReviewThread[];
+  checks?: CheckRun[];
+  reviews?: Review[];
+  files?: FileCategorization;
+  loading?: boolean;
+};
+
+function SummaryPanelWithContext(props: TestSummaryPanelProps) {
+  const context = makeAppContextValue({
+    prData: {
+      selectedPr: () => (props.pr ? { body: "", ...props.pr } : undefined),
+      currentUser: () => props.currentUser,
+    },
+    summary: {
+      threads: () => props.threads,
+      checks: () => props.checks,
+      reviews: () => props.reviews,
+      files: () => props.files,
+      loading: () => props.loading ?? false,
+    },
+  });
+
+  return (
+    <AppCtx value={context}>
+      <SummaryPanel />
+    </AppCtx>
+  );
+}
 
 const EMPTY_FILES: FileCategorization = {
   files: [],
@@ -20,7 +53,15 @@ describe("SummaryPanel", () => {
   test("shows PR title and author", async () => {
     const pr = makePR({ title: "Fix login bug", author: "alice", number: 99 });
     const { renderOnce, captureCharFrame } = await testRender(
-      () => <SummaryPanel pr={pr} threads={[]} checks={[]} reviews={[]} files={EMPTY_FILES} />,
+      () => (
+        <SummaryPanelWithContext
+          pr={pr}
+          threads={[]}
+          checks={[]}
+          reviews={[]}
+          files={EMPTY_FILES}
+        />
+      ),
       { width: 40, height: 30 },
     );
     await renderOnce();
@@ -33,7 +74,15 @@ describe("SummaryPanel", () => {
   test("shows draft badge for draft PRs", async () => {
     const pr = makePR({ isDraft: true });
     const { renderOnce, captureCharFrame } = await testRender(
-      () => <SummaryPanel pr={pr} threads={[]} checks={[]} reviews={[]} files={EMPTY_FILES} />,
+      () => (
+        <SummaryPanelWithContext
+          pr={pr}
+          threads={[]}
+          checks={[]}
+          reviews={[]}
+          files={EMPTY_FILES}
+        />
+      ),
       { width: 40, height: 30 },
     );
     await renderOnce();
@@ -44,7 +93,15 @@ describe("SummaryPanel", () => {
   test("shows merge conflict indicator", async () => {
     const pr = makePR({ mergeable: "CONFLICTING" });
     const { renderOnce, captureCharFrame } = await testRender(
-      () => <SummaryPanel pr={pr} threads={[]} checks={[]} reviews={[]} files={EMPTY_FILES} />,
+      () => (
+        <SummaryPanelWithContext
+          pr={pr}
+          threads={[]}
+          checks={[]}
+          reviews={[]}
+          files={EMPTY_FILES}
+        />
+      ),
       { width: 40, height: 30 },
     );
     await renderOnce();
@@ -60,7 +117,13 @@ describe("SummaryPanel", () => {
     ];
     const { renderOnce, captureCharFrame } = await testRender(
       () => (
-        <SummaryPanel pr={makePR()} threads={[]} checks={checks} reviews={[]} files={EMPTY_FILES} />
+        <SummaryPanelWithContext
+          pr={makePR()}
+          threads={[]}
+          checks={checks}
+          reviews={[]}
+          files={EMPTY_FILES}
+        />
       ),
       { width: 40, height: 30 },
     );
@@ -83,7 +146,7 @@ describe("SummaryPanel", () => {
     ];
     const { renderOnce, captureCharFrame } = await testRender(
       () => (
-        <SummaryPanel
+        <SummaryPanelWithContext
           pr={makePR()}
           threads={[]}
           checks={[]}
@@ -152,7 +215,7 @@ describe("SummaryPanel", () => {
     ];
     const { renderOnce, captureCharFrame } = await testRender(
       () => (
-        <SummaryPanel
+        <SummaryPanelWithContext
           pr={makePR()}
           threads={threads}
           checks={[]}
@@ -170,7 +233,7 @@ describe("SummaryPanel", () => {
 
   test("shows empty state when no pr", async () => {
     const { renderOnce, captureCharFrame } = await testRender(
-      () => <SummaryPanel pr={undefined} />,
+      () => <SummaryPanelWithContext pr={undefined} />,
       { width: 40, height: 30 },
     );
     await renderOnce();
@@ -181,7 +244,7 @@ describe("SummaryPanel", () => {
   test("shows basic info from PR when enrichment is loading", async () => {
     const pr = makePR({ title: "Loading test", number: 77 });
     const { renderOnce, captureCharFrame } = await testRender(
-      () => <SummaryPanel pr={pr} loading={true} />,
+      () => <SummaryPanelWithContext pr={pr} loading={true} />,
       { width: 40, height: 30 },
     );
     await renderOnce();
@@ -194,7 +257,7 @@ describe("SummaryPanel", () => {
     const pr = makePR({ author: "charlie", requestedReviewers: ["alice"] });
     const { renderOnce, captureCharFrame } = await testRender(
       () => (
-        <SummaryPanel
+        <SummaryPanelWithContext
           pr={pr}
           currentUser="alice"
           threads={[]}
@@ -215,7 +278,7 @@ describe("SummaryPanel", () => {
     const checks: CheckRun[] = [{ name: "build", status: "completed", conclusion: "failure" }];
     const { renderOnce, captureCharFrame } = await testRender(
       () => (
-        <SummaryPanel
+        <SummaryPanelWithContext
           pr={pr}
           currentUser="alice"
           threads={[]}
@@ -234,7 +297,15 @@ describe("SummaryPanel", () => {
   test("does not show blocker section when currentUser is not provided", async () => {
     const pr = makePR({ requestedReviewers: ["alice"] });
     const { renderOnce, captureCharFrame } = await testRender(
-      () => <SummaryPanel pr={pr} threads={[]} checks={[]} reviews={[]} files={EMPTY_FILES} />,
+      () => (
+        <SummaryPanelWithContext
+          pr={pr}
+          threads={[]}
+          checks={[]}
+          reviews={[]}
+          files={EMPTY_FILES}
+        />
+      ),
       { width: 50, height: 30 },
     );
     await renderOnce();

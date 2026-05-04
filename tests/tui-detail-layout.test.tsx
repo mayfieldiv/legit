@@ -1,7 +1,9 @@
 import { describe, test, expect } from "bun:test";
 import { testRender } from "@opentui/solid";
+import { AppCtx } from "../src/app-context";
 import { DetailView } from "../src/components/DetailView";
 import type { FullReviewThread, PRDetail } from "../src/lib/types";
+import { makeAppContextValue } from "./helpers";
 
 function findLineIndex(lines: string[], text: string): number {
   return lines.findIndex((line) => line.includes(text));
@@ -66,19 +68,30 @@ const threads: FullReviewThread[] = [
   },
 ];
 
+function DetailViewWithContext() {
+  const context = makeAppContextValue({
+    detail: {
+      view: () => ({ view: "detail", pr }),
+      pr: () => pr,
+      threads: () => threads,
+      comments: () => [],
+      loading: () => false,
+      showResolved: () => false,
+      showBotComments: () => true,
+    },
+  });
+
+  return (
+    <AppCtx value={context}>
+      <DetailView />
+    </AppCtx>
+  );
+}
+
 describe("DetailView layout", () => {
   test("moving selection between thread cards does not shift their rows", async () => {
     const { renderOnce, captureCharFrame, mockInput } = await testRender(
-      () => (
-        <DetailView
-          pr={pr}
-          threads={threads}
-          comments={[]}
-          loading={false}
-          showResolved={false}
-          showBotComments={true}
-        />
-      ),
+      () => <DetailViewWithContext />,
       { width: 120, height: 24 },
     );
 

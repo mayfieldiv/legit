@@ -10,43 +10,19 @@ import { processPRList } from "../lib/group-filter-engine";
 import type { GroupByKey } from "../lib/group-filter-engine";
 import type { PR } from "../lib/types";
 import type { PRIdentity } from "../lib/pr-identity";
-import type { GitHubNetworkStats } from "../lib/concurrency";
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { StatusBar } from "./StatusBar";
 import { theme } from "../lib/theme";
-import type { PRDerivedState } from "../lib/pr-state";
-import type { StatusMessage } from "../lib/ui-state";
+import { useAppContext } from "../app-context";
 
 interface ListViewProps {
-  prs: PR[];
-  selectedPr?: PR;
   showRepo?: boolean;
-  currentUser?: string;
   /** Initial grouping key. Default: "none". */
   groupBy?: GroupByKey;
   /** When this value changes, the selection resets to index 0. */
   resetKey?: number | string;
-  /** Lookup function for shared derived PR state. */
-  getPRState?: (pr: PR) => PRDerivedState;
-  /** Queue/refresh marker state for list rows. */
-  getRefreshState?: (pr: PR) => "queued" | "refreshing" | undefined;
-  onRefreshSelected: (pr?: PR) => void;
-  onRefreshAll: () => void;
-  onEnterDetail: (pr: PR) => void;
-  onSelectionChange?: (pr: PR) => void;
-  onOpenInBrowser?: (pr: PR) => void;
-  onOpenInDevin?: (pr: PR) => void;
-  onCreateWorktree?: (pr: PR) => void;
   /** Which optional columns are visible (responsive). */
   visibleColumns?: VisibleColumns;
-  networkStats?: GitHubNetworkStats;
-  statusMessage?: StatusMessage | null;
-  /** Repo tab labels (e.g. ["All", "acme/widgets"]). */
-  tabs?: string[];
-  /** Currently active tab index. */
-  activeTab?: number;
-  /** Called when the user switches tabs via keyboard. */
-  onTabChange?: (index: number) => void;
 }
 
 /**
@@ -95,6 +71,8 @@ function prLookupKey(pr: PRIdentity): string {
 }
 
 export function ListView(props: ListViewProps) {
+  const app = useAppContext();
+
   // ── Filter state ──────────────────────────────────────────────────────────
   const [filterText, setFilterText] = createSignal("");
   /** True while the user is actively typing a filter query. */
@@ -110,11 +88,11 @@ export function ListView(props: ListViewProps) {
   // ── Processed PR list ─────────────────────────────────────────────────────
   // Grouping/filtering determines only the list structure (group labels and
   // PR order). Row rendering must still read the live PR objects from the
-  // current `props.prs` array so field updates like `mergeable` propagate even
-  // when the grouping itself is unchanged.
+  // current app-context PR array so field updates like `mergeable` propagate
+  // even when the grouping itself is unchanged.
   const prByKey = createMemo(() => {
     const map = new Map<string, PR>();
-    for (const pr of props.prs) {
+    for (const pr of app.prData.prs()) {
       map.set(prLookupKey(pr), pr);
     }
     return map;
@@ -122,11 +100,11 @@ export function ListView(props: ListViewProps) {
 
   const processedStructure = createMemo(
     () => {
-      const result = processPRList(props.prs, {
+      const result = processPRList(app.prData.prs(), {
         groupBy: activeGroupBy(),
         filterText: filterText(),
-        currentUser: props.currentUser,
-        getPRState: props.getPRState,
+        currentUser: app.prData.currentUser(),
+        getPRState: app.derived.getPRState,
       });
 
       return {
@@ -189,8 +167,8 @@ export function ListView(props: ListViewProps) {
   const anchoredSelection = createAnchoredSelection({
     items: displayPRs,
     selection,
-    parentSelectedItem: () => props.selectedPr,
-    onSelectionChange: props.onSelectionChange,
+    parentSelectedItem: app.prData.selectedPr,
+    onSelectionChange: app.actions.selectPr,
     ensureVisible,
   });
 
@@ -334,23 +312,23 @@ export function ListView(props: ListViewProps) {
     } else if (name === "k" || name === "up") {
       navigate("up");
     } else if (name === "r" && !event.shift) {
-      props.onRefreshSelected(selection.selectedItem(displayPRs()));
+      app.actions.refreshSelected(selection.selectedItem(displayPRs()));
     } else if ((name === "r" && event.shift) || name === "R") {
-      props.onRefreshAll();
+      app.actions.refreshAll();
     } else if (name === "return") {
       const pr = selection.selectedItem(displayPRs());
       if (pr) {
-        props.onEnterDetail(pr);
+        app.actions.enterDetail(pr);
       }
     } else if (name === "o") {
       const pr = selection.selectedItem(displayPRs());
-      if (pr) props.onOpenInBrowser?.(pr);
+      if (pr) app.actions.openInBrowser(pr);
     } else if (name === "d") {
       const pr = selection.selectedItem(displayPRs());
-      if (pr) props.onOpenInDevin?.(pr);
+      if (pr) app.actions.openInDevin(pr);
     } else if (name === "w") {
       const pr = selection.selectedItem(displayPRs());
-      if (pr) props.onCreateWorktree?.(pr);
+      if (pr) app.actions.createWorktree(pr);
     } else if (name === "/") {
       setFilterEditing(true);
     } else if (name === "g") {
@@ -358,20 +336,20 @@ export function ListView(props: ListViewProps) {
       const idx = GROUP_BY_OPTIONS.findIndex((o) => o.key === activeGroupBy());
       setPanelIndex(idx >= 0 ? idx : 0);
       setPanelOpen(true);
-    } else if (props.onTabChange && props.tabs && props.tabs.length > 0) {
+    } else if (app.prData.tabs().length > 0) {
       // Tab switching — only when tabs are configured
-      const tabCount = props.tabs.length;
-      const current = props.activeTab ?? 0;
+      const tabCount = app.prData.tabs().length;
+      const current = app.prData.activeTab();
       if (name === "l" || name === "right" || name === "]") {
-        props.onTabChange(Math.min(tabCount - 1, current + 1));
+        app.actions.changeTab(Math.min(tabCount - 1, current + 1));
       } else if (name === "h" || name === "left" || name === "[") {
-        props.onTabChange(Math.max(0, current - 1));
+        app.actions.changeTab(Math.max(0, current - 1));
       } else if (name === "0") {
-        props.onTabChange(0);
+        app.actions.changeTab(0);
       } else if (/^[1-9]$/.test(name)) {
         const index = Number(name);
         if (index < tabCount) {
-          props.onTabChange(index);
+          app.actions.changeTab(index);
         }
       }
     }
@@ -400,7 +378,7 @@ export function ListView(props: ListViewProps) {
     <box flexDirection="column" flexGrow={1} width="100%">
       <PRListHeader
         showRepo={props.showRepo}
-        currentUser={props.currentUser}
+        currentUser={app.prData.currentUser()}
         visibleColumns={props.visibleColumns}
       />
 
@@ -456,18 +434,18 @@ export function ListView(props: ListViewProps) {
               items={flatItems()}
               selectedIndex={selection.index()}
               showRepo={props.showRepo}
-              currentUser={props.currentUser}
+              currentUser={app.prData.currentUser()}
               onSelect={selectIndex}
               visibleColumns={props.visibleColumns}
-              getPRState={props.getPRState}
-              getRefreshState={props.getRefreshState}
+              getPRState={app.derived.getPRState}
+              getRefreshState={app.derived.getRefreshState}
             />
           </scrollbox>
         </Show>
       </Show>
 
       {/* ── Status bar ──────────────────────────────────────── */}
-      <StatusBar networkStats={props.networkStats} statusMessage={props.statusMessage}>
+      <StatusBar networkStats={app.status.networkStats()} statusMessage={app.status.message()}>
         {" · "}R refresh tab · / filter · g group · w worktree
       </StatusBar>
     </box>

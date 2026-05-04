@@ -2,7 +2,17 @@ import { mkdtempSync, rmSync } from "fs";
 import { execFileSync } from "child_process";
 import { join } from "path";
 import { tmpdir } from "os";
-import type { PR } from "../src/lib/types";
+import type {
+  CheckRun,
+  FileCategorization,
+  FullReviewThread,
+  IssueComment,
+  PR,
+  PRDetail,
+  Review,
+} from "../src/lib/types";
+import type { AppContextValue } from "../src/app-context";
+import { derivePRState } from "../src/lib/pr-state";
 import type { AuthExecutor, LegitOptions } from "../src/lib/legit";
 import { Legit } from "../src/lib/legit";
 import type { HttpFetch, GitHubTransport, RawRestPR } from "../src/lib/github-client";
@@ -290,4 +300,117 @@ export function makePR(overrides: Partial<PR> = {}): PR {
     state: "OPEN",
     ...overrides,
   };
+}
+
+export function makePRDetail(overrides: Partial<PRDetail> = {}): PRDetail {
+  return {
+    ...makePR(overrides),
+    body: "Test PR body",
+    ...overrides,
+  };
+}
+
+const EMPTY_FILE_CATEGORIZATION: FileCategorization = {
+  files: [],
+  breakdown: {
+    code: { additions: 0, deletions: 0, files: 0 },
+    test: { additions: 0, deletions: 0, files: 0 },
+    generated: { additions: 0, deletions: 0, files: 0 },
+    docs: { additions: 0, deletions: 0, files: 0 },
+    config: { additions: 0, deletions: 0, files: 0 },
+    total: { additions: 0, deletions: 0, files: 0 },
+  },
+};
+
+type AppContextOverrides = {
+  prData?: Partial<AppContextValue["prData"]>;
+  summary?: Partial<AppContextValue["summary"]>;
+  detail?: Partial<AppContextValue["detail"]>;
+  status?: Partial<AppContextValue["status"]>;
+  derived?: Partial<AppContextValue["derived"]>;
+  actions?: Partial<AppContextValue["actions"]>;
+};
+
+const accessor =
+  <T>(value: T) =>
+  () =>
+    value;
+
+export function makeAppContextValue(overrides: AppContextOverrides = {}): AppContextValue {
+  const prs = accessor<PR[]>([]);
+  const noChecks = accessor<CheckRun[] | undefined>([]);
+  const noThreads = accessor<FullReviewThread[] | undefined>([]);
+  const noReviews = accessor<Review[] | undefined>([]);
+  const noComments = accessor<IssueComment[]>([]);
+
+  const value: AppContextValue = {
+    prData: {
+      prs,
+      loading: accessor(false),
+      error: accessor<string | undefined>(undefined),
+      repoSlug: accessor("acme/widgets"),
+      currentUser: accessor<string | undefined>(undefined),
+      selectedPr: accessor<PRDetail | undefined>(undefined),
+      tabs: accessor<string[]>([]),
+      activeTab: accessor(0),
+      ...overrides.prData,
+    },
+    summary: {
+      threads: noThreads,
+      checks: noChecks,
+      reviews: noReviews,
+      files: accessor<FileCategorization | undefined>(EMPTY_FILE_CATEGORIZATION),
+      loading: accessor(false),
+      state: accessor(undefined),
+      ...overrides.summary,
+    },
+    detail: {
+      view: accessor({ view: "list" }),
+      pr: accessor<PRDetail | undefined>(undefined),
+      checks: noChecks,
+      threads: noThreads,
+      comments: noComments,
+      loading: accessor(false),
+      showResolved: accessor(false),
+      showBotComments: accessor(true),
+      worktree: accessor(undefined),
+      ...overrides.detail,
+    },
+    status: {
+      networkStats: accessor(undefined),
+      message: accessor(null),
+      ...overrides.status,
+    },
+    derived: {
+      getPRState: (pr) =>
+        derivePRState(pr, {
+          currentUser: value.prData.currentUser(),
+          loading: false,
+          checks: value.summary.checks() ?? [],
+          reviews: value.summary.reviews(),
+          threads: value.summary.threads(),
+        }),
+      getRefreshState: () => undefined,
+      worktreeForPr: () => undefined,
+      ...overrides.derived,
+    },
+    actions: {
+      selectPr: () => {},
+      changeTab: () => {},
+      refreshSelected: () => {},
+      refreshAll: () => {},
+      enterDetail: () => {},
+      exitDetail: () => {},
+      toggleResolved: () => {},
+      toggleBotComments: () => {},
+      openInBrowser: () => {},
+      openInDevin: () => {},
+      openUrl: () => {},
+      refreshDetail: () => {},
+      createWorktree: () => {},
+      ...overrides.actions,
+    },
+  };
+
+  return value;
 }

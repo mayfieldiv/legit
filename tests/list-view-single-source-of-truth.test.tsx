@@ -2,8 +2,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { testRender } from "@opentui/solid";
 import type { CliRenderer } from "@opentui/core";
 import { createSignal } from "solid-js";
+import { AppCtx } from "../src/app-context";
 import { ListView } from "../src/components/ListView";
-import { makePR } from "./helpers";
+import { derivePRState } from "../src/lib/pr-state";
+import { makeAppContextValue, makePR } from "./helpers";
 
 let activeRenderer: CliRenderer | undefined;
 
@@ -34,15 +36,22 @@ describe("ListView single source of truth", () => {
     const [prs, setPrs] = createSignal([pr]);
 
     const { renderOnce, captureCharFrame } = await testRenderTracked(
-      () => (
-        <ListView
-          prs={prs()}
-          currentUser="bob"
-          onRefreshSelected={() => {}}
-          onRefreshAll={() => {}}
-          onEnterDetail={() => {}}
-        />
-      ),
+      () => {
+        const context = makeAppContextValue({
+          prData: {
+            prs,
+            currentUser: () => "bob",
+          },
+          derived: {
+            getPRState: (livePr) => derivePRState(livePr, { currentUser: "bob", loading: false }),
+          },
+        });
+        return (
+          <AppCtx value={context}>
+            <ListView />
+          </AppCtx>
+        );
+      },
       { width: 160, height: 12 },
     );
 

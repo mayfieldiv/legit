@@ -27,48 +27,16 @@ import {
   checkIcon,
   checksSummary,
 } from "../lib/format";
-import type {
-  CheckRun,
-  FullReviewThread,
-  IssueComment,
-  PRDetail,
-  ReviewComment,
-} from "../lib/types";
+import type { FullReviewThread, IssueComment, PRDetail, ReviewComment } from "../lib/types";
 import { classifyThread } from "../lib/blocker-engine";
 import type { BorderCharacters, MouseEvent, ScrollBoxRenderable } from "@opentui/core";
-import type { GitHubNetworkStats } from "../lib/concurrency";
 import { StatusBar } from "./StatusBar";
 import { theme } from "../lib/theme";
 import type { Accessor } from "solid-js";
-import type { StatusMessage } from "../lib/ui-state";
 import { WorktreeRow } from "./WorktreeRow";
+import { useAppContext } from "../app-context";
 
-// ── Props ───────────────────────────────────────────────────────────────────
-
-export interface DetailViewProps {
-  pr: PRDetail | undefined;
-  checks?: CheckRun[];
-  threads: FullReviewThread[];
-  comments: IssueComment[];
-  loading: boolean;
-  showResolved: boolean;
-  showBotComments: boolean;
-  onExit?: () => void;
-  onToggleResolved?: () => void;
-  onToggleBotComments?: () => void;
-  onOpenInBrowser?: () => void;
-  onOpenInDevin?: () => void;
-  onCreateWorktree?: () => void;
-  onOpenUrl?: (url: string) => void;
-  onRefresh?: () => void;
-  networkStats?: GitHubNetworkStats;
-  statusMessage?: StatusMessage | null;
-  /**
-   * Worktree attached to this PR, if any. Rendered as a header row and used
-   * for the `\ue725` indicator.
-   */
-  worktree?: { path: string };
-}
+// ── Context data ────────────────────────────────────────────────────────────
 
 // ── Focus selection model ───────────────────────────────────────────────────
 
@@ -232,34 +200,38 @@ function prIdentityKey(pr: PRDetail | undefined): string {
   return `${pr.repoSlug ?? ""}#${pr.number}`;
 }
 
-export function DetailView(props: DetailViewProps) {
-  const checks = createMemo(() => sortCheckRuns(props.checks ?? []));
+export function DetailView() {
+  const app = useAppContext();
+  const detailPr = app.detail.pr;
+  const threads = () => app.detail.threads() ?? [];
+  const comments = app.detail.comments;
+  const checks = createMemo(() => sortCheckRuns(app.detail.checks() ?? []));
 
   const counts = createMemo(() => checksSummary(checks()));
 
   // ── Filtered threads ─────────────────────────────────────────────────
   const visibleThreads = createMemo(() => {
-    let threads = props.threads;
-    if (!props.showResolved) {
-      threads = threads.filter((t) => !t.isResolved);
+    let visible = threads();
+    if (!app.detail.showResolved()) {
+      visible = visible.filter((t) => !t.isResolved);
     }
-    if (!props.showBotComments) {
-      threads = threads.filter((t) => t.comments.some((c) => !c.isBot));
+    if (!app.detail.showBotComments()) {
+      visible = visible.filter((t) => t.comments.some((c) => !c.isBot));
     }
-    return threads;
+    return visible;
   });
 
-  const hiddenThreadCount = createMemo(() => props.threads.length - visibleThreads().length);
+  const hiddenThreadCount = createMemo(() => threads().length - visibleThreads().length);
 
   // ── Filtered issue comments ──────────────────────────────────────────
   const visibleComments = createMemo(() => {
-    if (props.showBotComments) return props.comments;
-    return props.comments.filter((c) => !c.isBot);
+    if (app.detail.showBotComments()) return comments();
+    return comments().filter((c) => !c.isBot);
   });
 
   // ── Helper: visible comments for a specific thread ───────────────────
   const getVisibleThreadComments = (thread: FullReviewThread) => {
-    if (props.showBotComments) return thread.comments;
+    if (app.detail.showBotComments()) return thread.comments;
     return thread.comments.filter((c) => !c.isBot);
   };
 
@@ -366,9 +338,9 @@ export function DetailView(props: DetailViewProps) {
   const detailsControllers = new Map<number, DetailsController>();
   let prevPrIdentity: string | undefined;
   createEffect(
-    () => prIdentityKey(props.pr),
+    () => prIdentityKey(detailPr()),
     (next) => {
-      // Treat the empty-string sentinel (props.pr === undefined) the same as
+      // Treat the empty-string sentinel (detailPr() === undefined) the same as
       // the initial undefined: those states never registered controllers, so
       // transitioning out of them must NOT clear. Otherwise the cache-miss →
       // detail-fetch landed transition would wipe the controllers that the
@@ -392,7 +364,7 @@ export function DetailView(props: DetailViewProps) {
   useKeyboard((event) => {
     const name = event.name;
     if (name === "escape") {
-      props.onExit?.();
+      app.actions.exitDetail();
     } else if (name === "j" || name === "down") {
       const items = focusableItems();
       if (items.length > 0) {
@@ -401,24 +373,27 @@ export function DetailView(props: DetailViewProps) {
     } else if (name === "k" || name === "up") {
       setFocusedIndex((i) => Math.max(i - 1, 0));
     } else if (name === "t") {
-      props.onToggleResolved?.();
+      app.actions.toggleResolved();
     } else if (name === "b") {
-      props.onToggleBotComments?.();
+      app.actions.toggleBotComments();
     } else if (name === "o") {
       const idx = focusedIndex();
       const items = focusableItems();
       const item = items[idx];
       if (item && (item.kind === "thread" || item.kind === "reply" || item.kind === "comment")) {
-        props.onOpenUrl?.(item.url);
+        app.actions.openUrl(item.url);
       } else {
-        props.onOpenInBrowser?.();
+        const currentPr = detailPr();
+        if (currentPr) app.actions.openInBrowser(currentPr);
       }
     } else if (name === "d") {
-      props.onOpenInDevin?.();
+      const currentPr = detailPr();
+      if (currentPr) app.actions.openInDevin(currentPr);
     } else if (name === "w") {
-      props.onCreateWorktree?.();
+      const currentPr = detailPr();
+      if (currentPr) app.actions.createWorktree(currentPr);
     } else if (name === "r" && !event.shift) {
-      props.onRefresh?.();
+      app.actions.refreshDetail();
     } else if (name === "return") {
       const idx = focusedIndex();
       const ctrl = detailsControllers.get(idx);
@@ -430,9 +405,9 @@ export function DetailView(props: DetailViewProps) {
     <box flexDirection="column" width="100%" height="100%">
       {/* ── Header (pinned) ──────────────────────────────────── */}
       <Show
-        when={props.pr}
+        when={detailPr()}
         fallback={
-          <Show when={props.loading}>
+          <Show when={app.detail.loading()}>
             <text>
               <span style={{ fg: theme.warning }}>Loading PR detail...</span>
             </text>
@@ -493,7 +468,7 @@ export function DetailView(props: DetailViewProps) {
                 </text>
               </box>
             </Show>
-            <Show when={props.worktree}>
+            <Show when={app.detail.worktree()}>
               {(wt) => <WorktreeRow path={wt().path} maxWidth={80} />}
             </Show>
             <box width="100%" height={1}>
@@ -506,7 +481,7 @@ export function DetailView(props: DetailViewProps) {
       </Show>
 
       {/* ── Scrollable body ──────────────────────────────────── */}
-      <Show when={props.pr}>
+      <Show when={detailPr()}>
         {(pr: Accessor<PRDetail>) => (
           <scrollbox
             ref={(el: ScrollBoxRenderable) => {
@@ -569,7 +544,7 @@ export function DetailView(props: DetailViewProps) {
             </Show>
 
             {/* Review Threads */}
-            <Show when={props.threads.length > 0}>
+            <Show when={threads().length > 0}>
               <box width="100%" height={1}>
                 <text>{""}</text>
               </box>
@@ -638,7 +613,7 @@ export function DetailView(props: DetailViewProps) {
                           <DetailsCtx value={getDetailsController(rootItem().focusIdx)}>
                             <ThreadCard
                               thread={rootItem().thread}
-                              showBotComments={props.showBotComments}
+                              showBotComments={app.detail.showBotComments()}
                             />
                           </DetailsCtx>
                         </FocusableCard>
@@ -650,7 +625,7 @@ export function DetailView(props: DetailViewProps) {
             </Show>
 
             {/* Conversation (issue comments) */}
-            <Show when={props.comments.length > 0}>
+            <Show when={comments().length > 0}>
               <box width="100%" height={1}>
                 <text>{""}</text>
               </box>
@@ -684,10 +659,10 @@ export function DetailView(props: DetailViewProps) {
       </Show>
 
       {/* ── Status bar ────────────────────────────────────── */}
-      <Show when={props.pr}>
-        <StatusBar networkStats={props.networkStats} statusMessage={props.statusMessage}>
-          {" · "}Esc back · t {props.showResolved ? "hide" : "show"} resolved · b{" "}
-          {props.showBotComments ? "hide" : "show"} bots · w worktree
+      <Show when={detailPr()}>
+        <StatusBar networkStats={app.status.networkStats()} statusMessage={app.status.message()}>
+          {" · "}Esc back · t {app.detail.showResolved() ? "hide" : "show"} resolved · b{" "}
+          {app.detail.showBotComments() ? "hide" : "show"} bots · w worktree
         </StatusBar>
       </Show>
     </box>
