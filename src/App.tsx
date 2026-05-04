@@ -22,12 +22,9 @@ import { createBrowserActions } from "./lib/browser-actions";
 import { createDetailState } from "./lib/detail-state";
 import { createRefreshQueue, type RefreshPriority } from "./lib/refresh-queue";
 import { createPRQueries } from "./lib/pr-queries";
+import { createEnrichmentQueries } from "./lib/enrichment-queries";
 
 export { prUrl, devinUrl } from "./lib/browser-actions";
-
-function checksLookupKey(repo: string, headCommitSha: string): string {
-  return JSON.stringify([repo, headCommitSha]);
-}
 
 export interface AppProps {
   app: Legit;
@@ -118,114 +115,13 @@ function AppInner(props: AppInnerProps) {
   const showRepo = createMemo(() => uiState.activeTab === 0 && prState.repoTabs.length > 1);
 
   // ── Per-PR enrichment queries (threads, checks, reviews) ──────────────
-  const threadsQueries = useQueries<FullReviewThread[]>(() => ({
-    queries: prState.visiblePRs.map((pr) => {
-      const repo = pr.repoSlug ?? props.app.repoSlug;
-      return {
-        queryKey: ["threads", repo, pr.number] as const,
-        queryFn: async ({ signal }: { signal: AbortSignal }) =>
-          props.app.fetchFullReviewThreads(repo, pr.number, signal),
-        enabled: prState.enrichmentReady,
-      };
-    }),
-  }));
-
-  const threadsByKey = createMemo(() => {
-    const prs = prState.visiblePRs;
-    const map = new Map<string, FullReviewThread[]>();
-    for (let i = 0; i < prs.length; i++) {
-      void threadsQueries[i]?.dataUpdatedAt;
-      const pr = prs[i]!;
-      const repo = pr.repoSlug ?? props.app.repoSlug;
-      const data = props.queryClient.getQueryData<FullReviewThread[]>(["threads", repo, pr.number]);
-      if (data) map.set(`${repo}#${pr.number}`, data);
-    }
-    return map;
+  const [enrichment] = createEnrichmentQueries({
+    app: props.app,
+    queryClient: props.queryClient,
+    visiblePRs: () => prState.visiblePRs,
+    enrichmentReady: () => prState.enrichmentReady,
   });
-
-  const uniqueChecks = createMemo(() => {
-    const checks = new Map<
-      string,
-      { key: string; repo: string; headCommitSha: string; enabled: boolean }
-    >();
-
-    for (const pr of prState.visiblePRs) {
-      const repo = pr.repoSlug ?? props.app.repoSlug;
-      const headCommitSha = pr.headCommitSha;
-      if (!headCommitSha) continue;
-
-      const key = checksLookupKey(repo, headCommitSha);
-      if (checks.has(key)) continue;
-
-      checks.set(key, {
-        key,
-        repo,
-        headCommitSha,
-        enabled: prState.enrichmentReady,
-      });
-    }
-
-    return Array.from(checks.values());
-  });
-
-  const checksQueries = useQueries<CheckRun[]>(() => ({
-    queries: uniqueChecks().map(({ repo, headCommitSha, enabled }) => ({
-      queryKey: ["checks", repo, headCommitSha] as const,
-      queryFn: async ({ signal }: { signal: AbortSignal }) =>
-        props.app.fetchCheckRuns(repo, headCommitSha, signal),
-      enabled,
-    })),
-  }));
-
-  const checksByKey = createMemo(() => {
-    const map = new Map<string, CheckRun[] | undefined>();
-    const checks = uniqueChecks();
-    for (let i = 0; i < checks.length; i++) {
-      map.set(checks[i]!.key, checksQueries[i]?.data);
-    }
-    return map;
-  });
-
-  const checksForPr = (pr: PR): CheckRun[] | undefined => {
-    if (!pr.headCommitSha) return [];
-    const repo = pr.repoSlug ?? props.app.repoSlug;
-    return checksByKey().get(checksLookupKey(repo, pr.headCommitSha));
-  };
-
-  const reviewsQueries = useQueries<Review[]>(() => ({
-    queries: prState.visiblePRs.map((pr) => {
-      const repo = pr.repoSlug ?? props.app.repoSlug;
-      return {
-        queryKey: ["reviews", repo, pr.number] as const,
-        queryFn: async ({ signal }: { signal: AbortSignal }) =>
-          props.app.fetchReviews(repo, pr.number, signal),
-        enabled: prState.enrichmentReady,
-      };
-    }),
-  }));
-
-  const reviewsByKey = createMemo(() => {
-    const prs = prState.visiblePRs;
-    const map = new Map<string, Review[]>();
-    for (let i = 0; i < prs.length; i++) {
-      void reviewsQueries[i]?.dataUpdatedAt;
-      const pr = prs[i]!;
-      const repo = pr.repoSlug ?? props.app.repoSlug;
-      const data = props.queryClient.getQueryData<Review[]>(["reviews", repo, pr.number]);
-      if (data) map.set(`${repo}#${pr.number}`, data);
-    }
-    return map;
-  });
-
-  const threadsForPr = (pr: PRIdentity): FullReviewThread[] | undefined => {
-    const repo = pr.repoSlug ?? props.app.repoSlug;
-    return threadsByKey().get(`${repo}#${pr.number}`);
-  };
-
-  const reviewsForPr = (pr: PRIdentity): Review[] | undefined => {
-    const repo = pr.repoSlug ?? props.app.repoSlug;
-    return reviewsByKey().get(`${repo}#${pr.number}`);
-  };
+  const { threadsForPr, checksForPr, reviewsForPr } = enrichment;
 
   const worktreeController = createWorktreeController({
     app: props.app,
