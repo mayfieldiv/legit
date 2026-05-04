@@ -7,7 +7,6 @@ import {
   experimental_streamedQuery as streamedQuery,
 } from "@tanstack/solid-query";
 import { useQueriesLite as useQueries } from "./lib/use-queries-lite";
-import { createAbortableAsyncEffect } from "./lib/create-abortable-async-effect";
 import { samePr, prKey, type PRIdentity } from "./lib/pr-identity";
 import { AppShell } from "./components/AppShell";
 import { createUIState } from "./lib/ui-state";
@@ -25,6 +24,7 @@ import type {
 import { derivePRState, type PRDerivedState, type WorktreeInfo } from "./lib/pr-state";
 import { createWorktreeController } from "./lib/worktree-controller";
 import { createBrowserActions } from "./lib/browser-actions";
+import { createDetailState } from "./lib/detail-state";
 
 export { prUrl, devinUrl } from "./lib/browser-actions";
 
@@ -518,47 +518,35 @@ function AppInner(props: AppInnerProps) {
     return v.view === "detail" ? v.pr : undefined;
   };
 
-  const [detailComments, setDetailComments] = createSignal<IssueComment[]>([]);
-  const [detailLoading, setDetailLoading] = createSignal(false);
-  const [detailRefreshKey, setDetailRefreshKey] = createSignal(0);
-  createAbortableAsyncEffect(
-    () => ({ pr: detailPr(), refreshKey: detailRefreshKey() }),
-    async ({ pr }, signal, isCurrent) => {
-      setDetailComments([]);
-
-      if (!pr) {
-        setDetailLoading(false);
-        return;
-      }
-
+  const [detailViewState, detailActions] = createDetailState({
+    detailPr,
+    fetch: async (pr, signal) => {
       const repo = pr.repoSlug ?? props.app.repoSlug;
-      setDetailLoading(true);
-
       const [nextPr, threads, comments] = await Promise.all([
         props.app.fetchPR(repo, pr.number, signal),
         props.app.fetchFullReviewThreads(repo, pr.number, signal),
         props.app.fetchIssueComments(repo, pr.number, signal),
       ]);
-      if (!isCurrent()) return;
-
+      return { pr: { ...nextPr, repoSlug: repo }, threads, comments };
+    },
+    onFetched: (pr, result) => {
+      const repo = pr.repoSlug ?? props.app.repoSlug;
       props.queryClient.setQueryData<PRDetail>(["pr", repo, pr.number], (prev) => ({
         ...(prev ?? {}),
-        ...nextPr,
+        ...result.pr,
         repoSlug: repo,
       }));
-      props.queryClient.setQueryData(["threads", repo, pr.number], threads);
-      prunePrIndexIfClosed(repo, nextPr);
-      setDetailComments(comments);
-      setDetailLoading(false);
+      props.queryClient.setQueryData(["threads", repo, pr.number], result.threads);
+      prunePrIndexIfClosed(repo, result.pr);
     },
-    (error) => {
-      setDetailLoading(false);
-      uiActions.setStatusMessage({
-        text: `detail fetch failed: ${error instanceof Error ? error.message : String(error)}`,
-        kind: "error",
-      });
-    },
-  );
+    setStatusMessage: uiActions.setStatusMessage,
+  });
+
+  const detailComments = (): IssueComment[] => {
+    const s = detailViewState();
+    return s.kind === "ready" ? s.comments : [];
+  };
+  const detailLoading = (): boolean => detailViewState().kind === "loading";
 
   /** Read the freshest PRDetail for a PR identity from the per-PR cache.
    *  Reactive via prByKey so consumers re-render when any visible PR
@@ -857,7 +845,7 @@ function AppInner(props: AppInnerProps) {
     const pr = detailPr() ?? detailPrDetail();
     if (!pr) return;
     queuePrRefresh(prKey(pr), { priority: 0, includeFiles: true });
-    setDetailRefreshKey((n) => n + 1);
+    detailActions.refresh();
   }
 
   // ── Browser actions ───────────────────────────────────────────────────
