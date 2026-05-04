@@ -368,7 +368,12 @@ export function DetailView(props: DetailViewProps) {
   createEffect(
     () => prIdentityKey(props.pr),
     (next) => {
-      if (prevPrIdentity !== undefined && next !== prevPrIdentity) {
+      // Treat the empty-string sentinel (props.pr === undefined) the same as
+      // the initial undefined: those states never registered controllers, so
+      // transitioning out of them must NOT clear. Otherwise the cache-miss →
+      // detail-fetch landed transition would wipe the controllers that the
+      // very same render just registered, and Enter-toggleAll would no-op.
+      if (prevPrIdentity && next !== prevPrIdentity) {
         detailsControllers.clear();
       }
       prevPrIdentity = next;
