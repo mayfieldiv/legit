@@ -524,13 +524,11 @@ function AppInner(props: AppInnerProps) {
 
   const [detailComments, setDetailComments] = createSignal<IssueComment[]>([]);
   const [detailLoading, setDetailLoading] = createSignal(false);
-  const [detailError, setDetailError] = createSignal("");
   const [detailRefreshKey, setDetailRefreshKey] = createSignal(0);
   createAbortableAsyncEffect(
     () => ({ pr: detailPr(), refreshKey: detailRefreshKey() }),
     async ({ pr }, signal, isCurrent) => {
       setDetailComments([]);
-      setDetailError("");
 
       if (!pr) {
         setDetailLoading(false);
@@ -559,7 +557,10 @@ function AppInner(props: AppInnerProps) {
     },
     (error) => {
       setDetailLoading(false);
-      setDetailError(error instanceof Error ? error.message : String(error));
+      uiActions.setStatusMessage({
+        text: `detail fetch failed: ${error instanceof Error ? error.message : String(error)}`,
+        kind: "error",
+      });
     },
   );
 
@@ -864,26 +865,28 @@ function AppInner(props: AppInnerProps) {
   }
 
   // ── Browser actions ───────────────────────────────────────────────────
-  const [browserError, setBrowserError] = createSignal("");
+  function reportOpenFailure(label: string, err: Error): void {
+    uiActions.setStatusMessage({
+      text: `Failed to open ${label}: ${err.message}`,
+      kind: "error",
+    });
+  }
 
   function handleOpenInBrowser(pr: PR) {
-    setBrowserError("");
     execFile("open", [prUrl(pr.repoSlug ?? props.app.repoSlug, pr.number)], (err) => {
-      if (err) setBrowserError(`Failed to open browser: ${err.message}`);
+      if (err) reportOpenFailure("browser", err);
     });
   }
 
   function handleOpenUrl(url: string) {
-    setBrowserError("");
     execFile("open", [url], (err) => {
-      if (err) setBrowserError(`Failed to open browser: ${err.message}`);
+      if (err) reportOpenFailure("browser", err);
     });
   }
 
   function handleOpenInDevin(pr: PR) {
-    setBrowserError("");
     execFile("open", [devinUrl(pr.repoSlug ?? props.app.repoSlug, pr.number)], (err) => {
-      if (err) setBrowserError(`Failed to open Devin: ${err.message}`);
+      if (err) reportOpenFailure("Devin", err);
     });
   }
 
@@ -942,7 +945,7 @@ function AppInner(props: AppInnerProps) {
       showRepo={showRepo()}
       currentUser={props.app.currentUser}
       resetKey={uiState.activeTab}
-      error={prError() || detailError() || browserError()}
+      error={prError()}
       tabs={tabs()}
       activeTab={uiState.activeTab}
       selectedPr={selectedPrDetail()}
