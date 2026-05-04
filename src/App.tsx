@@ -1,4 +1,4 @@
-import { createSignal, createMemo, createEffect, onSettled, onCleanup } from "solid-js";
+import { createSignal, createMemo, createEffect, onSettled } from "solid-js";
 import type { JSX as OpenTuiJSX } from "@opentui/solid";
 import { execFile } from "child_process";
 import {
@@ -305,6 +305,7 @@ function AppInner(props: AppInnerProps) {
   createEffect(
     () => settledRepos(),
     (settled) => {
+      const timers: ReturnType<typeof setTimeout>[] = [];
       const repos = repoTabs();
       for (let i = 0; i < repos.length; i++) {
         const repo = repos[i]!;
@@ -325,9 +326,12 @@ function AppInner(props: AppInnerProps) {
               queryKey: ["pr", entry.repoSlug, entry.number],
             });
           }, 3_000);
-          onCleanup(() => clearTimeout(timer));
+          timers.push(timer);
         }
       }
+      return () => {
+        for (const timer of timers) clearTimeout(timer);
+      };
     },
   );
 
