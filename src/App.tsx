@@ -23,6 +23,7 @@ import { createDetailState } from "./lib/detail-state";
 import { createRefreshQueue, type RefreshPriority } from "./lib/refresh-queue";
 import { createPRQueries } from "./lib/pr-queries";
 import { createEnrichmentQueries } from "./lib/enrichment-queries";
+import { runPrRefresh, fetchDetail, commitDetailFetch } from "./lib/pr-cache-mutators";
 
 export { prUrl, devinUrl } from "./lib/browser-actions";
 
@@ -204,27 +205,11 @@ function AppInner(props: AppInnerProps) {
     return v.view === "detail" ? v.pr : undefined;
   };
 
+  const cacheDeps = { app: props.app, queryClient: props.queryClient, prActions };
   const [detailViewState, detailActions] = createDetailState({
     detailPr,
-    fetch: async (pr, signal) => {
-      const repo = pr.repoSlug ?? props.app.repoSlug;
-      const [nextPr, threads, comments] = await Promise.all([
-        props.app.fetchPR(repo, pr.number, signal),
-        props.app.fetchFullReviewThreads(repo, pr.number, signal),
-        props.app.fetchIssueComments(repo, pr.number, signal),
-      ]);
-      return { pr: { ...nextPr, repoSlug: repo }, threads, comments };
-    },
-    onFetched: (pr, result) => {
-      const repo = pr.repoSlug ?? props.app.repoSlug;
-      props.queryClient.setQueryData<PRDetail>(["pr", repo, pr.number], (prev) => ({
-        ...(prev ?? {}),
-        ...result.pr,
-        repoSlug: repo,
-      }));
-      props.queryClient.setQueryData(["threads", repo, pr.number], result.threads);
-      prActions.prunePrIndexIfClosed(repo, result.pr);
-    },
+    fetch: (pr, signal) => fetchDetail(props.app, pr, signal),
+    onFetched: (pr, result) => commitDetailFetch(cacheDeps, pr, result),
     setStatusMessage: uiActions.setStatusMessage,
   });
 
@@ -283,41 +268,7 @@ function AppInner(props: AppInnerProps) {
 
   const [refreshQueueState, refreshQueueActions] = createRefreshQueue({
     defaultRepoSlug: props.app.repoSlug,
-    runRefresh: async (item) => {
-      const { pr, includeFiles } = item;
-      const repo = pr.repoSlug ?? props.app.repoSlug;
-      prActions.notePrRefreshed(repo, pr.number);
-
-      const [nextPr, threads, reviews] = await Promise.all([
-        props.app.fetchPR(repo, pr.number),
-        props.app.fetchFullReviewThreads(repo, pr.number),
-        props.app.fetchReviews(repo, pr.number),
-      ]);
-
-      props.queryClient.setQueryData<PRDetail>(["pr", repo, pr.number], (prev) => ({
-        ...(prev ?? {}),
-        ...nextPr,
-        repoSlug: repo,
-      }));
-      props.queryClient.setQueryData(["threads", repo, pr.number], threads);
-      props.queryClient.setQueryData(["reviews", repo, pr.number], reviews);
-      prActions.prunePrIndexIfClosed(repo, nextPr);
-
-      if (nextPr.headCommitSha) {
-        const checks = await props.app.fetchCheckRuns(repo, nextPr.headCommitSha);
-        props.queryClient.setQueryData(["checks", repo, nextPr.headCommitSha], checks);
-      }
-
-      if (includeFiles) {
-        const files = await props.app.fetchCategorizedFiles(repo, pr.number);
-        props.queryClient.setQueryData(["files", repo, pr.number], files);
-      }
-
-      const sourceClone = props.app.resolveSourceClone(repo);
-      if (sourceClone) {
-        void props.queryClient.invalidateQueries({ queryKey: ["worktrees", sourceClone] });
-      }
-    },
+    runRefresh: (item) => runPrRefresh(cacheDeps, item),
     setStatusMessage: uiActions.setStatusMessage,
   });
 
