@@ -1,29 +1,23 @@
-import { createEffect, onCleanup, type Accessor } from "solid-js";
+import { createEffect, type Accessor } from "solid-js";
 
 export function createAbortableAsyncEffect<T>(
   source: Accessor<T>,
   run: (value: T, signal: AbortSignal, isCurrent: () => boolean) => void | Promise<void>,
   onError: (error: unknown, value: T) => void,
 ): void {
-  let controller: AbortController | undefined;
-
-  onCleanup(() => {
-    controller?.abort();
-    controller = undefined;
-  });
-
+  // The returned cleanup aborts the in-flight controller on both source change
+  // (effect re-run) and component unmount; nothing escapes the per-run scope.
   createEffect(source, (value) => {
-    controller?.abort();
-    const activeController = new AbortController();
-    controller = activeController;
-
-    const isCurrent = () => controller === activeController && !activeController.signal.aborted;
+    const controller = new AbortController();
+    const isCurrent = () => !controller.signal.aborted;
 
     void Promise.resolve()
-      .then(() => run(value, activeController.signal, isCurrent))
+      .then(() => run(value, controller.signal, isCurrent))
       .catch((error) => {
         if (!isCurrent()) return;
         onError(error, value);
       });
+
+    return () => controller.abort();
   });
 }

@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { testRender } from "@opentui/solid";
+import { createSignal } from "solid-js";
 import { DetailView } from "../src/components/DetailView";
 import type { PRDetail, CheckRun, FullReviewThread, IssueComment } from "../src/lib/types";
 import { makePR } from "./helpers";
@@ -996,5 +997,50 @@ describe("DetailView", () => {
     expect(frame).not.toContain("Content A.");
     expect(frame).not.toContain("Content B.");
     expect(frame).toContain("\u25b6"); // collapsed again
+  });
+
+  test("Enter toggles details after PR transitions from undefined to defined", async () => {
+    const [pr, setPr] = createSignal<PRDetail | undefined>(undefined);
+    const detailsBody = [
+      "<details>",
+      "<summary>First</summary>",
+      "",
+      "Content A.",
+      "",
+      "</details>",
+    ].join("\n");
+
+    const { renderOnce, captureCharFrame, mockInput } = await testRender(
+      () => (
+        <DetailView
+          pr={pr()}
+          threads={[]}
+          comments={[]}
+          loading={pr() === undefined}
+          showResolved={false}
+          showBotComments={true}
+        />
+      ),
+      { width: 80, height: 40 },
+    );
+    await renderOnce();
+
+    // Initial render: no PR yet (cache miss / fetch in flight)
+    expect(captureCharFrame()).toMatch(/loading/i);
+
+    // PR loads \u2014 body card registers <details> with the controller
+    setPr(makeDetail({ body: detailsBody }));
+    await renderOnce();
+    let frame = captureCharFrame();
+    expect(frame).toContain("First");
+    expect(frame).not.toContain("Content A."); // collapsed by default
+
+    // Press Enter on the body card (focused-0). If the controllers Map was
+    // wiped by the undefined\u2192defined effect transition, this would no-op.
+    mockInput.pressEnter();
+    await renderOnce();
+    frame = captureCharFrame();
+    expect(frame).toContain("Content A.");
+    expect(frame).toContain("\u25bc");
   });
 });

@@ -227,6 +227,11 @@ function CommentRow(props: { comment: ReviewComment | IssueComment }) {
 
 // ── Component ───────────────────────────────────────────────────────────────
 
+function prIdentityKey(pr: PRDetail | undefined): string {
+  if (!pr) return "";
+  return `${pr.repoSlug ?? ""}#${pr.number}`;
+}
+
 export function DetailView(props: DetailViewProps) {
   const checks = createMemo(() => sortCheckRuns(props.checks ?? []));
 
@@ -351,7 +356,29 @@ export function DetailView(props: DetailViewProps) {
   );
 
   // ── Details controllers (one per focusable card) ─────────────────────────────
+  // Scoped to the currently focused PR. When the PR identity changes (the user
+  // navigates to a different PR detail) we drop the prior controllers — their
+  // <details> registrations are no longer rendered, and reusing the Map by
+  // focusable index would accumulate stale signal references over a session.
+  // We skip the initial run because <details> register during the same render
+  // pass that establishes this effect; clearing on the initial fire would wipe
+  // the registrations we want to keep.
   const detailsControllers = new Map<number, DetailsController>();
+  let prevPrIdentity: string | undefined;
+  createEffect(
+    () => prIdentityKey(props.pr),
+    (next) => {
+      // Treat the empty-string sentinel (props.pr === undefined) the same as
+      // the initial undefined: those states never registered controllers, so
+      // transitioning out of them must NOT clear. Otherwise the cache-miss →
+      // detail-fetch landed transition would wipe the controllers that the
+      // very same render just registered, and Enter-toggleAll would no-op.
+      if (prevPrIdentity && next !== prevPrIdentity) {
+        detailsControllers.clear();
+      }
+      prevPrIdentity = next;
+    },
+  );
   function getDetailsController(idx: number): DetailsController {
     let ctrl = detailsControllers.get(idx);
     if (!ctrl) {
