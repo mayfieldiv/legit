@@ -20,3 +20,17 @@
 - `legit` is on the shell `PATH` and resolves to the current repo state; prefer running `legit` directly.
 - `~/immybot` can be used as a read-only dataset for TUI testing. Do not modify anything in that repo.
 - **Never post to GitHub without explicit user approval.** Do not create issues, file PRs, post PR comments, reply to review threads, or perform any write action on GitHub unless the user explicitly asks for it.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues at `mayfieldiv/legit`, accessed via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context — `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
