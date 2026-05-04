@@ -7,6 +7,10 @@ export function createAbortableAsyncEffect<T>(
 ): void {
   let controller: AbortController | undefined;
 
+  // Component-lifetime cleanup: aborts any in-flight run when the owning scope
+  // disposes. Aborts on source-change (effect re-run) are handled separately
+  // by the controller?.abort() at the top of the effect body — together they
+  // cover both the reactive re-run path and the unmount path.
   onCleanup(() => {
     controller?.abort();
     controller = undefined;

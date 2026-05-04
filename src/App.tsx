@@ -128,7 +128,7 @@ function AppInner(props: AppInnerProps) {
     const unsubHttp = props.app.subscribeGitHubNetworkStats(() => {
       setHttpNetworkStats(props.app.githubNetworkStats);
     });
-    onCleanup(unsubHttp);
+    return unsubHttp;
   });
 
   // ── Repo tabs ─────────────────────────────────────────────────────────
