@@ -1,6 +1,5 @@
 import { createSignal, createMemo, createEffect, onSettled } from "solid-js";
 import type { JSX as OpenTuiJSX } from "@opentui/solid";
-import { execFile } from "child_process";
 import {
   QueryClient,
   QueryClientProvider,
@@ -25,16 +24,9 @@ import type {
 } from "./lib/types";
 import { derivePRState, type PRDerivedState, type WorktreeInfo } from "./lib/pr-state";
 import { createWorktreeController } from "./lib/worktree-controller";
-/** Build a GitHub PR URL from a repo slug and PR number. */
-export function prUrl(repoSlug: string, number: number): string {
-  return `https://github.com/${repoSlug}/pull/${number}`;
-}
+import { createBrowserActions } from "./lib/browser-actions";
 
-/** Build a Devin review URL from a repo slug and PR number. */
-export function devinUrl(repoSlug: string, number: number): string {
-  const [owner, repo] = repoSlug.split("/");
-  return `https://app.devin.ai/review/${owner}/${repo}/pull/${number}`;
-}
+export { prUrl, devinUrl } from "./lib/browser-actions";
 
 function sameStringSet(a: Set<string> | undefined, b: Set<string> | undefined): boolean {
   if (a === b) return true;
@@ -869,30 +861,10 @@ function AppInner(props: AppInnerProps) {
   }
 
   // ── Browser actions ───────────────────────────────────────────────────
-  function reportOpenFailure(label: string, err: Error): void {
-    uiActions.setStatusMessage({
-      text: `Failed to open ${label}: ${err.message}`,
-      kind: "error",
-    });
-  }
-
-  function handleOpenInBrowser(pr: PR) {
-    execFile("open", [prUrl(pr.repoSlug ?? props.app.repoSlug, pr.number)], (err) => {
-      if (err) reportOpenFailure("browser", err);
-    });
-  }
-
-  function handleOpenUrl(url: string) {
-    execFile("open", [url], (err) => {
-      if (err) reportOpenFailure("browser", err);
-    });
-  }
-
-  function handleOpenInDevin(pr: PR) {
-    execFile("open", [devinUrl(pr.repoSlug ?? props.app.repoSlug, pr.number)], (err) => {
-      if (err) reportOpenFailure("Devin", err);
-    });
-  }
+  const [browserActions] = createBrowserActions({
+    defaultRepoSlug: props.app.repoSlug,
+    setStatusMessage: uiActions.setStatusMessage,
+  });
 
   const displayRepoSlug = () => {
     const tab = uiState.activeTab;
@@ -977,9 +949,9 @@ function AppInner(props: AppInnerProps) {
       onToggleResolved={uiActions.toggleResolved}
       onToggleBotComments={uiActions.toggleBotComments}
       onRefreshDetail={refreshDetail}
-      onOpenInBrowser={handleOpenInBrowser}
-      onOpenInDevin={handleOpenInDevin}
-      onOpenUrl={handleOpenUrl}
+      onOpenInBrowser={browserActions.openInBrowser}
+      onOpenInDevin={browserActions.openInDevin}
+      onOpenUrl={browserActions.openUrl}
       onCreateWorktree={handleCreateWorktree}
       statusMessage={uiState.statusMessage}
       detailWorktree={detailWorktree()}
