@@ -50,8 +50,23 @@ export function createBrowserActions(deps: BrowserActionsDeps): readonly [Browse
     });
   }
 
+  function detectOpenCommand(): readonly [cmd: string, baseArgs: string[]] {
+    switch (process.platform) {
+      case "darwin":
+        return ["open", []];
+      case "win32":
+        // Use `start` via cmd.exe so we respect the default browser/file handler.
+        return ["cmd", ["/c", "start", ""]];
+      default:
+        // Match lazygit's behaviour on Linux and other Unix-y platforms.
+        return ["xdg-open", []];
+    }
+  }
+
+  const [openCmd, openBaseArgs] = detectOpenCommand();
+
   function open(label: string, url: string): void {
-    exec("open", [url], (err) => {
+    exec(openCmd, [...openBaseArgs, url], (err) => {
       if (err) reportFailure(label, err);
     });
   }

@@ -8,6 +8,19 @@ interface ExecCall {
   args: string[];
 }
 
+function expectedOpen(url: string): ExecCall {
+  if (process.platform === "darwin") {
+    return { cmd: "open", args: [url] };
+  }
+
+  if (process.platform === "win32") {
+    return { cmd: "cmd", args: ["/c", "start", "", url] };
+  }
+
+  // Match lazygit's default behaviour on Linux and other Unix-y platforms.
+  return { cmd: "xdg-open", args: [url] };
+}
+
 function harness(options: { execError?: Error; defaultRepoSlug?: string } = {}) {
   const calls: ExecCall[] = [];
   const messages: (StatusMessage | null)[] = [];
@@ -28,7 +41,7 @@ describe("createBrowserActions", () => {
     const { actions, calls } = harness();
     const pr = makePR({ number: 7, repoSlug: "acme/widgets" });
     actions.openInBrowser(pr);
-    expect(calls).toEqual([{ cmd: "open", args: ["https://github.com/acme/widgets/pull/7"] }]);
+    expect(calls).toEqual([expectedOpen("https://github.com/acme/widgets/pull/7")]);
   });
 
   test("openInBrowser falls back to defaultRepoSlug when pr.repoSlug is missing", () => {
@@ -36,7 +49,7 @@ describe("createBrowserActions", () => {
     const pr = makePR({ number: 3 });
     pr.repoSlug = undefined;
     actions.openInBrowser(pr);
-    expect(calls).toEqual([{ cmd: "open", args: ["https://github.com/owner/fallback/pull/3"] }]);
+    expect(calls).toEqual([expectedOpen("https://github.com/owner/fallback/pull/3")]);
   });
 
   test("openInBrowser routes exec failures through setStatusMessage", () => {
@@ -50,8 +63,7 @@ describe("createBrowserActions", () => {
     successHarness.actions.openInDevin(makePR({ number: 9, repoSlug: "acme/widgets" }));
     expect(successHarness.calls).toEqual([
       {
-        cmd: "open",
-        args: ["https://app.devin.ai/review/acme/widgets/pull/9"],
+        ...expectedOpen("https://app.devin.ai/review/acme/widgets/pull/9"),
       },
     ]);
 
@@ -63,6 +75,6 @@ describe("createBrowserActions", () => {
   test("openUrl opens an arbitrary URL via the open command", () => {
     const { actions, calls } = harness();
     actions.openUrl("https://example.com/path?x=1");
-    expect(calls).toEqual([{ cmd: "open", args: ["https://example.com/path?x=1"] }]);
+    expect(calls).toEqual([expectedOpen("https://example.com/path?x=1")]);
   });
 });
