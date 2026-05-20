@@ -11,7 +11,12 @@ pub fn resolve_token() -> Result<String> {
         .context("failed to run `gh auth token`")?;
 
     if !output.status.success() {
-        bail!("`gh auth token` exited with {}", output.status);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = stderr.trim();
+        if stderr.is_empty() {
+            bail!("`gh auth token` exited with {}", output.status);
+        }
+        bail!("`gh auth token` exited with {}: {}", output.status, stderr);
     }
 
     let token = String::from_utf8(output.stdout)

@@ -13,7 +13,6 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
         Msg::TerminalEvent(_) => Vec::new(),
         Msg::ConfigLoaded(config) => {
             model.config = config;
-            model.last_error = None;
             Vec::new()
         }
         Msg::AuthTokenResolved(token) => {
@@ -52,5 +51,18 @@ mod tests {
         );
 
         assert!(model.should_quit);
+    }
+
+    #[test]
+    fn config_loaded_preserves_existing_error() {
+        let (mut model, _) = Model::new();
+        model.last_error = Some("resolve auth token: failed".to_owned());
+
+        update(&mut model, Msg::ConfigLoaded(Default::default()));
+
+        assert_eq!(
+            model.last_error.as_deref(),
+            Some("resolve auth token: failed")
+        );
     }
 }
