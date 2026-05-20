@@ -1,0 +1,177 @@
+use std::{path::Path, process::Command};
+
+use anyhow::{Context, Result, bail};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoInfo {
+    pub owner: String,
+    pub repo: String,
+}
+
+impl RepoInfo {
+    pub fn slug(&self) -> String {
+        format!("{}/{}", self.owner, self.repo)
+    }
+}
+
+/// Parse a GitHub remote URL into (owner, repo). Mirrors the TS `parseRemoteUrl`
+/// in `src/lib/legit.ts` so dotted repo names (e.g. `angular.js`) and both SSH
+/// and HTTPS forms parse identically.
+pub fn parse_remote_url(url: &str) -> Result<RepoInfo> {
+    if let Some((owner, repo)) = parse_ssh(url) {
+        return Ok(RepoInfo { owner, repo });
+    }
+    if let Some((owner, repo)) = parse_https(url) {
+        return Ok(RepoInfo { owner, repo });
+    }
+    bail!("Cannot parse GitHub remote URL: {url}");
+}
+
+fn parse_ssh(url: &str) -> Option<(String, String)> {
+    let rest = url.strip_prefix("git@github.com:")?;
+    split_owner_repo(rest)
+}
+
+fn parse_https(url: &str) -> Option<(String, String)> {
+    let rest = url
+        .strip_prefix("https://github.com/")
+        .or_else(|| url.strip_prefix("http://github.com/"))?;
+    split_owner_repo(rest)
+}
+
+fn split_owner_repo(rest: &str) -> Option<(String, String)> {
+    let (owner, repo) = rest.split_once('/')?;
+    if owner.is_empty() {
+        return None;
+    }
+    let repo = repo.strip_suffix(".git").unwrap_or(repo);
+    if repo.is_empty() {
+        return None;
+    }
+    Some((owner.to_owned(), repo.to_owned()))
+}
+
+/// Detect the GitHub repo for the given working directory by reading
+/// `git remote get-url origin`.
+#[tracing::instrument(name = "detect_repo")]
+pub fn detect_repo(cwd: &Path) -> Result<RepoInfo> {
+    tracing::info!(path = %cwd.display(), "detecting repo from git remote");
+    let output = Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(cwd)
+        .output()
+        .with_context(|| {
+            format!(
+                "failed to run `git remote get-url origin` in {}",
+                cwd.display()
+            )
+        })?;
+
+    if !output.status.success() {
+        bail!(
+            "No git remote 'origin' found in {} (`git remote get-url origin` exited {})",
+            cwd.display(),
+            output.status,
+        );
+    }
+
+    let url = String::from_utf8(output.stdout)
+        .context("`git remote get-url origin` returned non-utf8 output")?
+        .trim()
+        .to_owned();
+
+    parse_remote_url(&url)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RepoInfo, parse_remote_url};
+
+    fn info(owner: &str, repo: &str) -> RepoInfo {
+        RepoInfo {
+            owner: owner.to_owned(),
+            repo: repo.to_owned(),
+        }
+    }
+
+    #[test]
+    fn parses_ssh_url_with_git_suffix() {
+        assert_eq!(
+            parse_remote_url("git@github.com:owner/repo.git").unwrap(),
+            info("owner", "repo"),
+        );
+    }
+
+    #[test]
+    fn parses_ssh_url_without_git_suffix() {
+        assert_eq!(
+            parse_remote_url("git@github.com:owner/repo").unwrap(),
+            info("owner", "repo"),
+        );
+    }
+
+    #[test]
+    fn parses_https_url_with_git_suffix() {
+        assert_eq!(
+            parse_remote_url("https://github.com/owner/repo.git").unwrap(),
+            info("owner", "repo"),
+        );
+    }
+
+    #[test]
+    fn parses_https_url_without_git_suffix() {
+        assert_eq!(
+            parse_remote_url("https://github.com/owner/repo").unwrap(),
+            info("owner", "repo"),
+        );
+    }
+
+    #[test]
+    fn parses_ssh_url_with_dotted_repo_with_git_suffix() {
+        assert_eq!(
+            parse_remote_url("git@github.com:angular/angular.js.git").unwrap(),
+            info("angular", "angular.js"),
+        );
+    }
+
+    #[test]
+    fn parses_ssh_url_with_dotted_repo_without_git_suffix() {
+        assert_eq!(
+            parse_remote_url("git@github.com:socketio/socket.io").unwrap(),
+            info("socketio", "socket.io"),
+        );
+    }
+
+    #[test]
+    fn parses_https_url_with_dotted_repo_with_git_suffix() {
+        assert_eq!(
+            parse_remote_url("https://github.com/highlightjs/highlight.js.git").unwrap(),
+            info("highlightjs", "highlight.js"),
+        );
+    }
+
+    #[test]
+    fn parses_https_url_with_dotted_repo_without_git_suffix() {
+        assert_eq!(
+            parse_remote_url("https://github.com/kubernetes/kubernetes.io").unwrap(),
+            info("kubernetes", "kubernetes.io"),
+        );
+    }
+
+    #[test]
+    fn rejects_non_github_url() {
+        let err = parse_remote_url("git@gitlab.com:owner/repo.git").unwrap_err();
+        assert!(format!("{err}").contains("Cannot parse"));
+    }
+
+    #[test]
+    fn rejects_malformed_url() {
+        let err = parse_remote_url("not-a-url").unwrap_err();
+        assert!(format!("{err}").contains("Cannot parse"));
+    }
+
+    #[test]
+    fn slug_joins_owner_and_repo() {
+        assert_eq!(info("owner", "repo").slug(), "owner/repo");
+    }
+}
