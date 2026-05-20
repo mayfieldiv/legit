@@ -69,14 +69,22 @@ impl Default for LegitConfig {
 }
 
 pub fn load() -> Result<LegitConfig> {
-    load_from_path(config_path()?)
+    let path = config_path()?;
+    tracing::info!(path = %path.display(), "loading config");
+    load_from_path(path)
 }
 
 pub fn load_from_path(path: PathBuf) -> Result<LegitConfig> {
     match fs::read_to_string(&path) {
-        Ok(raw) => serde_json::from_str(&raw)
-            .with_context(|| format!("failed to parse {}", path.display())),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(LegitConfig::default()),
+        Ok(raw) => {
+            tracing::debug!(path = %path.display(), bytes = raw.len(), "config file read");
+            serde_json::from_str(&raw)
+                .with_context(|| format!("failed to parse {}", path.display()))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            tracing::info!(path = %path.display(), "config missing; using defaults");
+            Ok(LegitConfig::default())
+        }
         Err(error) => Err(error).with_context(|| format!("failed to read {}", path.display())),
     }
 }

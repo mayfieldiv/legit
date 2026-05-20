@@ -3,6 +3,7 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 
 pub fn resolve_token() -> Result<String> {
+    tracing::info!("resolving auth token with gh cli");
     let output = Command::new("gh")
         .args(["auth", "token"])
         .env_remove("GITHUB_TOKEN")
@@ -28,5 +29,6 @@ pub fn resolve_token() -> Result<String> {
         bail!("`gh auth token` returned an empty token");
     }
 
+    tracing::debug!("gh auth token returned non-empty token");
     Ok(token)
 }

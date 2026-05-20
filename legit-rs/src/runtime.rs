@@ -15,6 +15,7 @@ use crate::{
 };
 
 pub async fn run() -> Result<()> {
+    tracing::info!("entering TUI runtime");
     let _terminal_guard = TerminalGuard::enter()?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend).context("failed to create terminal")?;
@@ -24,8 +25,10 @@ pub async fn run() -> Result<()> {
     spawn_event_reader(event_tx);
 
     let (mut model, initial_cmds) = Model::new();
+    tracing::info!(commands = initial_cmds.len(), "model initialized");
     spawn_cmds(initial_cmds, &msg_tx);
     terminal.draw(|frame| view::view(&model, frame))?;
+    tracing::debug!("initial frame rendered");
 
     while !model.should_quit {
         let first_msg = tokio::select! {
@@ -45,24 +48,32 @@ pub async fn run() -> Result<()> {
         }
 
         terminal.draw(|frame| view::view(&model, frame))?;
+        tracing::debug!(should_quit = model.should_quit, "frame rendered");
     }
 
+    tracing::info!("leaving TUI runtime");
     Ok(())
 }
 
 fn process_msg(msg: Msg, model: &mut Model, msg_tx: &mpsc::UnboundedSender<Msg>) {
+    tracing::debug!(?msg, "processing message");
     let cmds = update(model, msg);
+    if !cmds.is_empty() {
+        tracing::debug!(commands = cmds.len(), "update returned commands");
+    }
     spawn_cmds(cmds, msg_tx);
 }
 
 fn spawn_cmds(cmds: Vec<cmd::Cmd>, msg_tx: &mpsc::UnboundedSender<Msg>) {
     for cmd in cmds {
+        tracing::debug!(?cmd, "spawning command");
         let tx = msg_tx.clone();
         tokio::task::spawn_blocking(move || cmd::run(cmd, tx));
     }
 }
 
 fn spawn_event_reader(event_tx: mpsc::UnboundedSender<Event>) {
+    tracing::debug!("spawning terminal event reader");
     thread::spawn(move || {
         loop {
             match event::read() {
@@ -86,10 +97,12 @@ struct TerminalGuard {
 
 impl TerminalGuard {
     fn enter() -> Result<Self> {
+        tracing::debug!("enabling raw mode");
         enable_raw_mode().context("failed to enable raw mode")?;
         let mut guard = Self {
             entered_alt_screen: false,
         };
+        tracing::debug!("entering alternate screen");
         execute!(io::stdout(), EnterAlternateScreen).context("failed to enter alternate screen")?;
         guard.entered_alt_screen = true;
         Ok(guard)
@@ -102,5 +115,6 @@ impl Drop for TerminalGuard {
             let _ = execute!(io::stdout(), LeaveAlternateScreen);
         }
         let _ = disable_raw_mode();
+        tracing::debug!("terminal restored");
     }
 }

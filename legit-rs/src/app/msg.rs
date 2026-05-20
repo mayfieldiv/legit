@@ -21,9 +21,14 @@ impl fmt::Debug for Msg {
             Self::TerminalEvent(event) => {
                 formatter.debug_tuple("TerminalEvent").field(event).finish()
             }
-            Self::ConfigLoaded(config) => {
-                formatter.debug_tuple("ConfigLoaded").field(config).finish()
-            }
+            Self::ConfigLoaded(config) => formatter
+                .debug_struct("ConfigLoaded")
+                .field("repos", &config.repos.len())
+                .field("bot_logins", &config.bot_logins.len())
+                .field("file_rules", &config.file_rules.len())
+                .field("has_user", &(!config.user.is_empty()))
+                .field("has_worktree_root", &config.worktree_root.is_some())
+                .finish(),
             Self::AuthTokenResolved(_) => formatter
                 .debug_tuple("AuthTokenResolved")
                 .field(&"<redacted>")
