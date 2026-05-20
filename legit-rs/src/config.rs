@@ -68,6 +68,7 @@ impl Default for LegitConfig {
     }
 }
 
+#[tracing::instrument(name = "load_config")]
 pub fn load() -> Result<LegitConfig> {
     let path = config_path()?;
     tracing::info!(path = %path.display(), "loading config");

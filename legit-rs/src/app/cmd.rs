@@ -8,6 +8,7 @@ pub enum Cmd {
     ResolveAuthToken,
 }
 
+#[tracing::instrument(name = "command", skip(tx))]
 pub fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>) {
     tracing::info!(?cmd, "command started");
     let msg = match cmd {

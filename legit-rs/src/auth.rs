@@ -2,6 +2,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
+#[tracing::instrument(name = "resolve_auth_token")]
 pub fn resolve_token() -> Result<String> {
     tracing::info!("resolving auth token with gh cli");
     let output = Command::new("gh")
