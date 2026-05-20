@@ -18,7 +18,7 @@
   ```
 - Prefer testing the real TUI in `tmux`, not only snapshot tests.
 - `legit` is on the shell `PATH` and resolves to the current repo state; prefer running `legit` directly.
-- For the Rust rewrite, start the dev TUI with `cd /home/mayfield/dev/legit/legit-rs && cargo run`.
+- For the Rust rewrite, start the dev TUI from the repo root with `cd legit-rs && cargo run`.
 - `~/immybot` can be used as a read-only dataset for TUI testing. Do not modify anything in that repo.
 - **Never post to GitHub without explicit user approval.** Do not create issues, file PRs, post PR comments, reply to review threads, or perform any write action on GitHub unless the user explicitly asks for it.
 
