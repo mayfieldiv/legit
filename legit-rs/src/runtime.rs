@@ -58,7 +58,7 @@ fn process_msg(msg: Msg, model: &mut Model, msg_tx: &mpsc::UnboundedSender<Msg>)
 fn spawn_cmds(cmds: Vec<cmd::Cmd>, msg_tx: &mpsc::UnboundedSender<Msg>) {
     for cmd in cmds {
         let tx = msg_tx.clone();
-        tokio::spawn(cmd::run(cmd, tx));
+        tokio::task::spawn_blocking(move || cmd::run(cmd, tx));
     }
 }
 
@@ -80,19 +80,27 @@ fn spawn_event_reader(event_tx: mpsc::UnboundedSender<Event>) {
     });
 }
 
-struct TerminalGuard;
+struct TerminalGuard {
+    entered_alt_screen: bool,
+}
 
 impl TerminalGuard {
     fn enter() -> Result<Self> {
         enable_raw_mode().context("failed to enable raw mode")?;
+        let mut guard = Self {
+            entered_alt_screen: false,
+        };
         execute!(io::stdout(), EnterAlternateScreen).context("failed to enter alternate screen")?;
-        Ok(Self)
+        guard.entered_alt_screen = true;
+        Ok(guard)
     }
 }
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
+        if self.entered_alt_screen {
+            let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        }
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen);
     }
 }

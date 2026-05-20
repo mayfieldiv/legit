@@ -8,7 +8,7 @@ pub enum Cmd {
     ResolveAuthToken,
 }
 
-pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>) {
+pub fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>) {
     let msg = match cmd {
         Cmd::LoadConfig => match config::load() {
             Ok(config) => Msg::ConfigLoaded(config),
