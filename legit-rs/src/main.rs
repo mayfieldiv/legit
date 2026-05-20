@@ -2,6 +2,7 @@ mod app;
 mod auth;
 mod config;
 mod git_remote;
+mod github;
 mod runtime;
 mod tracing_setup;
 mod view;
