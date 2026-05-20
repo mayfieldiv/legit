@@ -58,9 +58,9 @@ STAGED_FILES=$(git diff --cached --name-only)
 
 if [ -f legit-rs/Cargo.toml ] && echo "$STAGED_FILES" | grep -q '^legit-rs/'; then
 	echo "Running Rust formatting and type checking..."
-	cargo fmt --manifest-path legit-rs/Cargo.toml
+	cargo fmt --manifest-path legit-rs/Cargo.toml --check
 	if [ $? -ne 0 ]; then
-		echo "Rust formatting failed. Please fix the errors before committing."
+		echo "Rust formatting check failed. Run cargo fmt --manifest-path legit-rs/Cargo.toml before committing."
 		restore_changes
 		exit 1
 	fi
