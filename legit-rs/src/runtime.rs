@@ -14,8 +14,8 @@ use crate::{
     view,
 };
 
+#[tracing::instrument(name = "tui_runtime", skip_all)]
 pub async fn run() -> Result<()> {
-    tracing::info!("entering TUI runtime");
     let _terminal_guard = TerminalGuard::enter()?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend).context("failed to create terminal")?;
@@ -51,7 +51,6 @@ pub async fn run() -> Result<()> {
         tracing::debug!(should_quit = model.should_quit, "frame rendered");
     }
 
-    tracing::info!("leaving TUI runtime");
     Ok(())
 }
 

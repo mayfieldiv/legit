@@ -2,7 +2,7 @@ use std::{env, fs, path::PathBuf};
 
 use anyhow::{Context, Result};
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::{EnvFilter, fmt};
+use tracing_subscriber::{EnvFilter, fmt, fmt::format::FmtSpan};
 
 pub fn init() -> Result<WorkerGuard> {
     let log_dir = log_dir()?;
@@ -14,7 +14,11 @@ pub fn init() -> Result<WorkerGuard> {
     let filter = EnvFilter::try_new(env::var("LEGIT_LOG").unwrap_or_else(|_| "info".to_owned()))
         .context("invalid LEGIT_LOG filter")?;
 
-    fmt().with_env_filter(filter).with_writer(writer).init();
+    fmt()
+        .with_env_filter(filter)
+        .with_writer(writer)
+        .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
+        .init();
     Ok(guard)
 }
 
