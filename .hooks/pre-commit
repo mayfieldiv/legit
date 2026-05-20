@@ -54,7 +54,9 @@ if [ $? -ne 0 ]; then
 	exit 1
 fi
 
-if [ -f legit-rs/Cargo.toml ]; then
+STAGED_FILES=$(git diff --cached --name-only)
+
+if [ -f legit-rs/Cargo.toml ] && echo "$STAGED_FILES" | grep -q '^legit-rs/'; then
 	echo "Running Rust formatting and type checking..."
 	cargo fmt --manifest-path legit-rs/Cargo.toml
 	if [ $? -ne 0 ]; then
