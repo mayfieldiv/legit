@@ -27,7 +27,7 @@ impl fmt::Debug for Msg {
                 .field("bot_logins", &config.bot_logins.len())
                 .field("file_rules", &config.file_rules.len())
                 .field("has_user", &(!config.user.is_empty()))
-                .field("has_worktree_root", &config.worktree_root.is_some())
+                .field("has_worktree_root", &config.has_any_worktree_root())
                 .finish(),
             Self::AuthTokenResolved(_) => formatter
                 .debug_tuple("AuthTokenResolved")

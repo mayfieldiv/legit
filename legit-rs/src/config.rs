@@ -68,6 +68,12 @@ impl Default for LegitConfig {
     }
 }
 
+impl LegitConfig {
+    pub fn has_any_worktree_root(&self) -> bool {
+        self.worktree_root.is_some() || self.repos.iter().any(|repo| repo.worktree_root.is_some())
+    }
+}
+
 #[tracing::instrument(name = "load_config")]
 pub fn load() -> Result<LegitConfig> {
     let path = config_path()?;
@@ -184,6 +190,23 @@ mod tests {
         assert_eq!(config.bot_logins, LegitConfig::default().bot_logins);
         assert_eq!(config.ui.default_group_by, "smart-status");
         assert_eq!(config.ui.default_sort_by, "created");
+    }
+
+    #[test]
+    fn has_any_worktree_root_includes_global_and_per_repo_roots() {
+        let mut config = LegitConfig::default();
+        assert!(!config.has_any_worktree_root());
+
+        config.worktree_root = Some("/global".to_owned());
+        assert!(config.has_any_worktree_root());
+
+        config.worktree_root = None;
+        config.repos = vec![super::RepoConfig {
+            slug: "acme/widgets".to_owned(),
+            worktree_root: Some("/repo".to_owned()),
+            ..Default::default()
+        }];
+        assert!(config.has_any_worktree_root());
     }
 
     fn temp_path(name: &str) -> std::path::PathBuf {

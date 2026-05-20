@@ -19,7 +19,7 @@ pub fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>) {
                     bot_logins = config.bot_logins.len(),
                     file_rules = config.file_rules.len(),
                     has_user = !config.user.is_empty(),
-                    has_worktree_root = config.worktree_root.is_some(),
+                    has_worktree_root = config.has_any_worktree_root(),
                     "config loaded"
                 );
                 Msg::ConfigLoaded(config)
