@@ -54,6 +54,25 @@ if [ $? -ne 0 ]; then
 	exit 1
 fi
 
+STAGED_FILES=$(git diff --cached --name-only)
+
+if [ -f legit-rs/Cargo.toml ] && echo "$STAGED_FILES" | grep -q '^legit-rs/'; then
+	echo "Running Rust formatting and type checking..."
+	cargo fmt --manifest-path legit-rs/Cargo.toml --check
+	if [ $? -ne 0 ]; then
+		echo "Rust formatting check failed. Run cargo fmt --manifest-path legit-rs/Cargo.toml before committing."
+		restore_changes
+		exit 1
+	fi
+
+	cargo check --manifest-path legit-rs/Cargo.toml
+	if [ $? -ne 0 ]; then
+		echo "Rust type checking failed. Please fix the errors before committing."
+		restore_changes
+		exit 1
+	fi
+fi
+
 git diff --cached --name-only | while IFS= read -r file; do
 	if [ -f "$file" ]; then
 		git add "$file"
