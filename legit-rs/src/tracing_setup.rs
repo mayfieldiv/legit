@@ -18,7 +18,7 @@ pub fn init() -> Result<WorkerGuard> {
         .with_env_filter(filter)
         .with_writer(writer)
         .with_ansi(false)
-        .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
+        .with_span_events(FmtSpan::CLOSE)
         .init();
     Ok(guard)
 }

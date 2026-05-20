@@ -10,7 +10,7 @@ pub enum Cmd {
 
 #[tracing::instrument(name = "command", skip(tx))]
 pub fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>) {
-    tracing::info!(?cmd, "command started");
+    tracing::info!("started");
     let msg = match cmd {
         Cmd::LoadConfig => match config::load() {
             Ok(config) => {
