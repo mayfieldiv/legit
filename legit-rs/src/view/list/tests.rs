@@ -111,6 +111,41 @@ fn populated_pr_list_renders_one_row_per_pull_request() {
 }
 
 #[test]
+fn long_titles_truncate_with_ellipsis_to_fit_column() {
+    let (mut model, _) = Model::new();
+    model.prs = vec![pr(
+        7,
+        "This title is intentionally far too long to fit in the column",
+        "octocat",
+        2,
+    )];
+
+    let terminal = render_snapshot(&model, 60, 3);
+
+    let rows = buffer_text(&terminal);
+    assert!(
+        rows[0].contains('…'),
+        "expected ellipsis truncation, got row: {:?}",
+        rows[0]
+    );
+    assert!(
+        rows[0].contains("octocat"),
+        "author column must remain intact: {:?}",
+        rows[0]
+    );
+    assert!(
+        rows[0].contains("2h"),
+        "age column must remain intact: {:?}",
+        rows[0]
+    );
+    assert_eq!(
+        rows[0].chars().count(),
+        60,
+        "row should fill exact terminal width"
+    );
+}
+
+#[test]
 fn draft_pr_is_marked_in_its_row() {
     let (mut model, _) = Model::new();
     let mut draft = pr(50, "Polish things", "octocat", 1);
