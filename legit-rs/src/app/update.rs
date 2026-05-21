@@ -78,6 +78,13 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             }
             Vec::new()
         }
+        Msg::TerminalEvent(Event::Resize(_, height)) => {
+            // The status bar takes one row; everything above belongs to the
+            // list. Saturating-sub keeps a 0-row viewport handled gracefully.
+            model.viewport_height = (height as usize).saturating_sub(1);
+            normalize_scroll(model);
+            Vec::new()
+        }
         Msg::TerminalEvent(_) => Vec::new(),
         Msg::ConfigLoaded(config) => {
             model.config = config;
@@ -370,6 +377,34 @@ mod tests {
             visible_top,
             visible_bottom,
         );
+    }
+
+    #[test]
+    fn terminal_resize_updates_viewport_and_keeps_selection_visible() {
+        let (mut model, _) = Model::new();
+        for n in 1..=30 {
+            update(&mut model, Msg::PrArrived(sample_pr(n, "p")));
+        }
+        model.viewport_height = 20;
+        model.selected = 25;
+        // Initial state with a generous viewport.
+        update(
+            &mut model,
+            Msg::TerminalEvent(crossterm::event::Event::Resize(80, 21)),
+        );
+        // Viewport_height = terminal_height - 1 (status bar).
+        assert_eq!(model.viewport_height, 20);
+        assert!(model.selected >= model.scroll_offset);
+        assert!(model.selected < model.scroll_offset + model.viewport_height);
+
+        // Shrink: selection must remain on-screen after re-clamp.
+        update(
+            &mut model,
+            Msg::TerminalEvent(crossterm::event::Event::Resize(80, 6)),
+        );
+        assert_eq!(model.viewport_height, 5);
+        assert!(model.selected >= model.scroll_offset);
+        assert!(model.selected < model.scroll_offset + model.viewport_height);
     }
 
     #[test]
