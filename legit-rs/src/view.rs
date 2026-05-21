@@ -1,12 +1,14 @@
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Direction, Layout},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
 
 use crate::app::model::Model;
+
+pub mod list;
 
 pub fn view(model: &Model, frame: &mut Frame<'_>) {
     let area = frame.area();
@@ -15,11 +17,11 @@ pub fn view(model: &Model, frame: &mut Frame<'_>) {
         .constraints([Constraint::Min(1), Constraint::Length(1)])
         .areas(area);
 
-    let placeholder = Paragraph::new("legit-rs — no PRs yet")
-        .alignment(Alignment::Center)
-        .block(Block::default().borders(Borders::NONE));
-    frame.render_widget(placeholder, main);
+    list::render(model, frame, main);
+    render_status(model, frame, status);
+}
 
+fn render_status(model: &Model, frame: &mut Frame<'_>, area: Rect) {
     let status_line = if let Some(error) = &model.last_error {
         Line::from(vec![
             Span::styled("error: ", Style::default().fg(Color::Red)),
@@ -31,5 +33,12 @@ pub fn view(model: &Model, frame: &mut Frame<'_>) {
             Span::raw(" quit"),
         ])
     };
-    frame.render_widget(Paragraph::new(status_line), status);
+    frame.render_widget(Paragraph::new(status_line), area);
+}
+
+#[allow(dead_code)]
+fn centered_placeholder(text: &str) -> Paragraph<'_> {
+    Paragraph::new(text)
+        .alignment(Alignment::Center)
+        .block(Block::default().borders(Borders::NONE))
 }
