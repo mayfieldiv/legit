@@ -127,13 +127,17 @@ async fn run_fetch_open_prs(
     let result = client.list_open_prs(&owner, &repo, pr_tx).await;
     let _ = forwarder.await;
 
-    if let Err(error) = result {
-        let _ = tx.send(Msg::PrListFailed {
-            context: "list open PRs",
-            error: error.to_string(),
-        });
-    } else {
-        tracing::info!(%owner, %repo, "open PR listing finished");
+    match result {
+        Ok(()) => {
+            tracing::info!(%owner, %repo, "open PR listing finished");
+            let _ = tx.send(Msg::PrListLoaded);
+        }
+        Err(error) => {
+            let _ = tx.send(Msg::PrListFailed {
+                context: "list open PRs",
+                error: error.to_string(),
+            });
+        }
     }
 }
 

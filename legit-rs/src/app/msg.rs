@@ -10,6 +10,7 @@ pub enum Msg {
     AuthTokenResolved(String),
     RepoDetected(RepoInfo),
     PrArrived(PR),
+    PrListLoaded,
     PrListFailed {
         context: &'static str,
         error: String,
@@ -49,6 +50,7 @@ impl fmt::Debug for Msg {
                 .field("number", &pr.number)
                 .field("author", &pr.author)
                 .finish(),
+            Self::PrListLoaded => formatter.write_str("PrListLoaded"),
             Self::PrListFailed { context, error } => formatter
                 .debug_struct("PrListFailed")
                 .field("context", context)

@@ -103,6 +103,10 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             model.loading = false;
             Vec::new()
         }
+        Msg::PrListLoaded => {
+            model.loading = false;
+            Vec::new()
+        }
         Msg::PrListFailed { context, error } => {
             let message = format!("{context}: {error}");
             tracing::warn!(%message, "pr listing failed");
@@ -225,6 +229,19 @@ mod tests {
         update(&mut model, Msg::PrArrived(sample_pr(1, "a")));
 
         assert!(!model.loading, "loading flag should clear after first PR");
+    }
+
+    #[test]
+    fn pr_list_loaded_clears_loading_flag_when_no_prs_arrived() {
+        let (mut model, _) = Model::new();
+        model.loading = true;
+
+        update(&mut model, Msg::PrListLoaded);
+
+        assert!(
+            !model.loading,
+            "loading should clear when the listing finishes empty",
+        );
     }
 
     #[test]
