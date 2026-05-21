@@ -14,8 +14,12 @@ mod tests;
 /// later cycles add the loading state, populated rows, and truncation.
 pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect) {
     if model.prs.is_empty() {
-        let placeholder =
-            Paragraph::new(Line::from("No open pull requests")).alignment(Alignment::Center);
+        let text = if model.loading {
+            "Loading pull requests…"
+        } else {
+            "No open pull requests"
+        };
+        let placeholder = Paragraph::new(Line::from(text)).alignment(Alignment::Center);
         frame.render_widget(placeholder, area);
         return;
     }

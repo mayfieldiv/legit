@@ -43,3 +43,22 @@ fn empty_pr_list_renders_no_open_pull_requests_placeholder() {
         ]
     );
 }
+
+#[test]
+fn loading_pr_list_renders_loading_placeholder() {
+    let (mut model, _) = Model::new();
+    model.loading = true;
+
+    let terminal = render_snapshot(&model, 40, 5);
+
+    assert_eq!(
+        buffer_text(&terminal),
+        vec![
+            "         Loading pull requests…         ",
+            "                                        ",
+            "                                        ",
+            "                                        ",
+            "q quit                                  ",
+        ]
+    );
+}

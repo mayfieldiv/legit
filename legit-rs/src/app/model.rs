@@ -14,6 +14,7 @@ pub struct Model {
     pub selected: usize,
     pub scroll_offset: usize,
     pub viewport_height: usize,
+    pub loading: bool,
     pub list_error: Option<String>,
     pub last_error: Option<String>,
 }
@@ -33,6 +34,7 @@ impl fmt::Debug for Model {
             .field("selected", &self.selected)
             .field("scroll_offset", &self.scroll_offset)
             .field("viewport_height", &self.viewport_height)
+            .field("loading", &self.loading)
             .field("list_error", &self.list_error)
             .field("last_error", &self.last_error)
             .finish()
@@ -51,6 +53,7 @@ impl Model {
                 selected: 0,
                 scroll_offset: 0,
                 viewport_height: 0,
+                loading: false,
                 list_error: None,
                 last_error: None,
             },
