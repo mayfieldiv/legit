@@ -111,6 +111,22 @@ fn populated_pr_list_renders_one_row_per_pull_request() {
 }
 
 #[test]
+fn pr_list_error_appears_in_the_status_bar() {
+    let (mut model, _) = Model::new();
+    model.list_error = Some("list open PRs: network down".to_owned());
+
+    let terminal = render_snapshot(&model, 60, 3);
+
+    let rows = buffer_text(&terminal);
+    let status = rows.last().expect("status row");
+    assert!(
+        status.contains("list open PRs: network down"),
+        "status row should surface list_error: {:?}",
+        status,
+    );
+}
+
+#[test]
 fn long_titles_truncate_with_ellipsis_to_fit_column() {
     let (mut model, _) = Model::new();
     model.prs = vec![pr(

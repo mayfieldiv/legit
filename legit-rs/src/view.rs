@@ -23,10 +23,13 @@ pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
 }
 
 fn render_status(model: &Model, frame: &mut Frame<'_>, area: Rect) {
-    let status_line = if let Some(error) = &model.last_error {
+    // PR list errors take priority — they're what the user just tried to do.
+    // Generic command errors come next; the keymap hint is the fallback.
+    let active_error = model.list_error.as_deref().or(model.last_error.as_deref());
+    let status_line = if let Some(error) = active_error {
         Line::from(vec![
             Span::styled("error: ", Style::default().fg(Color::Red)),
-            Span::styled(error.as_str(), Style::default().fg(Color::Yellow)),
+            Span::styled(error, Style::default().fg(Color::Yellow)),
         ])
     } else {
         Line::from(vec![
