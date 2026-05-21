@@ -2,6 +2,20 @@ use crossterm::event::{Event, KeyCode, KeyEventKind};
 
 use super::{cmd::Cmd, model::Model, msg::Msg};
 
+/// Fire `Cmd::FetchOpenPRs` once both auth token and repo detection have
+/// landed in the model. The repo defines what to fetch; the token authorizes
+/// the request. Either alone yields no command — we wait for the second one.
+fn maybe_fetch_open_prs(model: &Model) -> Vec<Cmd> {
+    let (Some(token), Some(repo)) = (model.auth_token.as_ref(), model.repo.as_ref()) else {
+        return Vec::new();
+    };
+    vec![Cmd::FetchOpenPRs {
+        owner: repo.owner.clone(),
+        repo: repo.repo.clone(),
+        token: token.clone(),
+    }]
+}
+
 pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
     match msg {
         Msg::TerminalEvent(Event::Key(key)) => {
@@ -17,7 +31,11 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
         }
         Msg::AuthTokenResolved(token) => {
             model.auth_token = Some(token);
-            Vec::new()
+            maybe_fetch_open_prs(model)
+        }
+        Msg::RepoDetected(repo) => {
+            model.repo = Some(repo);
+            maybe_fetch_open_prs(model)
         }
         Msg::PrArrived(pr) => {
             model.prs.push(pr);
@@ -48,7 +66,8 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent};
 
     use crate::{
-        app::{model::Model, msg::Msg, update::update},
+        app::{cmd::Cmd, model::Model, msg::Msg, update::update},
+        git_remote::RepoInfo,
         github::rest::{PR, PRState},
     };
 
@@ -113,6 +132,51 @@ mod tests {
         assert_eq!(model.prs.len(), 1);
         assert_eq!(model.prs[0].number, 42);
         assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn repo_detected_without_token_stores_repo_but_does_not_fetch() {
+        let (mut model, _) = Model::new();
+
+        let cmds = update(
+            &mut model,
+            Msg::RepoDetected(RepoInfo {
+                owner: "mayfieldiv".to_owned(),
+                repo: "legit".to_owned(),
+            }),
+        );
+
+        assert_eq!(
+            model.repo.as_ref().map(|r| r.slug()),
+            Some("mayfieldiv/legit".to_owned()),
+        );
+        assert!(
+            cmds.is_empty(),
+            "no fetch should fire before auth token resolves"
+        );
+    }
+
+    #[test]
+    fn repo_detected_after_token_dispatches_fetch_open_prs() {
+        let (mut model, _) = Model::new();
+        model.auth_token = Some("ghp_test".to_owned());
+
+        let cmds = update(
+            &mut model,
+            Msg::RepoDetected(RepoInfo {
+                owner: "mayfieldiv".to_owned(),
+                repo: "legit".to_owned(),
+            }),
+        );
+
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            Cmd::FetchOpenPRs { owner, repo, .. } => {
+                assert_eq!(owner, "mayfieldiv");
+                assert_eq!(repo, "legit");
+            }
+            other => panic!("expected FetchOpenPRs cmd, got {other:?}"),
+        }
     }
 
     #[test]

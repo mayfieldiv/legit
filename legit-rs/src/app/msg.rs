@@ -2,12 +2,13 @@ use std::fmt;
 
 use crossterm::event::Event;
 
-use crate::{config::LegitConfig, github::rest::PR};
+use crate::{config::LegitConfig, git_remote::RepoInfo, github::rest::PR};
 
 pub enum Msg {
     TerminalEvent(Event),
     ConfigLoaded(LegitConfig),
     AuthTokenResolved(String),
+    RepoDetected(RepoInfo),
     PrArrived(PR),
     PrListFailed {
         context: &'static str,
@@ -37,6 +38,11 @@ impl fmt::Debug for Msg {
             Self::AuthTokenResolved(_) => formatter
                 .debug_tuple("AuthTokenResolved")
                 .field(&"<redacted>")
+                .finish(),
+            Self::RepoDetected(repo) => formatter
+                .debug_struct("RepoDetected")
+                .field("owner", &repo.owner)
+                .field("repo", &repo.repo)
                 .finish(),
             Self::PrArrived(pr) => formatter
                 .debug_struct("PrArrived")

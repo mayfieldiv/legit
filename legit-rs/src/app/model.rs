@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::{config::LegitConfig, github::rest::PR};
+use crate::{config::LegitConfig, git_remote::RepoInfo, github::rest::PR};
 
 use super::cmd::Cmd;
 
@@ -9,6 +9,7 @@ pub struct Model {
     pub should_quit: bool,
     pub config: LegitConfig,
     pub auth_token: Option<String>,
+    pub repo: Option<RepoInfo>,
     pub prs: Vec<PR>,
     pub list_error: Option<String>,
     pub last_error: Option<String>,
@@ -24,6 +25,7 @@ impl fmt::Debug for Model {
                 "auth_token",
                 &self.auth_token.as_ref().map(|_| "<redacted>"),
             )
+            .field("repo", &self.repo)
             .field("prs", &self.prs.len())
             .field("list_error", &self.list_error)
             .field("last_error", &self.last_error)
@@ -38,6 +40,7 @@ impl Model {
                 should_quit: false,
                 config: LegitConfig::default(),
                 auth_token: None,
+                repo: None,
                 prs: Vec::new(),
                 list_error: None,
                 last_error: None,

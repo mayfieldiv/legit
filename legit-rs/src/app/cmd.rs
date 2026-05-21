@@ -1,11 +1,33 @@
+use std::fmt;
+
 use tokio::sync::mpsc;
 
 use crate::{app::msg::Msg, auth, config};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Cmd {
     LoadConfig,
     ResolveAuthToken,
+    FetchOpenPRs {
+        owner: String,
+        repo: String,
+        token: String,
+    },
+}
+
+impl fmt::Debug for Cmd {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LoadConfig => f.write_str("LoadConfig"),
+            Self::ResolveAuthToken => f.write_str("ResolveAuthToken"),
+            Self::FetchOpenPRs { owner, repo, .. } => f
+                .debug_struct("FetchOpenPRs")
+                .field("owner", owner)
+                .field("repo", repo)
+                .field("token", &"<redacted>")
+                .finish(),
+        }
+    }
 }
 
 #[tracing::instrument(name = "command", skip(tx))]
@@ -38,6 +60,10 @@ pub fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>) {
                 context: "resolve auth token",
                 error: error.to_string(),
             },
+        },
+        Cmd::FetchOpenPRs { .. } => Msg::PrListFailed {
+            context: "list open PRs",
+            error: "fetch transport not yet wired".to_owned(),
         },
     };
 
