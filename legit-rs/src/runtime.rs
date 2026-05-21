@@ -67,7 +67,7 @@ fn spawn_cmds(cmds: Vec<cmd::Cmd>, msg_tx: &mpsc::UnboundedSender<Msg>) {
     for cmd in cmds {
         tracing::debug!(?cmd, "spawning command");
         let tx = msg_tx.clone();
-        tokio::task::spawn_blocking(move || cmd::run(cmd, tx));
+        tokio::spawn(cmd::run(cmd, tx));
     }
 }
 

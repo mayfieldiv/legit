@@ -8,12 +8,6 @@ pub struct RepoInfo {
     pub repo: String,
 }
 
-impl RepoInfo {
-    pub fn slug(&self) -> String {
-        format!("{}/{}", self.owner, self.repo)
-    }
-}
-
 /// Parse a GitHub remote URL into (owner, repo). Mirrors the TS `parseRemoteUrl`
 /// in `src/lib/legit.ts` so dotted repo names (e.g. `angular.js`) and both SSH
 /// and HTTPS forms parse identically.
@@ -168,10 +162,5 @@ mod tests {
     fn rejects_malformed_url() {
         let err = parse_remote_url("not-a-url").unwrap_err();
         assert!(format!("{err}").contains("Cannot parse"));
-    }
-
-    #[test]
-    fn slug_joins_owner_and_repo() {
-        assert_eq!(info("owner", "repo").slug(), "owner/repo");
     }
 }

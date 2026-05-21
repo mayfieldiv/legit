@@ -195,10 +195,6 @@ impl OctocrabRest {
             .context("failed to build octocrab client")?;
         Ok(Self { client })
     }
-
-    pub fn with_client(client: Octocrab) -> Self {
-        Self { client }
-    }
 }
 
 #[async_trait]

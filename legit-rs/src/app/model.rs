@@ -57,7 +57,7 @@ impl Model {
                 list_error: None,
                 last_error: None,
             },
-            vec![Cmd::LoadConfig, Cmd::ResolveAuthToken],
+            vec![Cmd::LoadConfig, Cmd::ResolveAuthToken, Cmd::DetectRepo],
         )
     }
 }
