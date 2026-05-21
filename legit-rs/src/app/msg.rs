@@ -9,6 +9,10 @@ pub enum Msg {
     ConfigLoaded(LegitConfig),
     AuthTokenResolved(String),
     PrArrived(PR),
+    PrListFailed {
+        context: &'static str,
+        error: String,
+    },
     CommandFailed {
         context: &'static str,
         error: String,
@@ -38,6 +42,11 @@ impl fmt::Debug for Msg {
                 .debug_struct("PrArrived")
                 .field("number", &pr.number)
                 .field("author", &pr.author)
+                .finish(),
+            Self::PrListFailed { context, error } => formatter
+                .debug_struct("PrListFailed")
+                .field("context", context)
+                .field("error", error)
                 .finish(),
             Self::CommandFailed { context, error } => formatter
                 .debug_struct("CommandFailed")

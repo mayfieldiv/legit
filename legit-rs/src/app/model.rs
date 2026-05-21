@@ -10,6 +10,7 @@ pub struct Model {
     pub config: LegitConfig,
     pub auth_token: Option<String>,
     pub prs: Vec<PR>,
+    pub list_error: Option<String>,
     pub last_error: Option<String>,
 }
 
@@ -24,6 +25,7 @@ impl fmt::Debug for Model {
                 &self.auth_token.as_ref().map(|_| "<redacted>"),
             )
             .field("prs", &self.prs.len())
+            .field("list_error", &self.list_error)
             .field("last_error", &self.last_error)
             .finish()
     }
@@ -37,6 +39,7 @@ impl Model {
                 config: LegitConfig::default(),
                 auth_token: None,
                 prs: Vec::new(),
+                list_error: None,
                 last_error: None,
             },
             vec![Cmd::LoadConfig, Cmd::ResolveAuthToken],

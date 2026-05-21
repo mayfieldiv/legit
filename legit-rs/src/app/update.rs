@@ -23,6 +23,12 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             model.prs.push(pr);
             Vec::new()
         }
+        Msg::PrListFailed { context, error } => {
+            let message = format!("{context}: {error}");
+            tracing::warn!(%message, "pr listing failed");
+            model.list_error = Some(message);
+            Vec::new()
+        }
         Msg::CommandFailed { context, error } => {
             let message = format!("{context}: {error}");
             tracing::warn!(%message);
@@ -106,6 +112,29 @@ mod tests {
 
         assert_eq!(model.prs.len(), 1);
         assert_eq!(model.prs[0].number, 42);
+        assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn pr_list_failed_records_error_without_dropping_arrived_prs() {
+        let (mut model, _) = Model::new();
+        update(&mut model, Msg::PrArrived(sample_pr(1, "first")));
+
+        let cmds = update(
+            &mut model,
+            Msg::PrListFailed {
+                context: "list open PRs",
+                error: "network down".to_owned(),
+            },
+        );
+
+        assert_eq!(model.prs.len(), 1, "already-arrived PRs should remain");
+        let error = model
+            .list_error
+            .as_deref()
+            .expect("list_error should be recorded");
+        assert!(error.contains("list open PRs"));
+        assert!(error.contains("network down"));
         assert!(cmds.is_empty());
     }
 }
