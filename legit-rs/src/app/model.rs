@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::config::LegitConfig;
+use crate::{config::LegitConfig, github::rest::PR};
 
 use super::cmd::Cmd;
 
@@ -9,6 +9,7 @@ pub struct Model {
     pub should_quit: bool,
     pub config: LegitConfig,
     pub auth_token: Option<String>,
+    pub prs: Vec<PR>,
     pub last_error: Option<String>,
 }
 
@@ -22,6 +23,7 @@ impl fmt::Debug for Model {
                 "auth_token",
                 &self.auth_token.as_ref().map(|_| "<redacted>"),
             )
+            .field("prs", &self.prs.len())
             .field("last_error", &self.last_error)
             .finish()
     }
@@ -34,6 +36,7 @@ impl Model {
                 should_quit: false,
                 config: LegitConfig::default(),
                 auth_token: None,
+                prs: Vec::new(),
                 last_error: None,
             },
             vec![Cmd::LoadConfig, Cmd::ResolveAuthToken],

@@ -19,6 +19,10 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             model.auth_token = Some(token);
             Vec::new()
         }
+        Msg::PrArrived(pr) => {
+            model.prs.push(pr);
+            Vec::new()
+        }
         Msg::CommandFailed { context, error } => {
             let message = format!("{context}: {error}");
             tracing::warn!(%message);
@@ -34,9 +38,37 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
 
 #[cfg(test)]
 mod tests {
+    use chrono::TimeZone;
     use crossterm::event::{KeyCode, KeyEvent};
 
-    use crate::app::{model::Model, msg::Msg, update::update};
+    use crate::{
+        app::{model::Model, msg::Msg, update::update},
+        github::rest::{PR, PRState},
+    };
+
+    fn sample_pr(number: u64, title: &str) -> PR {
+        PR {
+            number,
+            title: title.to_owned(),
+            author: "octocat".to_owned(),
+            created_at: chrono::Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap(),
+            updated_at: chrono::Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap(),
+            additions: 0,
+            deletions: 0,
+            is_draft: false,
+            labels: Vec::new(),
+            requested_reviewers: Vec::new(),
+            assignees: Vec::new(),
+            review_decision: String::new(),
+            mergeable: "UNKNOWN".to_owned(),
+            last_commit_date: None,
+            head_commit_sha: None,
+            head_ref: format!("feature/{number}"),
+            base_ref: "main".to_owned(),
+            head_repository_owner: "mayfieldiv".to_owned(),
+            state: PRState::Open,
+        }
+    }
 
     #[test]
     fn q_key_sets_should_quit() {
@@ -64,5 +96,16 @@ mod tests {
             model.last_error.as_deref(),
             Some("resolve auth token: failed")
         );
+    }
+
+    #[test]
+    fn pr_arrived_appends_to_open_pr_list() {
+        let (mut model, _) = Model::new();
+
+        let cmds = update(&mut model, Msg::PrArrived(sample_pr(42, "first")));
+
+        assert_eq!(model.prs.len(), 1);
+        assert_eq!(model.prs[0].number, 42);
+        assert!(cmds.is_empty());
     }
 }
