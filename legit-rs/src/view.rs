@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -10,14 +11,14 @@ use crate::app::model::Model;
 
 pub mod list;
 
-pub fn view(model: &Model, frame: &mut Frame<'_>) {
+pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
     let area = frame.area();
     let [main, status] = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
         .areas(area);
 
-    list::render(model, frame, main);
+    list::render(model, frame, main, now);
     render_status(model, frame, status);
 }
 

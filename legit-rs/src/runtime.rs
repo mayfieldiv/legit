@@ -27,7 +27,7 @@ pub async fn run() -> Result<()> {
     let (mut model, initial_cmds) = Model::new();
     tracing::info!(commands = initial_cmds.len(), "model initialized");
     spawn_cmds(initial_cmds, &msg_tx);
-    terminal.draw(|frame| view::view(&model, frame))?;
+    terminal.draw(|frame| view::view(&model, frame, chrono::Utc::now()))?;
     tracing::debug!("initial frame rendered");
 
     while !model.should_quit {
@@ -47,7 +47,7 @@ pub async fn run() -> Result<()> {
             process_msg(msg, &mut model, &msg_tx);
         }
 
-        terminal.draw(|frame| view::view(&model, frame))?;
+        terminal.draw(|frame| view::view(&model, frame, chrono::Utc::now()))?;
         tracing::debug!(should_quit = model.should_quit, "frame rendered");
     }
 
