@@ -11,6 +11,7 @@ pub struct Model {
     pub auth_token: Option<String>,
     pub repo: Option<RepoInfo>,
     pub prs: Vec<PR>,
+    pub selected: usize,
     pub list_error: Option<String>,
     pub last_error: Option<String>,
 }
@@ -27,6 +28,7 @@ impl fmt::Debug for Model {
             )
             .field("repo", &self.repo)
             .field("prs", &self.prs.len())
+            .field("selected", &self.selected)
             .field("list_error", &self.list_error)
             .field("last_error", &self.last_error)
             .finish()
@@ -42,6 +44,7 @@ impl Model {
                 auth_token: None,
                 repo: None,
                 prs: Vec::new(),
+                selected: 0,
                 list_error: None,
                 last_error: None,
             },

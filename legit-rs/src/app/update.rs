@@ -2,6 +2,25 @@ use crossterm::event::{Event, KeyCode, KeyEventKind};
 
 use super::{cmd::Cmd, model::Model, msg::Msg};
 
+/// Advance selection by one PR, clamped to the last row. No-op on an empty
+/// list — keeps `selected = 0` as a safe sentinel.
+fn move_selection_down(model: &mut Model) {
+    if model.prs.is_empty() {
+        return;
+    }
+    let last = model.prs.len() - 1;
+    if model.selected < last {
+        model.selected += 1;
+    }
+}
+
+/// Retreat selection by one PR, clamped at the first row.
+fn move_selection_up(model: &mut Model) {
+    if model.selected > 0 {
+        model.selected -= 1;
+    }
+}
+
 /// Fire `Cmd::FetchOpenPRs` once both auth token and repo detection have
 /// landed in the model. The repo defines what to fetch; the token authorizes
 /// the request. Either alone yields no command — we wait for the second one.
@@ -19,8 +38,13 @@ fn maybe_fetch_open_prs(model: &Model) -> Vec<Cmd> {
 pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
     match msg {
         Msg::TerminalEvent(Event::Key(key)) => {
-            if key.kind == KeyEventKind::Press && matches!(key.code, KeyCode::Char('q')) {
-                model.should_quit = true;
+            if key.kind == KeyEventKind::Press {
+                match key.code {
+                    KeyCode::Char('q') => model.should_quit = true,
+                    KeyCode::Char('j') => move_selection_down(model),
+                    KeyCode::Char('k') => move_selection_up(model),
+                    _ => {}
+                }
             }
             Vec::new()
         }
@@ -177,6 +201,73 @@ mod tests {
             }
             other => panic!("expected FetchOpenPRs cmd, got {other:?}"),
         }
+    }
+
+    fn key_event(code: KeyCode) -> Msg {
+        Msg::TerminalEvent(crossterm::event::Event::Key(KeyEvent::new(
+            code,
+            crossterm::event::KeyModifiers::NONE,
+        )))
+    }
+
+    #[test]
+    fn j_advances_selection_within_list_bounds() {
+        let (mut model, _) = Model::new();
+        for n in 1..=3 {
+            update(&mut model, Msg::PrArrived(sample_pr(n, "p")));
+        }
+
+        update(&mut model, key_event(KeyCode::Char('j')));
+        assert_eq!(model.selected, 1);
+
+        update(&mut model, key_event(KeyCode::Char('j')));
+        assert_eq!(model.selected, 2);
+    }
+
+    #[test]
+    fn j_at_last_pr_does_not_advance_past_end() {
+        let (mut model, _) = Model::new();
+        update(&mut model, Msg::PrArrived(sample_pr(1, "only")));
+
+        update(&mut model, key_event(KeyCode::Char('j')));
+        update(&mut model, key_event(KeyCode::Char('j')));
+
+        assert_eq!(model.selected, 0);
+    }
+
+    #[test]
+    fn k_retreats_selection_and_clamps_at_zero() {
+        let (mut model, _) = Model::new();
+        for n in 1..=3 {
+            update(&mut model, Msg::PrArrived(sample_pr(n, "p")));
+        }
+        update(&mut model, key_event(KeyCode::Char('j')));
+        update(&mut model, key_event(KeyCode::Char('j')));
+        assert_eq!(model.selected, 2);
+
+        update(&mut model, key_event(KeyCode::Char('k')));
+        assert_eq!(model.selected, 1);
+
+        update(&mut model, key_event(KeyCode::Char('k')));
+        update(&mut model, key_event(KeyCode::Char('k')));
+        assert_eq!(model.selected, 0);
+    }
+
+    #[test]
+    fn streaming_prs_keep_selection_pinned() {
+        let (mut model, _) = Model::new();
+        update(&mut model, Msg::PrArrived(sample_pr(1, "a")));
+        update(&mut model, Msg::PrArrived(sample_pr(2, "b")));
+        update(&mut model, key_event(KeyCode::Char('j')));
+        assert_eq!(model.selected, 1);
+
+        update(&mut model, Msg::PrArrived(sample_pr(3, "c")));
+        update(&mut model, Msg::PrArrived(sample_pr(4, "d")));
+
+        assert_eq!(
+            model.selected, 1,
+            "selection should not shift when new PRs arrive"
+        );
     }
 
     #[test]
