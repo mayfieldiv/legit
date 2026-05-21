@@ -12,12 +12,39 @@ fn move_selection_down(model: &mut Model) {
     if model.selected < last {
         model.selected += 1;
     }
+    normalize_scroll(model);
 }
 
 /// Retreat selection by one PR, clamped at the first row.
 fn move_selection_up(model: &mut Model) {
     if model.selected > 0 {
         model.selected -= 1;
+    }
+    normalize_scroll(model);
+}
+
+/// Adjust `scroll_offset` so `selected` stays on-screen with ~10% margin above
+/// and below. Margin is `viewport_height / 10`, floor 1, so navigation never
+/// parks the selection on the very top or bottom row when there's more list to
+/// see in that direction.
+fn normalize_scroll(model: &mut Model) {
+    if model.viewport_height == 0 || model.prs.is_empty() {
+        return;
+    }
+    let margin = (model.viewport_height / 10).max(1);
+    let visible_top = model.scroll_offset;
+    let visible_bottom = model.scroll_offset.saturating_add(model.viewport_height);
+
+    if model.selected + margin >= visible_bottom {
+        model.scroll_offset = model.selected + margin + 1 - model.viewport_height;
+    }
+    if model.selected < visible_top + margin {
+        model.scroll_offset = model.selected.saturating_sub(margin);
+    }
+
+    let max_offset = model.prs.len().saturating_sub(model.viewport_height);
+    if model.scroll_offset > max_offset {
+        model.scroll_offset = max_offset;
     }
 }
 
@@ -251,6 +278,57 @@ mod tests {
         update(&mut model, key_event(KeyCode::Char('k')));
         update(&mut model, key_event(KeyCode::Char('k')));
         assert_eq!(model.selected, 0);
+    }
+
+    #[test]
+    fn advancing_selection_below_bottom_margin_advances_scroll() {
+        let (mut model, _) = Model::new();
+        for n in 1..=20 {
+            update(&mut model, Msg::PrArrived(sample_pr(n, "p")));
+        }
+        model.viewport_height = 10;
+
+        // Push selection toward the bottom of the visible window. The ~10%
+        // margin means at viewport=10 we should reserve one row of lead, so
+        // selection cannot rest on the very last visible row.
+        for _ in 0..9 {
+            update(&mut model, key_event(KeyCode::Char('j')));
+        }
+
+        assert!(
+            model.scroll_offset >= 1,
+            "scroll should advance to preserve margin below selection, got {}",
+            model.scroll_offset,
+        );
+        let visible_top = model.scroll_offset;
+        let visible_bottom = model.scroll_offset + model.viewport_height;
+        assert!(
+            model.selected >= visible_top && model.selected < visible_bottom,
+            "selected {} must stay within visible window {}..{}",
+            model.selected,
+            visible_top,
+            visible_bottom,
+        );
+    }
+
+    #[test]
+    fn retreating_selection_back_to_top_resets_scroll() {
+        let (mut model, _) = Model::new();
+        for n in 1..=20 {
+            update(&mut model, Msg::PrArrived(sample_pr(n, "p")));
+        }
+        model.viewport_height = 10;
+        for _ in 0..15 {
+            update(&mut model, key_event(KeyCode::Char('j')));
+        }
+        assert!(model.scroll_offset > 0);
+
+        for _ in 0..20 {
+            update(&mut model, key_event(KeyCode::Char('k')));
+        }
+
+        assert_eq!(model.selected, 0);
+        assert_eq!(model.scroll_offset, 0);
     }
 
     #[test]

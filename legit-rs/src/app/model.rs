@@ -12,6 +12,8 @@ pub struct Model {
     pub repo: Option<RepoInfo>,
     pub prs: Vec<PR>,
     pub selected: usize,
+    pub scroll_offset: usize,
+    pub viewport_height: usize,
     pub list_error: Option<String>,
     pub last_error: Option<String>,
 }
@@ -29,6 +31,8 @@ impl fmt::Debug for Model {
             .field("repo", &self.repo)
             .field("prs", &self.prs.len())
             .field("selected", &self.selected)
+            .field("scroll_offset", &self.scroll_offset)
+            .field("viewport_height", &self.viewport_height)
             .field("list_error", &self.list_error)
             .field("last_error", &self.last_error)
             .finish()
@@ -45,6 +49,8 @@ impl Model {
                 repo: None,
                 prs: Vec::new(),
                 selected: 0,
+                scroll_offset: 0,
+                viewport_height: 0,
                 list_error: None,
                 last_error: None,
             },
