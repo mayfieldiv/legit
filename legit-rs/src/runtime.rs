@@ -27,6 +27,16 @@ pub async fn run() -> Result<()> {
     let (mut model, initial_cmds) = Model::new();
     tracing::info!(commands = initial_cmds.len(), "model initialized");
     spawn_cmds(initial_cmds, &msg_tx);
+
+    // Seed the viewport height before the first render so scroll math has the
+    // right bounds even before the user resizes anything.
+    let size = terminal.size().context("failed to query terminal size")?;
+    process_msg(
+        Msg::TerminalEvent(Event::Resize(size.width, size.height)),
+        &mut model,
+        &msg_tx,
+    );
+
     terminal.draw(|frame| view::view(&model, frame, chrono::Utc::now()))?;
     tracing::debug!("initial frame rendered");
 
