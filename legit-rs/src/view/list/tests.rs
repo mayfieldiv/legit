@@ -196,6 +196,35 @@ fn draft_pr_is_marked_in_its_row() {
 }
 
 #[test]
+fn wide_pr_number_widens_num_column_for_all_rows() {
+    let (mut model, _) = Model::new();
+    model.list = pr_list_with(vec![
+        pr(42, "small number", "octocat", 1),
+        pr(12345, "huge number", "alice", 2),
+    ]);
+
+    let terminal = render_snapshot(&model, 60, 4);
+    let rows = buffer_text(&terminal);
+
+    // Both rows should align at the same title column — the wider `#12345`
+    // sets the column width for the whole list.
+    let title_start = rows[0]
+        .find("small number")
+        .expect("first row should contain title");
+    let title_start_2 = rows[1]
+        .find("huge number")
+        .expect("second row should contain title");
+    assert_eq!(
+        title_start, title_start_2,
+        "title columns must align; got row1={:?} row2={:?}",
+        rows[0], rows[1]
+    );
+    // Row width must still fit the terminal.
+    assert_eq!(rows[0].chars().count(), 60);
+    assert_eq!(rows[1].chars().count(), 60);
+}
+
+#[test]
 fn loading_pr_list_renders_loading_placeholder() {
     let (mut model, _) = Model::new();
     model.list.begin_fetch();
