@@ -109,6 +109,19 @@ impl PrList {
         &self.prs
     }
 
+    /// Iterate the rows currently inside the scroll viewport, yielding the
+    /// absolute PR index alongside each `&PR`. The view uses the index to
+    /// detect which row is the selected one (`index == selected()`).
+    pub fn visible_rows(&self) -> impl Iterator<Item = (usize, &PR)> {
+        let start = self.scroll_offset.min(self.prs.len());
+        let end = if self.viewport_height == 0 {
+            self.prs.len()
+        } else {
+            (start + self.viewport_height).min(self.prs.len())
+        };
+        (start..end).map(move |i| (i, &self.prs[i]))
+    }
+
     pub fn phase(&self) -> &Phase {
         &self.phase
     }
@@ -213,6 +226,44 @@ mod tests {
         list.move_up();
         list.move_up();
         assert_eq!(list.selected(), 0);
+    }
+
+    #[test]
+    fn visible_rows_yields_window_starting_at_scroll_offset() {
+        let mut list = PrList::new();
+        for n in 1..=20 {
+            list.push(sample_pr(n));
+        }
+        list.resize(5);
+        // Scroll the window down a few rows.
+        for _ in 0..10 {
+            list.move_down();
+        }
+        let offset = list.scroll_offset();
+
+        let rows: Vec<(usize, u64)> = list.visible_rows().map(|(i, pr)| (i, pr.number)).collect();
+
+        assert_eq!(rows.len(), 5);
+        assert_eq!(rows[0].0, offset);
+        // PR numbers are 1-indexed; visible row at PR index N has PR number N+1.
+        assert_eq!(rows[0].1, (offset as u64) + 1);
+        assert_eq!(rows[4].1, (offset as u64) + 5);
+    }
+
+    #[test]
+    fn visible_rows_caps_at_list_length_when_window_extends_past_end() {
+        let mut list = PrList::new();
+        for n in 1..=3 {
+            list.push(sample_pr(n));
+        }
+        list.resize(10);
+
+        let count = list.visible_rows().count();
+
+        assert_eq!(
+            count, 3,
+            "viewport is larger than list; should yield all PRs"
+        );
     }
 
     #[test]
