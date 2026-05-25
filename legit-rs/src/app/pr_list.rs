@@ -24,6 +24,8 @@ pub struct PrList {
     prs: Vec<PR>,
     phase: Phase,
     selected: usize,
+    scroll_offset: usize,
+    viewport_height: usize,
 }
 
 impl PrList {
@@ -55,16 +57,52 @@ impl PrList {
         if self.selected < last {
             self.selected += 1;
         }
+        self.normalize_scroll();
     }
 
     pub fn move_up(&mut self) {
         if self.selected > 0 {
             self.selected -= 1;
         }
+        self.normalize_scroll();
+    }
+
+    pub fn resize(&mut self, viewport_height: usize) {
+        self.viewport_height = viewport_height;
+        self.normalize_scroll();
     }
 
     pub fn selected(&self) -> usize {
         self.selected
+    }
+
+    pub fn scroll_offset(&self) -> usize {
+        self.scroll_offset
+    }
+
+    /// Re-clamp `scroll_offset` so `selected` stays on-screen with a ~10%
+    /// margin above and below. Margin = `viewport_height / 10`, floor 1, so
+    /// the selection never parks on the very top/bottom row when more PRs are
+    /// available in that direction.
+    fn normalize_scroll(&mut self) {
+        if self.viewport_height == 0 || self.prs.is_empty() {
+            return;
+        }
+        let margin = (self.viewport_height / 10).max(1);
+        let visible_top = self.scroll_offset;
+        let visible_bottom = self.scroll_offset.saturating_add(self.viewport_height);
+
+        if self.selected + margin >= visible_bottom {
+            self.scroll_offset = self.selected + margin + 1 - self.viewport_height;
+        }
+        if self.selected < visible_top + margin {
+            self.scroll_offset = self.selected.saturating_sub(margin);
+        }
+
+        let max_offset = self.prs.len().saturating_sub(self.viewport_height);
+        if self.scroll_offset > max_offset {
+            self.scroll_offset = max_offset;
+        }
     }
 
     pub fn prs(&self) -> &[PR] {
@@ -175,6 +213,54 @@ mod tests {
         list.move_up();
         list.move_up();
         assert_eq!(list.selected(), 0);
+    }
+
+    #[test]
+    fn moving_below_bottom_margin_advances_scroll() {
+        let mut list = PrList::new();
+        for n in 1..=20 {
+            list.push(sample_pr(n));
+        }
+        list.resize(10);
+
+        // Push selection toward the bottom; ~10% margin means at viewport=10
+        // we keep at least one row of lead, so selection can't sit on the
+        // very last visible row.
+        for _ in 0..9 {
+            list.move_down();
+        }
+
+        assert!(
+            list.scroll_offset() >= 1,
+            "scroll should advance into the bottom margin, got {}",
+            list.scroll_offset(),
+        );
+        assert!(list.selected() >= list.scroll_offset());
+        assert!(list.selected() < list.scroll_offset() + 10);
+    }
+
+    #[test]
+    fn shrinking_viewport_re_clamps_scroll_to_keep_selection_visible() {
+        let mut list = PrList::new();
+        for n in 1..=30 {
+            list.push(sample_pr(n));
+        }
+        list.resize(20);
+        for _ in 0..25 {
+            list.move_down();
+        }
+        let prev_offset = list.scroll_offset();
+        assert!(list.selected() < prev_offset + 20);
+
+        list.resize(5);
+
+        assert!(
+            list.selected() >= list.scroll_offset() && list.selected() < list.scroll_offset() + 5,
+            "selection {} must stay within window {}..{} after shrink",
+            list.selected(),
+            list.scroll_offset(),
+            list.scroll_offset() + 5,
+        );
     }
 
     #[test]
