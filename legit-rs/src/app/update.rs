@@ -87,6 +87,7 @@ mod tests {
         app::{cmd::Cmd, model::Model, msg::Msg, pr_list::Phase, update::update},
         git_remote::RepoInfo,
         github::rest::{PR, PRState},
+        secret::Secret,
     };
 
     fn sample_pr(number: u64, title: &str) -> PR {
@@ -156,7 +157,7 @@ mod tests {
     #[test]
     fn dispatching_fetch_marks_list_as_loading() {
         let (mut model, _) = Model::new();
-        model.auth_token = Some("ghp_test".to_owned());
+        model.auth_token = Some(Secret::new("ghp_test".to_owned()));
 
         let cmds = update(
             &mut model,
@@ -251,7 +252,7 @@ mod tests {
     #[test]
     fn repo_detected_after_token_dispatches_fetch_open_prs() {
         let (mut model, _) = Model::new();
-        model.auth_token = Some("ghp_test".to_owned());
+        model.auth_token = Some(Secret::new("ghp_test".to_owned()));
 
         let cmds = update(
             &mut model,

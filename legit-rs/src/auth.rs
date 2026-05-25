@@ -2,8 +2,10 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
+use crate::secret::Secret;
+
 #[tracing::instrument(name = "resolve_auth_token")]
-pub fn resolve_token() -> Result<String> {
+pub fn resolve_token() -> Result<Secret<String>> {
     tracing::info!("resolving auth token with gh cli");
     let output = Command::new("gh")
         .args(["auth", "token"])
@@ -31,5 +33,5 @@ pub fn resolve_token() -> Result<String> {
     }
 
     tracing::debug!("gh auth token returned non-empty token");
-    Ok(token)
+    Ok(Secret::new(token))
 }

@@ -1,14 +1,13 @@
-use std::fmt;
-
 use tokio::sync::mpsc;
 
 use crate::{
     app::msg::Msg,
     auth, config, git_remote,
     github::rest::{GitHubRest, OctocrabRest},
+    secret::Secret,
 };
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Cmd {
     LoadConfig,
     ResolveAuthToken,
@@ -16,24 +15,8 @@ pub enum Cmd {
     FetchOpenPRs {
         owner: String,
         repo: String,
-        token: String,
+        token: Secret<String>,
     },
-}
-
-impl fmt::Debug for Cmd {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::LoadConfig => f.write_str("LoadConfig"),
-            Self::ResolveAuthToken => f.write_str("ResolveAuthToken"),
-            Self::DetectRepo => f.write_str("DetectRepo"),
-            Self::FetchOpenPRs { owner, repo, .. } => f
-                .debug_struct("FetchOpenPRs")
-                .field("owner", owner)
-                .field("repo", repo)
-                .field("token", &"<redacted>")
-                .finish(),
-        }
-    }
 }
 
 #[tracing::instrument(name = "command", skip(tx))]
@@ -100,7 +83,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>) {
 async fn run_fetch_open_prs(
     owner: String,
     repo: String,
-    token: String,
+    token: Secret<String>,
     tx: mpsc::UnboundedSender<Msg>,
 ) {
     let client = match OctocrabRest::new(&token) {

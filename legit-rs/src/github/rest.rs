@@ -5,6 +5,8 @@ use octocrab::{Octocrab, Page};
 use serde::Deserialize;
 use tokio::sync::mpsc;
 
+use crate::secret::Secret;
+
 /// Lifecycle state for a pull request. Mirrors the TS `PRState` discriminated
 /// type so the rest of the app can compare against the same values.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,9 +191,9 @@ pub struct OctocrabRest {
 }
 
 impl OctocrabRest {
-    pub fn new(token: &str) -> Result<Self> {
+    pub fn new(token: &Secret<String>) -> Result<Self> {
         let client = Octocrab::builder()
-            .personal_token(token.to_owned())
+            .personal_token(token.expose_secret().to_owned())
             .build()
             .context("failed to build octocrab client")?;
         Ok(Self { client })

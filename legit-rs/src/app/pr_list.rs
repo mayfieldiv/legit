@@ -2,6 +2,8 @@
 //! selection cursor, scroll viewport, and fetch phase. Concentrates the
 //! invariants that used to be spread across `Model` and `update.rs`.
 
+use std::fmt;
+
 use crate::github::rest::PR;
 
 /// Lifecycle of the open-PR fetch. At most one variant holds at a time, so the
@@ -19,13 +21,27 @@ pub enum Phase {
     Failed(String),
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct PrList {
     prs: Vec<PR>,
     phase: Phase,
     selected: usize,
     scroll_offset: usize,
     viewport_height: usize,
+}
+
+impl fmt::Debug for PrList {
+    /// Renders the list as `{ phase, prs: <len>, ... }` — the full PR vec is
+    /// noisy in `tracing` output and rarely informative compared to its length.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrList")
+            .field("phase", &self.phase)
+            .field("prs", &self.prs.len())
+            .field("selected", &self.selected)
+            .field("scroll_offset", &self.scroll_offset)
+            .field("viewport_height", &self.viewport_height)
+            .finish()
+    }
 }
 
 impl PrList {
