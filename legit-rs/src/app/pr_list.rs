@@ -23,6 +23,7 @@ pub enum Phase {
 pub struct PrList {
     prs: Vec<PR>,
     phase: Phase,
+    selected: usize,
 }
 
 impl PrList {
@@ -44,6 +45,26 @@ impl PrList {
 
     pub fn push(&mut self, pr: PR) {
         self.prs.push(pr);
+    }
+
+    pub fn move_down(&mut self) {
+        if self.prs.is_empty() {
+            return;
+        }
+        let last = self.prs.len() - 1;
+        if self.selected < last {
+            self.selected += 1;
+        }
+    }
+
+    pub fn move_up(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+        }
+    }
+
+    pub fn selected(&self) -> usize {
+        self.selected
     }
 
     pub fn prs(&self) -> &[PR] {
@@ -122,6 +143,38 @@ mod tests {
         list.begin_fetch();
         list.complete_fetch();
         assert!(matches!(list.phase(), super::Phase::Loaded));
+    }
+
+    #[test]
+    fn move_down_advances_selection_within_bounds() {
+        let mut list = PrList::new();
+        for n in 1..=3 {
+            list.push(sample_pr(n));
+        }
+
+        list.move_down();
+        assert_eq!(list.selected(), 1);
+        list.move_down();
+        list.move_down();
+        list.move_down();
+        // Last PR is index 2; further moves clamp.
+        assert_eq!(list.selected(), 2);
+    }
+
+    #[test]
+    fn move_up_retreats_selection_and_clamps_at_zero() {
+        let mut list = PrList::new();
+        for n in 1..=3 {
+            list.push(sample_pr(n));
+        }
+        list.move_down();
+        list.move_down();
+        assert_eq!(list.selected(), 2);
+
+        list.move_up();
+        list.move_up();
+        list.move_up();
+        assert_eq!(list.selected(), 0);
     }
 
     #[test]
