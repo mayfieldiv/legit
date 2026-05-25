@@ -48,69 +48,70 @@ pub struct PR {
 
 /// Permissive intermediate type for parsing GitHub REST responses. Mirrors the
 /// TS `RawRestPR`: every field GitHub may omit is optional or defaulted so a
-/// stale or stripped response doesn't fail the whole list.
+/// stale or stripped response doesn't fail the whole list. Private — the
+/// module's contract is `PR`, not the wire shape.
 #[derive(Debug, Clone, Deserialize)]
-pub struct RawRestPR {
-    pub number: u64,
-    pub title: String,
+struct RawRestPR {
+    number: u64,
+    title: String,
     #[serde(default)]
-    pub user: Option<RawUser>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    user: Option<RawUser>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
     #[serde(default)]
-    pub draft: bool,
+    draft: bool,
     #[serde(default)]
-    pub additions: u64,
+    additions: u64,
     #[serde(default)]
-    pub deletions: u64,
+    deletions: u64,
     #[serde(default)]
-    pub labels: Vec<RawLabel>,
+    labels: Vec<RawLabel>,
     #[serde(default)]
-    pub requested_reviewers: Vec<RawUser>,
+    requested_reviewers: Vec<RawUser>,
     #[serde(default)]
-    pub assignees: Vec<RawUser>,
+    assignees: Vec<RawUser>,
     #[serde(default)]
-    pub head: Option<RawHead>,
+    head: Option<RawHead>,
     #[serde(default)]
-    pub base: Option<RawBase>,
+    base: Option<RawBase>,
     #[serde(default)]
-    pub state: Option<String>,
+    state: Option<String>,
     #[serde(default)]
-    pub merged_at: Option<DateTime<Utc>>,
+    merged_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct RawUser {
-    pub login: String,
+struct RawUser {
+    login: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct RawLabel {
-    pub name: String,
+struct RawLabel {
+    name: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct RawHead {
+struct RawHead {
     #[serde(rename = "ref")]
-    pub ref_field: String,
+    ref_field: String,
     #[serde(default)]
-    pub repo: Option<RawRepo>,
+    repo: Option<RawRepo>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct RawBase {
+struct RawBase {
     #[serde(rename = "ref")]
-    pub ref_field: String,
+    ref_field: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct RawRepo {
+struct RawRepo {
     #[serde(default)]
-    pub owner: Option<RawUser>,
+    owner: Option<RawUser>,
 }
 
 /// Parse a raw REST pull request into the domain `PR`. Pure; tested directly.
-pub fn parse_pr(raw: RawRestPR) -> PR {
+fn parse_pr(raw: RawRestPR) -> PR {
     // GitHub reports merged PRs as state="closed" with merged_at set. Split
     // them into a distinct MERGED state so the UI can distinguish them from
     // PRs closed without being merged. The list endpoint omits `state`
