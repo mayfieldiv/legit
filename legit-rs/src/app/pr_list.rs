@@ -4,14 +4,42 @@
 
 use crate::github::rest::PR;
 
+/// Lifecycle of the open-PR fetch. At most one variant holds at a time, so the
+/// view never has to ask "are we loading AND failed?".
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub enum Phase {
+    /// No fetch has been dispatched yet.
+    #[default]
+    Idle,
+    /// Fetch in flight.
+    Loading,
+    /// Fetch completed (rows may still be 0).
+    Loaded,
+    /// Fetch returned an error; the message is what the status bar surfaces.
+    Failed(String),
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct PrList {
     prs: Vec<PR>,
+    phase: Phase,
 }
 
 impl PrList {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn begin_fetch(&mut self) {
+        self.phase = Phase::Loading;
+    }
+
+    pub fn complete_fetch(&mut self) {
+        self.phase = Phase::Loaded;
+    }
+
+    pub fn fail_fetch(&mut self, message: String) {
+        self.phase = Phase::Failed(message);
     }
 
     pub fn push(&mut self, pr: PR) {
@@ -20,6 +48,17 @@ impl PrList {
 
     pub fn prs(&self) -> &[PR] {
         &self.prs
+    }
+
+    pub fn phase(&self) -> &Phase {
+        &self.phase
+    }
+
+    pub fn failure(&self) -> Option<&str> {
+        match &self.phase {
+            Phase::Failed(message) => Some(message),
+            _ => None,
+        }
     }
 }
 
@@ -62,5 +101,36 @@ mod tests {
 
         assert_eq!(list.prs().len(), 1);
         assert_eq!(list.prs()[0].number, 42);
+    }
+
+    #[test]
+    fn new_list_starts_idle() {
+        let list = PrList::new();
+        assert!(matches!(list.phase(), super::Phase::Idle));
+    }
+
+    #[test]
+    fn begin_fetch_transitions_to_loading() {
+        let mut list = PrList::new();
+        list.begin_fetch();
+        assert!(matches!(list.phase(), super::Phase::Loading));
+    }
+
+    #[test]
+    fn complete_fetch_transitions_to_loaded() {
+        let mut list = PrList::new();
+        list.begin_fetch();
+        list.complete_fetch();
+        assert!(matches!(list.phase(), super::Phase::Loaded));
+    }
+
+    #[test]
+    fn fail_fetch_records_failure_message() {
+        let mut list = PrList::new();
+        list.begin_fetch();
+        list.fail_fetch("network down".to_owned());
+
+        assert!(matches!(list.phase(), super::Phase::Failed(_)));
+        assert_eq!(list.failure(), Some("network down"));
     }
 }
