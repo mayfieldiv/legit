@@ -141,6 +141,10 @@ async fn run_fetch_open_prs(
     }
 }
 
+/// Run `f` on the blocking pool and fold the `JoinError` into the same
+/// `anyhow::Result` the inner function returns. Lets call sites stay
+/// 2-arm (`Ok(value)` / `Err(error)`) instead of the 3-arm shape
+/// `spawn_blocking().await` would force (`Ok(Ok)` / `Ok(Err)` / `Err`).
 async fn blocking<F, T>(f: F) -> anyhow::Result<T>
 where
     F: FnOnce() -> anyhow::Result<T> + Send + 'static,
