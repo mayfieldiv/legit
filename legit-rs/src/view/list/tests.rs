@@ -196,6 +196,33 @@ fn draft_pr_is_marked_in_its_row() {
 }
 
 #[test]
+fn large_diff_size_widens_size_column_for_all_rows() {
+    let (mut model, _) = Model::new();
+    let mut big = pr(100, "huge diff", "octocat", 1);
+    big.additions = 1234;
+    big.deletions = 5678;
+    model.list = pr_list_with(vec![pr(101, "small diff", "alice", 2), big]);
+
+    let terminal = render_snapshot(&model, 60, 4);
+    let rows = buffer_text(&terminal);
+
+    // Both size strings must render in full; neither overflow into the age
+    // column nor truncate.
+    assert!(
+        rows[0].contains("+5/-3"),
+        "small-diff size must render in full: {:?}",
+        rows[0]
+    );
+    assert!(
+        rows[1].contains("+1234/-5678"),
+        "large-diff size must render in full: {:?}",
+        rows[1]
+    );
+    assert_eq!(rows[0].chars().count(), 60);
+    assert_eq!(rows[1].chars().count(), 60);
+}
+
+#[test]
 fn wide_pr_number_widens_num_column_for_all_rows() {
     let (mut model, _) = Model::new();
     model.list = pr_list_with(vec![

@@ -32,9 +32,10 @@ pub fn render(pr_list: &PrList, frame: &mut Frame<'_>, area: Rect, now: DateTime
     let width = area.width;
     let selected = pr_list.selected();
     let pr_num_col = pr_num_col_width(pr_list.prs());
+    let size_col = size_col_width(pr_list.prs());
     let lines: Vec<Line<'_>> = pr_list
         .visible_rows()
-        .map(|(pr_index, pr)| row_line(pr, width, pr_num_col, now, pr_index == selected))
+        .map(|(pr_index, pr)| row_line(pr, width, pr_num_col, size_col, now, pr_index == selected))
         .collect();
     let paragraph = Paragraph::new(lines);
     frame.render_widget(paragraph, area);
@@ -42,7 +43,7 @@ pub fn render(pr_list: &PrList, frame: &mut Frame<'_>, area: Rect, now: DateTime
 
 const PR_NUM_COL_MIN: usize = 5;
 const AUTHOR_COL: usize = 14;
-const SIZE_COL: usize = 6;
+const SIZE_COL_MIN: usize = 6;
 const AGE_COL_MIN: usize = 8;
 
 /// Width of the `#<number>` column, sized to fit the widest PR number in the
@@ -58,10 +59,24 @@ fn pr_num_col_width(prs: &[PR]) -> usize {
     widest.max(PR_NUM_COL_MIN)
 }
 
+/// Width of the `+A/-D` size column, sized to fit the widest size string in
+/// the list. Floored at `SIZE_COL_MIN` so the minimum `+0/-0` form sits in a
+/// stable column; `format_size` has no upper bound (PRs can touch thousands
+/// of lines) so a fixed width would clip otherwise.
+fn size_col_width(prs: &[PR]) -> usize {
+    let widest = prs
+        .iter()
+        .map(|pr| format_size(pr.additions, pr.deletions).chars().count())
+        .max()
+        .unwrap_or(0);
+    widest.max(SIZE_COL_MIN)
+}
+
 fn row_line<'a>(
     pr: &'a PR,
     width: u16,
     pr_num_col: usize,
+    size_col: usize,
     now: DateTime<Utc>,
     selected: bool,
 ) -> Line<'a> {
@@ -76,12 +91,12 @@ fn row_line<'a>(
     let size = format_size(pr.additions, pr.deletions);
     let age = format_age(pr.created_at, now);
 
-    let fixed = pr_num_col + AUTHOR_COL + SIZE_COL + AGE_COL_MIN;
+    let fixed = pr_num_col + AUTHOR_COL + size_col + AGE_COL_MIN;
     let title_col = width.saturating_sub(fixed).max(1);
 
     let title = truncate(&raw_title, title_col);
     let author = truncate(&author, AUTHOR_COL);
-    let age_col = width.saturating_sub(pr_num_col + title_col + AUTHOR_COL + SIZE_COL);
+    let age_col = width.saturating_sub(pr_num_col + title_col + AUTHOR_COL + size_col);
 
     let rendered = format!(
         "{num:<num_w$}{title:<title_w$}{author:<author_w$}{size:<size_w$}{age:<age_w$}",
@@ -93,7 +108,7 @@ fn row_line<'a>(
         num_w = pr_num_col,
         title_w = title_col,
         author_w = AUTHOR_COL,
-        size_w = SIZE_COL,
+        size_w = size_col,
         age_w = age_col,
     );
 
