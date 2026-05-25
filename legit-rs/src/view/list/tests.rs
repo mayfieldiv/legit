@@ -2,7 +2,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use ratatui::{Terminal, backend::TestBackend};
 
 use crate::{
-    app::model::Model,
+    app::{model::Model, pr_list::PrList},
     github::rest::{PR, PRState},
     view,
 };
@@ -54,6 +54,18 @@ fn pr(number: u64, title: &str, author: &str, hours_ago: i64) -> PR {
     }
 }
 
+/// Build a `PrList` containing `prs`, in the Loaded phase. Mirrors the steady
+/// state the runtime reaches after `Msg::PrListLoaded` lands.
+fn pr_list_with(prs: Vec<PR>) -> PrList {
+    let mut list = PrList::new();
+    list.begin_fetch();
+    for pr in prs {
+        list.push(pr);
+    }
+    list.complete_fetch();
+    list
+}
+
 /// Extract the rendered buffer's text as one string per row. Snapshot tests
 /// focus on the text layout the user sees; cell styling (colors, BOLD, etc.)
 /// is left to manual review.
@@ -90,11 +102,11 @@ fn empty_pr_list_renders_no_open_pull_requests_placeholder() {
 #[test]
 fn populated_pr_list_renders_one_row_per_pull_request() {
     let (mut model, _) = Model::new();
-    model.prs = vec![
+    model.list = pr_list_with(vec![
         pr(42, "Add streaming PR list", "octocat", 3),
         pr(43, "Wire FetchOpenPRs cmd", "alice", 26),
         pr(44, "Render list view", "bob", 168),
-    ];
+    ]);
 
     let terminal = render_snapshot(&model, 60, 5);
 
@@ -113,7 +125,10 @@ fn populated_pr_list_renders_one_row_per_pull_request() {
 #[test]
 fn pr_list_error_appears_in_the_status_bar() {
     let (mut model, _) = Model::new();
-    model.list_error = Some("list open PRs: network down".to_owned());
+    model.list.begin_fetch();
+    model
+        .list
+        .fail_fetch("list open PRs: network down".to_owned());
 
     let terminal = render_snapshot(&model, 60, 3);
 
@@ -121,7 +136,7 @@ fn pr_list_error_appears_in_the_status_bar() {
     let status = rows.last().expect("status row");
     assert!(
         status.contains("list open PRs: network down"),
-        "status row should surface list_error: {:?}",
+        "status row should surface the fetch failure: {:?}",
         status,
     );
 }
@@ -129,12 +144,12 @@ fn pr_list_error_appears_in_the_status_bar() {
 #[test]
 fn long_titles_truncate_with_ellipsis_to_fit_column() {
     let (mut model, _) = Model::new();
-    model.prs = vec![pr(
+    model.list = pr_list_with(vec![pr(
         7,
         "This title is intentionally far too long to fit in the column",
         "octocat",
         2,
-    )];
+    )]);
 
     let terminal = render_snapshot(&model, 60, 3);
 
@@ -166,7 +181,7 @@ fn draft_pr_is_marked_in_its_row() {
     let (mut model, _) = Model::new();
     let mut draft = pr(50, "Polish things", "octocat", 1);
     draft.is_draft = true;
-    model.prs = vec![draft];
+    model.list = pr_list_with(vec![draft]);
 
     let terminal = render_snapshot(&model, 60, 3);
 
@@ -183,7 +198,7 @@ fn draft_pr_is_marked_in_its_row() {
 #[test]
 fn loading_pr_list_renders_loading_placeholder() {
     let (mut model, _) = Model::new();
-    model.loading = true;
+    model.list.begin_fetch();
 
     let terminal = render_snapshot(&model, 40, 5);
 

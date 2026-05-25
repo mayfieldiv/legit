@@ -8,7 +8,7 @@ use ratatui::{
 };
 
 use crate::{
-    app::model::Model,
+    app::pr_list::{Phase, PrList},
     format::{format_age, format_size, truncate},
     github::rest::PR,
 };
@@ -18,12 +18,11 @@ mod tests;
 
 /// Render the PR list region. Renders the empty/loading placeholder, or one
 /// row per PR with `#number | title | author | size | age` columns.
-pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, now: DateTime<Utc>) {
-    if model.prs.is_empty() {
-        let text = if model.loading {
-            "Loading pull requests…"
-        } else {
-            "No open pull requests"
+pub fn render(pr_list: &PrList, frame: &mut Frame<'_>, area: Rect, now: DateTime<Utc>) {
+    if pr_list.prs().is_empty() {
+        let text = match pr_list.phase() {
+            Phase::Loading => "Loading pull requests…",
+            _ => "No open pull requests",
         };
         let placeholder = Paragraph::new(Line::from(text)).alignment(Alignment::Center);
         frame.render_widget(placeholder, area);
@@ -31,26 +30,13 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, now: DateTime<Ut
     }
 
     let width = area.width;
-    let lines: Vec<Line<'_>> = visible_window(model, area.height as usize)
-        .iter()
-        .enumerate()
-        .map(|(visible_idx, pr)| {
-            let pr_index = model.scroll_offset + visible_idx;
-            let selected = pr_index == model.selected;
-            row_line(pr, width, now, selected)
-        })
+    let selected = pr_list.selected();
+    let lines: Vec<Line<'_>> = pr_list
+        .visible_rows()
+        .map(|(pr_index, pr)| row_line(pr, width, now, pr_index == selected))
         .collect();
     let paragraph = Paragraph::new(lines);
     frame.render_widget(paragraph, area);
-}
-
-fn visible_window(model: &Model, height: usize) -> &[PR] {
-    if height == 0 || model.prs.is_empty() {
-        return &[];
-    }
-    let start = model.scroll_offset.min(model.prs.len());
-    let end = (start + height).min(model.prs.len());
-    &model.prs[start..end]
 }
 
 const PR_NUM_COL: usize = 5;

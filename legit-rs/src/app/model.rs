@@ -1,8 +1,8 @@
 use std::fmt;
 
-use crate::{config::LegitConfig, git_remote::RepoInfo, github::rest::PR};
+use crate::{config::LegitConfig, git_remote::RepoInfo};
 
-use super::cmd::Cmd;
+use super::{cmd::Cmd, pr_list::PrList};
 
 #[derive(Clone)]
 pub struct Model {
@@ -10,12 +10,7 @@ pub struct Model {
     pub config: LegitConfig,
     pub auth_token: Option<String>,
     pub repo: Option<RepoInfo>,
-    pub prs: Vec<PR>,
-    pub selected: usize,
-    pub scroll_offset: usize,
-    pub viewport_height: usize,
-    pub loading: bool,
-    pub list_error: Option<String>,
+    pub list: PrList,
     pub last_error: Option<String>,
 }
 
@@ -30,12 +25,7 @@ impl fmt::Debug for Model {
                 &self.auth_token.as_ref().map(|_| "<redacted>"),
             )
             .field("repo", &self.repo)
-            .field("prs", &self.prs.len())
-            .field("selected", &self.selected)
-            .field("scroll_offset", &self.scroll_offset)
-            .field("viewport_height", &self.viewport_height)
-            .field("loading", &self.loading)
-            .field("list_error", &self.list_error)
+            .field("list", &self.list)
             .field("last_error", &self.last_error)
             .finish()
     }
@@ -49,12 +39,7 @@ impl Model {
                 config: LegitConfig::default(),
                 auth_token: None,
                 repo: None,
-                prs: Vec::new(),
-                selected: 0,
-                scroll_offset: 0,
-                viewport_height: 0,
-                loading: false,
-                list_error: None,
+                list: PrList::new(),
                 last_error: None,
             },
             vec![Cmd::LoadConfig, Cmd::ResolveAuthToken, Cmd::DetectRepo],

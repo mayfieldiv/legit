@@ -76,8 +76,18 @@ impl PrList {
         self.selected
     }
 
+    /// Index of the first row inside the scroll window. Exposed for tests and
+    /// future debug overlays; the view itself prefers `visible_rows()`.
+    #[allow(dead_code)]
     pub fn scroll_offset(&self) -> usize {
         self.scroll_offset
+    }
+
+    /// Number of rows currently allotted to the list (terminal height minus
+    /// the status bar). Set via `resize()`. Exposed for tests/inspection.
+    #[allow(dead_code)]
+    pub fn viewport_height(&self) -> usize {
+        self.viewport_height
     }
 
     /// Re-clamp `scroll_offset` so `selected` stays on-screen with a ~10%

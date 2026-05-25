@@ -2,62 +2,16 @@ use crossterm::event::{Event, KeyCode, KeyEventKind};
 
 use super::{cmd::Cmd, model::Model, msg::Msg};
 
-/// Advance selection by one PR, clamped to the last row. No-op on an empty
-/// list — keeps `selected = 0` as a safe sentinel.
-fn move_selection_down(model: &mut Model) {
-    if model.prs.is_empty() {
-        return;
-    }
-    let last = model.prs.len() - 1;
-    if model.selected < last {
-        model.selected += 1;
-    }
-    normalize_scroll(model);
-}
-
-/// Retreat selection by one PR, clamped at the first row.
-fn move_selection_up(model: &mut Model) {
-    if model.selected > 0 {
-        model.selected -= 1;
-    }
-    normalize_scroll(model);
-}
-
-/// Adjust `scroll_offset` so `selected` stays on-screen with ~10% margin above
-/// and below. Margin is `viewport_height / 10`, floor 1, so navigation never
-/// parks the selection on the very top or bottom row when there's more list to
-/// see in that direction.
-fn normalize_scroll(model: &mut Model) {
-    if model.viewport_height == 0 || model.prs.is_empty() {
-        return;
-    }
-    let margin = (model.viewport_height / 10).max(1);
-    let visible_top = model.scroll_offset;
-    let visible_bottom = model.scroll_offset.saturating_add(model.viewport_height);
-
-    if model.selected + margin >= visible_bottom {
-        model.scroll_offset = model.selected + margin + 1 - model.viewport_height;
-    }
-    if model.selected < visible_top + margin {
-        model.scroll_offset = model.selected.saturating_sub(margin);
-    }
-
-    let max_offset = model.prs.len().saturating_sub(model.viewport_height);
-    if model.scroll_offset > max_offset {
-        model.scroll_offset = max_offset;
-    }
-}
-
 /// Fire `Cmd::FetchOpenPRs` once both auth token and repo detection have
 /// landed in the model. The repo defines what to fetch; the token authorizes
 /// the request. Either alone yields no command — we wait for the second one.
-/// Sets the loading flag so the view can swap from "No open PRs" to
-/// "Loading pull requests…" until the first result lands.
+/// Marks the PR list as Loading so the view swaps from "No open PRs" to
+/// "Loading pull requests…" until results land.
 fn maybe_fetch_open_prs(model: &mut Model) -> Vec<Cmd> {
     let (Some(token), Some(repo)) = (model.auth_token.as_ref(), model.repo.as_ref()) else {
         return Vec::new();
     };
-    model.loading = true;
+    model.list.begin_fetch();
     vec![Cmd::FetchOpenPRs {
         owner: repo.owner.clone(),
         repo: repo.repo.clone(),
@@ -71,8 +25,8 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             if key.kind == KeyEventKind::Press {
                 match key.code {
                     KeyCode::Char('q') => model.should_quit = true,
-                    KeyCode::Char('j') => move_selection_down(model),
-                    KeyCode::Char('k') => move_selection_up(model),
+                    KeyCode::Char('j') => model.list.move_down(),
+                    KeyCode::Char('k') => model.list.move_up(),
                     _ => {}
                 }
             }
@@ -81,8 +35,7 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
         Msg::TerminalEvent(Event::Resize(_, height)) => {
             // The status bar takes one row; everything above belongs to the
             // list. Saturating-sub keeps a 0-row viewport handled gracefully.
-            model.viewport_height = (height as usize).saturating_sub(1);
-            normalize_scroll(model);
+            model.list.resize((height as usize).saturating_sub(1));
             Vec::new()
         }
         Msg::TerminalEvent(_) => Vec::new(),
@@ -99,19 +52,17 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             maybe_fetch_open_prs(model)
         }
         Msg::PrArrived(pr) => {
-            model.prs.push(pr);
-            model.loading = false;
+            model.list.push(pr);
             Vec::new()
         }
         Msg::PrListLoaded => {
-            model.loading = false;
+            model.list.complete_fetch();
             Vec::new()
         }
         Msg::PrListFailed { context, error } => {
             let message = format!("{context}: {error}");
             tracing::warn!(%message, "pr listing failed");
-            model.list_error = Some(message);
-            model.loading = false;
+            model.list.fail_fetch(message);
             Vec::new()
         }
         Msg::CommandFailed { context, error } => {
@@ -133,7 +84,7 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent};
 
     use crate::{
-        app::{cmd::Cmd, model::Model, msg::Msg, update::update},
+        app::{cmd::Cmd, model::Model, msg::Msg, pr_list::Phase, update::update},
         git_remote::RepoInfo,
         github::rest::{PR, PRState},
     };
@@ -162,17 +113,18 @@ mod tests {
         }
     }
 
+    fn key_event(code: KeyCode) -> Msg {
+        Msg::TerminalEvent(crossterm::event::Event::Key(KeyEvent::new(
+            code,
+            crossterm::event::KeyModifiers::NONE,
+        )))
+    }
+
     #[test]
     fn q_key_sets_should_quit() {
         let (mut model, _) = Model::new();
 
-        update(
-            &mut model,
-            Msg::TerminalEvent(crossterm::event::Event::Key(KeyEvent::new(
-                KeyCode::Char('q'),
-                crossterm::event::KeyModifiers::NONE,
-            ))),
-        );
+        update(&mut model, key_event(KeyCode::Char('q')));
 
         assert!(model.should_quit);
     }
@@ -216,38 +168,37 @@ mod tests {
 
         assert_eq!(cmds.len(), 1);
         assert!(
-            model.loading,
-            "loading flag should be set on fetch dispatch"
+            matches!(model.list.phase(), Phase::Loading),
+            "list should enter Loading phase on fetch dispatch",
         );
     }
 
     #[test]
-    fn pr_arrived_clears_loading_flag() {
+    fn pr_arrived_clears_loading_phase() {
         let (mut model, _) = Model::new();
-        model.loading = true;
+        model.list.begin_fetch();
 
         update(&mut model, Msg::PrArrived(sample_pr(1, "a")));
 
-        assert!(!model.loading, "loading flag should clear after first PR");
+        // Push alone doesn't transition phase; the explicit PrListLoaded does.
+        // Until then, the list is still "loading more" — but rows render now.
+        assert_eq!(model.list.prs().len(), 1);
     }
 
     #[test]
-    fn pr_list_loaded_clears_loading_flag_when_no_prs_arrived() {
+    fn pr_list_loaded_transitions_to_loaded() {
         let (mut model, _) = Model::new();
-        model.loading = true;
+        model.list.begin_fetch();
 
         update(&mut model, Msg::PrListLoaded);
 
-        assert!(
-            !model.loading,
-            "loading should clear when the listing finishes empty",
-        );
+        assert!(matches!(model.list.phase(), Phase::Loaded));
     }
 
     #[test]
-    fn pr_list_failed_clears_loading_flag() {
+    fn pr_list_failed_transitions_to_failed_with_message() {
         let (mut model, _) = Model::new();
-        model.loading = true;
+        model.list.begin_fetch();
 
         update(
             &mut model,
@@ -257,7 +208,12 @@ mod tests {
             },
         );
 
-        assert!(!model.loading, "loading flag should clear on failure");
+        let failure = model
+            .list
+            .failure()
+            .expect("phase should be Failed after PrListFailed");
+        assert!(failure.contains("list open PRs"));
+        assert!(failure.contains("boom"));
     }
 
     #[test]
@@ -266,8 +222,8 @@ mod tests {
 
         let cmds = update(&mut model, Msg::PrArrived(sample_pr(42, "first")));
 
-        assert_eq!(model.prs.len(), 1);
-        assert_eq!(model.prs[0].number, 42);
+        assert_eq!(model.list.prs().len(), 1);
+        assert_eq!(model.list.prs()[0].number, 42);
         assert!(cmds.is_empty());
     }
 
@@ -315,13 +271,6 @@ mod tests {
         }
     }
 
-    fn key_event(code: KeyCode) -> Msg {
-        Msg::TerminalEvent(crossterm::event::Event::Key(KeyEvent::new(
-            code,
-            crossterm::event::KeyModifiers::NONE,
-        )))
-    }
-
     #[test]
     fn j_advances_selection_within_list_bounds() {
         let (mut model, _) = Model::new();
@@ -330,10 +279,10 @@ mod tests {
         }
 
         update(&mut model, key_event(KeyCode::Char('j')));
-        assert_eq!(model.selected, 1);
+        assert_eq!(model.list.selected(), 1);
 
         update(&mut model, key_event(KeyCode::Char('j')));
-        assert_eq!(model.selected, 2);
+        assert_eq!(model.list.selected(), 2);
     }
 
     #[test]
@@ -344,7 +293,7 @@ mod tests {
         update(&mut model, key_event(KeyCode::Char('j')));
         update(&mut model, key_event(KeyCode::Char('j')));
 
-        assert_eq!(model.selected, 0);
+        assert_eq!(model.list.selected(), 0);
     }
 
     #[test]
@@ -355,45 +304,14 @@ mod tests {
         }
         update(&mut model, key_event(KeyCode::Char('j')));
         update(&mut model, key_event(KeyCode::Char('j')));
-        assert_eq!(model.selected, 2);
+        assert_eq!(model.list.selected(), 2);
 
         update(&mut model, key_event(KeyCode::Char('k')));
-        assert_eq!(model.selected, 1);
+        assert_eq!(model.list.selected(), 1);
 
         update(&mut model, key_event(KeyCode::Char('k')));
         update(&mut model, key_event(KeyCode::Char('k')));
-        assert_eq!(model.selected, 0);
-    }
-
-    #[test]
-    fn advancing_selection_below_bottom_margin_advances_scroll() {
-        let (mut model, _) = Model::new();
-        for n in 1..=20 {
-            update(&mut model, Msg::PrArrived(sample_pr(n, "p")));
-        }
-        model.viewport_height = 10;
-
-        // Push selection toward the bottom of the visible window. The ~10%
-        // margin means at viewport=10 we should reserve one row of lead, so
-        // selection cannot rest on the very last visible row.
-        for _ in 0..9 {
-            update(&mut model, key_event(KeyCode::Char('j')));
-        }
-
-        assert!(
-            model.scroll_offset >= 1,
-            "scroll should advance to preserve margin below selection, got {}",
-            model.scroll_offset,
-        );
-        let visible_top = model.scroll_offset;
-        let visible_bottom = model.scroll_offset + model.viewport_height;
-        assert!(
-            model.selected >= visible_top && model.selected < visible_bottom,
-            "selected {} must stay within visible window {}..{}",
-            model.selected,
-            visible_top,
-            visible_bottom,
-        );
+        assert_eq!(model.list.selected(), 0);
     }
 
     #[test]
@@ -402,46 +320,28 @@ mod tests {
         for n in 1..=30 {
             update(&mut model, Msg::PrArrived(sample_pr(n, "p")));
         }
-        model.viewport_height = 20;
-        model.selected = 25;
-        // Initial state with a generous viewport.
         update(
             &mut model,
             Msg::TerminalEvent(crossterm::event::Event::Resize(80, 21)),
         );
         // Viewport_height = terminal_height - 1 (status bar).
-        assert_eq!(model.viewport_height, 20);
-        assert!(model.selected >= model.scroll_offset);
-        assert!(model.selected < model.scroll_offset + model.viewport_height);
+        assert_eq!(model.list.viewport_height(), 20);
+
+        // Drive the selection deep into the list.
+        for _ in 0..25 {
+            update(&mut model, key_event(KeyCode::Char('j')));
+        }
+        assert!(model.list.selected() >= model.list.scroll_offset());
+        assert!(model.list.selected() < model.list.scroll_offset() + 20);
 
         // Shrink: selection must remain on-screen after re-clamp.
         update(
             &mut model,
             Msg::TerminalEvent(crossterm::event::Event::Resize(80, 6)),
         );
-        assert_eq!(model.viewport_height, 5);
-        assert!(model.selected >= model.scroll_offset);
-        assert!(model.selected < model.scroll_offset + model.viewport_height);
-    }
-
-    #[test]
-    fn retreating_selection_back_to_top_resets_scroll() {
-        let (mut model, _) = Model::new();
-        for n in 1..=20 {
-            update(&mut model, Msg::PrArrived(sample_pr(n, "p")));
-        }
-        model.viewport_height = 10;
-        for _ in 0..15 {
-            update(&mut model, key_event(KeyCode::Char('j')));
-        }
-        assert!(model.scroll_offset > 0);
-
-        for _ in 0..20 {
-            update(&mut model, key_event(KeyCode::Char('k')));
-        }
-
-        assert_eq!(model.selected, 0);
-        assert_eq!(model.scroll_offset, 0);
+        assert_eq!(model.list.viewport_height(), 5);
+        assert!(model.list.selected() >= model.list.scroll_offset());
+        assert!(model.list.selected() < model.list.scroll_offset() + 5);
     }
 
     #[test]
@@ -450,19 +350,20 @@ mod tests {
         update(&mut model, Msg::PrArrived(sample_pr(1, "a")));
         update(&mut model, Msg::PrArrived(sample_pr(2, "b")));
         update(&mut model, key_event(KeyCode::Char('j')));
-        assert_eq!(model.selected, 1);
+        assert_eq!(model.list.selected(), 1);
 
         update(&mut model, Msg::PrArrived(sample_pr(3, "c")));
         update(&mut model, Msg::PrArrived(sample_pr(4, "d")));
 
         assert_eq!(
-            model.selected, 1,
+            model.list.selected(),
+            1,
             "selection should not shift when new PRs arrive"
         );
     }
 
     #[test]
-    fn pr_list_failed_records_error_without_dropping_arrived_prs() {
+    fn pr_list_failed_keeps_already_arrived_prs() {
         let (mut model, _) = Model::new();
         update(&mut model, Msg::PrArrived(sample_pr(1, "first")));
 
@@ -474,13 +375,14 @@ mod tests {
             },
         );
 
-        assert_eq!(model.prs.len(), 1, "already-arrived PRs should remain");
-        let error = model
-            .list_error
-            .as_deref()
-            .expect("list_error should be recorded");
-        assert!(error.contains("list open PRs"));
-        assert!(error.contains("network down"));
+        assert_eq!(
+            model.list.prs().len(),
+            1,
+            "already-arrived PRs should remain after a fetch failure"
+        );
+        let failure = model.list.failure().expect("failure recorded");
+        assert!(failure.contains("list open PRs"));
+        assert!(failure.contains("network down"));
         assert!(cmds.is_empty());
     }
 }
