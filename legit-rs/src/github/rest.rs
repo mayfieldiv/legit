@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use octocrab::{Octocrab, Page};
 use serde::Deserialize;
@@ -167,25 +166,11 @@ fn parse_pr(raw: RawRestPR) -> PR {
     }
 }
 
-// ── Transport trait + octocrab impl ─────────────────────────────────────────
+// ── Octocrab transport ──────────────────────────────────────────────────────
 
-/// REST half of the GitHub client. Behind a trait so tests can swap in a mock.
-#[async_trait]
-pub trait GitHubRest: Send + Sync {
-    /// List every open PR for `owner/repo`, sending each one through `out` as
-    /// it streams in from the REST API. Returns once the listing finishes (or
-    /// when `out` closes); errors are returned via `Result`.
-    async fn list_open_prs(
-        &self,
-        owner: &str,
-        repo: &str,
-        out: mpsc::UnboundedSender<PR>,
-    ) -> Result<()>;
-}
-
-/// Octocrab-backed `GitHubRest`. Uses a personal access token; `_get` lets us
-/// deserialize directly into our permissive `RawRestPR` so octocrab's strict
-/// model types don't tie us to fields GitHub may omit.
+/// Octocrab-backed REST client. Uses a personal access token; the raw `get`
+/// lets us deserialize directly into our permissive `RawRestPR` so octocrab's
+/// strict model types don't tie us to fields GitHub may omit.
 pub struct OctocrabRest {
     client: Octocrab,
 }
@@ -198,12 +183,12 @@ impl OctocrabRest {
             .context("failed to build octocrab client")?;
         Ok(Self { client })
     }
-}
 
-#[async_trait]
-impl GitHubRest for OctocrabRest {
+    /// List every open PR for `owner/repo`, sending each one through `out` as
+    /// it streams in from the REST API. Returns once the listing finishes (or
+    /// when `out` closes); errors are returned via `Result`.
     #[tracing::instrument(name = "list_open_prs", skip(self, out))]
-    async fn list_open_prs(
+    pub async fn list_open_prs(
         &self,
         owner: &str,
         repo: &str,
@@ -253,11 +238,9 @@ struct ListParams {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
-
     use chrono::TimeZone;
 
-    use super::{GitHubRest, PR, PRState, RawRestPR, parse_pr};
+    use super::{PR, PRState, RawRestPR, parse_pr};
 
     fn deserialize(raw: &str) -> RawRestPR {
         serde_json::from_str(raw).expect("fixture should deserialize")
@@ -397,70 +380,5 @@ mod tests {
         assert_eq!(pr.deletions, 0);
         assert_eq!(pr.mergeable, "UNKNOWN");
         assert_eq!(pr.review_decision, "");
-    }
-
-    // ── Mock transport ──────────────────────────────────────────────────────
-
-    /// Stand-in `GitHubRest` for higher-level tests. Replays a canned list of
-    /// PRs into the sink in order.
-    struct MockRest {
-        prs: Mutex<Vec<PR>>,
-    }
-
-    impl MockRest {
-        fn new(prs: Vec<PR>) -> Self {
-            Self {
-                prs: Mutex::new(prs),
-            }
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl GitHubRest for MockRest {
-        async fn list_open_prs(
-            &self,
-            _owner: &str,
-            _repo: &str,
-            out: tokio::sync::mpsc::UnboundedSender<PR>,
-        ) -> anyhow::Result<()> {
-            let prs = std::mem::take(&mut *self.prs.lock().unwrap());
-            for pr in prs {
-                let _ = out.send(pr);
-            }
-            Ok(())
-        }
-    }
-
-    #[tokio::test]
-    async fn mock_transport_streams_prs_in_order() {
-        let raw_a = deserialize(
-            r#"{
-                "number": 1, "title": "A", "user": { "login": "a" },
-                "created_at": "2026-05-01T00:00:00Z",
-                "updated_at": "2026-05-01T00:00:00Z",
-                "head": { "ref": "a" }, "base": { "ref": "main" }
-            }"#,
-        );
-        let raw_b = deserialize(
-            r#"{
-                "number": 2, "title": "B", "user": { "login": "b" },
-                "created_at": "2026-05-02T00:00:00Z",
-                "updated_at": "2026-05-02T00:00:00Z",
-                "head": { "ref": "b" }, "base": { "ref": "main" }
-            }"#,
-        );
-        let mock = MockRest::new(vec![parse_pr(raw_a), parse_pr(raw_b)]);
-
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        mock.list_open_prs("acme", "widgets", tx).await.unwrap();
-
-        let first = rx.recv().await.expect("first PR streamed");
-        let second = rx.recv().await.expect("second PR streamed");
-        assert_eq!(first.number, 1);
-        assert_eq!(second.number, 2);
-        assert!(
-            rx.recv().await.is_none(),
-            "channel should close after listing"
-        );
     }
 }

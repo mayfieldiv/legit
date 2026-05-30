@@ -1,11 +1,6 @@
 use tokio::sync::mpsc;
 
-use crate::{
-    app::msg::Msg,
-    auth, config, git_remote,
-    github::rest::{GitHubRest, OctocrabRest},
-    secret::Secret,
-};
+use crate::{app::msg::Msg, auth, config, git_remote, github::rest::OctocrabRest, secret::Secret};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Cmd {
