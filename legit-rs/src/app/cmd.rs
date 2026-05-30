@@ -36,10 +36,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>) {
                     );
                     Msg::ConfigLoaded(config)
                 }
-                Err(error) => Msg::CommandFailed {
-                    context: "load config",
-                    error: error.to_string(),
-                },
+                Err(error) => command_failed("load config", error),
             };
             let _ = tx.send(msg);
         }
@@ -49,10 +46,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>) {
                     tracing::info!("auth token resolved from gh cli");
                     Msg::AuthTokenResolved(token)
                 }
-                Err(error) => Msg::CommandFailed {
-                    context: "resolve auth token",
-                    error: error.to_string(),
-                },
+                Err(error) => command_failed("resolve auth token", error),
             };
             let _ = tx.send(msg);
         }
@@ -67,10 +61,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>) {
                     tracing::info!(owner = %repo.owner, repo = %repo.repo, "repo detected");
                     Msg::RepoDetected(repo)
                 }
-                Err(error) => Msg::CommandFailed {
-                    context: "detect repo",
-                    error: error.to_string(),
-                },
+                Err(error) => command_failed("detect repo", error),
             };
             let _ = tx.send(msg);
         }
@@ -89,10 +80,7 @@ async fn run_fetch_open_prs(
     let client = match OctocrabRest::new(&token) {
         Ok(client) => client,
         Err(error) => {
-            let _ = tx.send(Msg::PrListFailed {
-                context: "build github client",
-                error: error.to_string(),
-            });
+            let _ = tx.send(pr_list_failed("build github client", error));
             return;
         }
     };
@@ -116,12 +104,28 @@ async fn run_fetch_open_prs(
             let _ = tx.send(Msg::PrListLoaded);
         }
         Err(error) => {
-            let _ = tx.send(Msg::PrListFailed {
-                context: "list open PRs",
-                error: error.to_string(),
-            });
+            let _ = tx.send(pr_list_failed("list open PRs", error));
         }
     }
+}
+
+/// Log the failure here (cmd is the impure layer) and build the `Msg` for
+/// the runtime to deliver to `update`. Keeps `update` a pure
+/// `(Model, Msg) -> Vec<Cmd>` — the warn doesn't have to fire from inside
+/// the reducer.
+fn command_failed(context: &'static str, error: anyhow::Error) -> Msg {
+    let error = error.to_string();
+    tracing::warn!(context, %error, "command failed");
+    Msg::CommandFailed { context, error }
+}
+
+/// Same as `command_failed`, but for the PR-listing pipeline (which has its
+/// own `Msg` variant so the status bar can prioritise list errors over
+/// generic command errors).
+fn pr_list_failed(context: &'static str, error: anyhow::Error) -> Msg {
+    let error = error.to_string();
+    tracing::warn!(context, %error, "pr listing failed");
+    Msg::PrListFailed { context, error }
 }
 
 /// Run `f` on the blocking pool and fold the `JoinError` into the same

@@ -60,15 +60,11 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             Vec::new()
         }
         Msg::PrListFailed { context, error } => {
-            let message = format!("{context}: {error}");
-            tracing::warn!(%message, "pr listing failed");
-            model.list.fail_fetch(message);
+            model.list.fail_fetch(format!("{context}: {error}"));
             Vec::new()
         }
         Msg::CommandFailed { context, error } => {
-            let message = format!("{context}: {error}");
-            tracing::warn!(%message);
-            model.last_error = Some(message);
+            model.last_error = Some(format!("{context}: {error}"));
             Vec::new()
         }
         Msg::Quit => {
