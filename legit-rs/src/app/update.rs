@@ -1,4 +1,4 @@
-use crossterm::event::{Event, KeyCode, KeyEventKind};
+use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind};
 
 use super::{cmd::Cmd, model::Model, msg::Msg};
 
@@ -77,7 +77,7 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
 #[cfg(test)]
 mod tests {
     use chrono::TimeZone;
-    use crossterm::event::{KeyCode, KeyEvent};
+    use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
     use crate::{
         app::{cmd::Cmd, model::Model, msg::Msg, pr_list::Phase, update::update},
@@ -111,9 +111,9 @@ mod tests {
     }
 
     fn key_event(code: KeyCode) -> Msg {
-        Msg::TerminalEvent(crossterm::event::Event::Key(KeyEvent::new(
+        Msg::TerminalEvent(ratatui::crossterm::event::Event::Key(KeyEvent::new(
             code,
-            crossterm::event::KeyModifiers::NONE,
+            ratatui::crossterm::event::KeyModifiers::NONE,
         )))
     }
 
@@ -319,7 +319,7 @@ mod tests {
         }
         update(
             &mut model,
-            Msg::TerminalEvent(crossterm::event::Event::Resize(80, 21)),
+            Msg::TerminalEvent(ratatui::crossterm::event::Event::Resize(80, 21)),
         );
         // Viewport_height = terminal_height - 1 (status bar).
         assert_eq!(model.list.viewport_height(), 20);
@@ -334,7 +334,7 @@ mod tests {
         // Shrink: selection must remain on-screen after re-clamp.
         update(
             &mut model,
-            Msg::TerminalEvent(crossterm::event::Event::Resize(80, 6)),
+            Msg::TerminalEvent(ratatui::crossterm::event::Event::Resize(80, 6)),
         );
         assert_eq!(model.list.viewport_height(), 5);
         assert!(model.list.selected() >= model.list.scroll_offset());

@@ -1,4 +1,4 @@
-use crossterm::event::Event;
+use ratatui::crossterm::event::Event;
 
 use crate::{config::LegitConfig, git_remote::RepoInfo, github::rest::PR, secret::Secret};
 
