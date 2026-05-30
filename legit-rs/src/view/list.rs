@@ -9,7 +9,7 @@ use ratatui::{
 
 use crate::{
     app::pr_list::{Phase, PrList},
-    format::{format_age, format_size, truncate},
+    format::{format_age, format_size, pad_to_width, truncate},
     github::rest::PR,
 };
 
@@ -98,18 +98,15 @@ fn row_line<'a>(
     let author = truncate(&author, AUTHOR_COL);
     let age_col = width.saturating_sub(pr_num_col + title_col + AUTHOR_COL + size_col);
 
+    // Pad each column by display width (not char count) so rows with wide
+    // glyphs in the title/author stay aligned with ASCII rows.
     let rendered = format!(
-        "{num:<num_w$}{title:<title_w$}{author:<author_w$}{size:<size_w$}{age:<age_w$}",
-        num = num,
-        title = title,
-        author = author,
-        size = size,
-        age = age,
-        num_w = pr_num_col,
-        title_w = title_col,
-        author_w = AUTHOR_COL,
-        size_w = size_col,
-        age_w = age_col,
+        "{}{}{}{}{}",
+        pad_to_width(&num, pr_num_col),
+        pad_to_width(&title, title_col),
+        pad_to_width(&author, AUTHOR_COL),
+        pad_to_width(&size, size_col),
+        pad_to_width(&age, age_col),
     );
 
     let line = Line::from(rendered);
