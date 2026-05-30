@@ -114,15 +114,23 @@ impl PrList {
         if self.viewport_height == 0 || self.prs.is_empty() {
             return;
         }
-        let margin = (self.viewport_height / 10).max(1);
-        let visible_top = self.scroll_offset;
-        let visible_bottom = self.scroll_offset.saturating_add(self.viewport_height);
+        // Cap the margin at half the rows on each side. Without this, a tiny
+        // viewport makes the top and bottom margins overlap and become jointly
+        // unsatisfiable (e.g. at height 1, a floor-1 margin demands a row above
+        // AND below the only visible line), and `selected` ends up off-screen.
+        let margin = (self.viewport_height / 10)
+            .max(1)
+            .min(self.viewport_height.saturating_sub(1) / 2);
 
-        if self.selected + margin >= visible_bottom {
-            self.scroll_offset = self.selected + margin + 1 - self.viewport_height;
-        }
-        if self.selected < visible_top + margin {
-            self.scroll_offset = self.selected.saturating_sub(margin);
+        // Single-pass clamp against both constraints. The bottom constraint is
+        // a lower bound on the offset, the top constraint an upper bound; with
+        // the capped margin they can't conflict, so order doesn't matter.
+        let min_offset = (self.selected + margin + 1).saturating_sub(self.viewport_height);
+        let max_for_top = self.selected.saturating_sub(margin);
+        if self.scroll_offset < min_offset {
+            self.scroll_offset = min_offset;
+        } else if self.scroll_offset > max_for_top {
+            self.scroll_offset = max_for_top;
         }
 
         let max_offset = self.prs.len().saturating_sub(self.viewport_height);
@@ -337,6 +345,28 @@ mod tests {
             list.selected(),
             list.scroll_offset(),
             list.scroll_offset() + 5,
+        );
+    }
+
+    #[test]
+    fn single_row_viewport_keeps_selection_visible() {
+        let mut list = PrList::new();
+        for n in 1..=10 {
+            list.push(sample_pr(n));
+        }
+        list.resize(1);
+
+        // At viewport_height = 1 the margin must collapse to 0, otherwise the
+        // top and bottom margins are jointly unsatisfiable and the selected row
+        // scrolls out of the single visible line.
+        for _ in 0..5 {
+            list.move_down();
+        }
+
+        assert_eq!(
+            list.scroll_offset(),
+            list.selected(),
+            "the only visible row must be the selected one",
         );
     }
 
