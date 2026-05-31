@@ -1,12 +1,18 @@
 use std::{io, thread};
 
 use anyhow::{Context, Result};
-use crossterm::{
-    event::{self, Event},
-    execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+use ratatui::{
+    Terminal,
+    backend::CrosstermBackend,
+    crossterm::{
+        event::{self, Event},
+        execute,
+        terminal::{
+            DisableLineWrap, EnableLineWrap, EnterAlternateScreen, LeaveAlternateScreen,
+            disable_raw_mode, enable_raw_mode,
+        },
+    },
 };
-use ratatui::{Terminal, backend::CrosstermBackend};
 use tokio::sync::mpsc;
 
 use crate::{
@@ -27,7 +33,17 @@ pub async fn run() -> Result<()> {
     let (mut model, initial_cmds) = Model::new();
     tracing::info!(commands = initial_cmds.len(), "model initialized");
     spawn_cmds(initial_cmds, &msg_tx);
-    terminal.draw(|frame| view::view(&model, frame))?;
+
+    // Seed the viewport height before the first render so scroll math has the
+    // right bounds even before the user resizes anything.
+    let size = terminal.size().context("failed to query terminal size")?;
+    process_msg(
+        Msg::TerminalEvent(Event::Resize(size.width, size.height)),
+        &mut model,
+        &msg_tx,
+    );
+
+    terminal.draw(|frame| view::view(&model, frame, chrono::Utc::now()))?;
     tracing::debug!("initial frame rendered");
 
     while !model.should_quit {
@@ -47,7 +63,7 @@ pub async fn run() -> Result<()> {
             process_msg(msg, &mut model, &msg_tx);
         }
 
-        terminal.draw(|frame| view::view(&model, frame))?;
+        terminal.draw(|frame| view::view(&model, frame, chrono::Utc::now()))?;
         tracing::debug!(should_quit = model.should_quit, "frame rendered");
     }
 
@@ -67,7 +83,7 @@ fn spawn_cmds(cmds: Vec<cmd::Cmd>, msg_tx: &mpsc::UnboundedSender<Msg>) {
     for cmd in cmds {
         tracing::debug!(?cmd, "spawning command");
         let tx = msg_tx.clone();
-        tokio::task::spawn_blocking(move || cmd::run(cmd, tx));
+        tokio::spawn(cmd::run(cmd, tx));
     }
 }
 
@@ -102,7 +118,14 @@ impl TerminalGuard {
             entered_alt_screen: false,
         };
         tracing::debug!("entering alternate screen");
-        execute!(io::stdout(), EnterAlternateScreen).context("failed to enter alternate screen")?;
+        // Disable the terminal's auto-wrap (DECAWM). ratatui positions each row
+        // with an absolute cursor move and never re-emits one mid-row, so if its
+        // detected width ever disagrees with the real width (e.g. over
+        // ssh+tmux at large sizes, ratatui#2167) the terminal would wrap each
+        // full-width row and tile the list into columns. With auto-wrap off the
+        // overflow is clipped instead of wrapped, so rows stay one-per-line.
+        execute!(io::stdout(), EnterAlternateScreen, DisableLineWrap)
+            .context("failed to enter alternate screen")?;
         guard.entered_alt_screen = true;
         Ok(guard)
     }
@@ -111,7 +134,7 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         if self.entered_alt_screen {
-            let _ = execute!(io::stdout(), LeaveAlternateScreen);
+            let _ = execute!(io::stdout(), EnableLineWrap, LeaveAlternateScreen);
         }
         let _ = disable_raw_mode();
         tracing::debug!("terminal restored");

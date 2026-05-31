@@ -1,30 +1,15 @@
-use std::fmt;
+use crate::{config::LegitConfig, git_remote::RepoInfo, secret::Secret};
 
-use crate::config::LegitConfig;
+use super::{cmd::Cmd, pr_list::PrList};
 
-use super::cmd::Cmd;
-
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Model {
     pub should_quit: bool,
     pub config: LegitConfig,
-    pub auth_token: Option<String>,
+    pub auth_token: Option<Secret<String>>,
+    pub repo: Option<RepoInfo>,
+    pub list: PrList,
     pub last_error: Option<String>,
-}
-
-impl fmt::Debug for Model {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("Model")
-            .field("should_quit", &self.should_quit)
-            .field("config", &self.config)
-            .field(
-                "auth_token",
-                &self.auth_token.as_ref().map(|_| "<redacted>"),
-            )
-            .field("last_error", &self.last_error)
-            .finish()
-    }
 }
 
 impl Model {
@@ -34,21 +19,23 @@ impl Model {
                 should_quit: false,
                 config: LegitConfig::default(),
                 auth_token: None,
+                repo: None,
+                list: PrList::new(),
                 last_error: None,
             },
-            vec![Cmd::LoadConfig, Cmd::ResolveAuthToken],
+            vec![Cmd::LoadConfig, Cmd::ResolveAuthToken, Cmd::DetectRepo],
         )
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::app::model::Model;
+    use crate::{app::model::Model, secret::Secret};
 
     #[test]
     fn debug_redacts_auth_token() {
         let (mut model, _) = Model::new();
-        model.auth_token = Some("secret-token".to_owned());
+        model.auth_token = Some(Secret::new("secret-token".to_owned()));
 
         let debug = format!("{model:?}");
 

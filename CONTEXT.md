@@ -13,6 +13,9 @@ _Avoid_: change request, MR.
 **PR Detail**:
 A PR plus its body (markdown), used in the detail view. Fetched lazily when the user drills in.
 
+**Open PR List**:
+The list of open PRs for the current Tracked Repo, plus the user's selection cursor and the scroll viewport that keeps the cursor on-screen as the list grows. Populated by REST streaming during a fetch; rendered as one row per PR in the list view.
+
 **Repo Tab**:
 A UI tab showing PRs from a single configured repo (or `All` showing every tracked repo combined).
 
