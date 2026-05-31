@@ -44,6 +44,21 @@ impl Drop for Permit {
     }
 }
 
+/// Decrements `waiting` (and republishes) on drop. Guards the gap between
+/// registering as `waiting` and obtaining the semaphore permit so a cancelled
+/// `acquire` future — dropped while parked on the `.await` — can't leak the
+/// count and leave `NetworkStats.waiting` stuck above zero.
+struct WaitingGuard<'a> {
+    limiter: &'a Arc<NetworkLimiter>,
+}
+
+impl Drop for WaitingGuard<'_> {
+    fn drop(&mut self) {
+        self.limiter.waiting.fetch_sub(1, Ordering::SeqCst);
+        self.limiter.publish();
+    }
+}
+
 impl NetworkLimiter {
     pub fn new(max_concurrent: usize) -> Arc<Self> {
         let (stats_tx, _) = watch::channel(NetworkStats::default());
@@ -61,13 +76,18 @@ impl NetworkLimiter {
     pub async fn acquire(self: &Arc<Self>) -> Permit {
         self.waiting.fetch_add(1, Ordering::SeqCst);
         self.publish();
+        // Hold the decrement in a drop guard so cancelling this future while
+        // parked on the semaphore still releases the `waiting` count.
+        let waiting = WaitingGuard { limiter: self };
         let permit = Arc::clone(&self.semaphore)
             .acquire_owned()
             .await
             .expect("network limiter semaphore is never closed");
-        self.waiting.fetch_sub(1, Ordering::SeqCst);
+        // Past the await, so no more cancellation points. Bump in_flight before
+        // dropping the guard so its republish reflects the final
+        // {in_flight, waiting} state in a single tick.
         self.in_flight.fetch_add(1, Ordering::SeqCst);
-        self.publish();
+        drop(waiting);
         Permit {
             _permit: permit,
             limiter: Arc::clone(self),
@@ -167,5 +187,35 @@ mod tests {
             }
         );
         drop(resumed);
+    }
+
+    #[tokio::test]
+    async fn cancelled_acquire_does_not_leak_waiting() {
+        let limiter = NetworkLimiter::new(1);
+        // Fill the only slot so the next acquire must park as `waiting`.
+        let held = limiter.acquire().await;
+
+        let blocked = Arc::clone(&limiter);
+        let pending = tokio::spawn(async move { blocked.acquire().await });
+        while limiter.snapshot().waiting == 0 {
+            tokio::task::yield_now().await;
+        }
+
+        // Cancel the parked acquire: its future is dropped mid-await. Without a
+        // drop guard the `waiting` increment would leak forever (this loop would
+        // never terminate); with it, the count returns to zero.
+        pending.abort();
+        let _ = pending.await;
+        while limiter.snapshot().waiting != 0 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            limiter.snapshot(),
+            NetworkStats {
+                in_flight: 1,
+                waiting: 0
+            }
+        );
+        drop(held);
     }
 }
