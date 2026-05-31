@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 
 use tokio::sync::mpsc;
 
@@ -112,24 +112,23 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             token,
             pr_numbers,
         } => {
-            let client = match GraphQlClient::new(&token) {
-                Ok(client) => client,
-                Err(error) => {
-                    let _ = tx.send(review_status_failed("build graphql client", error));
-                    return;
-                }
-            };
-            let _permit = limiter.acquire().await;
-            match client.fetch_review_status(&owner, &repo, &pr_numbers).await {
-                Ok(results) => {
-                    for (pr_number, status) in results {
-                        let _ = tx.send(Msg::ReviewStatusArrived { pr_number, status });
-                    }
-                }
-                Err(error) => {
-                    let _ = tx.send(review_status_failed("fetch review status", error));
-                }
-            }
+            request(
+                &tx,
+                &limiter,
+                "fetch review status",
+                async move {
+                    GraphQlClient::new(&token)?
+                        .fetch_review_status(&owner, &repo, &pr_numbers)
+                        .await
+                },
+                |results| {
+                    results
+                        .into_iter()
+                        .map(|(pr_number, status)| Msg::ReviewStatusArrived { pr_number, status })
+                        .collect()
+                },
+            )
+            .await;
         }
         Cmd::FetchThreads {
             owner,
@@ -138,36 +137,23 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             number,
             bot_logins,
         } => {
-            let client = match GraphQlClient::new(&token) {
-                Ok(client) => client,
-                Err(error) => {
-                    let _ = tx.send(enrichment_failed(
-                        Area::Threads,
-                        "build graphql client",
-                        error,
-                    ));
-                    return;
-                }
-            };
-            let _permit = limiter.acquire().await;
-            match client
-                .fetch_review_threads(&owner, &repo, number, &bot_logins)
-                .await
-            {
-                Ok(threads) => {
-                    let _ = tx.send(Msg::ThreadsArrived {
+            request(
+                &tx,
+                &limiter,
+                "fetch review threads",
+                async move {
+                    GraphQlClient::new(&token)?
+                        .fetch_review_threads(&owner, &repo, number, &bot_logins)
+                        .await
+                },
+                move |threads| {
+                    vec![Msg::ThreadsArrived {
                         pr_number: number,
                         threads,
-                    });
-                }
-                Err(error) => {
-                    let _ = tx.send(enrichment_failed(
-                        Area::Threads,
-                        "fetch review threads",
-                        error,
-                    ));
-                }
-            }
+                    }]
+                },
+            )
+            .await;
         }
         Cmd::FetchReviews {
             owner,
@@ -175,29 +161,23 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             token,
             number,
         } => {
-            let client = match OctocrabRest::new(&token) {
-                Ok(client) => client,
-                Err(error) => {
-                    let _ = tx.send(enrichment_failed(
-                        Area::Reviews,
-                        "build github client",
-                        error,
-                    ));
-                    return;
-                }
-            };
-            let _permit = limiter.acquire().await;
-            match client.list_reviews(&owner, &repo, number).await {
-                Ok(reviews) => {
-                    let _ = tx.send(Msg::ReviewsArrived {
+            request(
+                &tx,
+                &limiter,
+                "fetch reviews",
+                async move {
+                    OctocrabRest::new(&token)?
+                        .list_reviews(&owner, &repo, number)
+                        .await
+                },
+                move |reviews| {
+                    vec![Msg::ReviewsArrived {
                         pr_number: number,
                         reviews,
-                    });
-                }
-                Err(error) => {
-                    let _ = tx.send(enrichment_failed(Area::Reviews, "fetch reviews", error));
-                }
-            }
+                    }]
+                },
+            )
+            .await;
         }
         Cmd::FetchIssueComments {
             owner,
@@ -206,36 +186,23 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             number,
             bot_logins,
         } => {
-            let client = match OctocrabRest::new(&token) {
-                Ok(client) => client,
-                Err(error) => {
-                    let _ = tx.send(enrichment_failed(
-                        Area::IssueComments,
-                        "build github client",
-                        error,
-                    ));
-                    return;
-                }
-            };
-            let _permit = limiter.acquire().await;
-            match client
-                .list_issue_comments(&owner, &repo, number, &bot_logins)
-                .await
-            {
-                Ok(comments) => {
-                    let _ = tx.send(Msg::IssueCommentsArrived {
+            request(
+                &tx,
+                &limiter,
+                "fetch issue comments",
+                async move {
+                    OctocrabRest::new(&token)?
+                        .list_issue_comments(&owner, &repo, number, &bot_logins)
+                        .await
+                },
+                move |comments| {
+                    vec![Msg::IssueCommentsArrived {
                         pr_number: number,
                         comments,
-                    });
-                }
-                Err(error) => {
-                    let _ = tx.send(enrichment_failed(
-                        Area::IssueComments,
-                        "fetch issue comments",
-                        error,
-                    ));
-                }
-            }
+                    }]
+                },
+            )
+            .await;
         }
         Cmd::FetchChecks {
             owner,
@@ -243,26 +210,19 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             token,
             head_sha,
         } => {
-            let client = match OctocrabRest::new(&token) {
-                Ok(client) => client,
-                Err(error) => {
-                    let _ = tx.send(enrichment_failed(
-                        Area::Checks,
-                        "build github client",
-                        error,
-                    ));
-                    return;
-                }
-            };
-            let _permit = limiter.acquire().await;
-            match client.list_check_runs(&owner, &repo, &head_sha).await {
-                Ok(checks) => {
-                    let _ = tx.send(Msg::ChecksArrived { head_sha, checks });
-                }
-                Err(error) => {
-                    let _ = tx.send(enrichment_failed(Area::Checks, "fetch check runs", error));
-                }
-            }
+            request(
+                &tx,
+                &limiter,
+                "fetch check runs",
+                async move {
+                    let checks = OctocrabRest::new(&token)?
+                        .list_check_runs(&owner, &repo, &head_sha)
+                        .await?;
+                    Ok((head_sha, checks))
+                },
+                |(head_sha, checks)| vec![Msg::ChecksArrived { head_sha, checks }],
+            )
+            .await;
         }
         Cmd::ScheduleStatusClear { token, delay_ms } => {
             tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
@@ -313,12 +273,39 @@ async fn run_fetch_open_prs(
     }
 }
 
+/// Hold one concurrency permit, run a single GitHub request, and forward the
+/// messages it produces — or one `CommandFailed` if the request (including the
+/// client build inside it) errors. Captures the build-permit-dispatch shape
+/// every per-PR enrichment command shares; `context` names the operation so
+/// the failure reads e.g. "fetch reviews: ...". `op` is a lazy future, so the
+/// permit is held only across the actual await, not while it's constructed.
+async fn request<T>(
+    tx: &mpsc::UnboundedSender<Msg>,
+    limiter: &Arc<NetworkLimiter>,
+    context: &'static str,
+    op: impl Future<Output = anyhow::Result<T>>,
+    to_msgs: impl FnOnce(T) -> Vec<Msg>,
+) {
+    let _permit = limiter.acquire().await;
+    match op.await {
+        Ok(value) => {
+            for msg in to_msgs(value) {
+                let _ = tx.send(msg);
+            }
+        }
+        Err(error) => {
+            let _ = tx.send(command_failed(context, error));
+        }
+    }
+}
+
 /// Log the failure here (cmd is the impure layer) and build the `Msg` for
 /// the runtime to deliver to `update`. Keeps `update` a pure
 /// `(Model, Msg) -> Vec<Cmd>` — the warn doesn't have to fire from inside
-/// the reducer.
+/// the reducer. `{error:#}` renders the full anyhow cause chain (e.g. the
+/// underlying HTTP status), not just the outermost context.
 fn command_failed(context: &'static str, error: anyhow::Error) -> Msg {
-    let error = error.to_string();
+    let error = format!("{error:#}");
     tracing::warn!(context, %error, "command failed");
     Msg::CommandFailed { context, error }
 }
@@ -327,35 +314,9 @@ fn command_failed(context: &'static str, error: anyhow::Error) -> Msg {
 /// own `Msg` variant so the status bar can prioritise list errors over
 /// generic command errors).
 fn pr_list_failed(context: &'static str, error: anyhow::Error) -> Msg {
-    let error = error.to_string();
+    let error = format!("{error:#}");
     tracing::warn!(context, %error, "pr listing failed");
     Msg::PrListFailed { context, error }
-}
-
-/// Which enrichment area a failed fetch belongs to. Selects the per-area
-/// failure `Msg` so the model can attribute errors precisely.
-enum Area {
-    Threads,
-    Reviews,
-    Checks,
-    IssueComments,
-}
-
-fn review_status_failed(context: &'static str, error: anyhow::Error) -> Msg {
-    let error = error.to_string();
-    tracing::warn!(context, %error, "review status fetch failed");
-    Msg::ReviewStatusFailed { context, error }
-}
-
-fn enrichment_failed(area: Area, context: &'static str, error: anyhow::Error) -> Msg {
-    let error = error.to_string();
-    tracing::warn!(context, %error, "enrichment fetch failed");
-    match area {
-        Area::Threads => Msg::ThreadsFailed { context, error },
-        Area::Reviews => Msg::ReviewsFailed { context, error },
-        Area::Checks => Msg::ChecksFailed { context, error },
-        Area::IssueComments => Msg::IssueCommentsFailed { context, error },
-    }
 }
 
 /// Run `f` on the blocking pool and fold the `JoinError` into the same

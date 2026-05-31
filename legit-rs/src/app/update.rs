@@ -191,20 +191,14 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             model.enrichment.issue_comments.insert(pr_number, comments);
             Vec::new()
         }
-        Msg::ReviewStatusFailed { context, error }
-        | Msg::ThreadsFailed { context, error }
-        | Msg::ReviewsFailed { context, error }
-        | Msg::ChecksFailed { context, error }
-        | Msg::IssueCommentsFailed { context, error } => {
-            // Enrichment is best-effort: surface the error, keep all PRs and any
-            // enrichment that did arrive, and never crash.
-            set_status(model, StatusKind::Error, format!("{context}: {error}"))
-        }
         Msg::PrListFailed { context, error } => {
             model.list.fail_fetch(format!("{context}: {error}"));
             Vec::new()
         }
         Msg::CommandFailed { context, error } => {
+            // Covers bootstrap-command failures and best-effort per-PR
+            // enrichment: surface the error, keep all PRs and any enrichment
+            // that did arrive, and never crash.
             set_status(model, StatusKind::Error, format!("{context}: {error}"))
         }
         Msg::StatusCleared { token } => {
@@ -872,7 +866,7 @@ mod tests {
 
         let cmds = update(
             &mut model,
-            Msg::ChecksFailed {
+            Msg::CommandFailed {
                 context: "fetch check runs",
                 error: "500 Server Error".to_owned(),
             },

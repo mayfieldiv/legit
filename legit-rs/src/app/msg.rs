@@ -39,36 +39,21 @@ pub enum Msg {
         pr_number: u64,
         comments: Vec<IssueComment>,
     },
-    // ── enrichment failures (per area; none crash the TUI) ──
-    ReviewStatusFailed {
-        context: &'static str,
-        error: String,
-    },
-    ThreadsFailed {
-        context: &'static str,
-        error: String,
-    },
-    ReviewsFailed {
-        context: &'static str,
-        error: String,
-    },
-    ChecksFailed {
-        context: &'static str,
-        error: String,
-    },
-    IssueCommentsFailed {
-        context: &'static str,
-        error: String,
-    },
     /// A scheduled status-message clear fired; honored only if `token` still
     /// matches the model's current status generation.
     StatusCleared {
         token: u64,
     },
+    /// The open-PR listing failed; routes to the list's `Failed` phase so the
+    /// view can surface it distinctly from transient command errors.
     PrListFailed {
         context: &'static str,
         error: String,
     },
+    /// Any other command (config/auth/repo bootstrap or best-effort per-PR
+    /// enrichment) failed. All such failures are surfaced identically as a
+    /// transient status-bar error, so they share one variant; `context`
+    /// names the operation.
     CommandFailed {
         context: &'static str,
         error: String,
