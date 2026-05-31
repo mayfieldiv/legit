@@ -24,12 +24,52 @@ const GITHUB_GRAPHQL_URL: &str = "https://api.github.com/graphql";
 /// GitHub caps aliased batches; the TS client uses 25 PRs per review-status call.
 const REVIEW_STATUS_BATCH_SIZE: usize = 25;
 
+// ── graphql-level errors ─────────────────────────────────────────────────────
+
+/// One entry from a GraphQL `errors` array. GitHub returns these with HTTP 200,
+/// so a 2xx status alone does not mean the query succeeded — they must be
+/// inspected explicitly.
+#[derive(Debug, Deserialize)]
+struct GraphQlError {
+    message: String,
+}
+
+/// Implemented by every top-level response envelope so `post` can surface
+/// query-level `errors` generically instead of silently parsing `data: null`
+/// as an empty (but "successful") result.
+trait GraphQlErrors {
+    fn errors(&self) -> &[GraphQlError];
+}
+
+/// Turn a decoded response into `Err` when it carries any GraphQL-level errors,
+/// joining their messages; otherwise pass it through unchanged.
+fn ensure_no_errors<T: GraphQlErrors>(response: T) -> Result<T> {
+    if response.errors().is_empty() {
+        return Ok(response);
+    }
+    let joined = response
+        .errors()
+        .iter()
+        .map(|e| e.message.as_str())
+        .collect::<Vec<_>>()
+        .join("; ");
+    anyhow::bail!("GitHub GraphQL returned errors: {joined}");
+}
+
 // ── review status batch ──────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
 pub struct ReviewStatusResponse {
     #[serde(default)]
     data: Option<ReviewStatusData>,
+    #[serde(default)]
+    errors: Vec<GraphQlError>,
+}
+
+impl GraphQlErrors for ReviewStatusResponse {
+    fn errors(&self) -> &[GraphQlError] {
+        &self.errors
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -114,6 +154,14 @@ fn parse_review_status(response: ReviewStatusResponse) -> Vec<(u64, ReviewStatus
 pub struct ThreadsResponse {
     #[serde(default)]
     data: Option<ThreadsData>,
+    #[serde(default)]
+    errors: Vec<GraphQlError>,
+}
+
+impl GraphQlErrors for ThreadsResponse {
+    fn errors(&self) -> &[GraphQlError] {
+        &self.errors
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -285,7 +333,10 @@ impl GraphQlClient {
         })
     }
 
-    async fn post<T: serde::de::DeserializeOwned>(&self, body: &GraphQlRequest) -> Result<T> {
+    async fn post<T: serde::de::DeserializeOwned + GraphQlErrors>(
+        &self,
+        body: &GraphQlRequest,
+    ) -> Result<T> {
         let response = self
             .http
             .post(GITHUB_GRAPHQL_URL)
@@ -299,10 +350,11 @@ impl GraphQlClient {
             let detail = response.text().await.unwrap_or_default();
             anyhow::bail!("GitHub GraphQL error: {status}: {detail}");
         }
-        response
-            .json::<T>()
-            .await
-            .context("decoding graphql response")
+        let decoded: T = response.json().await.context("decoding graphql response")?;
+        // GitHub reports query-level failures as HTTP 200 with an `errors` array
+        // and null/partial `data`; surface them rather than parsing empty data
+        // as a successful (but empty) result.
+        ensure_no_errors(decoded)
     }
 
     /// Fetch review status for many PRs, batched per `REVIEW_STATUS_BATCH_SIZE`.
@@ -382,7 +434,10 @@ impl GraphQlClient {
 
 #[cfg(test)]
 mod tests {
-    use super::{ReviewStatusResponse, ThreadsResponse, parse_review_status, parse_review_threads};
+    use super::{
+        ReviewStatusResponse, ThreadsResponse, ensure_no_errors, parse_review_status,
+        parse_review_threads,
+    };
 
     #[test]
     fn parses_review_status_batch_with_latest_commit() {
@@ -534,5 +589,33 @@ mod tests {
 
         assert!(page.threads.is_empty());
         assert!(!page.has_next_page);
+    }
+
+    #[test]
+    fn graphql_errors_with_http_200_surface_as_err() {
+        // GitHub returns query-level failures as HTTP 200 with `data: null` and a
+        // populated `errors` array; this must not look like an empty success.
+        let raw = r#"{ "data": null, "errors": [
+            { "message": "Bad credentials" },
+            { "message": "Something went wrong while executing your query." }
+        ] }"#;
+        let response: ReviewStatusResponse = serde_json::from_str(raw).expect("deserialize");
+
+        let err = ensure_no_errors(response).expect_err("errors must surface as Err");
+        let msg = err.to_string();
+        assert!(msg.contains("Bad credentials"), "joined messages: {msg}");
+        assert!(
+            msg.contains("Something went wrong while executing your query."),
+            "joined messages: {msg}"
+        );
+    }
+
+    #[test]
+    fn no_errors_passes_response_through() {
+        let raw = r#"{ "data": { "repository": {} } }"#;
+        let response: ReviewStatusResponse = serde_json::from_str(raw).expect("deserialize");
+
+        let passed = ensure_no_errors(response).expect("clean response passes through");
+        assert!(parse_review_status(passed).is_empty());
     }
 }
