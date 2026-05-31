@@ -1,4 +1,6 @@
-use crate::{config::LegitConfig, git_remote::RepoInfo, secret::Secret};
+use crate::{
+    config::LegitConfig, git_remote::RepoInfo, github::limiter::NetworkStats, secret::Secret,
+};
 
 use super::{cmd::Cmd, pr_list::PrList};
 
@@ -10,6 +12,7 @@ pub struct Model {
     pub repo: Option<RepoInfo>,
     pub list: PrList,
     pub last_error: Option<String>,
+    pub network_stats: NetworkStats,
 }
 
 impl Model {
@@ -22,6 +25,7 @@ impl Model {
                 repo: None,
                 list: PrList::new(),
                 last_error: None,
+                network_stats: NetworkStats::default(),
             },
             vec![Cmd::LoadConfig, Cmd::ResolveAuthToken, Cmd::DetectRepo],
         )

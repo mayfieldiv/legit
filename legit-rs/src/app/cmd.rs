@@ -1,6 +1,11 @@
+use std::sync::Arc;
+
 use tokio::sync::mpsc;
 
-use crate::{app::msg::Msg, auth, config, git_remote, github::rest::OctocrabRest, secret::Secret};
+use crate::{
+    app::msg::Msg, auth, config, git_remote, github::limiter::NetworkLimiter,
+    github::rest::OctocrabRest, secret::Secret,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Cmd {
@@ -14,8 +19,8 @@ pub enum Cmd {
     },
 }
 
-#[tracing::instrument(name = "command", skip(tx))]
-pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>) {
+#[tracing::instrument(name = "command", skip(tx, limiter))]
+pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkLimiter>) {
     tracing::info!("started");
     match cmd {
         Cmd::LoadConfig => {
@@ -61,7 +66,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>) {
             let _ = tx.send(msg);
         }
         Cmd::FetchOpenPRs { owner, repo, token } => {
-            run_fetch_open_prs(owner, repo, token, tx).await;
+            run_fetch_open_prs(owner, repo, token, tx, limiter).await;
         }
     }
 }
@@ -71,6 +76,7 @@ async fn run_fetch_open_prs(
     repo: String,
     token: Secret<String>,
     tx: mpsc::UnboundedSender<Msg>,
+    limiter: Arc<NetworkLimiter>,
 ) {
     let client = match OctocrabRest::new(&token) {
         Ok(client) => client,
@@ -90,6 +96,9 @@ async fn run_fetch_open_prs(
         }
     });
 
+    // Hold a concurrency slot for the duration of the (paginated) listing so the
+    // network indicator reflects it and we stay under the shared 8-request cap.
+    let _permit = limiter.acquire().await;
     let result = client.list_open_prs(&owner, &repo, pr_tx).await;
     let _ = forwarder.await;
 

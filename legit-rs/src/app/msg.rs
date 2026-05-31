@@ -1,6 +1,9 @@
 use ratatui::crossterm::event::Event;
 
-use crate::{config::LegitConfig, git_remote::RepoInfo, github::rest::PR, secret::Secret};
+use crate::{
+    config::LegitConfig, git_remote::RepoInfo, github::limiter::NetworkStats, github::rest::PR,
+    secret::Secret,
+};
 
 #[derive(Debug)]
 pub enum Msg {
@@ -10,6 +13,7 @@ pub enum Msg {
     RepoDetected(RepoInfo),
     PrArrived(PR),
     PrListLoaded,
+    NetworkStatsChanged(NetworkStats),
     PrListFailed {
         context: &'static str,
         error: String,

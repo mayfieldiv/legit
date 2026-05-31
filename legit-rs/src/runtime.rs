@@ -1,4 +1,4 @@
-use std::{io, thread};
+use std::{io, sync::Arc, thread};
 
 use anyhow::{Context, Result};
 use ratatui::{
@@ -17,8 +17,13 @@ use tokio::sync::mpsc;
 
 use crate::{
     app::{cmd, model::Model, msg::Msg, update::update},
+    github::limiter::NetworkLimiter,
     view,
 };
+
+/// Cap on simultaneously in-flight GitHub HTTP requests across the whole
+/// transport. Keeps us well under GitHub's abuse thresholds (the PRD sets 8).
+const MAX_CONCURRENT_REQUESTS: usize = 8;
 
 #[tracing::instrument(name = "tui_runtime", skip_all)]
 pub async fn run() -> Result<()> {
@@ -30,9 +35,12 @@ pub async fn run() -> Result<()> {
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
     spawn_event_reader(event_tx);
 
+    let limiter = NetworkLimiter::new(MAX_CONCURRENT_REQUESTS);
+    spawn_network_stats_forwarder(&limiter, &msg_tx);
+
     let (mut model, initial_cmds) = Model::new();
     tracing::info!(commands = initial_cmds.len(), "model initialized");
-    spawn_cmds(initial_cmds, &msg_tx);
+    spawn_cmds(initial_cmds, &msg_tx, &limiter);
 
     // Seed the viewport height before the first render so scroll math has the
     // right bounds even before the user resizes anything.
@@ -41,6 +49,7 @@ pub async fn run() -> Result<()> {
         Msg::TerminalEvent(Event::Resize(size.width, size.height)),
         &mut model,
         &msg_tx,
+        &limiter,
     );
 
     terminal.draw(|frame| view::view(&model, frame, chrono::Utc::now()))?;
@@ -53,14 +62,14 @@ pub async fn run() -> Result<()> {
             else => Msg::Quit,
         };
 
-        process_msg(first_msg, &mut model, &msg_tx);
+        process_msg(first_msg, &mut model, &msg_tx, &limiter);
 
         while let Ok(event) = event_rx.try_recv() {
-            process_msg(Msg::TerminalEvent(event), &mut model, &msg_tx);
+            process_msg(Msg::TerminalEvent(event), &mut model, &msg_tx, &limiter);
         }
 
         while let Ok(msg) = msg_rx.try_recv() {
-            process_msg(msg, &mut model, &msg_tx);
+            process_msg(msg, &mut model, &msg_tx, &limiter);
         }
 
         terminal.draw(|frame| view::view(&model, frame, chrono::Utc::now()))?;
@@ -70,21 +79,50 @@ pub async fn run() -> Result<()> {
     Ok(())
 }
 
-fn process_msg(msg: Msg, model: &mut Model, msg_tx: &mpsc::UnboundedSender<Msg>) {
+fn process_msg(
+    msg: Msg,
+    model: &mut Model,
+    msg_tx: &mpsc::UnboundedSender<Msg>,
+    limiter: &Arc<NetworkLimiter>,
+) {
     tracing::debug!(?msg, "processing message");
     let cmds = update(model, msg);
     if !cmds.is_empty() {
         tracing::debug!(commands = cmds.len(), "update returned commands");
     }
-    spawn_cmds(cmds, msg_tx);
+    spawn_cmds(cmds, msg_tx, limiter);
 }
 
-fn spawn_cmds(cmds: Vec<cmd::Cmd>, msg_tx: &mpsc::UnboundedSender<Msg>) {
+fn spawn_cmds(
+    cmds: Vec<cmd::Cmd>,
+    msg_tx: &mpsc::UnboundedSender<Msg>,
+    limiter: &Arc<NetworkLimiter>,
+) {
     for cmd in cmds {
         tracing::debug!(?cmd, "spawning command");
         let tx = msg_tx.clone();
-        tokio::spawn(cmd::run(cmd, tx));
+        let limiter = Arc::clone(limiter);
+        tokio::spawn(cmd::run(cmd, tx, limiter));
     }
+}
+
+/// Bridge the limiter's change stream into the model: every time the in-flight /
+/// waiting counts move, deliver a `Msg::NetworkStatsChanged` so the status bar
+/// re-renders. One long-lived task; ends when the channel closes at shutdown.
+fn spawn_network_stats_forwarder(
+    limiter: &Arc<NetworkLimiter>,
+    msg_tx: &mpsc::UnboundedSender<Msg>,
+) {
+    let mut rx = limiter.subscribe();
+    let tx = msg_tx.clone();
+    tokio::spawn(async move {
+        while rx.changed().await.is_ok() {
+            let stats = *rx.borrow_and_update();
+            if tx.send(Msg::NetworkStatsChanged(stats)).is_err() {
+                break;
+            }
+        }
+    });
 }
 
 fn spawn_event_reader(event_tx: mpsc::UnboundedSender<Event>) {

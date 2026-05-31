@@ -59,6 +59,10 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             model.list.complete_fetch();
             Vec::new()
         }
+        Msg::NetworkStatsChanged(stats) => {
+            model.network_stats = stats;
+            Vec::new()
+        }
         Msg::PrListFailed { context, error } => {
             model.list.fail_fetch(format!("{context}: {error}"));
             Vec::new()
@@ -115,6 +119,24 @@ mod tests {
             code,
             ratatui::crossterm::event::KeyModifiers::NONE,
         )))
+    }
+
+    #[test]
+    fn network_stats_changed_updates_model() {
+        let (mut model, _) = Model::new();
+        assert_eq!(model.network_stats.in_flight, 0);
+
+        let cmds = update(
+            &mut model,
+            Msg::NetworkStatsChanged(crate::github::limiter::NetworkStats {
+                in_flight: 3,
+                waiting: 5,
+            }),
+        );
+
+        assert_eq!(model.network_stats.in_flight, 3);
+        assert_eq!(model.network_stats.waiting, 5);
+        assert!(cmds.is_empty());
     }
 
     #[test]
