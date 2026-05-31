@@ -1,7 +1,11 @@
+use std::sync::Arc;
+
 use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind};
 
+use crate::{git_remote::RepoInfo, secret::Secret};
+
 use super::{
-    cmd::Cmd,
+    cmd::{Cmd, RequestContext},
     model::{Model, StatusKind, StatusMessage},
     msg::Msg,
 };
@@ -38,8 +42,7 @@ fn maybe_fetch_open_prs(model: &mut Model) -> Vec<Cmd> {
     };
     model.list.begin_fetch();
     vec![Cmd::FetchOpenPRs {
-        owner: repo.owner.clone(),
-        repo: repo.repo.clone(),
+        repo: repo.clone(),
         token: token.clone(),
     }]
 }
@@ -56,37 +59,41 @@ fn enrichment_cmds(model: &Model) -> Vec<Cmd> {
     if prs.is_empty() {
         return Vec::new();
     }
-    let bot_logins = &model.config.bot_logins;
+    let ctx = request_context(repo, token, &model.config.bot_logins);
     let mut cmds = Vec::with_capacity(prs.len() * 3 + 1);
     cmds.push(Cmd::FetchReviewStatus {
-        owner: repo.owner.clone(),
-        repo: repo.repo.clone(),
-        token: token.clone(),
+        ctx: Arc::clone(&ctx),
         pr_numbers: prs.iter().map(|pr| pr.number).collect(),
     });
     for pr in prs {
         cmds.push(Cmd::FetchThreads {
-            owner: repo.owner.clone(),
-            repo: repo.repo.clone(),
-            token: token.clone(),
+            ctx: Arc::clone(&ctx),
             number: pr.number,
-            bot_logins: bot_logins.clone(),
         });
         cmds.push(Cmd::FetchReviews {
-            owner: repo.owner.clone(),
-            repo: repo.repo.clone(),
-            token: token.clone(),
+            ctx: Arc::clone(&ctx),
             number: pr.number,
         });
         cmds.push(Cmd::FetchIssueComments {
-            owner: repo.owner.clone(),
-            repo: repo.repo.clone(),
-            token: token.clone(),
+            ctx: Arc::clone(&ctx),
             number: pr.number,
-            bot_logins: bot_logins.clone(),
         });
     }
     cmds
+}
+
+/// Build the `Arc<RequestContext>` shared by a fan-out of enrichment commands:
+/// the tracked repo, auth token, and configured bot logins.
+fn request_context(
+    repo: &RepoInfo,
+    token: &Secret<String>,
+    bot_logins: &[String],
+) -> Arc<RequestContext> {
+    Arc::new(RequestContext {
+        repo: repo.clone(),
+        token: token.clone(),
+        bot_logins: bot_logins.to_vec(),
+    })
 }
 
 /// Build a checks fetch for a freshly-learned head SHA, unless checks for it
@@ -102,9 +109,7 @@ fn maybe_fetch_checks(model: &Model, head_sha: Option<String>) -> Vec<Cmd> {
         return Vec::new();
     };
     vec![Cmd::FetchChecks {
-        owner: repo.owner.clone(),
-        repo: repo.repo.clone(),
-        token: token.clone(),
+        ctx: request_context(repo, token, &model.config.bot_logins),
         head_sha: sha,
     }]
 }
@@ -475,9 +480,9 @@ mod tests {
 
         assert_eq!(cmds.len(), 1);
         match &cmds[0] {
-            Cmd::FetchOpenPRs { owner, repo, .. } => {
-                assert_eq!(owner, "mayfieldiv");
-                assert_eq!(repo, "legit");
+            Cmd::FetchOpenPRs { repo, .. } => {
+                assert_eq!(repo.owner, "mayfieldiv");
+                assert_eq!(repo.repo, "legit");
             }
             other => panic!("expected FetchOpenPRs cmd, got {other:?}"),
         }
