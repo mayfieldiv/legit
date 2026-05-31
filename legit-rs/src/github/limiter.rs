@@ -76,18 +76,21 @@ impl NetworkLimiter {
     pub async fn acquire(self: &Arc<Self>) -> Permit {
         self.waiting.fetch_add(1, Ordering::SeqCst);
         self.publish();
-        // Hold the decrement in a drop guard so cancelling this future while
-        // parked on the semaphore still releases the `waiting` count.
-        let waiting = WaitingGuard { limiter: self };
-        let permit = Arc::clone(&self.semaphore)
-            .acquire_owned()
-            .await
-            .expect("network limiter semaphore is never closed");
-        // Past the await, so no more cancellation points. Bump in_flight before
-        // dropping the guard so its republish reflects the final
-        // {in_flight, waiting} state in a single tick.
-        self.in_flight.fetch_add(1, Ordering::SeqCst);
-        drop(waiting);
+        let permit = {
+            // Hold the decrement in a drop guard so cancelling this future while
+            // parked on the semaphore still releases the `waiting` count. The
+            // guard drops at the end of this block — once the permit is in hand.
+            let _waiting = WaitingGuard { limiter: self };
+            let permit = Arc::clone(&self.semaphore)
+                .acquire_owned()
+                .await
+                .expect("network limiter semaphore is never closed");
+            // Past the await, so no more cancellation points. Bump in_flight
+            // before the guard drops so its republish reflects the final
+            // {in_flight, waiting} state in a single tick.
+            self.in_flight.fetch_add(1, Ordering::SeqCst);
+            permit
+        };
         Permit {
             _permit: permit,
             limiter: Arc::clone(self),
