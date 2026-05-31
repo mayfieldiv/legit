@@ -4,7 +4,7 @@
 
 use chrono::{DateTime, TimeZone, Utc};
 
-use super::{BlockerOptions, Tier, classify_threads, compute_blocker};
+use super::{BlockerOptions, ThreadKind, Tier, classify_thread, classify_threads, compute_blocker};
 use crate::github::rest::{PR, PRState};
 use crate::github::types::{CheckRun, FullReviewThread, Review, ReviewComment};
 
@@ -894,6 +894,54 @@ fn classify_tracks_oldest_reply_date() {
     assert_eq!(bob.oldest_reply_date, date("2026-03-10T00:00:00Z"));
 }
 
+// ── classify_thread (single) ────────────────────────────────────────────────
+
+#[test]
+fn classify_thread_resolved() {
+    let t = thread_with(vec![comment(OTHER), comment(AUTHOR)], true);
+    assert_eq!(classify_thread(&t), ThreadKind::Resolved);
+}
+
+#[test]
+fn classify_thread_unreplied_when_only_starter() {
+    let t = thread(vec![comment(OTHER)]);
+    assert_eq!(classify_thread(&t), ThreadKind::Unreplied);
+}
+
+#[test]
+fn classify_thread_awaiting_reviewer_when_other_replied_last() {
+    let t = thread(vec![comment(OTHER), comment(AUTHOR)]);
+    assert_eq!(classify_thread(&t), ThreadKind::AwaitingReviewer);
+}
+
+#[test]
+fn classify_thread_unreplied_when_starter_replied_last() {
+    let t = thread(vec![comment(OTHER), comment(AUTHOR), comment(OTHER)]);
+    assert_eq!(classify_thread(&t), ThreadKind::Unreplied);
+}
+
+#[test]
+fn classify_thread_ignores_trailing_bot_comment() {
+    let t = thread(vec![
+        comment(OTHER),
+        comment(AUTHOR),
+        bot_comment("github-actions[bot]"),
+    ]);
+    assert_eq!(classify_thread(&t), ThreadKind::AwaitingReviewer);
+}
+
+#[test]
+fn classify_thread_only_bots_is_unreplied() {
+    let t = thread(vec![bot_comment("bot1"), bot_comment("bot2")]);
+    assert_eq!(classify_thread(&t), ThreadKind::Unreplied);
+}
+
+#[test]
+fn classify_thread_empty_is_unreplied() {
+    let t = thread(vec![]);
+    assert_eq!(classify_thread(&t), ThreadKind::Unreplied);
+}
+
 // ── compute_blocker: unreplied vs awaiting-reviewer ─────────────────────────────
 
 #[test]
@@ -1080,13 +1128,6 @@ fn pr_568_all_replied_is_awaiting_reviewer() {
 }
 
 // ── Tier metadata ──────────────────────────────────────────────────────────────
-
-#[test]
-fn tier_keys_match_ts_string_union() {
-    assert_eq!(Tier::MeBlocking.key(), "me-blocking");
-    assert_eq!(Tier::NeedsReview.key(), "needs-review");
-    assert_eq!(Tier::WaitingOnAuthor.key(), "waiting-on-author");
-}
 
 #[test]
 fn tier_labels_are_headings() {

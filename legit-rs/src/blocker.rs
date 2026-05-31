@@ -30,16 +30,6 @@ pub enum Tier {
 }
 
 impl Tier {
-    /// Stable key for grouping/serialisation, matching the TS string union
-    /// (`me-blocking` / `needs-review` / `waiting-on-author`).
-    pub fn key(self) -> &'static str {
-        match self {
-            Tier::MeBlocking => "me-blocking",
-            Tier::NeedsReview => "needs-review",
-            Tier::WaitingOnAuthor => "waiting-on-author",
-        }
-    }
-
     /// Human-readable label, suitable for group headings.
     pub fn label(self) -> &'static str {
         match self {
@@ -86,7 +76,9 @@ pub struct BlockerOptions<'a> {
 }
 
 /// How a single unresolved review thread is waiting. Mirrors the TS
-/// `classifyThread` return union.
+/// `classifyThread` return union. Consumed by `classify_thread`, which the
+/// detail view will use to badge individual threads in a later milestone.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThreadKind {
     /// Closed; not blocking anyone.
@@ -167,6 +159,9 @@ fn last_non_bot(thread: &FullReviewThread) -> Option<&crate::github::types::Revi
 }
 
 /// Classify a single unresolved thread. Mirrors the TS `classifyThread`.
+/// Standalone API (the aggregate path uses `classify_threads`); the detail view
+/// will badge per-thread state with it in a later milestone.
+#[allow(dead_code)]
 pub fn classify_thread(thread: &FullReviewThread) -> ThreadKind {
     if thread.is_resolved {
         return ThreadKind::Resolved;
@@ -261,8 +256,8 @@ fn pick_top_awaiting_reviewer(awaiting: &[AwaitingReviewer]) -> &str {
 ///  1. CI failing          -> waiting-on-author (fix CI before reviewing)
 ///  2. Draft               -> waiting-on-author (not ready for review)
 ///  3. Merge conflict      -> waiting-on-author (author must rebase)
-///  4. Changes requested   -> waiting-on-author (via `review_decision` or an
-///                            individual review; author must respond first)
+///  4. Changes requested   -> waiting-on-author (via `review_decision` or a
+///     review; author must respond before pending reviewers need to act)
 ///  5. Unreplied threads   -> waiting-on-author (only when thread data loaded)
 ///  6. Approved            -> waiting-on-author (author should merge)
 ///  7. All awaiting-reviewer -> needs-review / me-blocking for that reviewer
@@ -330,14 +325,14 @@ fn compute_blocker_core(pr: &PR, current_user: &str, opts: &BlockerOptions<'_>) 
     // 5. Unreplied review threads (when full thread data is available). Only
     //    threads where the author hasn't replied count against the author.
     let classification = opts.threads.map(classify_threads);
-    if let Some(c) = &classification {
-        if c.unreplied > 0 {
-            let n = c.unreplied;
-            return waiting(
-                effective_author,
-                &format!("{n} unreplied thread{}", plural(n)),
-            );
-        }
+    if let Some(c) = &classification
+        && c.unreplied > 0
+    {
+        let n = c.unreplied;
+        return waiting(
+            effective_author,
+            &format!("{n} unreplied thread{}", plural(n)),
+        );
     }
 
     // 6. Approved — GitHub's aggregate decision or the loaded reviews show the
@@ -348,21 +343,21 @@ fn compute_blocker_core(pr: &PR, current_user: &str, opts: &BlockerOptions<'_>) 
 
     // 7. All unresolved threads are awaiting-reviewer (author replied to every
     //    one). Identify the reviewer who needs to act.
-    if let Some(c) = &classification {
-        if c.awaiting_reviewer > 0 {
-            let reviewer = pick_top_awaiting_reviewer(&c.awaiting_by_reviewer);
-            let n = c.awaiting_reviewer;
-            let tier = if reviewer == current_user {
-                Tier::MeBlocking
-            } else {
-                Tier::NeedsReview
-            };
-            return BlockerResult {
-                blocker: reviewer.to_owned(),
-                tier,
-                reason: format!("{n} thread{} awaiting {reviewer}", plural(n)),
-            };
-        }
+    if let Some(c) = &classification
+        && c.awaiting_reviewer > 0
+    {
+        let reviewer = pick_top_awaiting_reviewer(&c.awaiting_by_reviewer);
+        let n = c.awaiting_reviewer;
+        let tier = if reviewer == current_user {
+            Tier::MeBlocking
+        } else {
+            Tier::NeedsReview
+        };
+        return BlockerResult {
+            blocker: reviewer.to_owned(),
+            tier,
+            reason: format!("{n} thread{} awaiting {reviewer}", plural(n)),
+        };
     }
 
     // 8. Current user is a requested reviewer -> me-blocking.

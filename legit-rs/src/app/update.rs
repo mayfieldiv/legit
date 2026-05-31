@@ -122,6 +122,13 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
                     KeyCode::Char('q') => model.should_quit = true,
                     KeyCode::Char('j') => model.list.move_down(),
                     KeyCode::Char('k') => model.list.move_up(),
+                    KeyCode::Char('g') => {
+                        // Cycle smart-status -> repo -> none -> smart-status,
+                        // resetting selection, then rebuild the layout under the
+                        // new grouping.
+                        model.list.cycle_grouping();
+                        model.relayout();
+                    }
                     _ => {}
                 }
             }
@@ -148,6 +155,9 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
         }
         Msg::PrArrived(pr) => {
             model.list.push(pr);
+            // The new PR has no enrichment yet, so it joins "Loading details…";
+            // rebuild the layout so it renders immediately.
+            model.relayout();
             Vec::new()
         }
         Msg::PrListLoaded => {
@@ -175,18 +185,23 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
                 // PR no longer in the list (e.g. filtered/refetched); drop it.
                 return Vec::new();
             }
+            // review_decision/mergeable feed the blocker rules, so re-derive.
+            model.refresh_blockers();
             maybe_fetch_checks(model, head_sha)
         }
         Msg::ThreadsArrived { pr_number, threads } => {
             model.enrichment.review_threads.insert(pr_number, threads);
+            model.refresh_blockers();
             Vec::new()
         }
         Msg::ReviewsArrived { pr_number, reviews } => {
             model.enrichment.reviews.insert(pr_number, reviews);
+            model.refresh_blockers();
             Vec::new()
         }
         Msg::ChecksArrived { head_sha, checks } => {
             model.enrichment.checks.insert(head_sha, checks);
+            model.refresh_blockers();
             Vec::new()
         }
         Msg::IssueCommentsArrived {
@@ -548,8 +563,10 @@ mod tests {
         for _ in 0..25 {
             update(&mut model, key_event(KeyCode::Char('j')));
         }
-        assert!(model.list.selected() >= model.list.scroll_offset());
-        assert!(model.list.selected() < model.list.scroll_offset() + 20);
+        assert!(
+            selection_is_visible(&model),
+            "selection must stay within the 20-row viewport"
+        );
 
         // Shrink: selection must remain on-screen after re-clamp.
         update(
@@ -557,8 +574,18 @@ mod tests {
             Msg::TerminalEvent(ratatui::crossterm::event::Event::Resize(80, 6)),
         );
         assert_eq!(model.list.viewport_height(), 5);
-        assert!(model.list.selected() >= model.list.scroll_offset());
-        assert!(model.list.selected() < model.list.scroll_offset() + 5);
+        assert!(
+            selection_is_visible(&model),
+            "selection must stay within the 5-row viewport after shrink"
+        );
+    }
+
+    /// Whether the selected PR's row is among the currently visible display
+    /// rows. `selected()` is a PR index while `scroll_offset()` counts display
+    /// rows (headers included), so the two aren't directly comparable — ask the
+    /// rendered window instead.
+    fn selection_is_visible(model: &Model) -> bool {
+        model.list.visible_rows().any(|(_, selected)| selected)
     }
 
     #[test]
@@ -576,6 +603,70 @@ mod tests {
             model.list.selected(),
             1,
             "selection should not shift when new PRs arrive"
+        );
+    }
+
+    // ── grouping ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn g_cycles_grouping_smart_status_repo_none_and_resets_selection() {
+        use crate::app::grouping::Grouping;
+
+        let (mut model, _) = Model::new();
+        for n in 1..=3 {
+            update(&mut model, Msg::PrArrived(sample_pr(n, "p")));
+        }
+        update(&mut model, key_event(KeyCode::Char('j')));
+        update(&mut model, key_event(KeyCode::Char('j')));
+        assert_eq!(model.list.selected(), 2);
+
+        update(&mut model, key_event(KeyCode::Char('g')));
+        assert_eq!(model.list.grouping(), Grouping::Repo);
+        assert_eq!(model.list.selected(), 0, "selection resets on cycle");
+
+        update(&mut model, key_event(KeyCode::Char('g')));
+        assert_eq!(model.list.grouping(), Grouping::None);
+
+        update(&mut model, key_event(KeyCode::Char('g')));
+        assert_eq!(
+            model.list.grouping(),
+            Grouping::SmartStatus,
+            "cycle wraps back to smart-status"
+        );
+    }
+
+    #[test]
+    fn j_skips_group_headers_when_smart_status_grouping_has_tiers() {
+        use crate::blocker::{BlockerResult, Tier};
+
+        let (mut model, _) = Model::new();
+        update(&mut model, Msg::PrArrived(sample_pr(1, "me")));
+        update(&mut model, Msg::PrArrived(sample_pr(2, "waiting")));
+        // Seed two tiers so the layout has two headers between the PR rows.
+        model.blockers.insert(
+            1,
+            BlockerResult {
+                blocker: "me".to_owned(),
+                tier: Tier::MeBlocking,
+                reason: "you".to_owned(),
+            },
+        );
+        model.blockers.insert(
+            2,
+            BlockerResult {
+                blocker: "charlie".to_owned(),
+                tier: Tier::WaitingOnAuthor,
+                reason: "draft".to_owned(),
+            },
+        );
+        model.relayout();
+        assert_eq!(model.list.selected(), 0);
+
+        update(&mut model, key_event(KeyCode::Char('j')));
+        assert_eq!(
+            model.list.selected(),
+            1,
+            "j steps PR-to-PR, skipping the intervening header"
         );
     }
 

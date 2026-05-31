@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
+    blocker::{BlockerOptions, BlockerResult, Tier, compute_blocker},
     config::LegitConfig,
     git_remote::RepoInfo,
     github::limiter::NetworkStats,
@@ -61,6 +62,12 @@ pub struct Model {
     pub status_gen: u64,
     pub network_stats: NetworkStats,
     pub enrichment: Enrichment,
+    /// Per-PR Smart-status, derived from `enrichment` + the current user and
+    /// cached so the list view and grouping read it without recomputing on
+    /// every frame. Keyed by PR number; recomputed by `refresh_blockers`
+    /// whenever a PR arrives or its enrichment lands. A PR absent from the map
+    /// hasn't been derived yet (it groups under "Loading details…").
+    pub blockers: HashMap<u64, BlockerResult>,
 }
 
 impl Model {
@@ -76,9 +83,89 @@ impl Model {
                 status_gen: 0,
                 network_stats: NetworkStats::default(),
                 enrichment: Enrichment::default(),
+                blockers: HashMap::new(),
             },
             vec![Cmd::LoadConfig, Cmd::ResolveAuthToken, Cmd::DetectRepo],
         )
+    }
+
+    /// The current user's login, from config (`~/.legit/config.json` `user`).
+    /// Empty when unset — the blocker engine treats an empty current user as
+    /// "no one is me", so nothing is ever me-blocking until it's configured.
+    pub fn current_user(&self) -> &str {
+        &self.config.user
+    }
+
+    /// `owner/repo` slug for the detected repo, or empty when none is detected
+    /// yet. Used as the repo-grouping label (single-repo today).
+    pub fn repo_slug(&self) -> String {
+        match &self.repo {
+            Some(repo) => format!("{}/{}", repo.owner, repo.repo),
+            None => String::new(),
+        }
+    }
+
+    /// Smart-status tier for the PR at `index` in the list, or `None` when its
+    /// blocker hasn't been derived yet (enrichment still pending).
+    fn tier_of(&self, index: usize) -> Option<Tier> {
+        let pr = self.list.prs().get(index)?;
+        self.blockers.get(&pr.number).map(|b| b.tier)
+    }
+
+    /// Recompute the cached blocker result for one PR from whatever enrichment
+    /// has arrived. A PR is only classified once both its threads and reviews
+    /// are present (matching the TS `loading` gate); until then it stays absent
+    /// from the cache and groups under "Loading details…".
+    fn refresh_blocker(&mut self, pr_number: u64) {
+        let Some(pr) = self.list.prs().iter().find(|pr| pr.number == pr_number) else {
+            return;
+        };
+        let (Some(threads), Some(reviews)) = (
+            self.enrichment.review_threads.get(&pr_number),
+            self.enrichment.reviews.get(&pr_number),
+        ) else {
+            return;
+        };
+        let checks = pr
+            .head_commit_sha
+            .as_ref()
+            .and_then(|sha| self.enrichment.checks.get(sha))
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let result = compute_blocker(
+            pr,
+            self.current_user(),
+            &BlockerOptions {
+                checks,
+                reviews,
+                threads: Some(threads),
+            },
+        );
+        self.blockers.insert(pr_number, result);
+    }
+
+    /// Recompute every cached blocker result, then rebuild the list layout. Used
+    /// after any change that can affect tiers (enrichment arrival, a PR's
+    /// fields changing, a fresh stream). Keeps the cache and the rendered groups
+    /// in lockstep.
+    pub fn refresh_blockers(&mut self) {
+        let numbers: Vec<u64> = self.list.prs().iter().map(|pr| pr.number).collect();
+        for number in numbers {
+            self.refresh_blocker(number);
+        }
+        self.relayout();
+    }
+
+    /// Rebuild the list's display layout from the current PRs, cached tiers, and
+    /// grouping. Cheap; safe to call after selection/grouping changes too.
+    pub fn relayout(&mut self) {
+        // Snapshot the inputs `tier_of` needs so the closure doesn't borrow
+        // `self` while `self.list` is mutably borrowed.
+        let tiers: Vec<Option<Tier>> = (0..self.list.prs().len())
+            .map(|i| self.tier_of(i))
+            .collect();
+        let repo_slug = self.repo_slug();
+        self.list.relayout(|i| tiers[i], &repo_slug);
     }
 }
 

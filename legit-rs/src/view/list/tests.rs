@@ -3,9 +3,11 @@ use ratatui::{Terminal, backend::TestBackend};
 
 use crate::{
     app::{
+        grouping::Grouping,
         model::{Model, StatusKind, StatusMessage},
-        pr_list::PrList,
     },
+    blocker::{BlockerResult, Tier},
+    git_remote::RepoInfo,
     github::limiter::NetworkStats,
     github::rest::{PR, PRState},
     view,
@@ -58,16 +60,52 @@ fn pr(number: u64, title: &str, author: &str, hours_ago: i64) -> PR {
     }
 }
 
-/// Build a `PrList` containing `prs`, in the Loaded phase. Mirrors the steady
-/// state the runtime reaches after `Msg::PrListLoaded` lands.
-fn pr_list_with(prs: Vec<PR>) -> PrList {
-    let mut list = PrList::new();
-    list.begin_fetch();
+/// A model whose Open PR List holds `prs` (Loaded phase) under `grouping`, with
+/// each PR's blocker pre-seeded from `tier_of` so the smart-status grouping has
+/// something to group by. `tier_of` returns `None` for a PR that should land in
+/// "Loading details…". Drives the same `relayout` path the runtime uses.
+fn model_with(prs: Vec<PR>, grouping: Grouping, tier_of: impl Fn(&PR) -> Option<Tier>) -> Model {
+    let (mut model, _) = Model::new();
+    model.repo = Some(RepoInfo {
+        owner: "acme".to_owned(),
+        repo: "web".to_owned(),
+    });
+    model.list.begin_fetch();
     for pr in prs {
-        list.push(pr);
+        if let Some(tier) = tier_of(&pr) {
+            model.blockers.insert(
+                pr.number,
+                BlockerResult {
+                    blocker: "someone".to_owned(),
+                    tier,
+                    reason: reason_for(tier),
+                },
+            );
+        }
+        model.list.push(pr);
     }
-    list.complete_fetch();
-    list
+    model.list.complete_fetch();
+    set_grouping(&mut model, grouping);
+    model
+}
+
+/// A short, recognisable reason per tier for snapshot assertions.
+fn reason_for(tier: Tier) -> String {
+    match tier {
+        Tier::MeBlocking => "You are a requested reviewer".to_owned(),
+        Tier::NeedsReview => "Awaiting review".to_owned(),
+        Tier::WaitingOnAuthor => "Draft".to_owned(),
+    }
+}
+
+/// Cycle the list's grouping to `target` (from the SmartStatus default) and
+/// rebuild the layout. `cycle_grouping` resets the selection, so callers that
+/// care about selection set it afterwards.
+fn set_grouping(model: &mut Model, target: Grouping) {
+    while model.list.grouping() != target {
+        model.list.cycle_grouping();
+    }
+    model.relayout();
 }
 
 /// Extract the rendered buffer's text as one string per row. Snapshot tests
@@ -85,6 +123,13 @@ fn buffer_text(terminal: &Terminal<TestBackend>) -> Vec<String> {
         .collect()
 }
 
+/// Rows excluding the status bar (the last row).
+fn list_rows(terminal: &Terminal<TestBackend>) -> Vec<String> {
+    let mut rows = buffer_text(terminal);
+    rows.pop();
+    rows
+}
+
 #[test]
 fn empty_pr_list_renders_no_open_pull_requests_placeholder() {
     let (model, _) = Model::new();
@@ -98,31 +143,154 @@ fn empty_pr_list_renders_no_open_pull_requests_placeholder() {
             "                                        ",
             "                                        ",
             "                                        ",
-            "q quit                                  ",
+            "q quit  g group: smart-status           ",
         ]
     );
 }
 
 #[test]
-fn populated_pr_list_renders_one_row_per_pull_request() {
-    let (mut model, _) = Model::new();
-    model.list = pr_list_with(vec![
-        pr(42, "Add streaming PR list", "octocat", 3),
-        pr(43, "Wire FetchOpenPRs cmd", "alice", 26),
-        pr(44, "Render list view", "bob", 168),
-    ]);
+fn flat_list_renders_one_row_per_pull_request() {
+    let model = model_with(
+        vec![
+            pr(42, "Add streaming PR list", "octocat", 3),
+            pr(43, "Wire FetchOpenPRs cmd", "alice", 26),
+            pr(44, "Render list view", "bob", 168),
+        ],
+        Grouping::None,
+        |_| Some(Tier::NeedsReview),
+    );
 
-    let terminal = render_snapshot(&model, 60, 5);
+    let terminal = render_snapshot(&model, 80, 5);
 
     assert_eq!(
-        buffer_text(&terminal),
+        list_rows(&terminal),
         vec![
-            "#42  Add streaming PR list      octocat       +5/-3 3h      ",
-            "#43  Wire FetchOpenPRs cmd      alice         +5/-3 1d      ",
-            "#44  Render list view           bob           +5/-3 7d      ",
-            "                                                            ",
-            "q quit                                                      ",
+            "#42  Add streaming PR list    octocat       +5/-3 3h    Awaiting review         ",
+            "#43  Wire FetchOpenPRs cmd    alice         +5/-3 1d    Awaiting review         ",
+            "#44  Render list view         bob           +5/-3 7d    Awaiting review         ",
+            "                                                                                ",
         ]
+    );
+}
+
+#[test]
+fn smart_status_grouping_renders_a_header_per_tier_in_order() {
+    let model = model_with(
+        vec![
+            pr(1, "Waiting one", "carol", 1),
+            pr(2, "Needs one", "dave", 2),
+            pr(3, "Me one", "erin", 3),
+            pr(4, "Needs two", "frank", 4),
+        ],
+        Grouping::SmartStatus,
+        |pr| {
+            Some(match pr.number {
+                1 => Tier::WaitingOnAuthor,
+                3 => Tier::MeBlocking,
+                _ => Tier::NeedsReview,
+            })
+        },
+    );
+
+    let terminal = render_snapshot(&model, 80, 9);
+    let rows = list_rows(&terminal);
+
+    // Headers appear in tier order, each above its PRs; needs-review groups two.
+    assert!(rows[0].starts_with("── Me blocking "), "{rows:?}");
+    assert!(rows[1].contains("#3"), "{rows:?}");
+    assert!(rows[2].starts_with("── Needs review "), "{rows:?}");
+    assert!(rows[3].contains("#2"), "{rows:?}");
+    assert!(rows[4].contains("#4"), "{rows:?}");
+    assert!(rows[5].starts_with("── Waiting on author "), "{rows:?}");
+    assert!(rows[6].contains("#1"), "{rows:?}");
+}
+
+#[test]
+fn smart_status_grouping_omits_empty_tiers_single_tier_list() {
+    // All needs-review -> a single group, no Me blocking / Waiting headers.
+    let model = model_with(
+        vec![pr(1, "one", "carol", 1), pr(2, "two", "dave", 2)],
+        Grouping::SmartStatus,
+        |_| Some(Tier::NeedsReview),
+    );
+
+    let terminal = render_snapshot(&model, 80, 6);
+    let rows = list_rows(&terminal);
+
+    assert!(rows[0].starts_with("── Needs review "), "{rows:?}");
+    assert!(rows[1].contains("#1"), "{rows:?}");
+    assert!(rows[2].contains("#2"), "{rows:?}");
+    let headers = rows.iter().filter(|r| r.starts_with("──")).count();
+    assert_eq!(
+        headers, 1,
+        "only the populated tier gets a header: {rows:?}"
+    );
+}
+
+#[test]
+fn smart_status_undelivered_blockers_render_under_loading_details() {
+    let model = model_with(
+        vec![pr(1, "derived", "carol", 1), pr(2, "pending", "dave", 2)],
+        Grouping::SmartStatus,
+        |pr| (pr.number == 1).then_some(Tier::NeedsReview),
+    );
+
+    let terminal = render_snapshot(&model, 80, 6);
+    let rows = list_rows(&terminal);
+
+    assert!(rows[0].starts_with("── Needs review "), "{rows:?}");
+    assert!(rows[1].contains("#1"), "{rows:?}");
+    assert!(rows[2].starts_with("── Loading details… "), "{rows:?}");
+    assert!(rows[3].contains("#2"), "{rows:?}");
+    // The pending PR shows the "…" placeholder reason hint.
+    assert!(rows[3].trim_end().ends_with('…'), "{rows:?}");
+}
+
+#[test]
+fn repo_grouping_renders_one_header_for_the_detected_repo() {
+    let model = model_with(
+        vec![pr(1, "one", "carol", 1), pr(2, "two", "dave", 2)],
+        Grouping::Repo,
+        |_| Some(Tier::NeedsReview),
+    );
+
+    let terminal = render_snapshot(&model, 80, 6);
+    let rows = list_rows(&terminal);
+
+    assert!(rows[0].starts_with("── acme/web "), "{rows:?}");
+    assert!(rows[1].contains("#1"), "{rows:?}");
+    assert!(rows[2].contains("#2"), "{rows:?}");
+}
+
+#[test]
+fn no_grouping_renders_no_headers() {
+    let model = model_with(
+        vec![pr(1, "one", "carol", 1), pr(2, "two", "dave", 2)],
+        Grouping::None,
+        |_| Some(Tier::NeedsReview),
+    );
+
+    let terminal = render_snapshot(&model, 80, 6);
+    let rows = list_rows(&terminal);
+
+    assert!(
+        !rows.iter().any(|r| r.starts_with("──")),
+        "no grouping must not emit headers: {rows:?}"
+    );
+    assert!(rows[0].contains("#1"), "{rows:?}");
+    assert!(rows[1].contains("#2"), "{rows:?}");
+}
+
+#[test]
+fn empty_list_with_smart_status_grouping_shows_placeholder() {
+    let model = model_with(Vec::new(), Grouping::SmartStatus, |_| None);
+
+    let terminal = render_snapshot(&model, 40, 3);
+    let rows = list_rows(&terminal);
+
+    assert!(
+        rows[0].contains("No open pull requests"),
+        "empty grouped list shows the placeholder: {rows:?}"
     );
 }
 
@@ -147,17 +315,20 @@ fn pr_list_error_appears_in_the_status_bar() {
 
 #[test]
 fn long_titles_truncate_with_ellipsis_to_fit_column() {
-    let (mut model, _) = Model::new();
-    model.list = pr_list_with(vec![pr(
-        7,
-        "This title is intentionally far too long to fit in the column",
-        "octocat",
-        2,
-    )]);
+    let model = model_with(
+        vec![pr(
+            7,
+            "This title is intentionally far too long to fit in the column",
+            "octocat",
+            2,
+        )],
+        Grouping::None,
+        |_| Some(Tier::NeedsReview),
+    );
 
-    let terminal = render_snapshot(&model, 60, 3);
+    let terminal = render_snapshot(&model, 80, 3);
 
-    let rows = buffer_text(&terminal);
+    let rows = list_rows(&terminal);
     assert!(
         rows[0].contains('…'),
         "expected ellipsis truncation, got row: {:?}",
@@ -175,43 +346,38 @@ fn long_titles_truncate_with_ellipsis_to_fit_column() {
     );
     assert_eq!(
         rows[0].chars().count(),
-        60,
+        80,
         "row should fill exact terminal width"
     );
 }
 
 #[test]
 fn draft_pr_is_marked_in_its_row() {
-    let (mut model, _) = Model::new();
     let mut draft = pr(50, "Polish things", "octocat", 1);
     draft.is_draft = true;
-    model.list = pr_list_with(vec![draft]);
+    let model = model_with(vec![draft], Grouping::None, |_| Some(Tier::WaitingOnAuthor));
 
-    let terminal = render_snapshot(&model, 60, 3);
+    let terminal = render_snapshot(&model, 80, 3);
+    let rows = list_rows(&terminal);
 
-    assert_eq!(
-        buffer_text(&terminal),
-        vec![
-            "#50  [draft] Polish things      octocat       +5/-3 1h      ",
-            "                                                            ",
-            "q quit                                                      ",
-        ]
-    );
+    assert!(rows[0].contains("[draft] Polish things"), "{rows:?}");
+    assert!(rows[0].contains("octocat"), "{rows:?}");
 }
 
 #[test]
 fn large_diff_size_widens_size_column_for_all_rows() {
-    let (mut model, _) = Model::new();
     let mut big = pr(100, "huge diff", "octocat", 1);
     big.additions = 1234;
     big.deletions = 5678;
-    model.list = pr_list_with(vec![pr(101, "small diff", "alice", 2), big]);
+    let model = model_with(
+        vec![pr(101, "small diff", "alice", 2), big],
+        Grouping::None,
+        |_| Some(Tier::NeedsReview),
+    );
 
-    let terminal = render_snapshot(&model, 60, 4);
-    let rows = buffer_text(&terminal);
+    let terminal = render_snapshot(&model, 90, 4);
+    let rows = list_rows(&terminal);
 
-    // Both size strings must render in full; neither overflow into the age
-    // column nor truncate.
     assert!(
         rows[0].contains("+5/-3"),
         "small-diff size must render in full: {:?}",
@@ -222,23 +388,24 @@ fn large_diff_size_widens_size_column_for_all_rows() {
         "large-diff size must render in full: {:?}",
         rows[1]
     );
-    assert_eq!(rows[0].chars().count(), 60);
-    assert_eq!(rows[1].chars().count(), 60);
+    assert_eq!(rows[0].chars().count(), 90);
+    assert_eq!(rows[1].chars().count(), 90);
 }
 
 #[test]
 fn wide_pr_number_widens_num_column_for_all_rows() {
-    let (mut model, _) = Model::new();
-    model.list = pr_list_with(vec![
-        pr(42, "small number", "octocat", 1),
-        pr(12345, "huge number", "alice", 2),
-    ]);
+    let model = model_with(
+        vec![
+            pr(42, "small number", "octocat", 1),
+            pr(12345, "huge number", "alice", 2),
+        ],
+        Grouping::None,
+        |_| Some(Tier::NeedsReview),
+    );
 
-    let terminal = render_snapshot(&model, 60, 4);
-    let rows = buffer_text(&terminal);
+    let terminal = render_snapshot(&model, 90, 4);
+    let rows = list_rows(&terminal);
 
-    // Both rows should align at the same title column — the wider `#12345`
-    // sets the column width for the whole list.
     let title_start = rows[0]
         .find("small number")
         .expect("first row should contain title");
@@ -250,9 +417,8 @@ fn wide_pr_number_widens_num_column_for_all_rows() {
         "title columns must align; got row1={:?} row2={:?}",
         rows[0], rows[1]
     );
-    // Row width must still fit the terminal.
-    assert_eq!(rows[0].chars().count(), 60);
-    assert_eq!(rows[1].chars().count(), 60);
+    assert_eq!(rows[0].chars().count(), 90);
+    assert_eq!(rows[1].chars().count(), 90);
 }
 
 #[test]
@@ -269,7 +435,7 @@ fn loading_pr_list_renders_loading_placeholder() {
             "                                        ",
             "                                        ",
             "                                        ",
-            "q quit                                  ",
+            "q quit  g group: smart-status           ",
         ]
     );
 }
@@ -280,13 +446,21 @@ fn status_row(terminal: &Terminal<TestBackend>) -> String {
 }
 
 #[test]
+fn status_bar_shows_grouping_mode_and_cycles_with_g() {
+    let model = model_with(vec![pr(1, "a", "octocat", 1)], Grouping::Repo, |_| {
+        Some(Tier::NeedsReview)
+    });
+
+    let status = status_row(&render_snapshot(&model, 60, 3));
+
+    assert!(status.contains("g group: repo"), "shows mode: {status:?}");
+}
+
+#[test]
 fn status_bar_with_no_network_activity_shows_only_hints() {
-    let (mut model, _) = Model::new();
-    model.list = pr_list_with(vec![pr(1, "a", "octocat", 1)]);
-    model.network_stats = NetworkStats {
-        in_flight: 0,
-        waiting: 0,
-    };
+    let model = model_with(vec![pr(1, "a", "octocat", 1)], Grouping::None, |_| {
+        Some(Tier::NeedsReview)
+    });
 
     let status = status_row(&render_snapshot(&model, 60, 3));
 
@@ -299,8 +473,9 @@ fn status_bar_with_no_network_activity_shows_only_hints() {
 
 #[test]
 fn status_bar_shows_in_flight_and_waiting_counts() {
-    let (mut model, _) = Model::new();
-    model.list = pr_list_with(vec![pr(1, "a", "octocat", 1)]);
+    let mut model = model_with(vec![pr(1, "a", "octocat", 1)], Grouping::None, |_| {
+        Some(Tier::NeedsReview)
+    });
     model.network_stats = NetworkStats {
         in_flight: 3,
         waiting: 5,
@@ -317,8 +492,9 @@ fn status_bar_shows_in_flight_and_waiting_counts() {
 
 #[test]
 fn status_bar_shows_in_flight_only_when_nothing_waiting() {
-    let (mut model, _) = Model::new();
-    model.list = pr_list_with(vec![pr(1, "a", "octocat", 1)]);
+    let mut model = model_with(vec![pr(1, "a", "octocat", 1)], Grouping::None, |_| {
+        Some(Tier::NeedsReview)
+    });
     model.network_stats = NetworkStats {
         in_flight: 2,
         waiting: 0,
@@ -335,14 +511,15 @@ fn status_bar_shows_in_flight_only_when_nothing_waiting() {
 
 #[test]
 fn status_bar_shows_info_message_on_the_right() {
-    let (mut model, _) = Model::new();
-    model.list = pr_list_with(vec![pr(1, "a", "octocat", 1)]);
+    let mut model = model_with(vec![pr(1, "a", "octocat", 1)], Grouping::None, |_| {
+        Some(Tier::NeedsReview)
+    });
     model.status = Some(StatusMessage {
         kind: StatusKind::Info,
         text: "loading details".to_owned(),
     });
 
-    let status = status_row(&render_snapshot(&model, 60, 3));
+    let status = status_row(&render_snapshot(&model, 80, 3));
 
     assert!(
         status.starts_with("q quit"),
@@ -356,14 +533,15 @@ fn status_bar_shows_info_message_on_the_right() {
 
 #[test]
 fn status_bar_shows_error_message_on_the_right() {
-    let (mut model, _) = Model::new();
-    model.list = pr_list_with(vec![pr(1, "a", "octocat", 1)]);
+    let mut model = model_with(vec![pr(1, "a", "octocat", 1)], Grouping::None, |_| {
+        Some(Tier::NeedsReview)
+    });
     model.status = Some(StatusMessage {
         kind: StatusKind::Error,
         text: "fetch review status: 500".to_owned(),
     });
 
-    let status = status_row(&render_snapshot(&model, 70, 3));
+    let status = status_row(&render_snapshot(&model, 80, 3));
 
     assert!(
         status.contains("fetch review status: 500"),
