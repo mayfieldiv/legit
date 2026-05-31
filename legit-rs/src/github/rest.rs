@@ -1,10 +1,15 @@
+use std::collections::HashMap;
+
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use octocrab::{Octocrab, Page};
-use serde::Deserialize;
+use serde::{Deserialize, de::DeserializeOwned};
 use tokio::sync::mpsc;
 
-use crate::secret::Secret;
+use crate::{
+    github::types::{CheckRun, IssueComment, Review, is_bot},
+    secret::Secret,
+};
 
 /// Lifecycle state for a pull request. Mirrors the TS `PRState` discriminated
 /// type so the rest of the app can compare against the same values.
@@ -228,6 +233,87 @@ impl OctocrabRest {
             }
         }
     }
+
+    /// Fetch all non-pending reviews for a PR, reduced to the latest decision
+    /// per user.
+    #[tracing::instrument(name = "list_reviews", skip(self))]
+    pub async fn list_reviews(&self, owner: &str, repo: &str, number: u64) -> Result<Vec<Review>> {
+        let route = format!("/repos/{owner}/{repo}/pulls/{number}/reviews");
+        let raw = self
+            .get_all::<RawReview>(&route)
+            .await
+            .with_context(|| format!("listing reviews for {owner}/{repo}#{number}"))?;
+        Ok(parse_reviews(raw))
+    }
+
+    /// Fetch all top-level conversation comments for a PR, with bot detection.
+    #[tracing::instrument(name = "list_issue_comments", skip(self, bot_logins))]
+    pub async fn list_issue_comments(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        bot_logins: &[String],
+    ) -> Result<Vec<IssueComment>> {
+        let route = format!("/repos/{owner}/{repo}/issues/{number}/comments");
+        let raw = self
+            .get_all::<RawIssueComment>(&route)
+            .await
+            .with_context(|| format!("listing issue comments for {owner}/{repo}#{number}"))?;
+        Ok(parse_issue_comments(raw, bot_logins))
+    }
+
+    /// Fetch all CI check runs for a commit. The check-runs endpoint nests the
+    /// array under `check_runs` and paginates by `page`, so it can't use the
+    /// Link-header `get_all` helper.
+    #[tracing::instrument(name = "list_check_runs", skip(self))]
+    pub async fn list_check_runs(
+        &self,
+        owner: &str,
+        repo: &str,
+        commit_sha: &str,
+    ) -> Result<Vec<CheckRun>> {
+        let route = format!("/repos/{owner}/{repo}/commits/{commit_sha}/check-runs");
+        let mut all = Vec::new();
+        let mut page = 1u32;
+        loop {
+            let params = CheckRunParams {
+                per_page: 100,
+                page,
+            };
+            let response: RawCheckRunsResponse = self
+                .client
+                .get(&route, Some(&params))
+                .await
+                .with_context(|| {
+                    format!("listing check runs for {owner}/{repo}@{commit_sha} (page {page})")
+                })?;
+            let count = response.check_runs.len();
+            all.extend(parse_check_runs(response));
+            if count < 100 {
+                break;
+            }
+            page += 1;
+        }
+        Ok(all)
+    }
+
+    /// Follow Link-header pagination for an array endpoint, collecting every
+    /// page into one `Vec`. Mirrors the pagination in `list_open_prs`.
+    async fn get_all<T: DeserializeOwned>(&self, route: &str) -> octocrab::Result<Vec<T>> {
+        let mut items = Vec::new();
+        let mut page: Page<T> = self
+            .client
+            .get(route, Some(&PerPageParams { per_page: 100 }))
+            .await?;
+        loop {
+            items.extend(page.take_items());
+            match self.client.get_page::<T>(&page.next).await? {
+                Some(next_page) => page = next_page,
+                None => return Ok(items),
+            }
+        }
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -236,11 +322,132 @@ struct ListParams {
     per_page: u8,
 }
 
+#[derive(serde::Serialize)]
+struct PerPageParams {
+    per_page: u8,
+}
+
+#[derive(serde::Serialize)]
+struct CheckRunParams {
+    per_page: u8,
+    page: u32,
+}
+
+// ── Enrichment raw shapes + parsing ──────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+struct RawReview {
+    #[serde(default)]
+    user: Option<RawUser>,
+    state: String,
+    #[serde(default)]
+    submitted_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RawCheckRunsResponse {
+    #[serde(default)]
+    check_runs: Vec<RawCheckRun>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RawCheckRun {
+    name: String,
+    status: String,
+    #[serde(default)]
+    conclusion: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RawIssueComment {
+    id: u64,
+    #[serde(default)]
+    user: Option<RawCommentUser>,
+    #[serde(default)]
+    body: String,
+    created_at: DateTime<Utc>,
+    #[serde(default)]
+    html_url: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RawCommentUser {
+    login: String,
+    #[serde(rename = "type", default)]
+    user_type: Option<String>,
+}
+
+/// Reduce raw reviews to the latest decision per user. Drops `PENDING` reviews
+/// and reviews with no author; ties broken by latest `submitted_at`. Output is
+/// sorted by login so the result is deterministic (the list endpoint's order
+/// isn't meaningful here).
+fn parse_reviews(raw: Vec<RawReview>) -> Vec<Review> {
+    let epoch = DateTime::<Utc>::from_timestamp(0, 0).expect("unix epoch is valid");
+    let mut latest: HashMap<String, (DateTime<Utc>, String)> = HashMap::new();
+    for review in raw {
+        if review.state == "PENDING" {
+            continue;
+        }
+        let Some(user) = review.user else {
+            continue;
+        };
+        let submitted = review.submitted_at.unwrap_or(epoch);
+        match latest.get(&user.login) {
+            Some((existing, _)) if *existing >= submitted => {}
+            _ => {
+                latest.insert(user.login, (submitted, review.state));
+            }
+        }
+    }
+    let mut reviews: Vec<Review> = latest
+        .into_iter()
+        .map(|(user, (_, state))| Review { user, state })
+        .collect();
+    reviews.sort_by(|a, b| a.user.cmp(&b.user));
+    reviews
+}
+
+fn parse_check_runs(raw: RawCheckRunsResponse) -> Vec<CheckRun> {
+    raw.check_runs
+        .into_iter()
+        .map(|run| CheckRun {
+            name: run.name,
+            status: run.status,
+            conclusion: run.conclusion,
+        })
+        .collect()
+}
+
+fn parse_issue_comments(raw: Vec<RawIssueComment>, bot_logins: &[String]) -> Vec<IssueComment> {
+    raw.into_iter()
+        .map(|comment| {
+            let (author, is_bot_author) = match comment.user {
+                Some(user) => {
+                    let bot = is_bot(&user.login, user.user_type.as_deref(), bot_logins);
+                    (user.login, bot)
+                }
+                None => ("ghost".to_owned(), false),
+            };
+            IssueComment {
+                id: comment.id,
+                author,
+                body: comment.body,
+                created_at: comment.created_at,
+                url: comment.html_url,
+                is_bot: is_bot_author,
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::TimeZone;
 
-    use super::{PR, PRState, RawRestPR, parse_pr};
+    use super::{
+        PR, PRState, RawCheckRunsResponse, RawIssueComment, RawRestPR, RawReview, parse_check_runs,
+        parse_issue_comments, parse_pr, parse_reviews,
+    };
 
     fn deserialize(raw: &str) -> RawRestPR {
         serde_json::from_str(raw).expect("fixture should deserialize")
@@ -380,5 +587,90 @@ mod tests {
         assert_eq!(pr.deletions, 0);
         assert_eq!(pr.mergeable, "UNKNOWN");
         assert_eq!(pr.review_decision, "");
+    }
+
+    #[test]
+    fn reviews_keep_latest_decision_per_user() {
+        let raw: Vec<RawReview> = serde_json::from_str(
+            r#"[
+                { "user": { "login": "alice" }, "state": "COMMENTED", "submitted_at": "2026-05-01T00:00:00Z" },
+                { "user": { "login": "alice" }, "state": "APPROVED", "submitted_at": "2026-05-02T00:00:00Z" },
+                { "user": { "login": "bob" }, "state": "CHANGES_REQUESTED", "submitted_at": "2026-05-01T00:00:00Z" }
+            ]"#,
+        )
+        .expect("deserialize");
+
+        let reviews = parse_reviews(raw);
+
+        // Sorted by login; alice's later APPROVED supersedes her COMMENTED.
+        assert_eq!(reviews.len(), 2);
+        assert_eq!(reviews[0].user, "alice");
+        assert_eq!(reviews[0].state, "APPROVED");
+        assert_eq!(reviews[1].user, "bob");
+        assert_eq!(reviews[1].state, "CHANGES_REQUESTED");
+    }
+
+    #[test]
+    fn reviews_drop_pending_and_authorless() {
+        let raw: Vec<RawReview> = serde_json::from_str(
+            r#"[
+                { "user": { "login": "alice" }, "state": "PENDING", "submitted_at": null },
+                { "user": null, "state": "APPROVED", "submitted_at": "2026-05-02T00:00:00Z" },
+                { "user": { "login": "carol" }, "state": "APPROVED", "submitted_at": "2026-05-03T00:00:00Z" }
+            ]"#,
+        )
+        .expect("deserialize");
+
+        let reviews = parse_reviews(raw);
+
+        assert_eq!(reviews.len(), 1);
+        assert_eq!(reviews[0].user, "carol");
+    }
+
+    #[test]
+    fn check_runs_parse_name_status_conclusion() {
+        let raw: RawCheckRunsResponse = serde_json::from_str(
+            r#"{ "total_count": 2, "check_runs": [
+                { "name": "build", "status": "completed", "conclusion": "success" },
+                { "name": "deploy", "status": "in_progress", "conclusion": null }
+            ] }"#,
+        )
+        .expect("deserialize");
+
+        let checks = parse_check_runs(raw);
+
+        assert_eq!(checks.len(), 2);
+        assert_eq!(checks[0].name, "build");
+        assert_eq!(checks[0].status, "completed");
+        assert_eq!(checks[0].conclusion.as_deref(), Some("success"));
+        assert_eq!(checks[1].status, "in_progress");
+        assert_eq!(checks[1].conclusion, None);
+    }
+
+    #[test]
+    fn issue_comments_detect_bots_and_default_ghost() {
+        let raw: Vec<RawIssueComment> = serde_json::from_str(
+            r#"[
+                { "id": 1, "user": { "login": "alice", "type": "User" }, "body": "lgtm",
+                  "created_at": "2026-05-01T00:00:00Z", "html_url": "u1" },
+                { "id": 2, "user": { "login": "ci", "type": "Bot" }, "body": "ran",
+                  "created_at": "2026-05-01T01:00:00Z", "html_url": "u2" },
+                { "id": 3, "user": { "login": "renovate[bot]", "type": "User" }, "body": "bump",
+                  "created_at": "2026-05-01T02:00:00Z", "html_url": "u3" },
+                { "id": 4, "user": null, "body": "deleted account",
+                  "created_at": "2026-05-01T03:00:00Z", "html_url": "u4" }
+            ]"#,
+        )
+        .expect("deserialize");
+
+        let comments = parse_issue_comments(raw, &["custombot".to_owned()]);
+
+        assert_eq!(comments.len(), 4);
+        assert!(!comments[0].is_bot);
+        assert_eq!(comments[0].url, "u1");
+        assert!(comments[1].is_bot, "type == Bot");
+        assert!(comments[2].is_bot, "[bot] suffix");
+        assert_eq!(comments[3].author, "ghost");
+        assert!(!comments[3].is_bot);
     }
 }

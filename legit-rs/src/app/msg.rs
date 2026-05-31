@@ -1,7 +1,11 @@
 use ratatui::crossterm::event::Event;
 
 use crate::{
-    config::LegitConfig, git_remote::RepoInfo, github::limiter::NetworkStats, github::rest::PR,
+    config::LegitConfig,
+    git_remote::RepoInfo,
+    github::limiter::NetworkStats,
+    github::rest::PR,
+    github::types::{CheckRun, FullReviewThread, IssueComment, Review, ReviewStatus},
     secret::Secret,
 };
 
@@ -14,6 +18,48 @@ pub enum Msg {
     PrArrived(PR),
     PrListLoaded,
     NetworkStatsChanged(NetworkStats),
+    // ── enrichment arrivals ──
+    ReviewStatusArrived {
+        pr_number: u64,
+        status: ReviewStatus,
+    },
+    ThreadsArrived {
+        pr_number: u64,
+        threads: Vec<FullReviewThread>,
+    },
+    ReviewsArrived {
+        pr_number: u64,
+        reviews: Vec<Review>,
+    },
+    ChecksArrived {
+        head_sha: String,
+        checks: Vec<CheckRun>,
+    },
+    IssueCommentsArrived {
+        pr_number: u64,
+        comments: Vec<IssueComment>,
+    },
+    // ── enrichment failures (per area; none crash the TUI) ──
+    ReviewStatusFailed {
+        context: &'static str,
+        error: String,
+    },
+    ThreadsFailed {
+        context: &'static str,
+        error: String,
+    },
+    ReviewsFailed {
+        context: &'static str,
+        error: String,
+    },
+    ChecksFailed {
+        context: &'static str,
+        error: String,
+    },
+    IssueCommentsFailed {
+        context: &'static str,
+        error: String,
+    },
     PrListFailed {
         context: &'static str,
         error: String,

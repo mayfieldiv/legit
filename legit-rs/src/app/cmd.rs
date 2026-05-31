@@ -3,8 +3,8 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use crate::{
-    app::msg::Msg, auth, config, git_remote, github::limiter::NetworkLimiter,
-    github::rest::OctocrabRest, secret::Secret,
+    app::msg::Msg, auth, config, git_remote, github::graphql::GraphQlClient,
+    github::limiter::NetworkLimiter, github::rest::OctocrabRest, secret::Secret,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,6 +16,38 @@ pub enum Cmd {
         owner: String,
         repo: String,
         token: Secret<String>,
+    },
+    FetchReviewStatus {
+        owner: String,
+        repo: String,
+        token: Secret<String>,
+        pr_numbers: Vec<u64>,
+    },
+    FetchThreads {
+        owner: String,
+        repo: String,
+        token: Secret<String>,
+        number: u64,
+        bot_logins: Vec<String>,
+    },
+    FetchReviews {
+        owner: String,
+        repo: String,
+        token: Secret<String>,
+        number: u64,
+    },
+    FetchIssueComments {
+        owner: String,
+        repo: String,
+        token: Secret<String>,
+        number: u64,
+        bot_logins: Vec<String>,
+    },
+    FetchChecks {
+        owner: String,
+        repo: String,
+        token: Secret<String>,
+        head_sha: String,
     },
 }
 
@@ -67,6 +99,164 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
         }
         Cmd::FetchOpenPRs { owner, repo, token } => {
             run_fetch_open_prs(owner, repo, token, tx, limiter).await;
+        }
+        Cmd::FetchReviewStatus {
+            owner,
+            repo,
+            token,
+            pr_numbers,
+        } => {
+            let client = match GraphQlClient::new(&token) {
+                Ok(client) => client,
+                Err(error) => {
+                    let _ = tx.send(review_status_failed("build graphql client", error));
+                    return;
+                }
+            };
+            let _permit = limiter.acquire().await;
+            match client.fetch_review_status(&owner, &repo, &pr_numbers).await {
+                Ok(results) => {
+                    for (pr_number, status) in results {
+                        let _ = tx.send(Msg::ReviewStatusArrived { pr_number, status });
+                    }
+                }
+                Err(error) => {
+                    let _ = tx.send(review_status_failed("fetch review status", error));
+                }
+            }
+        }
+        Cmd::FetchThreads {
+            owner,
+            repo,
+            token,
+            number,
+            bot_logins,
+        } => {
+            let client = match GraphQlClient::new(&token) {
+                Ok(client) => client,
+                Err(error) => {
+                    let _ = tx.send(enrichment_failed(
+                        Area::Threads,
+                        "build graphql client",
+                        error,
+                    ));
+                    return;
+                }
+            };
+            let _permit = limiter.acquire().await;
+            match client
+                .fetch_review_threads(&owner, &repo, number, &bot_logins)
+                .await
+            {
+                Ok(threads) => {
+                    let _ = tx.send(Msg::ThreadsArrived {
+                        pr_number: number,
+                        threads,
+                    });
+                }
+                Err(error) => {
+                    let _ = tx.send(enrichment_failed(
+                        Area::Threads,
+                        "fetch review threads",
+                        error,
+                    ));
+                }
+            }
+        }
+        Cmd::FetchReviews {
+            owner,
+            repo,
+            token,
+            number,
+        } => {
+            let client = match OctocrabRest::new(&token) {
+                Ok(client) => client,
+                Err(error) => {
+                    let _ = tx.send(enrichment_failed(
+                        Area::Reviews,
+                        "build github client",
+                        error,
+                    ));
+                    return;
+                }
+            };
+            let _permit = limiter.acquire().await;
+            match client.list_reviews(&owner, &repo, number).await {
+                Ok(reviews) => {
+                    let _ = tx.send(Msg::ReviewsArrived {
+                        pr_number: number,
+                        reviews,
+                    });
+                }
+                Err(error) => {
+                    let _ = tx.send(enrichment_failed(Area::Reviews, "fetch reviews", error));
+                }
+            }
+        }
+        Cmd::FetchIssueComments {
+            owner,
+            repo,
+            token,
+            number,
+            bot_logins,
+        } => {
+            let client = match OctocrabRest::new(&token) {
+                Ok(client) => client,
+                Err(error) => {
+                    let _ = tx.send(enrichment_failed(
+                        Area::IssueComments,
+                        "build github client",
+                        error,
+                    ));
+                    return;
+                }
+            };
+            let _permit = limiter.acquire().await;
+            match client
+                .list_issue_comments(&owner, &repo, number, &bot_logins)
+                .await
+            {
+                Ok(comments) => {
+                    let _ = tx.send(Msg::IssueCommentsArrived {
+                        pr_number: number,
+                        comments,
+                    });
+                }
+                Err(error) => {
+                    let _ = tx.send(enrichment_failed(
+                        Area::IssueComments,
+                        "fetch issue comments",
+                        error,
+                    ));
+                }
+            }
+        }
+        Cmd::FetchChecks {
+            owner,
+            repo,
+            token,
+            head_sha,
+        } => {
+            let client = match OctocrabRest::new(&token) {
+                Ok(client) => client,
+                Err(error) => {
+                    let _ = tx.send(enrichment_failed(
+                        Area::Checks,
+                        "build github client",
+                        error,
+                    ));
+                    return;
+                }
+            };
+            let _permit = limiter.acquire().await;
+            match client.list_check_runs(&owner, &repo, &head_sha).await {
+                Ok(checks) => {
+                    let _ = tx.send(Msg::ChecksArrived { head_sha, checks });
+                }
+                Err(error) => {
+                    let _ = tx.send(enrichment_failed(Area::Checks, "fetch check runs", error));
+                }
+            }
         }
     }
 }
@@ -130,6 +320,32 @@ fn pr_list_failed(context: &'static str, error: anyhow::Error) -> Msg {
     let error = error.to_string();
     tracing::warn!(context, %error, "pr listing failed");
     Msg::PrListFailed { context, error }
+}
+
+/// Which enrichment area a failed fetch belongs to. Selects the per-area
+/// failure `Msg` so the model can attribute errors precisely.
+enum Area {
+    Threads,
+    Reviews,
+    Checks,
+    IssueComments,
+}
+
+fn review_status_failed(context: &'static str, error: anyhow::Error) -> Msg {
+    let error = error.to_string();
+    tracing::warn!(context, %error, "review status fetch failed");
+    Msg::ReviewStatusFailed { context, error }
+}
+
+fn enrichment_failed(area: Area, context: &'static str, error: anyhow::Error) -> Msg {
+    let error = error.to_string();
+    tracing::warn!(context, %error, "enrichment fetch failed");
+    match area {
+        Area::Threads => Msg::ThreadsFailed { context, error },
+        Area::Reviews => Msg::ReviewsFailed { context, error },
+        Area::Checks => Msg::ChecksFailed { context, error },
+        Area::IssueComments => Msg::IssueCommentsFailed { context, error },
+    }
 }
 
 /// Run `f` on the blocking pool and fold the `JoinError` into the same

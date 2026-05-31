@@ -1,8 +1,26 @@
+use std::collections::HashMap;
+
 use crate::{
-    config::LegitConfig, git_remote::RepoInfo, github::limiter::NetworkStats, secret::Secret,
+    config::LegitConfig,
+    git_remote::RepoInfo,
+    github::limiter::NetworkStats,
+    github::types::{CheckRun, FullReviewThread, IssueComment, Review},
+    secret::Secret,
 };
 
 use super::{cmd::Cmd, pr_list::PrList};
+
+/// Per-PR enrichment landed by the GraphQL/REST fan-out. Keyed by PR number,
+/// except `checks` which is keyed by head commit SHA (checks belong to a commit
+/// and are shared across PRs that point at it). Written here in M3; the blocker
+/// engine, summary panel, and detail view consume these in later milestones.
+#[derive(Clone, Debug, Default)]
+pub struct Enrichment {
+    pub review_threads: HashMap<u64, Vec<FullReviewThread>>,
+    pub reviews: HashMap<u64, Vec<Review>>,
+    pub issue_comments: HashMap<u64, Vec<IssueComment>>,
+    pub checks: HashMap<String, Vec<CheckRun>>,
+}
 
 #[derive(Clone, Debug)]
 pub struct Model {
@@ -13,6 +31,7 @@ pub struct Model {
     pub list: PrList,
     pub last_error: Option<String>,
     pub network_stats: NetworkStats,
+    pub enrichment: Enrichment,
 }
 
 impl Model {
@@ -26,6 +45,7 @@ impl Model {
                 list: PrList::new(),
                 last_error: None,
                 network_stats: NetworkStats::default(),
+                enrichment: Enrichment::default(),
             },
             vec![Cmd::LoadConfig, Cmd::ResolveAuthToken, Cmd::DetectRepo],
         )

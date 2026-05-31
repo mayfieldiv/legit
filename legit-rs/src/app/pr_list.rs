@@ -143,6 +143,13 @@ impl PrList {
         &self.prs
     }
 
+    /// Mutable access to a streamed PR by number, for enrichment that overwrites
+    /// list fields in place (mergeable, review decision, size, head SHA). `None`
+    /// if no PR with that number is in the list.
+    pub fn pr_mut(&mut self, number: u64) -> Option<&mut PR> {
+        self.prs.iter_mut().find(|pr| pr.number == number)
+    }
+
     /// Iterate the rows currently inside the scroll viewport, yielding the
     /// absolute PR index alongside each `&PR`. The view uses the index to
     /// detect which row is the selected one (`index == selected()`).
