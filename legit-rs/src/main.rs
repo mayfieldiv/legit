@@ -1,5 +1,6 @@
 mod app;
 mod auth;
+mod blocker;
 mod config;
 mod format;
 mod git_remote;
