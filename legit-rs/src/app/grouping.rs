@@ -63,7 +63,15 @@ pub fn display_rows(
 ) -> Vec<DisplayRow> {
     match grouping {
         Grouping::None => (0..prs.len()).map(DisplayRow::Pr).collect(),
-        Grouping::Repo => grouped_rows(prs, |i| Some(repo_slug_label(prs, i, repo_slug))),
+        // Single-repo today, so every PR shares `repo_slug`; fall back to
+        // `"unknown"` (matching the TS engine) when no repo is detected yet.
+        Grouping::Repo => grouped_rows(prs, |_| {
+            if repo_slug.is_empty() {
+                "unknown".to_owned()
+            } else {
+                repo_slug.to_owned()
+            }
+        }),
         Grouping::SmartStatus => smart_status_rows(prs, tier_of),
     }
 }
@@ -99,12 +107,11 @@ fn smart_status_rows(prs: &[PR], tier_of: impl Fn(usize) -> Option<Tier>) -> Vec
 
 /// Generic single-key grouping (used by repo): bucket indices by the key
 /// `key_of(i)` produces, emit groups sorted alphabetically by key, headers
-/// labelled with the key. `None` from `key_of` drops the PR from grouping (not
-/// used today; kept for symmetry with the smart-status loading bucket).
-fn grouped_rows(prs: &[PR], key_of: impl Fn(usize) -> Option<String>) -> Vec<DisplayRow> {
+/// labelled with the key.
+fn grouped_rows(prs: &[PR], key_of: impl Fn(usize) -> String) -> Vec<DisplayRow> {
     let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
     for i in 0..prs.len() {
-        let Some(key) = key_of(i) else { continue };
+        let key = key_of(i);
         match groups.iter_mut().find(|(k, _)| *k == key) {
             Some((_, members)) => members.push(i),
             None => groups.push((key, vec![i])),
@@ -118,17 +125,6 @@ fn grouped_rows(prs: &[PR], key_of: impl Fn(usize) -> Option<String>) -> Vec<Dis
         rows.extend(members.into_iter().map(DisplayRow::Pr));
     }
     rows
-}
-
-/// Repo-grouping label for a PR. Single-repo today, so `repo_slug` is the slug
-/// for every PR; falls back to `"unknown"` (matching the TS engine) when the
-/// app has no detected repo yet.
-fn repo_slug_label(_prs: &[PR], _index: usize, repo_slug: &str) -> String {
-    if repo_slug.is_empty() {
-        "unknown".to_owned()
-    } else {
-        repo_slug.to_owned()
-    }
 }
 
 #[cfg(test)]
