@@ -60,6 +60,11 @@ pub enum Msg {
         context: &'static str,
         error: String,
     },
+    /// A scheduled status-message clear fired; honored only if `token` still
+    /// matches the model's current status generation.
+    StatusCleared {
+        token: u64,
+    },
     PrListFailed {
         context: &'static str,
         error: String,

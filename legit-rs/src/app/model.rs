@@ -22,6 +22,31 @@ pub struct Enrichment {
     pub checks: HashMap<String, Vec<CheckRun>>,
 }
 
+/// Severity of a transient status-bar message. Drives both styling and how long
+/// the message lingers before auto-clearing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StatusKind {
+    /// Persists until replaced. Produced by later milestones (e.g. in-flight
+    /// operation notices); the view renders it today.
+    #[allow(dead_code)]
+    Info,
+    /// Auto-clears after 4s. Produced by later milestones (e.g. worktree-created
+    /// confirmations); the view renders it today.
+    #[allow(dead_code)]
+    Success,
+    /// Auto-clears after 8s. Used now for command and enrichment failures.
+    Error,
+}
+
+/// A transient message shown on the right of the status bar. `Success` clears
+/// after 4s and `Error` after 8s (scheduled by `update`); `Info` persists until
+/// replaced.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StatusMessage {
+    pub kind: StatusKind,
+    pub text: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct Model {
     pub should_quit: bool,
@@ -29,7 +54,11 @@ pub struct Model {
     pub auth_token: Option<Secret<String>>,
     pub repo: Option<RepoInfo>,
     pub list: PrList,
-    pub last_error: Option<String>,
+    /// Transient status message + a generation counter. A scheduled clear only
+    /// fires if its token still matches `status_gen`, so a newer message is
+    /// never wiped by an older message's timer.
+    pub status: Option<StatusMessage>,
+    pub status_gen: u64,
     pub network_stats: NetworkStats,
     pub enrichment: Enrichment,
 }
@@ -43,7 +72,8 @@ impl Model {
                 auth_token: None,
                 repo: None,
                 list: PrList::new(),
-                last_error: None,
+                status: None,
+                status_gen: 0,
                 network_stats: NetworkStats::default(),
                 enrichment: Enrichment::default(),
             },

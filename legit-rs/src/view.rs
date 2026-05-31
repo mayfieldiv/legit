@@ -7,7 +7,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
-use crate::app::model::Model;
+use crate::app::model::{Model, StatusKind};
 
 pub mod list;
 
@@ -23,21 +23,49 @@ pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
 }
 
 fn render_status(model: &Model, frame: &mut Frame<'_>, area: Rect) {
-    // PR list errors take priority — they're what the user just tried to do.
-    // Generic command errors come next; the keymap hint is the fallback.
-    let active_error = model.list.failure().or(model.last_error.as_deref());
-    let status_line = if let Some(error) = active_error {
-        Line::from(vec![
+    // Left: a network-activity indicator (only while requests are in flight or
+    // queued) followed by key hints.
+    let mut left = Vec::new();
+    let stats = model.network_stats;
+    if stats.in_flight > 0 || stats.waiting > 0 {
+        let indicator = if stats.waiting > 0 {
+            format!(
+                "[{} in flight, {} waiting] ",
+                stats.in_flight, stats.waiting
+            )
+        } else {
+            format!("[{} in flight] ", stats.in_flight)
+        };
+        left.push(Span::styled(indicator, Style::default().fg(Color::Cyan)));
+    }
+    left.push(Span::styled(
+        "q",
+        Style::default().add_modifier(Modifier::BOLD),
+    ));
+    left.push(Span::raw(" quit"));
+    frame.render_widget(Paragraph::new(Line::from(left)), area);
+
+    // Right: a hard list-load failure takes precedence; otherwise the transient
+    // status message (info / success / error). Rendered right-aligned over the
+    // same row so it sits opposite the hints.
+    if let Some(failure) = model.list.failure() {
+        let line = Line::from(vec![
             Span::styled("error: ", Style::default().fg(Color::Red)),
-            Span::styled(error, Style::default().fg(Color::Yellow)),
-        ])
-    } else {
-        Line::from(vec![
-            Span::styled("q", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(" quit"),
-        ])
-    };
-    frame.render_widget(Paragraph::new(status_line), area);
+            Span::styled(failure.to_owned(), Style::default().fg(Color::Yellow)),
+        ]);
+        frame.render_widget(Paragraph::new(line).alignment(Alignment::Right), area);
+    } else if let Some(status) = &model.status {
+        let color = match status.kind {
+            StatusKind::Info => Color::Gray,
+            StatusKind::Success => Color::Green,
+            StatusKind::Error => Color::Red,
+        };
+        let line = Line::from(Span::styled(
+            status.text.clone(),
+            Style::default().fg(color),
+        ));
+        frame.render_widget(Paragraph::new(line).alignment(Alignment::Right), area);
+    }
 }
 
 #[allow(dead_code)]

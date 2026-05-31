@@ -49,6 +49,12 @@ pub enum Cmd {
         token: Secret<String>,
         head_sha: String,
     },
+    /// Clear the status message after `delay_ms`, but only if it's still the one
+    /// identified by `token` (see `Model::status_gen`).
+    ScheduleStatusClear {
+        token: u64,
+        delay_ms: u64,
+    },
 }
 
 #[tracing::instrument(name = "command", skip(tx, limiter))]
@@ -257,6 +263,10 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                     let _ = tx.send(enrichment_failed(Area::Checks, "fetch check runs", error));
                 }
             }
+        }
+        Cmd::ScheduleStatusClear { token, delay_ms } => {
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            let _ = tx.send(Msg::StatusCleared { token });
         }
     }
 }

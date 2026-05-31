@@ -2,7 +2,11 @@ use chrono::{DateTime, TimeZone, Utc};
 use ratatui::{Terminal, backend::TestBackend};
 
 use crate::{
-    app::{model::Model, pr_list::PrList},
+    app::{
+        model::{Model, StatusKind, StatusMessage},
+        pr_list::PrList,
+    },
+    github::limiter::NetworkStats,
     github::rest::{PR, PRState},
     view,
 };
@@ -267,5 +271,102 @@ fn loading_pr_list_renders_loading_placeholder() {
             "                                        ",
             "q quit                                  ",
         ]
+    );
+}
+
+/// Last row of a rendered snapshot — the status bar.
+fn status_row(terminal: &Terminal<TestBackend>) -> String {
+    buffer_text(terminal).pop().expect("status row")
+}
+
+#[test]
+fn status_bar_with_no_network_activity_shows_only_hints() {
+    let (mut model, _) = Model::new();
+    model.list = pr_list_with(vec![pr(1, "a", "octocat", 1)]);
+    model.network_stats = NetworkStats {
+        in_flight: 0,
+        waiting: 0,
+    };
+
+    let status = status_row(&render_snapshot(&model, 60, 3));
+
+    assert!(status.starts_with("q quit"), "hints at col 0: {status:?}");
+    assert!(
+        !status.contains("in flight"),
+        "no indicator when idle: {status:?}"
+    );
+}
+
+#[test]
+fn status_bar_shows_in_flight_and_waiting_counts() {
+    let (mut model, _) = Model::new();
+    model.list = pr_list_with(vec![pr(1, "a", "octocat", 1)]);
+    model.network_stats = NetworkStats {
+        in_flight: 3,
+        waiting: 5,
+    };
+
+    let status = status_row(&render_snapshot(&model, 60, 3));
+
+    assert!(
+        status.contains("[3 in flight, 5 waiting]"),
+        "indicator shows both counts: {status:?}"
+    );
+    assert!(status.contains("q quit"), "hints still present: {status:?}");
+}
+
+#[test]
+fn status_bar_shows_in_flight_only_when_nothing_waiting() {
+    let (mut model, _) = Model::new();
+    model.list = pr_list_with(vec![pr(1, "a", "octocat", 1)]);
+    model.network_stats = NetworkStats {
+        in_flight: 2,
+        waiting: 0,
+    };
+
+    let status = status_row(&render_snapshot(&model, 60, 3));
+
+    assert!(
+        status.contains("[2 in flight]"),
+        "no waiting segment when zero queued: {status:?}"
+    );
+    assert!(!status.contains("waiting"), "waiting omitted: {status:?}");
+}
+
+#[test]
+fn status_bar_shows_info_message_on_the_right() {
+    let (mut model, _) = Model::new();
+    model.list = pr_list_with(vec![pr(1, "a", "octocat", 1)]);
+    model.status = Some(StatusMessage {
+        kind: StatusKind::Info,
+        text: "loading details".to_owned(),
+    });
+
+    let status = status_row(&render_snapshot(&model, 60, 3));
+
+    assert!(
+        status.starts_with("q quit"),
+        "hints on the left: {status:?}"
+    );
+    assert!(
+        status.trim_end().ends_with("loading details"),
+        "info message on the right: {status:?}"
+    );
+}
+
+#[test]
+fn status_bar_shows_error_message_on_the_right() {
+    let (mut model, _) = Model::new();
+    model.list = pr_list_with(vec![pr(1, "a", "octocat", 1)]);
+    model.status = Some(StatusMessage {
+        kind: StatusKind::Error,
+        text: "fetch review status: 500".to_owned(),
+    });
+
+    let status = status_row(&render_snapshot(&model, 70, 3));
+
+    assert!(
+        status.contains("fetch review status: 500"),
+        "error message rendered: {status:?}"
     );
 }

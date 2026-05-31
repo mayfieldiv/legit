@@ -1,6 +1,31 @@
 use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind};
 
-use super::{cmd::Cmd, model::Model, msg::Msg};
+use super::{
+    cmd::Cmd,
+    model::{Model, StatusKind, StatusMessage},
+    msg::Msg,
+};
+
+/// How long a transient status message lingers before its scheduled clear.
+const STATUS_SUCCESS_CLEAR_MS: u64 = 4_000;
+const STATUS_ERROR_CLEAR_MS: u64 = 8_000;
+
+/// Set the transient status message, bumping the generation so a pending clear
+/// for an older message no-ops. Returns a `ScheduleStatusClear` for Success (4s)
+/// and Error (8s); Info persists until replaced.
+fn set_status(model: &mut Model, kind: StatusKind, text: String) -> Vec<Cmd> {
+    model.status_gen = model.status_gen.wrapping_add(1);
+    model.status = Some(StatusMessage { kind, text });
+    let delay_ms = match kind {
+        StatusKind::Success => STATUS_SUCCESS_CLEAR_MS,
+        StatusKind::Error => STATUS_ERROR_CLEAR_MS,
+        StatusKind::Info => return Vec::new(),
+    };
+    vec![Cmd::ScheduleStatusClear {
+        token: model.status_gen,
+        delay_ms,
+    }]
+}
 
 /// Fire `Cmd::FetchOpenPRs` once both auth token and repo detection have
 /// landed in the model. The repo defines what to fetch; the token authorizes
@@ -171,17 +196,22 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
         | Msg::ReviewsFailed { context, error }
         | Msg::ChecksFailed { context, error }
         | Msg::IssueCommentsFailed { context, error } => {
-            // Enrichment is best-effort: record the error, keep all PRs and any
+            // Enrichment is best-effort: surface the error, keep all PRs and any
             // enrichment that did arrive, and never crash.
-            model.last_error = Some(format!("{context}: {error}"));
-            Vec::new()
+            set_status(model, StatusKind::Error, format!("{context}: {error}"))
         }
         Msg::PrListFailed { context, error } => {
             model.list.fail_fetch(format!("{context}: {error}"));
             Vec::new()
         }
         Msg::CommandFailed { context, error } => {
-            model.last_error = Some(format!("{context}: {error}"));
+            set_status(model, StatusKind::Error, format!("{context}: {error}"))
+        }
+        Msg::StatusCleared { token } => {
+            // Ignore a stale timer — a newer message has since taken the slot.
+            if model.status_gen == token {
+                model.status = None;
+            }
             Vec::new()
         }
         Msg::Quit => {
@@ -197,7 +227,13 @@ mod tests {
     use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
     use crate::{
-        app::{cmd::Cmd, model::Model, msg::Msg, pr_list::Phase, update::update},
+        app::{
+            cmd::Cmd,
+            model::{Model, StatusKind},
+            msg::Msg,
+            pr_list::Phase,
+            update::update,
+        },
         git_remote::RepoInfo,
         github::rest::{PR, PRState},
         secret::Secret,
@@ -262,16 +298,66 @@ mod tests {
     }
 
     #[test]
-    fn config_loaded_preserves_existing_error() {
+    fn config_loaded_preserves_existing_status() {
         let (mut model, _) = Model::new();
-        model.last_error = Some("resolve auth token: failed".to_owned());
+        update(
+            &mut model,
+            Msg::CommandFailed {
+                context: "resolve auth token",
+                error: "failed".to_owned(),
+            },
+        );
 
         update(&mut model, Msg::ConfigLoaded(Default::default()));
 
-        assert_eq!(
-            model.last_error.as_deref(),
-            Some("resolve auth token: failed")
+        let status = model.status.as_ref().expect("status preserved");
+        assert!(status.text.contains("resolve auth token"));
+    }
+
+    #[test]
+    fn command_failed_sets_error_status_that_schedules_a_clear() {
+        let (mut model, _) = Model::new();
+
+        let cmds = update(
+            &mut model,
+            Msg::CommandFailed {
+                context: "load config",
+                error: "boom".to_owned(),
+            },
         );
+
+        let status = model.status.as_ref().expect("error status set");
+        assert_eq!(status.kind, StatusKind::Error);
+        assert!(status.text.contains("load config"));
+        // Errors auto-clear after 8s.
+        match cmds.as_slice() {
+            [Cmd::ScheduleStatusClear { token, delay_ms }] => {
+                assert_eq!(*token, model.status_gen);
+                assert_eq!(*delay_ms, 8_000);
+            }
+            other => panic!("expected one ScheduleStatusClear, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn status_cleared_clears_only_when_token_is_current() {
+        let (mut model, _) = Model::new();
+        update(
+            &mut model,
+            Msg::CommandFailed {
+                context: "load config",
+                error: "boom".to_owned(),
+            },
+        );
+        let current = model.status_gen;
+
+        // A stale timer (older generation) must not wipe the live message.
+        update(&mut model, Msg::StatusCleared { token: current - 1 });
+        assert!(model.status.is_some(), "stale clear must be ignored");
+
+        // The matching timer clears it.
+        update(&mut model, Msg::StatusCleared { token: current });
+        assert!(model.status.is_none(), "current clear empties the status");
     }
 
     #[test]
@@ -792,12 +878,14 @@ mod tests {
             },
         );
 
-        let error = model.last_error.as_deref().expect("error recorded");
-        assert!(error.contains("fetch check runs"));
-        assert!(error.contains("500 Server Error"));
+        let status = model.status.as_ref().expect("error status recorded");
+        assert_eq!(status.kind, StatusKind::Error);
+        assert!(status.text.contains("fetch check runs"));
+        assert!(status.text.contains("500 Server Error"));
         // Best-effort: nothing already loaded is dropped on a failure.
         assert_eq!(model.list.prs().len(), 1);
         assert!(model.enrichment.reviews.contains_key(&1));
-        assert!(cmds.is_empty());
+        // The error message is scheduled to auto-clear.
+        assert!(matches!(cmds.as_slice(), [Cmd::ScheduleStatusClear { .. }]));
     }
 }
