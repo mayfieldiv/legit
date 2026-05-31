@@ -1,6 +1,13 @@
 use ratatui::crossterm::event::Event;
 
-use crate::{config::LegitConfig, git_remote::RepoInfo, github::rest::PR, secret::Secret};
+use crate::{
+    config::LegitConfig,
+    git_remote::RepoInfo,
+    github::limiter::NetworkStats,
+    github::rest::PR,
+    github::types::{CheckRun, FullReviewThread, IssueComment, Review, ReviewStatus},
+    secret::Secret,
+};
 
 #[derive(Debug)]
 pub enum Msg {
@@ -10,10 +17,43 @@ pub enum Msg {
     RepoDetected(RepoInfo),
     PrArrived(PR),
     PrListLoaded,
+    NetworkStatsChanged(NetworkStats),
+    // ── enrichment arrivals ──
+    ReviewStatusArrived {
+        pr_number: u64,
+        status: ReviewStatus,
+    },
+    ThreadsArrived {
+        pr_number: u64,
+        threads: Vec<FullReviewThread>,
+    },
+    ReviewsArrived {
+        pr_number: u64,
+        reviews: Vec<Review>,
+    },
+    ChecksArrived {
+        head_sha: String,
+        checks: Vec<CheckRun>,
+    },
+    IssueCommentsArrived {
+        pr_number: u64,
+        comments: Vec<IssueComment>,
+    },
+    /// A scheduled status-message clear fired; honored only if `token` still
+    /// matches the model's current status generation.
+    StatusCleared {
+        token: u64,
+    },
+    /// The open-PR listing failed; routes to the list's `Failed` phase so the
+    /// view can surface it distinctly from transient command errors.
     PrListFailed {
         context: &'static str,
         error: String,
     },
+    /// Any other command (config/auth/repo bootstrap or best-effort per-PR
+    /// enrichment) failed. All such failures are surfaced identically as a
+    /// transient status-bar error, so they share one variant; `context`
+    /// names the operation.
     CommandFailed {
         context: &'static str,
         error: String,

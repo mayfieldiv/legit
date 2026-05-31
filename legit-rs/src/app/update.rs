@@ -1,6 +1,35 @@
+use std::sync::Arc;
+
 use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind};
 
-use super::{cmd::Cmd, model::Model, msg::Msg};
+use crate::{git_remote::RepoInfo, secret::Secret};
+
+use super::{
+    cmd::{Cmd, RequestContext},
+    model::{Model, StatusKind, StatusMessage},
+    msg::Msg,
+};
+
+/// How long a transient status message lingers before its scheduled clear.
+const STATUS_SUCCESS_CLEAR_MS: u64 = 4_000;
+const STATUS_ERROR_CLEAR_MS: u64 = 8_000;
+
+/// Set the transient status message, bumping the generation so a pending clear
+/// for an older message no-ops. Returns a `ScheduleStatusClear` for Success (4s)
+/// and Error (8s); Info persists until replaced.
+fn set_status(model: &mut Model, kind: StatusKind, text: String) -> Vec<Cmd> {
+    model.status_gen = model.status_gen.wrapping_add(1);
+    model.status = Some(StatusMessage { kind, text });
+    let delay_ms = match kind {
+        StatusKind::Success => STATUS_SUCCESS_CLEAR_MS,
+        StatusKind::Error => STATUS_ERROR_CLEAR_MS,
+        StatusKind::Info => return Vec::new(),
+    };
+    vec![Cmd::ScheduleStatusClear {
+        token: model.status_gen,
+        delay_ms,
+    }]
+}
 
 /// Fire `Cmd::FetchOpenPRs` once both auth token and repo detection have
 /// landed in the model. The repo defines what to fetch; the token authorizes
@@ -13,9 +42,75 @@ fn maybe_fetch_open_prs(model: &mut Model) -> Vec<Cmd> {
     };
     model.list.begin_fetch();
     vec![Cmd::FetchOpenPRs {
-        owner: repo.owner.clone(),
-        repo: repo.repo.clone(),
+        repo: repo.clone(),
         token: token.clone(),
+    }]
+}
+
+/// Fan out per-PR enrichment after the REST list settles: one batched
+/// review-status query plus per-PR threads / reviews / issue-comments fetches.
+/// Checks are deferred until review-status reports each PR's head SHA. Yields
+/// nothing if auth/repo aren't ready or the list is empty.
+fn enrichment_cmds(model: &Model) -> Vec<Cmd> {
+    let (Some(token), Some(repo)) = (model.auth_token.as_ref(), model.repo.as_ref()) else {
+        return Vec::new();
+    };
+    let prs = model.list.prs();
+    if prs.is_empty() {
+        return Vec::new();
+    }
+    let ctx = request_context(repo, token, &model.config.bot_logins);
+    let mut cmds = Vec::with_capacity(prs.len() * 3 + 1);
+    cmds.push(Cmd::FetchReviewStatus {
+        ctx: Arc::clone(&ctx),
+        pr_numbers: prs.iter().map(|pr| pr.number).collect(),
+    });
+    for pr in prs {
+        cmds.push(Cmd::FetchThreads {
+            ctx: Arc::clone(&ctx),
+            number: pr.number,
+        });
+        cmds.push(Cmd::FetchReviews {
+            ctx: Arc::clone(&ctx),
+            number: pr.number,
+        });
+        cmds.push(Cmd::FetchIssueComments {
+            ctx: Arc::clone(&ctx),
+            number: pr.number,
+        });
+    }
+    cmds
+}
+
+/// Build the `Arc<RequestContext>` shared by a fan-out of enrichment commands:
+/// the tracked repo, auth token, and configured bot logins.
+fn request_context(
+    repo: &RepoInfo,
+    token: &Secret<String>,
+    bot_logins: &[String],
+) -> Arc<RequestContext> {
+    Arc::new(RequestContext {
+        repo: repo.clone(),
+        token: token.clone(),
+        bot_logins: bot_logins.to_vec(),
+    })
+}
+
+/// Build a checks fetch for a freshly-learned head SHA, unless checks for it
+/// already arrived. A `None` SHA (a PR with no commits yet) yields nothing.
+fn maybe_fetch_checks(model: &Model, head_sha: Option<String>) -> Vec<Cmd> {
+    let Some(sha) = head_sha else {
+        return Vec::new();
+    };
+    if model.enrichment.checks.contains_key(&sha) {
+        return Vec::new();
+    }
+    let (Some(token), Some(repo)) = (model.auth_token.as_ref(), model.repo.as_ref()) else {
+        return Vec::new();
+    };
+    vec![Cmd::FetchChecks {
+        ctx: request_context(repo, token, &model.config.bot_logins),
+        head_sha: sha,
     }]
 }
 
@@ -57,6 +152,48 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
         }
         Msg::PrListLoaded => {
             model.list.complete_fetch();
+            // The REST stream has settled — fan out enrichment for every PR now
+            // in the list.
+            enrichment_cmds(model)
+        }
+        Msg::NetworkStatsChanged(stats) => {
+            model.network_stats = stats;
+            Vec::new()
+        }
+        Msg::ReviewStatusArrived { pr_number, status } => {
+            // Overwrite the list fields the REST endpoint couldn't supply, then
+            // — once we know the head SHA — fan out the checks fetch for it.
+            let head_sha = status.head_commit_sha.clone();
+            if let Some(pr) = model.list.pr_mut(pr_number) {
+                pr.additions = status.additions;
+                pr.deletions = status.deletions;
+                pr.review_decision = status.review_decision;
+                pr.mergeable = status.mergeable;
+                pr.last_commit_date = status.last_commit_date;
+                pr.head_commit_sha = status.head_commit_sha;
+            } else {
+                // PR no longer in the list (e.g. filtered/refetched); drop it.
+                return Vec::new();
+            }
+            maybe_fetch_checks(model, head_sha)
+        }
+        Msg::ThreadsArrived { pr_number, threads } => {
+            model.enrichment.review_threads.insert(pr_number, threads);
+            Vec::new()
+        }
+        Msg::ReviewsArrived { pr_number, reviews } => {
+            model.enrichment.reviews.insert(pr_number, reviews);
+            Vec::new()
+        }
+        Msg::ChecksArrived { head_sha, checks } => {
+            model.enrichment.checks.insert(head_sha, checks);
+            Vec::new()
+        }
+        Msg::IssueCommentsArrived {
+            pr_number,
+            comments,
+        } => {
+            model.enrichment.issue_comments.insert(pr_number, comments);
             Vec::new()
         }
         Msg::PrListFailed { context, error } => {
@@ -64,7 +201,16 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             Vec::new()
         }
         Msg::CommandFailed { context, error } => {
-            model.last_error = Some(format!("{context}: {error}"));
+            // Covers bootstrap-command failures and best-effort per-PR
+            // enrichment: surface the error, keep all PRs and any enrichment
+            // that did arrive, and never crash.
+            set_status(model, StatusKind::Error, format!("{context}: {error}"))
+        }
+        Msg::StatusCleared { token } => {
+            // Ignore a stale timer — a newer message has since taken the slot.
+            if model.status_gen == token {
+                model.status = None;
+            }
             Vec::new()
         }
         Msg::Quit => {
@@ -80,7 +226,13 @@ mod tests {
     use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
     use crate::{
-        app::{cmd::Cmd, model::Model, msg::Msg, pr_list::Phase, update::update},
+        app::{
+            cmd::Cmd,
+            model::{Model, StatusKind},
+            msg::Msg,
+            pr_list::Phase,
+            update::update,
+        },
         git_remote::RepoInfo,
         github::rest::{PR, PRState},
         secret::Secret,
@@ -118,6 +270,24 @@ mod tests {
     }
 
     #[test]
+    fn network_stats_changed_updates_model() {
+        let (mut model, _) = Model::new();
+        assert_eq!(model.network_stats.in_flight, 0);
+
+        let cmds = update(
+            &mut model,
+            Msg::NetworkStatsChanged(crate::github::limiter::NetworkStats {
+                in_flight: 3,
+                waiting: 5,
+            }),
+        );
+
+        assert_eq!(model.network_stats.in_flight, 3);
+        assert_eq!(model.network_stats.waiting, 5);
+        assert!(cmds.is_empty());
+    }
+
+    #[test]
     fn q_key_sets_should_quit() {
         let (mut model, _) = Model::new();
 
@@ -127,16 +297,66 @@ mod tests {
     }
 
     #[test]
-    fn config_loaded_preserves_existing_error() {
+    fn config_loaded_preserves_existing_status() {
         let (mut model, _) = Model::new();
-        model.last_error = Some("resolve auth token: failed".to_owned());
+        update(
+            &mut model,
+            Msg::CommandFailed {
+                context: "resolve auth token",
+                error: "failed".to_owned(),
+            },
+        );
 
         update(&mut model, Msg::ConfigLoaded(Default::default()));
 
-        assert_eq!(
-            model.last_error.as_deref(),
-            Some("resolve auth token: failed")
+        let status = model.status.as_ref().expect("status preserved");
+        assert!(status.text.contains("resolve auth token"));
+    }
+
+    #[test]
+    fn command_failed_sets_error_status_that_schedules_a_clear() {
+        let (mut model, _) = Model::new();
+
+        let cmds = update(
+            &mut model,
+            Msg::CommandFailed {
+                context: "load config",
+                error: "boom".to_owned(),
+            },
         );
+
+        let status = model.status.as_ref().expect("error status set");
+        assert_eq!(status.kind, StatusKind::Error);
+        assert!(status.text.contains("load config"));
+        // Errors auto-clear after 8s.
+        match cmds.as_slice() {
+            [Cmd::ScheduleStatusClear { token, delay_ms }] => {
+                assert_eq!(*token, model.status_gen);
+                assert_eq!(*delay_ms, 8_000);
+            }
+            other => panic!("expected one ScheduleStatusClear, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn status_cleared_clears_only_when_token_is_current() {
+        let (mut model, _) = Model::new();
+        update(
+            &mut model,
+            Msg::CommandFailed {
+                context: "load config",
+                error: "boom".to_owned(),
+            },
+        );
+        let current = model.status_gen;
+
+        // A stale timer (older generation) must not wipe the live message.
+        update(&mut model, Msg::StatusCleared { token: current - 1 });
+        assert!(model.status.is_some(), "stale clear must be ignored");
+
+        // The matching timer clears it.
+        update(&mut model, Msg::StatusCleared { token: current });
+        assert!(model.status.is_none(), "current clear empties the status");
     }
 
     #[test]
@@ -260,9 +480,9 @@ mod tests {
 
         assert_eq!(cmds.len(), 1);
         match &cmds[0] {
-            Cmd::FetchOpenPRs { owner, repo, .. } => {
-                assert_eq!(owner, "mayfieldiv");
-                assert_eq!(repo, "legit");
+            Cmd::FetchOpenPRs { repo, .. } => {
+                assert_eq!(repo.owner, "mayfieldiv");
+                assert_eq!(repo.repo, "legit");
             }
             other => panic!("expected FetchOpenPRs cmd, got {other:?}"),
         }
@@ -381,5 +601,290 @@ mod tests {
         assert!(failure.contains("list open PRs"));
         assert!(failure.contains("network down"));
         assert!(cmds.is_empty());
+    }
+
+    // ── enrichment ──────────────────────────────────────────────────────────
+
+    use crate::github::types::ReviewStatus;
+
+    /// A model with auth + repo resolved and `numbers` streamed into the list.
+    fn enriched_model(numbers: &[u64]) -> Model {
+        let (mut model, _) = Model::new();
+        model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+        model.repo = Some(RepoInfo {
+            owner: "mayfieldiv".to_owned(),
+            repo: "legit".to_owned(),
+        });
+        model.list.begin_fetch();
+        for n in numbers {
+            model.list.push(sample_pr(*n, "p"));
+        }
+        model
+    }
+
+    fn review_status(head_sha: Option<&str>) -> ReviewStatus {
+        ReviewStatus {
+            additions: 12,
+            deletions: 4,
+            review_decision: "APPROVED".to_owned(),
+            mergeable: "MERGEABLE".to_owned(),
+            last_commit_date: None,
+            head_commit_sha: head_sha.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn pr_list_loaded_fans_out_enrichment_per_pr() {
+        let mut model = enriched_model(&[1, 2]);
+
+        let cmds = update(&mut model, Msg::PrListLoaded);
+
+        // 1 batched review-status + (threads + reviews + issue-comments) per PR.
+        assert_eq!(cmds.len(), 1 + 2 * 3);
+        match &cmds[0] {
+            Cmd::FetchReviewStatus { pr_numbers, .. } => assert_eq!(pr_numbers, &[1, 2]),
+            other => panic!("first cmd should batch review status, got {other:?}"),
+        }
+        let threads = cmds
+            .iter()
+            .filter(|c| matches!(c, Cmd::FetchThreads { .. }))
+            .count();
+        let reviews = cmds
+            .iter()
+            .filter(|c| matches!(c, Cmd::FetchReviews { .. }))
+            .count();
+        let comments = cmds
+            .iter()
+            .filter(|c| matches!(c, Cmd::FetchIssueComments { .. }))
+            .count();
+        assert_eq!((threads, reviews, comments), (2, 2, 2));
+        // Checks are NOT fanned out yet — they wait on review-status SHAs.
+        assert!(!cmds.iter().any(|c| matches!(c, Cmd::FetchChecks { .. })));
+    }
+
+    #[test]
+    fn pr_list_loaded_with_empty_list_fans_out_nothing() {
+        let mut model = enriched_model(&[]);
+
+        let cmds = update(&mut model, Msg::PrListLoaded);
+
+        assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn pr_list_loaded_without_auth_fans_out_nothing() {
+        let (mut model, _) = Model::new();
+        model.repo = Some(RepoInfo {
+            owner: "mayfieldiv".to_owned(),
+            repo: "legit".to_owned(),
+        });
+        model.list.begin_fetch();
+        model.list.push(sample_pr(1, "p"));
+
+        let cmds = update(&mut model, Msg::PrListLoaded);
+
+        assert!(
+            cmds.is_empty(),
+            "no enrichment until the auth token resolves"
+        );
+    }
+
+    #[test]
+    fn review_status_arrived_overwrites_pr_fields_and_fetches_checks() {
+        let mut model = enriched_model(&[1]);
+
+        let cmds = update(
+            &mut model,
+            Msg::ReviewStatusArrived {
+                pr_number: 1,
+                status: review_status(Some("abc123")),
+            },
+        );
+
+        let pr = &model.list.prs()[0];
+        assert_eq!(pr.additions, 12);
+        assert_eq!(pr.deletions, 4);
+        assert_eq!(pr.review_decision, "APPROVED");
+        assert_eq!(pr.mergeable, "MERGEABLE");
+        assert_eq!(pr.head_commit_sha.as_deref(), Some("abc123"));
+
+        assert_eq!(cmds.len(), 1);
+        match &cmds[0] {
+            Cmd::FetchChecks { head_sha, .. } => assert_eq!(head_sha, "abc123"),
+            other => panic!("expected FetchChecks for the new head SHA, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn review_status_arrived_without_sha_skips_checks() {
+        let mut model = enriched_model(&[1]);
+
+        let cmds = update(
+            &mut model,
+            Msg::ReviewStatusArrived {
+                pr_number: 1,
+                status: review_status(None),
+            },
+        );
+
+        assert_eq!(model.list.prs()[0].mergeable, "MERGEABLE");
+        assert!(cmds.is_empty(), "no SHA means no checks fetch");
+    }
+
+    #[test]
+    fn review_status_arrived_for_unknown_pr_is_a_noop() {
+        let mut model = enriched_model(&[1]);
+
+        let cmds = update(
+            &mut model,
+            Msg::ReviewStatusArrived {
+                pr_number: 999,
+                status: review_status(Some("abc123")),
+            },
+        );
+
+        // The known PR is untouched and no checks are fetched for the stray SHA.
+        assert_eq!(model.list.prs()[0].mergeable, "UNKNOWN");
+        assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn review_status_arrived_skips_checks_already_fetched_for_sha() {
+        let mut model = enriched_model(&[1]);
+        model
+            .enrichment
+            .checks
+            .insert("abc123".to_owned(), Vec::new());
+
+        let cmds = update(
+            &mut model,
+            Msg::ReviewStatusArrived {
+                pr_number: 1,
+                status: review_status(Some("abc123")),
+            },
+        );
+
+        assert!(
+            cmds.is_empty(),
+            "checks already present for this SHA; don't refetch"
+        );
+    }
+
+    #[test]
+    fn threads_arrived_stores_threads_by_pr_number() {
+        let mut model = enriched_model(&[1]);
+        let thread = crate::github::types::FullReviewThread {
+            id: "T1".to_owned(),
+            is_resolved: false,
+            path: "src/x".to_owned(),
+            line: Some(3),
+            comments: Vec::new(),
+        };
+
+        let cmds = update(
+            &mut model,
+            Msg::ThreadsArrived {
+                pr_number: 1,
+                threads: vec![thread.clone()],
+            },
+        );
+
+        assert_eq!(model.enrichment.review_threads.get(&1), Some(&vec![thread]));
+        assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn reviews_arrived_stores_reviews_by_pr_number() {
+        let mut model = enriched_model(&[1]);
+        let review = crate::github::types::Review {
+            user: "alice".to_owned(),
+            state: "APPROVED".to_owned(),
+        };
+
+        update(
+            &mut model,
+            Msg::ReviewsArrived {
+                pr_number: 1,
+                reviews: vec![review.clone()],
+            },
+        );
+
+        assert_eq!(model.enrichment.reviews.get(&1), Some(&vec![review]));
+    }
+
+    #[test]
+    fn checks_arrived_stores_checks_by_head_sha() {
+        let mut model = enriched_model(&[1]);
+        let check = crate::github::types::CheckRun {
+            name: "build".to_owned(),
+            status: "completed".to_owned(),
+            conclusion: Some("success".to_owned()),
+        };
+
+        update(
+            &mut model,
+            Msg::ChecksArrived {
+                head_sha: "abc123".to_owned(),
+                checks: vec![check.clone()],
+            },
+        );
+
+        assert_eq!(model.enrichment.checks.get("abc123"), Some(&vec![check]));
+    }
+
+    #[test]
+    fn issue_comments_arrived_stores_comments_by_pr_number() {
+        let mut model = enriched_model(&[1]);
+        let comment = crate::github::types::IssueComment {
+            id: 7,
+            author: "bob".to_owned(),
+            body: "lgtm".to_owned(),
+            created_at: chrono::Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap(),
+            url: "u".to_owned(),
+            is_bot: false,
+        };
+
+        update(
+            &mut model,
+            Msg::IssueCommentsArrived {
+                pr_number: 1,
+                comments: vec![comment.clone()],
+            },
+        );
+
+        assert_eq!(
+            model.enrichment.issue_comments.get(&1),
+            Some(&vec![comment])
+        );
+    }
+
+    #[test]
+    fn enrichment_failure_records_error_and_keeps_data() {
+        let mut model = enriched_model(&[1]);
+        model.enrichment.reviews.insert(
+            1,
+            vec![crate::github::types::Review {
+                user: "alice".to_owned(),
+                state: "APPROVED".to_owned(),
+            }],
+        );
+
+        let cmds = update(
+            &mut model,
+            Msg::CommandFailed {
+                context: "fetch check runs",
+                error: "500 Server Error".to_owned(),
+            },
+        );
+
+        let status = model.status.as_ref().expect("error status recorded");
+        assert_eq!(status.kind, StatusKind::Error);
+        assert!(status.text.contains("fetch check runs"));
+        assert!(status.text.contains("500 Server Error"));
+        // Best-effort: nothing already loaded is dropped on a failure.
+        assert_eq!(model.list.prs().len(), 1);
+        assert!(model.enrichment.reviews.contains_key(&1));
+        // The error message is scheduled to auto-clear.
+        assert!(matches!(cmds.as_slice(), [Cmd::ScheduleStatusClear { .. }]));
     }
 }

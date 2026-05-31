@@ -1,21 +1,66 @@
+use std::{future::Future, sync::Arc};
+
 use tokio::sync::mpsc;
 
-use crate::{app::msg::Msg, auth, config, git_remote, github::rest::OctocrabRest, secret::Secret};
+use crate::{
+    app::msg::Msg, auth, config, git_remote, git_remote::RepoInfo, github::graphql::GraphQlClient,
+    github::limiter::NetworkLimiter, github::rest::OctocrabRest, secret::Secret,
+};
+
+/// The inputs every per-PR enrichment request shares: which repo, the auth
+/// token, and the configured bot logins (used for comment/thread bot
+/// detection). Built once per list-load in `update::enrichment_cmds` and shared
+/// by `Arc` so the per-PR fan-out clones one pointer per command instead of the
+/// owner/repo/token/bot-login strings each time.
+#[derive(Debug, PartialEq, Eq)]
+pub struct RequestContext {
+    pub repo: RepoInfo,
+    pub token: Secret<String>,
+    pub bot_logins: Vec<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Cmd {
     LoadConfig,
     ResolveAuthToken,
     DetectRepo,
+    /// Listing open PRs streams results back one-by-one and runs before the
+    /// enrichment fan-out, so it carries only repo + token rather than the
+    /// shared `RequestContext` (it has no use for `bot_logins`).
     FetchOpenPRs {
-        owner: String,
-        repo: String,
+        repo: RepoInfo,
         token: Secret<String>,
+    },
+    FetchReviewStatus {
+        ctx: Arc<RequestContext>,
+        pr_numbers: Vec<u64>,
+    },
+    FetchThreads {
+        ctx: Arc<RequestContext>,
+        number: u64,
+    },
+    FetchReviews {
+        ctx: Arc<RequestContext>,
+        number: u64,
+    },
+    FetchIssueComments {
+        ctx: Arc<RequestContext>,
+        number: u64,
+    },
+    FetchChecks {
+        ctx: Arc<RequestContext>,
+        head_sha: String,
+    },
+    /// Clear the status message after `delay_ms`, but only if it's still the one
+    /// identified by `token` (see `Model::status_gen`).
+    ScheduleStatusClear {
+        token: u64,
+        delay_ms: u64,
     },
 }
 
-#[tracing::instrument(name = "command", skip(tx))]
-pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>) {
+#[tracing::instrument(name = "command", skip(tx, limiter))]
+pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkLimiter>) {
     tracing::info!("started");
     match cmd {
         Cmd::LoadConfig => {
@@ -60,17 +105,122 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>) {
             };
             let _ = tx.send(msg);
         }
-        Cmd::FetchOpenPRs { owner, repo, token } => {
-            run_fetch_open_prs(owner, repo, token, tx).await;
+        Cmd::FetchOpenPRs { repo, token } => {
+            run_fetch_open_prs(repo, token, tx, limiter).await;
+        }
+        Cmd::FetchReviewStatus { ctx, pr_numbers } => {
+            request(
+                &tx,
+                &limiter,
+                "fetch review status",
+                async move {
+                    GraphQlClient::new(&ctx.token)?
+                        .fetch_review_status(&ctx.repo.owner, &ctx.repo.repo, &pr_numbers)
+                        .await
+                },
+                |results| {
+                    results
+                        .into_iter()
+                        .map(|(pr_number, status)| Msg::ReviewStatusArrived { pr_number, status })
+                        .collect()
+                },
+            )
+            .await;
+        }
+        Cmd::FetchThreads { ctx, number } => {
+            request(
+                &tx,
+                &limiter,
+                "fetch review threads",
+                async move {
+                    GraphQlClient::new(&ctx.token)?
+                        .fetch_review_threads(
+                            &ctx.repo.owner,
+                            &ctx.repo.repo,
+                            number,
+                            &ctx.bot_logins,
+                        )
+                        .await
+                },
+                move |threads| {
+                    vec![Msg::ThreadsArrived {
+                        pr_number: number,
+                        threads,
+                    }]
+                },
+            )
+            .await;
+        }
+        Cmd::FetchReviews { ctx, number } => {
+            request(
+                &tx,
+                &limiter,
+                "fetch reviews",
+                async move {
+                    OctocrabRest::new(&ctx.token)?
+                        .list_reviews(&ctx.repo.owner, &ctx.repo.repo, number)
+                        .await
+                },
+                move |reviews| {
+                    vec![Msg::ReviewsArrived {
+                        pr_number: number,
+                        reviews,
+                    }]
+                },
+            )
+            .await;
+        }
+        Cmd::FetchIssueComments { ctx, number } => {
+            request(
+                &tx,
+                &limiter,
+                "fetch issue comments",
+                async move {
+                    OctocrabRest::new(&ctx.token)?
+                        .list_issue_comments(
+                            &ctx.repo.owner,
+                            &ctx.repo.repo,
+                            number,
+                            &ctx.bot_logins,
+                        )
+                        .await
+                },
+                move |comments| {
+                    vec![Msg::IssueCommentsArrived {
+                        pr_number: number,
+                        comments,
+                    }]
+                },
+            )
+            .await;
+        }
+        Cmd::FetchChecks { ctx, head_sha } => {
+            request(
+                &tx,
+                &limiter,
+                "fetch check runs",
+                async move {
+                    let checks = OctocrabRest::new(&ctx.token)?
+                        .list_check_runs(&ctx.repo.owner, &ctx.repo.repo, &head_sha)
+                        .await?;
+                    Ok((head_sha, checks))
+                },
+                |(head_sha, checks)| vec![Msg::ChecksArrived { head_sha, checks }],
+            )
+            .await;
+        }
+        Cmd::ScheduleStatusClear { token, delay_ms } => {
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            let _ = tx.send(Msg::StatusCleared { token });
         }
     }
 }
 
 async fn run_fetch_open_prs(
-    owner: String,
-    repo: String,
+    repo: RepoInfo,
     token: Secret<String>,
     tx: mpsc::UnboundedSender<Msg>,
+    limiter: Arc<NetworkLimiter>,
 ) {
     let client = match OctocrabRest::new(&token) {
         Ok(client) => client,
@@ -90,12 +240,15 @@ async fn run_fetch_open_prs(
         }
     });
 
-    let result = client.list_open_prs(&owner, &repo, pr_tx).await;
+    // Hold a concurrency slot for the duration of the (paginated) listing so the
+    // network indicator reflects it and we stay under the shared 8-request cap.
+    let _permit = limiter.acquire().await;
+    let result = client.list_open_prs(&repo.owner, &repo.repo, pr_tx).await;
     let _ = forwarder.await;
 
     match result {
         Ok(()) => {
-            tracing::info!(%owner, %repo, "open PR listing finished");
+            tracing::info!(owner = %repo.owner, repo = %repo.repo, "open PR listing finished");
             let _ = tx.send(Msg::PrListLoaded);
         }
         Err(error) => {
@@ -104,12 +257,39 @@ async fn run_fetch_open_prs(
     }
 }
 
+/// Hold one concurrency permit, run a single GitHub request, and forward the
+/// messages it produces — or one `CommandFailed` if the request (including the
+/// client build inside it) errors. Captures the build-permit-dispatch shape
+/// every per-PR enrichment command shares; `context` names the operation so
+/// the failure reads e.g. "fetch reviews: ...". `op` is a lazy future, so the
+/// permit is held only across the actual await, not while it's constructed.
+async fn request<T>(
+    tx: &mpsc::UnboundedSender<Msg>,
+    limiter: &Arc<NetworkLimiter>,
+    context: &'static str,
+    op: impl Future<Output = anyhow::Result<T>>,
+    to_msgs: impl FnOnce(T) -> Vec<Msg>,
+) {
+    let _permit = limiter.acquire().await;
+    match op.await {
+        Ok(value) => {
+            for msg in to_msgs(value) {
+                let _ = tx.send(msg);
+            }
+        }
+        Err(error) => {
+            let _ = tx.send(command_failed(context, error));
+        }
+    }
+}
+
 /// Log the failure here (cmd is the impure layer) and build the `Msg` for
 /// the runtime to deliver to `update`. Keeps `update` a pure
 /// `(Model, Msg) -> Vec<Cmd>` — the warn doesn't have to fire from inside
-/// the reducer.
+/// the reducer. `{error:#}` renders the full anyhow cause chain (e.g. the
+/// underlying HTTP status), not just the outermost context.
 fn command_failed(context: &'static str, error: anyhow::Error) -> Msg {
-    let error = error.to_string();
+    let error = format!("{error:#}");
     tracing::warn!(context, %error, "command failed");
     Msg::CommandFailed { context, error }
 }
@@ -118,7 +298,7 @@ fn command_failed(context: &'static str, error: anyhow::Error) -> Msg {
 /// own `Msg` variant so the status bar can prioritise list errors over
 /// generic command errors).
 fn pr_list_failed(context: &'static str, error: anyhow::Error) -> Msg {
-    let error = error.to_string();
+    let error = format!("{error:#}");
     tracing::warn!(context, %error, "pr listing failed");
     Msg::PrListFailed { context, error }
 }
