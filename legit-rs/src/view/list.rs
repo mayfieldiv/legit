@@ -126,6 +126,10 @@ fn row_line<'a>(
     let author = truncate(&author, AUTHOR_COL);
     let reason = truncate(reason, REASON_COL);
     let age_col = width.saturating_sub(pr_num_col + title_col + AUTHOR_COL + size_col + REASON_COL);
+    // Truncate, not just pad: in a narrow terminal `age_col` can saturate to 0,
+    // and `pad_to_width` returns the string untouched when it already meets the
+    // width — so without this the full age would overflow into the reason cell.
+    let age = truncate(&age, age_col);
 
     // Pad each column by display width (not char count) so rows with wide
     // glyphs in the title/author stay aligned with ASCII rows.

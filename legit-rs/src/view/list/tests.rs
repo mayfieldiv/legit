@@ -548,3 +548,36 @@ fn status_bar_shows_error_message_on_the_right() {
         "error message rendered: {status:?}"
     );
 }
+
+#[test]
+fn narrow_width_empties_age_rather_than_overflowing_the_row() {
+    // Choose a width where the title clamps to its 1-column floor and the age
+    // column saturates to 0. The age must then render empty, not pass the full
+    // age string through and overflow into the trailing reason cell — a row
+    // must never render wider than its width.
+    let pr_num_col = 6;
+    let size_col = 8;
+    let width = (pr_num_col + super::AUTHOR_COL + size_col + super::REASON_COL + 1) as u16;
+
+    let pr = pr(
+        1234,
+        "a title far too long to fit in this row",
+        "octocat",
+        72,
+    );
+    let line = super::row_line(
+        &pr,
+        Some("needs review"),
+        width,
+        pr_num_col,
+        size_col,
+        fixed_now(),
+        false,
+    );
+
+    assert!(
+        line.width() <= width as usize,
+        "row overflowed its width: {} > {width}",
+        line.width(),
+    );
+}
