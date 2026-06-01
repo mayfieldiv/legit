@@ -52,6 +52,12 @@ pub struct StatusMessage {
 pub struct Model {
     pub should_quit: bool,
     pub config: LegitConfig,
+    /// True once config load has settled successfully (`Cmd::LoadConfig` ->
+    /// `Msg::ConfigLoaded`). The PR fetch waits on this so blockers are never
+    /// derived with a default `user`/`bot_logins` that lost the startup race
+    /// against enrichment. A malformed config never sets it (`ConfigLoadFailed`
+    /// halts the list instead).
+    pub config_loaded: bool,
     pub auth_token: Option<Secret<String>>,
     pub repo: Option<RepoInfo>,
     pub list: PrList,
@@ -76,6 +82,7 @@ impl Model {
             Self {
                 should_quit: false,
                 config: LegitConfig::default(),
+                config_loaded: false,
                 auth_token: None,
                 repo: None,
                 list: PrList::new(),

@@ -31,15 +31,21 @@ fn set_status(model: &mut Model, kind: StatusKind, text: String) -> Vec<Cmd> {
     }]
 }
 
-/// Fire `Cmd::FetchOpenPRs` once both auth token and repo detection have
-/// landed in the model. The repo defines what to fetch; the token authorizes
-/// the request. Either alone yields no command — we wait for the second one.
+/// Fire `Cmd::FetchOpenPRs` once all three startup prerequisites have landed:
+/// the auth token authorizes the request, repo detection defines what to fetch,
+/// and a settled config supplies the current user and bot logins that drive
+/// smart-status. Any one missing yields no command — we wait for the last. The
+/// config gate is load-bearing: it guarantees no PR's blocker is derived before
+/// the user is known, so a lost startup race can never misclassify a PR.
 /// Marks the PR list as Loading so the view swaps from "No open PRs" to
 /// "Loading pull requests…" until results land.
 fn maybe_fetch_open_prs(model: &mut Model) -> Vec<Cmd> {
     let (Some(token), Some(repo)) = (model.auth_token.as_ref(), model.repo.as_ref()) else {
         return Vec::new();
     };
+    if !model.config_loaded {
+        return Vec::new();
+    }
     model.list.begin_fetch();
     vec![Cmd::FetchOpenPRs {
         repo: repo.clone(),
@@ -143,7 +149,11 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
         Msg::TerminalEvent(_) => Vec::new(),
         Msg::ConfigLoaded(config) => {
             model.config = config;
-            Vec::new()
+            // Releasing the fetch gate here lets the PR fetch fire if auth + repo
+            // already landed — config (a local file read) usually wins the
+            // startup race, but when it arrives last it must kick off the fetch.
+            model.config_loaded = true;
+            maybe_fetch_open_prs(model)
         }
         Msg::AuthTokenResolved(token) => {
             model.auth_token = Some(token);
@@ -213,6 +223,14 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
         }
         Msg::PrListFailed { context, error } => {
             model.list.fail_fetch(format!("{context}: {error}"));
+            Vec::new()
+        }
+        Msg::ConfigLoadFailed { error } => {
+            // Config is a hard prerequisite (current user + bot logins drive
+            // smart-status), so a malformed config halts the list with a
+            // persistent failure instead of fetching with wrong defaults.
+            // `config_loaded` stays false, so `maybe_fetch_open_prs` never fires.
+            model.list.fail_fetch(format!("config error: {error}"));
             Vec::new()
         }
         Msg::CommandFailed { context, error } => {

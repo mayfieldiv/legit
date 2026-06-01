@@ -76,7 +76,15 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                     );
                     Msg::ConfigLoaded(config)
                 }
-                Err(error) => command_failed("load config", error),
+                Err(error) => {
+                    // Config is a hard prerequisite, not a best-effort command,
+                    // so it gets its own halt-the-list failure rather than the
+                    // transient `command_failed` status. `{error:#}` renders the
+                    // full validation cause chain.
+                    let error = format!("{error:#}");
+                    tracing::warn!(%error, "config load failed");
+                    Msg::ConfigLoadFailed { error }
+                }
             };
             let _ = tx.send(msg);
         }

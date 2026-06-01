@@ -50,10 +50,18 @@ pub enum Msg {
         context: &'static str,
         error: String,
     },
-    /// Any other command (config/auth/repo bootstrap or best-effort per-PR
-    /// enrichment) failed. All such failures are surfaced identically as a
-    /// transient status-bar error, so they share one variant; `context`
-    /// names the operation.
+    /// Config load failed validation (a malformed `~/.legit/config.json`).
+    /// Config is a hard prerequisite for fetching PRs — it supplies the current
+    /// user and bot logins that drive smart-status — so this halts the list with
+    /// a persistent failure rather than fetching with wrong defaults. A *missing*
+    /// config is not an error: it loads as defaults and routes to `ConfigLoaded`.
+    ConfigLoadFailed {
+        error: String,
+    },
+    /// Any other command (auth/repo bootstrap or best-effort per-PR enrichment)
+    /// failed. All such failures are surfaced identically as a transient
+    /// status-bar error, so they share one variant; `context` names the
+    /// operation.
     CommandFailed {
         context: &'static str,
         error: String,

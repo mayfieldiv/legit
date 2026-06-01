@@ -150,6 +150,7 @@ fn initial_cmds_include_repo_detection() {
 fn dispatching_fetch_marks_list_as_loading() {
     let (mut model, _) = Model::new();
     model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.config_loaded = true;
 
     let cmds = update(
         &mut model,
@@ -245,6 +246,7 @@ fn repo_detected_without_token_stores_repo_but_does_not_fetch() {
 fn repo_detected_after_token_dispatches_fetch_open_prs() {
     let (mut model, _) = Model::new();
     model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.config_loaded = true;
 
     let cmds = update(
         &mut model,
@@ -262,6 +264,82 @@ fn repo_detected_after_token_dispatches_fetch_open_prs() {
         }
         other => panic!("expected FetchOpenPRs cmd, got {other:?}"),
     }
+}
+
+#[test]
+fn fetch_waits_for_config_even_with_auth_and_repo() {
+    let (mut model, _) = Model::new();
+    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    // config has NOT settled yet — the gate must hold.
+
+    let cmds = update(
+        &mut model,
+        Msg::RepoDetected(RepoInfo {
+            owner: "mayfieldiv".to_owned(),
+            repo: "legit".to_owned(),
+        }),
+    );
+
+    assert!(
+        cmds.is_empty(),
+        "fetch must wait for config so blockers aren't derived without the user"
+    );
+    assert!(
+        !matches!(model.list.phase(), Phase::Loading),
+        "the list must not enter Loading until the fetch actually dispatches"
+    );
+}
+
+#[test]
+fn config_loaded_releases_the_fetch_when_auth_and_repo_already_landed() {
+    let (mut model, _) = Model::new();
+    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.repo = Some(RepoInfo {
+        owner: "mayfieldiv".to_owned(),
+        repo: "legit".to_owned(),
+    });
+
+    // Config arrives last; it must kick off the gated fetch.
+    let cmds = update(&mut model, Msg::ConfigLoaded(Default::default()));
+
+    assert!(model.config_loaded);
+    assert_eq!(cmds.len(), 1);
+    assert!(
+        matches!(&cmds[0], Cmd::FetchOpenPRs { .. }),
+        "config landing last should dispatch the fetch, got {cmds:?}"
+    );
+}
+
+#[test]
+fn config_load_failed_halts_the_list_and_does_not_fetch() {
+    let (mut model, _) = Model::new();
+    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.repo = Some(RepoInfo {
+        owner: "mayfieldiv".to_owned(),
+        repo: "legit".to_owned(),
+    });
+
+    let cmds = update(
+        &mut model,
+        Msg::ConfigLoadFailed {
+            error: "invalid bot_logins entry".to_owned(),
+        },
+    );
+
+    assert!(
+        cmds.is_empty(),
+        "a malformed config halts: no fetch, and no scheduled clear (the failure is persistent)"
+    );
+    assert!(
+        !model.config_loaded,
+        "a failed load must not release the fetch gate"
+    );
+    let failure = model
+        .list
+        .failure()
+        .expect("list should be in the Failed phase after ConfigLoadFailed");
+    assert!(failure.contains("config error"));
+    assert!(failure.contains("invalid bot_logins entry"));
 }
 
 #[test]
