@@ -7,9 +7,19 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
+use crate::app::grouping::Grouping;
 use crate::app::model::{Model, StatusKind};
 
 pub mod list;
+
+/// Short label for the active grouping mode, shown in the status-bar `g` hint.
+fn grouping_label(model: &Model) -> &'static str {
+    match model.list.grouping() {
+        Grouping::SmartStatus => "smart-status",
+        Grouping::Repo => "repo",
+        Grouping::None => "none",
+    }
+}
 
 pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
     let area = frame.area();
@@ -18,7 +28,7 @@ pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
         .constraints([Constraint::Min(1), Constraint::Length(1)])
         .areas(area);
 
-    list::render(&model.list, frame, main, now);
+    list::render(model, frame, main, now);
     render_status(model, frame, status);
 }
 
@@ -42,7 +52,12 @@ fn render_status(model: &Model, frame: &mut Frame<'_>, area: Rect) {
         "q",
         Style::default().add_modifier(Modifier::BOLD),
     ));
-    left.push(Span::raw(" quit"));
+    left.push(Span::raw(" quit  "));
+    left.push(Span::styled(
+        "g",
+        Style::default().add_modifier(Modifier::BOLD),
+    ));
+    left.push(Span::raw(format!(" group: {}", grouping_label(model))));
     frame.render_widget(Paragraph::new(Line::from(left)), area);
 
     // Right: a hard list-load failure takes precedence; otherwise the transient
