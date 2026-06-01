@@ -10,7 +10,6 @@
 //! author), repo groups alphabetically.
 
 use crate::blocker::Tier;
-use crate::github::rest::PR;
 
 /// How the Open PR List is grouped. `g` cycles through these in order, wrapping
 /// back to `SmartStatus`.
@@ -37,7 +36,7 @@ impl Grouping {
 }
 
 /// One row in the rendered list: either a group header or a PR. `Pr` carries the
-/// absolute index into the underlying `&[PR]` so selection (a PR index) maps to
+/// absolute index into the underlying PR list so selection (a PR index) maps to
 /// a display row and back without a second lookup.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DisplayRow {
@@ -45,7 +44,7 @@ pub enum DisplayRow {
     Pr(usize),
 }
 
-/// Build the display rows for `prs` under `grouping`.
+/// Build the display rows for `pr_count` PRs under `grouping`.
 ///
 /// - `tier_of` returns the Smart-status tier for a PR by index, or `None` when
 ///   its enrichment hasn't been derived yet (those PRs collect under a trailing
@@ -56,33 +55,33 @@ pub enum DisplayRow {
 /// PR order within a group preserves input order (the REST stream order). Empty
 /// groups are never emitted.
 pub fn display_rows(
-    prs: &[PR],
+    pr_count: usize,
     grouping: Grouping,
     tier_of: impl Fn(usize) -> Option<Tier>,
     repo_slug: &str,
 ) -> Vec<DisplayRow> {
     match grouping {
-        Grouping::None => (0..prs.len()).map(DisplayRow::Pr).collect(),
+        Grouping::None => (0..pr_count).map(DisplayRow::Pr).collect(),
         // Single-repo today, so every PR shares `repo_slug`; fall back to
         // `"unknown"` (matching the TS engine) when no repo is detected yet.
-        Grouping::Repo => grouped_rows(prs, |_| {
+        Grouping::Repo => grouped_rows(pr_count, |_| {
             if repo_slug.is_empty() {
                 "unknown".to_owned()
             } else {
                 repo_slug.to_owned()
             }
         }),
-        Grouping::SmartStatus => smart_status_rows(prs, tier_of),
+        Grouping::SmartStatus => smart_status_rows(pr_count, tier_of),
     }
 }
 
 /// Smart-status grouping: tier-ordered groups, then a trailing "Loading details…"
 /// group for PRs whose tier hasn't been derived yet.
-fn smart_status_rows(prs: &[PR], tier_of: impl Fn(usize) -> Option<Tier>) -> Vec<DisplayRow> {
+fn smart_status_rows(pr_count: usize, tier_of: impl Fn(usize) -> Option<Tier>) -> Vec<DisplayRow> {
     // Collect indices per tier, preserving input order within each tier.
     let mut tiers: Vec<(Tier, Vec<usize>)> = Vec::new();
     let mut loading: Vec<usize> = Vec::new();
-    for i in 0..prs.len() {
+    for i in 0..pr_count {
         match tier_of(i) {
             Some(tier) => match tiers.iter_mut().find(|(t, _)| *t == tier) {
                 Some((_, members)) => members.push(i),
@@ -93,7 +92,7 @@ fn smart_status_rows(prs: &[PR], tier_of: impl Fn(usize) -> Option<Tier>) -> Vec
     }
     tiers.sort_by_key(|(tier, _)| tier.order());
 
-    let mut rows = Vec::with_capacity(prs.len() + tiers.len() + 1);
+    let mut rows = Vec::with_capacity(pr_count + tiers.len() + 1);
     for (tier, members) in tiers {
         rows.push(DisplayRow::Header(tier.label().to_owned()));
         rows.extend(members.into_iter().map(DisplayRow::Pr));
@@ -108,9 +107,9 @@ fn smart_status_rows(prs: &[PR], tier_of: impl Fn(usize) -> Option<Tier>) -> Vec
 /// Generic single-key grouping (used by repo): bucket indices by the key
 /// `key_of(i)` produces, emit groups sorted alphabetically by key, headers
 /// labelled with the key.
-fn grouped_rows(prs: &[PR], key_of: impl Fn(usize) -> String) -> Vec<DisplayRow> {
+fn grouped_rows(pr_count: usize, key_of: impl Fn(usize) -> String) -> Vec<DisplayRow> {
     let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
-    for i in 0..prs.len() {
+    for i in 0..pr_count {
         let key = key_of(i);
         match groups.iter_mut().find(|(k, _)| *k == key) {
             Some((_, members)) => members.push(i),
@@ -119,7 +118,7 @@ fn grouped_rows(prs: &[PR], key_of: impl Fn(usize) -> String) -> Vec<DisplayRow>
     }
     groups.sort_by(|(a, _), (b, _)| a.cmp(b));
 
-    let mut rows = Vec::with_capacity(prs.len() + groups.len());
+    let mut rows = Vec::with_capacity(pr_count + groups.len());
     for (key, members) in groups {
         rows.push(DisplayRow::Header(key));
         rows.extend(members.into_iter().map(DisplayRow::Pr));

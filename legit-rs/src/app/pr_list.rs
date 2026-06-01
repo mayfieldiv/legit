@@ -87,7 +87,7 @@ impl PrList {
     /// on-screen. Called by `update` after PRs arrive, enrichment lands, or the
     /// grouping changes.
     pub fn relayout(&mut self, tier_of: impl Fn(usize) -> Option<Tier>, repo_slug: &str) {
-        self.rows = display_rows(&self.prs, self.grouping, tier_of, repo_slug);
+        self.rows = display_rows(self.prs.len(), self.grouping, tier_of, repo_slug);
         if self.selected >= self.prs.len() {
             self.selected = self.prs.len().saturating_sub(1);
         }
