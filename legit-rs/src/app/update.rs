@@ -180,17 +180,17 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             model.network_stats = stats;
             Vec::new()
         }
-        Msg::ReviewStatusArrived { pr_number, status } => {
+        Msg::ReviewStatusArrived { pr, status } => {
             // Overwrite the list fields the REST endpoint couldn't supply, then
             // — once we know the head SHA — fan out the checks fetch for it.
             let head_sha = status.head_commit_sha.clone();
-            if let Some(pr) = model.list.pr_mut(pr_number) {
-                pr.additions = status.additions;
-                pr.deletions = status.deletions;
-                pr.review_decision = status.review_decision;
-                pr.mergeable = status.mergeable;
-                pr.last_commit_date = status.last_commit_date;
-                pr.head_commit_sha = status.head_commit_sha;
+            if let Some(entry) = model.list.pr_mut(&pr) {
+                entry.additions = status.additions;
+                entry.deletions = status.deletions;
+                entry.review_decision = status.review_decision;
+                entry.mergeable = status.mergeable;
+                entry.last_commit_date = status.last_commit_date;
+                entry.head_commit_sha = status.head_commit_sha;
             } else {
                 // PR no longer in the list (e.g. filtered/refetched); drop it.
                 return Vec::new();
@@ -199,13 +199,13 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             model.refresh_blockers();
             maybe_fetch_checks(model, head_sha)
         }
-        Msg::ThreadsArrived { pr_number, threads } => {
-            model.enrichment.review_threads.insert(pr_number, threads);
+        Msg::ThreadsArrived { pr, threads } => {
+            model.enrichment.review_threads.insert(pr, threads);
             model.refresh_blockers();
             Vec::new()
         }
-        Msg::ReviewsArrived { pr_number, reviews } => {
-            model.enrichment.reviews.insert(pr_number, reviews);
+        Msg::ReviewsArrived { pr, reviews } => {
+            model.enrichment.reviews.insert(pr, reviews);
             model.refresh_blockers();
             Vec::new()
         }
@@ -214,11 +214,8 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             model.refresh_blockers();
             Vec::new()
         }
-        Msg::IssueCommentsArrived {
-            pr_number,
-            comments,
-        } => {
-            model.enrichment.issue_comments.insert(pr_number, comments);
+        Msg::IssueCommentsArrived { pr, comments } => {
+            model.enrichment.issue_comments.insert(pr, comments);
             Vec::new()
         }
         Msg::PrListFailed { context, error } => {

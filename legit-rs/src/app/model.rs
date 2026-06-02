@@ -5,21 +5,23 @@ use crate::{
     config::LegitConfig,
     git_remote::RepoInfo,
     github::limiter::NetworkStats,
+    github::rest::PrKey,
     github::types::{CheckRun, FullReviewThread, IssueComment, Review},
     secret::Secret,
 };
 
 use super::{cmd::Cmd, pr_list::PrList};
 
-/// Per-PR enrichment landed by the GraphQL/REST fan-out. Keyed by PR number,
-/// except `checks` which is keyed by head commit SHA (checks belong to a commit
-/// and are shared across PRs that point at it). Written here in M3; the blocker
-/// engine, summary panel, and detail view consume these in later milestones.
+/// Per-PR enrichment landed by the GraphQL/REST fan-out. Keyed by `PrKey`
+/// (slug + number — numbers collide across repos), except `checks` which is
+/// keyed by head commit SHA (checks belong to a commit and are shared across
+/// PRs that point at it). Written here in M3; the blocker engine, summary
+/// panel, and detail view consume these in later milestones.
 #[derive(Clone, Debug, Default)]
 pub struct Enrichment {
-    pub review_threads: HashMap<u64, Vec<FullReviewThread>>,
-    pub reviews: HashMap<u64, Vec<Review>>,
-    pub issue_comments: HashMap<u64, Vec<IssueComment>>,
+    pub review_threads: HashMap<PrKey, Vec<FullReviewThread>>,
+    pub reviews: HashMap<PrKey, Vec<Review>>,
+    pub issue_comments: HashMap<PrKey, Vec<IssueComment>>,
     pub checks: HashMap<String, Vec<CheckRun>>,
 }
 
@@ -70,10 +72,10 @@ pub struct Model {
     pub enrichment: Enrichment,
     /// Per-PR Smart-status, derived from `enrichment` + the current user and
     /// cached so the list view and grouping read it without recomputing on
-    /// every frame. Keyed by PR number; recomputed by `refresh_blockers`
+    /// every frame. Keyed by `PrKey`; recomputed by `refresh_blockers`
     /// whenever a PR arrives or its enrichment lands. A PR absent from the map
     /// hasn't been derived yet (it groups under "Loading details…").
-    pub blockers: HashMap<u64, BlockerResult>,
+    pub blockers: HashMap<PrKey, BlockerResult>,
 }
 
 impl Model {
@@ -116,20 +118,20 @@ impl Model {
     /// blocker hasn't been derived yet (enrichment still pending).
     fn tier_of(&self, index: usize) -> Option<Tier> {
         let pr = self.list.prs().get(index)?;
-        self.blockers.get(&pr.number).map(|b| b.tier)
+        self.blockers.get(&pr.key()).map(|b| b.tier)
     }
 
     /// Recompute the cached blocker result for one PR from whatever enrichment
     /// has arrived. A PR is only classified once both its threads and reviews
     /// are present (matching the TS `loading` gate); until then it stays absent
     /// from the cache and groups under "Loading details…".
-    fn refresh_blocker(&mut self, pr_number: u64) {
-        let Some(pr) = self.list.prs().iter().find(|pr| pr.number == pr_number) else {
+    fn refresh_blocker(&mut self, key: PrKey) {
+        let Some(pr) = self.list.prs().iter().find(|pr| pr.key() == key) else {
             return;
         };
         let (Some(threads), Some(reviews)) = (
-            self.enrichment.review_threads.get(&pr_number),
-            self.enrichment.reviews.get(&pr_number),
+            self.enrichment.review_threads.get(&key),
+            self.enrichment.reviews.get(&key),
         ) else {
             return;
         };
@@ -148,7 +150,7 @@ impl Model {
                 threads: Some(threads),
             },
         );
-        self.blockers.insert(pr_number, result);
+        self.blockers.insert(key, result);
     }
 
     /// Recompute every cached blocker result, then rebuild the list layout. Used
@@ -156,9 +158,9 @@ impl Model {
     /// fields changing, a fresh stream). Keeps the cache and the rendered groups
     /// in lockstep.
     pub fn refresh_blockers(&mut self) {
-        let numbers: Vec<u64> = self.list.prs().iter().map(|pr| pr.number).collect();
-        for number in numbers {
-            self.refresh_blocker(number);
+        let keys: Vec<PrKey> = self.list.prs().iter().map(|pr| pr.key()).collect();
+        for key in keys {
+            self.refresh_blocker(key);
         }
         self.relayout();
     }

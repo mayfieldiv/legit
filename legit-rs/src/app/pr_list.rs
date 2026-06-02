@@ -12,7 +12,7 @@ use std::fmt;
 
 use crate::app::grouping::{DisplayRow, Grouping, display_rows};
 use crate::blocker::Tier;
-use crate::github::rest::PR;
+use crate::github::rest::{PR, PrKey};
 
 /// Lifecycle of the open-PR fetch. At most one variant holds at a time, so the
 /// view never has to ask "are we loading AND failed?".
@@ -200,11 +200,11 @@ impl PrList {
         &self.prs
     }
 
-    /// Mutable access to a streamed PR by number, for enrichment that overwrites
+    /// Mutable access to a streamed PR by key, for enrichment that overwrites
     /// list fields in place (mergeable, review decision, size, head SHA). `None`
-    /// if no PR with that number is in the list.
-    pub fn pr_mut(&mut self, number: u64) -> Option<&mut PR> {
-        self.prs.iter_mut().find(|pr| pr.number == number)
+    /// if no PR with that key is in the list.
+    pub fn pr_mut(&mut self, key: &PrKey) -> Option<&mut PR> {
+        self.prs.iter_mut().find(|pr| pr.key() == *key)
     }
 
     /// Iterate the display rows currently inside the scroll viewport. Each item

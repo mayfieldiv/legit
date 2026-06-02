@@ -55,6 +55,25 @@ pub struct PR {
     pub state: PRState,
 }
 
+/// Globally-unique PR identity across Tracked Repos: PR numbers alone collide
+/// between repos, so every cross-repo keyed structure (enrichment maps, cached
+/// blockers) keys on slug + number.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PrKey {
+    pub repo_slug: String,
+    pub number: u64,
+}
+
+impl PR {
+    /// The cross-repo identity key for this PR.
+    pub fn key(&self) -> PrKey {
+        PrKey {
+            repo_slug: self.repo_slug.clone(),
+            number: self.number,
+        }
+    }
+}
+
 // ── Raw deserialization shape ───────────────────────────────────────────────
 
 /// Permissive intermediate type for parsing GitHub REST responses. Mirrors the

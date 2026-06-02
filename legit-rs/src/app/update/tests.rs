@@ -10,9 +10,18 @@ use crate::{
         update::update,
     },
     git_remote::RepoInfo,
-    github::rest::{PR, PRState},
+    github::rest::{PR, PRState, PrKey},
     secret::Secret,
 };
+
+/// The `PrKey` of `sample_pr(number, ..)` — every sample PR is stamped with
+/// the same Tracked Repo slug.
+fn key(number: u64) -> PrKey {
+    PrKey {
+        repo_slug: "mayfieldiv/legit".to_owned(),
+        number,
+    }
+}
 
 fn sample_pr(number: u64, title: &str) -> PR {
     PR {
@@ -484,7 +493,7 @@ fn j_skips_group_headers_when_smart_status_grouping_has_tiers() {
     update(&mut model, Msg::PrArrived(sample_pr(2, "waiting")));
     // Seed two tiers so the layout has two headers between the PR rows.
     model.blockers.insert(
-        1,
+        key(1),
         BlockerResult {
             blocker: "me".to_owned(),
             tier: Tier::MeBlocking,
@@ -492,7 +501,7 @@ fn j_skips_group_headers_when_smart_status_grouping_has_tiers() {
         },
     );
     model.blockers.insert(
-        2,
+        key(2),
         BlockerResult {
             blocker: "charlie".to_owned(),
             tier: Tier::WaitingOnAuthor,
@@ -627,7 +636,7 @@ fn review_status_arrived_overwrites_pr_fields_and_fetches_checks() {
     let cmds = update(
         &mut model,
         Msg::ReviewStatusArrived {
-            pr_number: 1,
+            pr: key(1),
             status: review_status(Some("abc123")),
         },
     );
@@ -653,7 +662,7 @@ fn review_status_arrived_without_sha_skips_checks() {
     let cmds = update(
         &mut model,
         Msg::ReviewStatusArrived {
-            pr_number: 1,
+            pr: key(1),
             status: review_status(None),
         },
     );
@@ -669,7 +678,7 @@ fn review_status_arrived_for_unknown_pr_is_a_noop() {
     let cmds = update(
         &mut model,
         Msg::ReviewStatusArrived {
-            pr_number: 999,
+            pr: key(999),
             status: review_status(Some("abc123")),
         },
     );
@@ -690,7 +699,7 @@ fn review_status_arrived_skips_checks_already_fetched_for_sha() {
     let cmds = update(
         &mut model,
         Msg::ReviewStatusArrived {
-            pr_number: 1,
+            pr: key(1),
             status: review_status(Some("abc123")),
         },
     );
@@ -715,12 +724,15 @@ fn threads_arrived_stores_threads_by_pr_number() {
     let cmds = update(
         &mut model,
         Msg::ThreadsArrived {
-            pr_number: 1,
+            pr: key(1),
             threads: vec![thread.clone()],
         },
     );
 
-    assert_eq!(model.enrichment.review_threads.get(&1), Some(&vec![thread]));
+    assert_eq!(
+        model.enrichment.review_threads.get(&key(1)),
+        Some(&vec![thread])
+    );
     assert!(cmds.is_empty());
 }
 
@@ -735,12 +747,12 @@ fn reviews_arrived_stores_reviews_by_pr_number() {
     update(
         &mut model,
         Msg::ReviewsArrived {
-            pr_number: 1,
+            pr: key(1),
             reviews: vec![review.clone()],
         },
     );
 
-    assert_eq!(model.enrichment.reviews.get(&1), Some(&vec![review]));
+    assert_eq!(model.enrichment.reviews.get(&key(1)), Some(&vec![review]));
 }
 
 #[test]
@@ -778,13 +790,13 @@ fn issue_comments_arrived_stores_comments_by_pr_number() {
     update(
         &mut model,
         Msg::IssueCommentsArrived {
-            pr_number: 1,
+            pr: key(1),
             comments: vec![comment.clone()],
         },
     );
 
     assert_eq!(
-        model.enrichment.issue_comments.get(&1),
+        model.enrichment.issue_comments.get(&key(1)),
         Some(&vec![comment])
     );
 }
@@ -793,7 +805,7 @@ fn issue_comments_arrived_stores_comments_by_pr_number() {
 fn enrichment_failure_records_error_and_keeps_data() {
     let mut model = enriched_model(&[1]);
     model.enrichment.reviews.insert(
-        1,
+        key(1),
         vec![crate::github::types::Review {
             user: "alice".to_owned(),
             state: "APPROVED".to_owned(),
@@ -814,7 +826,7 @@ fn enrichment_failure_records_error_and_keeps_data() {
     assert!(status.text.contains("500 Server Error"));
     // Best-effort: nothing already loaded is dropped on a failure.
     assert_eq!(model.list.prs().len(), 1);
-    assert!(model.enrichment.reviews.contains_key(&1));
+    assert!(model.enrichment.reviews.contains_key(&key(1)));
     // The error message is scheduled to auto-clear.
     assert!(matches!(cmds.as_slice(), [Cmd::ScheduleStatusClear { .. }]));
 }

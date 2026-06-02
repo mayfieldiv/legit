@@ -4,7 +4,8 @@ use tokio::sync::mpsc;
 
 use crate::{
     app::msg::Msg, auth, config, git_remote, git_remote::RepoInfo, github::graphql::GraphQlClient,
-    github::limiter::NetworkLimiter, github::rest::OctocrabRest, secret::Secret,
+    github::limiter::NetworkLimiter, github::rest::OctocrabRest, github::rest::PrKey,
+    secret::Secret,
 };
 
 /// The inputs every per-PR enrichment request shares: which repo, the auth
@@ -17,6 +18,14 @@ pub struct RequestContext {
     pub repo: RepoInfo,
     pub token: Secret<String>,
     pub bot_logins: Vec<String>,
+}
+
+impl RequestContext {
+    /// `owner/repo` slug of the repo this context targets — the `PrKey` slug
+    /// for every PR it enriches.
+    fn slug(&self) -> String {
+        format!("{}/{}", self.repo.owner, self.repo.repo)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,6 +126,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             run_fetch_open_prs(repo, token, tx, limiter).await;
         }
         Cmd::FetchReviewStatus { ctx, pr_numbers } => {
+            let repo_slug = ctx.slug();
             request(
                 &tx,
                 &limiter,
@@ -126,16 +136,26 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                         .fetch_review_status(&ctx.repo.owner, &ctx.repo.repo, &pr_numbers)
                         .await
                 },
-                |results| {
+                move |results| {
                     results
                         .into_iter()
-                        .map(|(pr_number, status)| Msg::ReviewStatusArrived { pr_number, status })
+                        .map(|(number, status)| Msg::ReviewStatusArrived {
+                            pr: PrKey {
+                                repo_slug: repo_slug.clone(),
+                                number,
+                            },
+                            status,
+                        })
                         .collect()
                 },
             )
             .await;
         }
         Cmd::FetchThreads { ctx, number } => {
+            let pr = PrKey {
+                repo_slug: ctx.slug(),
+                number,
+            };
             request(
                 &tx,
                 &limiter,
@@ -150,16 +170,15 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                         )
                         .await
                 },
-                move |threads| {
-                    vec![Msg::ThreadsArrived {
-                        pr_number: number,
-                        threads,
-                    }]
-                },
+                move |threads| vec![Msg::ThreadsArrived { pr, threads }],
             )
             .await;
         }
         Cmd::FetchReviews { ctx, number } => {
+            let pr = PrKey {
+                repo_slug: ctx.slug(),
+                number,
+            };
             request(
                 &tx,
                 &limiter,
@@ -169,16 +188,15 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                         .list_reviews(&ctx.repo.owner, &ctx.repo.repo, number)
                         .await
                 },
-                move |reviews| {
-                    vec![Msg::ReviewsArrived {
-                        pr_number: number,
-                        reviews,
-                    }]
-                },
+                move |reviews| vec![Msg::ReviewsArrived { pr, reviews }],
             )
             .await;
         }
         Cmd::FetchIssueComments { ctx, number } => {
+            let pr = PrKey {
+                repo_slug: ctx.slug(),
+                number,
+            };
             request(
                 &tx,
                 &limiter,
@@ -193,12 +211,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                         )
                         .await
                 },
-                move |comments| {
-                    vec![Msg::IssueCommentsArrived {
-                        pr_number: number,
-                        comments,
-                    }]
-                },
+                move |comments| vec![Msg::IssueCommentsArrived { pr, comments }],
             )
             .await;
         }

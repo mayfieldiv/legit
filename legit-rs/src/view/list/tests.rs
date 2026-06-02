@@ -75,7 +75,7 @@ fn model_with(prs: Vec<PR>, grouping: Grouping, tier_of: impl Fn(&PR) -> Option<
     for pr in prs {
         if let Some(tier) = tier_of(&pr) {
             model.blockers.insert(
-                pr.number,
+                pr.key(),
                 BlockerResult {
                     blocker: "someone".to_owned(),
                     tier,

@@ -42,7 +42,7 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, now: DateTime<Ut
             DisplayRow::Header(label) => header_line(label, width),
             DisplayRow::Pr(index) => {
                 let pr = &prs[*index];
-                let reason = model.blockers.get(&pr.number).map(|b| b.reason.as_str());
+                let reason = model.blockers.get(&pr.key()).map(|b| b.reason.as_str());
                 row_line(pr, reason, width, pr_num_col, size_col, now, selected)
             }
         })

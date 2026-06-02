@@ -4,7 +4,7 @@ use crate::{
     config::LegitConfig,
     git_remote::RepoInfo,
     github::limiter::NetworkStats,
-    github::rest::PR,
+    github::rest::{PR, PrKey},
     github::types::{CheckRun, FullReviewThread, IssueComment, Review, ReviewStatus},
     secret::Secret,
 };
@@ -18,17 +18,17 @@ pub enum Msg {
     PrArrived(PR),
     PrListLoaded,
     NetworkStatsChanged(NetworkStats),
-    // ── enrichment arrivals ──
+    // ── enrichment arrivals (keyed by PrKey — numbers collide across repos) ──
     ReviewStatusArrived {
-        pr_number: u64,
+        pr: PrKey,
         status: ReviewStatus,
     },
     ThreadsArrived {
-        pr_number: u64,
+        pr: PrKey,
         threads: Vec<FullReviewThread>,
     },
     ReviewsArrived {
-        pr_number: u64,
+        pr: PrKey,
         reviews: Vec<Review>,
     },
     ChecksArrived {
@@ -36,7 +36,7 @@ pub enum Msg {
         checks: Vec<CheckRun>,
     },
     IssueCommentsArrived {
-        pr_number: u64,
+        pr: PrKey,
         comments: Vec<IssueComment>,
     },
     /// A scheduled status-message clear fired; honored only if `token` still
