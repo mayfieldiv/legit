@@ -109,9 +109,30 @@ impl Model {
     /// yet. Used as the repo-grouping label (single-repo today).
     pub fn repo_slug(&self) -> String {
         match &self.repo {
-            Some(repo) => format!("{}/{}", repo.owner, repo.repo),
+            Some(repo) => repo.slug(),
             None => String::new(),
         }
+    }
+
+    /// Every Tracked Repo slug: the configured repos in config order, then the
+    /// CWD-detected repo appended when it isn't already configured. Deduped
+    /// case-insensitively (GitHub slugs are case-insensitive); the first
+    /// occurrence's casing wins, so fetches, `PR::repo_slug` stamps, and tab
+    /// labels all share one canonical string per repo.
+    pub fn tracked_repos(&self) -> Vec<String> {
+        let mut slugs: Vec<String> = Vec::new();
+        let push_unique = |slug: String, slugs: &mut Vec<String>| {
+            if !slugs.iter().any(|s| s.eq_ignore_ascii_case(&slug)) {
+                slugs.push(slug);
+            }
+        };
+        for repo in &self.config.repos {
+            push_unique(repo.slug.clone(), &mut slugs);
+        }
+        if let Some(repo) = &self.repo {
+            push_unique(repo.slug(), &mut slugs);
+        }
+        slugs
     }
 
     /// Smart-status tier for the PR at `index` in the list, or `None` when its

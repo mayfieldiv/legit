@@ -16,7 +16,10 @@ pub enum Msg {
     AuthTokenResolved(Secret<String>),
     RepoDetected(RepoInfo),
     PrArrived(PR),
-    PrListLoaded,
+    /// One Tracked Repo's open-PR listing finished streaming.
+    PrListLoaded {
+        repo_slug: String,
+    },
     NetworkStatsChanged(NetworkStats),
     // ── enrichment arrivals (keyed by PrKey — numbers collide across repos) ──
     ReviewStatusArrived {
@@ -44,9 +47,11 @@ pub enum Msg {
     StatusCleared {
         token: u64,
     },
-    /// The open-PR listing failed; routes to the list's `Failed` phase so the
-    /// view can surface it distinctly from transient command errors.
+    /// One Tracked Repo's open-PR listing failed; routes to that repo's
+    /// `Failed` phase so the view can surface it distinctly from transient
+    /// command errors (and without masking other repos' results).
     PrListFailed {
+        repo_slug: String,
         context: &'static str,
         error: String,
     },

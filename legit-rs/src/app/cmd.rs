@@ -24,7 +24,7 @@ impl RequestContext {
     /// `owner/repo` slug of the repo this context targets — the `PrKey` slug
     /// for every PR it enriches.
     fn slug(&self) -> String {
-        format!("{}/{}", self.repo.owner, self.repo.repo)
+        self.repo.slug()
     }
 }
 
@@ -243,10 +243,11 @@ async fn run_fetch_open_prs(
     tx: mpsc::UnboundedSender<Msg>,
     limiter: Arc<NetworkLimiter>,
 ) {
+    let repo_slug = repo.slug();
     let client = match OctocrabRest::new(&token) {
         Ok(client) => client,
         Err(error) => {
-            let _ = tx.send(pr_list_failed("build github client", error));
+            let _ = tx.send(pr_list_failed(repo_slug, "build github client", error));
             return;
         }
     };
@@ -270,10 +271,10 @@ async fn run_fetch_open_prs(
     match result {
         Ok(()) => {
             tracing::info!(owner = %repo.owner, repo = %repo.repo, "open PR listing finished");
-            let _ = tx.send(Msg::PrListLoaded);
+            let _ = tx.send(Msg::PrListLoaded { repo_slug });
         }
         Err(error) => {
-            let _ = tx.send(pr_list_failed("list open PRs", error));
+            let _ = tx.send(pr_list_failed(repo_slug, "list open PRs", error));
         }
     }
 }
@@ -317,11 +318,16 @@ fn command_failed(context: &'static str, error: anyhow::Error) -> Msg {
 
 /// Same as `command_failed`, but for the PR-listing pipeline (which has its
 /// own `Msg` variant so the status bar can prioritise list errors over
-/// generic command errors).
-fn pr_list_failed(context: &'static str, error: anyhow::Error) -> Msg {
+/// generic command errors). `repo_slug` names the Tracked Repo whose listing
+/// failed so other repos' phases are untouched.
+fn pr_list_failed(repo_slug: String, context: &'static str, error: anyhow::Error) -> Msg {
     let error = format!("{error:#}");
-    tracing::warn!(context, %error, "pr listing failed");
-    Msg::PrListFailed { context, error }
+    tracing::warn!(%repo_slug, context, %error, "pr listing failed");
+    Msg::PrListFailed {
+        repo_slug,
+        context,
+        error,
+    }
 }
 
 /// Run `f` on the blocking pool and fold the `JoinError` into the same

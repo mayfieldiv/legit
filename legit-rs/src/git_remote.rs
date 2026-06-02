@@ -8,6 +8,28 @@ pub struct RepoInfo {
     pub repo: String,
 }
 
+impl RepoInfo {
+    /// Parse an `owner/repo` slug (the config `repos` format) back into parts.
+    /// `None` for malformed slugs — config validation rejects those at load,
+    /// so callers treat this as an unreachable guard, not an error path.
+    pub fn from_slug(slug: &str) -> Option<Self> {
+        let (owner, repo) = slug.split_once('/')?;
+        if owner.is_empty() || repo.is_empty() {
+            return None;
+        }
+        Some(Self {
+            owner: owner.to_owned(),
+            repo: repo.to_owned(),
+        })
+    }
+
+    /// The `owner/repo` slug for this repo — the form config, tabs, and
+    /// `PR::repo_slug` all use.
+    pub fn slug(&self) -> String {
+        format!("{}/{}", self.owner, self.repo)
+    }
+}
+
 /// Parse a GitHub remote URL into (owner, repo). Mirrors the TS `parseRemoteUrl`
 /// in `src/lib/legit.ts` so dotted repo names (e.g. `angular.js`) and both SSH
 /// and HTTPS forms parse identically.

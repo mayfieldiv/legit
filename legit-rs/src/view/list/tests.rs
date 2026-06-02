@@ -71,7 +71,7 @@ fn model_with(prs: Vec<PR>, grouping: Grouping, tier_of: impl Fn(&PR) -> Option<
         owner: "acme".to_owned(),
         repo: "web".to_owned(),
     });
-    model.list.begin_fetch();
+    model.list.begin_fetch("acme/web");
     for pr in prs {
         if let Some(tier) = tier_of(&pr) {
             model.blockers.insert(
@@ -85,7 +85,7 @@ fn model_with(prs: Vec<PR>, grouping: Grouping, tier_of: impl Fn(&PR) -> Option<
         }
         model.list.push(pr);
     }
-    model.list.complete_fetch();
+    model.list.complete_fetch("acme/web");
     set_grouping(&mut model, grouping);
     model
 }
@@ -298,10 +298,10 @@ fn empty_list_with_smart_status_grouping_shows_placeholder() {
 #[test]
 fn pr_list_error_appears_in_the_status_bar() {
     let (mut model, _) = Model::new();
-    model.list.begin_fetch();
+    model.list.begin_fetch("acme/web");
     model
         .list
-        .fail_fetch("list open PRs: network down".to_owned());
+        .fail_fetch("acme/web", "list open PRs: network down".to_owned());
 
     let terminal = render_snapshot(&model, 60, 3);
 
@@ -425,7 +425,7 @@ fn wide_pr_number_widens_num_column_for_all_rows() {
 #[test]
 fn loading_pr_list_renders_loading_placeholder() {
     let (mut model, _) = Model::new();
-    model.list.begin_fetch();
+    model.list.begin_fetch("acme/web");
 
     let terminal = render_snapshot(&model, 40, 5);
 

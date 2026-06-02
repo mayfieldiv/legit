@@ -23,9 +23,10 @@ mod tests;
 pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, now: DateTime<Utc>) {
     let pr_list = &model.list;
     if pr_list.prs().is_empty() {
-        let text = match pr_list.phase() {
-            crate::app::pr_list::Phase::Loading => "Loading pull requests…",
-            _ => "No open pull requests",
+        let text = if pr_list.is_loading(None) {
+            "Loading pull requests…"
+        } else {
+            "No open pull requests"
         };
         let placeholder = Paragraph::new(Line::from(text)).alignment(Alignment::Center);
         frame.render_widget(placeholder, area);

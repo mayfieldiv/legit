@@ -172,15 +172,15 @@ fn dispatching_fetch_marks_list_as_loading() {
 
     assert_eq!(cmds.len(), 1);
     assert!(
-        matches!(model.list.phase(), Phase::Loading),
-        "list should enter Loading phase on fetch dispatch",
+        model.list.is_loading(Some("mayfieldiv/legit")),
+        "the repo should enter Loading phase on fetch dispatch",
     );
 }
 
 #[test]
 fn pr_arrived_clears_loading_phase() {
     let (mut model, _) = Model::new();
-    model.list.begin_fetch();
+    model.list.begin_fetch("mayfieldiv/legit");
 
     update(&mut model, Msg::PrArrived(sample_pr(1, "a")));
 
@@ -190,23 +190,32 @@ fn pr_arrived_clears_loading_phase() {
 }
 
 #[test]
-fn pr_list_loaded_transitions_to_loaded() {
+fn pr_list_loaded_transitions_that_repo_to_loaded() {
     let (mut model, _) = Model::new();
-    model.list.begin_fetch();
+    model.list.begin_fetch("mayfieldiv/legit");
 
-    update(&mut model, Msg::PrListLoaded);
+    update(
+        &mut model,
+        Msg::PrListLoaded {
+            repo_slug: "mayfieldiv/legit".to_owned(),
+        },
+    );
 
-    assert!(matches!(model.list.phase(), Phase::Loaded));
+    assert_eq!(
+        model.list.phase_of("mayfieldiv/legit"),
+        Some(&Phase::Loaded)
+    );
 }
 
 #[test]
-fn pr_list_failed_transitions_to_failed_with_message() {
+fn pr_list_failed_transitions_that_repo_to_failed_with_message() {
     let (mut model, _) = Model::new();
-    model.list.begin_fetch();
+    model.list.begin_fetch("mayfieldiv/legit");
 
     update(
         &mut model,
         Msg::PrListFailed {
+            repo_slug: "mayfieldiv/legit".to_owned(),
             context: "list open PRs",
             error: "boom".to_owned(),
         },
@@ -217,6 +226,7 @@ fn pr_list_failed_transitions_to_failed_with_message() {
         .failure()
         .expect("phase should be Failed after PrListFailed");
     assert!(failure.contains("list open PRs"));
+    assert!(failure.contains("mayfieldiv/legit"), "names the repo");
     assert!(failure.contains("boom"));
 }
 
@@ -295,7 +305,7 @@ fn fetch_waits_for_config_even_with_auth_and_repo() {
         "fetch must wait for config so blockers aren't derived without the user"
     );
     assert!(
-        !matches!(model.list.phase(), Phase::Loading),
+        !model.list.is_loading(None),
         "the list must not enter Loading until the fetch actually dispatches"
     );
 }
@@ -350,6 +360,150 @@ fn config_load_failed_halts_the_list_and_does_not_fetch() {
         .expect("list should be in the Failed phase after ConfigLoadFailed");
     assert!(failure.contains("config error"));
     assert!(failure.contains("invalid bot_logins entry"));
+}
+
+// ── multi-repo fan-out ────────────────────────────────────────────────────
+
+/// A `sample_pr` stamped with a specific Tracked Repo slug.
+fn sample_pr_in(repo_slug: &str, number: u64, title: &str) -> PR {
+    PR {
+        repo_slug: repo_slug.to_owned(),
+        ..sample_pr(number, title)
+    }
+}
+
+/// A config tracking `slugs` (bare-slug entries), for fan-out tests.
+fn config_with_repos(slugs: &[&str]) -> crate::config::LegitConfig {
+    crate::config::LegitConfig {
+        repos: slugs
+            .iter()
+            .map(|slug| crate::config::RepoConfig {
+                slug: (*slug).to_owned(),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    }
+}
+
+/// The repo slugs of every `FetchOpenPRs` in `cmds`, in dispatch order.
+fn fetched_slugs(cmds: &[Cmd]) -> Vec<String> {
+    cmds.iter()
+        .map(|c| match c {
+            Cmd::FetchOpenPRs { repo, .. } => repo.slug(),
+            other => panic!("expected only FetchOpenPRs, got {other:?}"),
+        })
+        .collect()
+}
+
+#[test]
+fn fetch_fans_out_to_every_tracked_repo() {
+    let (mut model, _) = Model::new();
+    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.repo = Some(RepoInfo {
+        owner: "mayfieldiv".to_owned(),
+        repo: "legit".to_owned(),
+    });
+
+    let cmds = update(
+        &mut model,
+        Msg::ConfigLoaded(config_with_repos(&["acme/web", "acme/api"])),
+    );
+
+    // Config repos in config order, then the CWD-detected repo appended.
+    assert_eq!(
+        fetched_slugs(&cmds),
+        ["acme/web", "acme/api", "mayfieldiv/legit"]
+    );
+    assert!(model.list.is_loading(Some("acme/web")));
+    assert!(model.list.is_loading(Some("acme/api")));
+    assert!(model.list.is_loading(Some("mayfieldiv/legit")));
+}
+
+#[test]
+fn detected_repo_already_in_config_is_fetched_once_with_config_casing() {
+    let (mut model, _) = Model::new();
+    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.repo = Some(RepoInfo {
+        owner: "mayfieldiv".to_owned(),
+        repo: "legit".to_owned(),
+    });
+
+    // GitHub slugs are case-insensitive; the configured casing wins.
+    let cmds = update(
+        &mut model,
+        Msg::ConfigLoaded(config_with_repos(&["MayfieldIV/Legit"])),
+    );
+
+    assert_eq!(fetched_slugs(&cmds), ["MayfieldIV/Legit"]);
+}
+
+#[test]
+fn pr_list_loaded_fans_out_enrichment_only_for_that_repo() {
+    let (mut model, _) = Model::new();
+    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.repo = Some(RepoInfo {
+        owner: "mayfieldiv".to_owned(),
+        repo: "legit".to_owned(),
+    });
+    model.list.begin_fetch("acme/web");
+    model.list.begin_fetch("mayfieldiv/legit");
+    model.list.push(sample_pr_in("acme/web", 7, "other repo"));
+    model.list.push(sample_pr(1, "this repo"));
+
+    let cmds = update(
+        &mut model,
+        Msg::PrListLoaded {
+            repo_slug: "acme/web".to_owned(),
+        },
+    );
+
+    // One batched review-status + threads/reviews/comments for acme/web#7
+    // only; mayfieldiv/legit#1 waits for its own repo's listing to settle.
+    assert_eq!(cmds.len(), 1 + 3);
+    match &cmds[0] {
+        Cmd::FetchReviewStatus { ctx, pr_numbers } => {
+            assert_eq!(ctx.repo.slug(), "acme/web");
+            assert_eq!(pr_numbers, &[7]);
+        }
+        other => panic!("first cmd should batch review status, got {other:?}"),
+    }
+}
+
+#[test]
+fn same_pr_number_in_two_repos_does_not_collide() {
+    let mut model = enriched_model(&[]);
+    model.list.push(sample_pr_in("acme/web", 7, "a"));
+    model.list.push(sample_pr(7, "b"));
+    let acme_key = PrKey {
+        repo_slug: "acme/web".to_owned(),
+        number: 7,
+    };
+
+    // Full enrichment for acme/web#7 only.
+    update(
+        &mut model,
+        Msg::ThreadsArrived {
+            pr: acme_key.clone(),
+            threads: Vec::new(),
+        },
+    );
+    update(
+        &mut model,
+        Msg::ReviewsArrived {
+            pr: acme_key.clone(),
+            reviews: Vec::new(),
+        },
+    );
+
+    assert!(
+        model.blockers.contains_key(&acme_key),
+        "acme/web#7 is classified"
+    );
+    assert!(
+        !model.blockers.contains_key(&key(7)),
+        "mayfieldiv/legit#7 must still be loading — its enrichment never arrived"
+    );
 }
 
 #[test]
@@ -527,6 +681,7 @@ fn pr_list_failed_keeps_already_arrived_prs() {
     let cmds = update(
         &mut model,
         Msg::PrListFailed {
+            repo_slug: "mayfieldiv/legit".to_owned(),
             context: "list open PRs",
             error: "network down".to_owned(),
         },
@@ -555,7 +710,7 @@ fn enriched_model(numbers: &[u64]) -> Model {
         owner: "mayfieldiv".to_owned(),
         repo: "legit".to_owned(),
     });
-    model.list.begin_fetch();
+    model.list.begin_fetch("mayfieldiv/legit");
     for n in numbers {
         model.list.push(sample_pr(*n, "p"));
     }
@@ -577,7 +732,12 @@ fn review_status(head_sha: Option<&str>) -> ReviewStatus {
 fn pr_list_loaded_fans_out_enrichment_per_pr() {
     let mut model = enriched_model(&[1, 2]);
 
-    let cmds = update(&mut model, Msg::PrListLoaded);
+    let cmds = update(
+        &mut model,
+        Msg::PrListLoaded {
+            repo_slug: "mayfieldiv/legit".to_owned(),
+        },
+    );
 
     // 1 batched review-status + (threads + reviews + issue-comments) per PR.
     assert_eq!(cmds.len(), 1 + 2 * 3);
@@ -606,7 +766,12 @@ fn pr_list_loaded_fans_out_enrichment_per_pr() {
 fn pr_list_loaded_with_empty_list_fans_out_nothing() {
     let mut model = enriched_model(&[]);
 
-    let cmds = update(&mut model, Msg::PrListLoaded);
+    let cmds = update(
+        &mut model,
+        Msg::PrListLoaded {
+            repo_slug: "mayfieldiv/legit".to_owned(),
+        },
+    );
 
     assert!(cmds.is_empty());
 }
@@ -618,10 +783,15 @@ fn pr_list_loaded_without_auth_fans_out_nothing() {
         owner: "mayfieldiv".to_owned(),
         repo: "legit".to_owned(),
     });
-    model.list.begin_fetch();
+    model.list.begin_fetch("mayfieldiv/legit");
     model.list.push(sample_pr(1, "p"));
 
-    let cmds = update(&mut model, Msg::PrListLoaded);
+    let cmds = update(
+        &mut model,
+        Msg::PrListLoaded {
+            repo_slug: "mayfieldiv/legit".to_owned(),
+        },
+    );
 
     assert!(
         cmds.is_empty(),

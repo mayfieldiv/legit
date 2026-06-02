@@ -31,58 +31,78 @@ fn set_status(model: &mut Model, kind: StatusKind, text: String) -> Vec<Cmd> {
     }]
 }
 
-/// Fire `Cmd::FetchOpenPRs` once all three startup prerequisites have landed:
-/// the auth token authorizes the request, repo detection defines what to fetch,
-/// and a settled config supplies the current user and bot logins that drive
+/// Fire one `Cmd::FetchOpenPRs` per Tracked Repo once all three startup
+/// prerequisites have landed: the auth token authorizes the requests, repo
+/// detection completes the tracked set (config repos + CWD repo), and a
+/// settled config supplies the current user and bot logins that drive
 /// smart-status. Any one missing yields no command — we wait for the last. The
-/// config gate is load-bearing: it guarantees no PR's blocker is derived before
-/// the user is known, so a lost startup race can never misclassify a PR.
-/// Marks the PR list as Loading so the view swaps from "No open PRs" to
-/// "Loading pull requests…" until results land.
+/// config gate is load-bearing twice over: it guarantees no PR's blocker is
+/// derived before the user is known, and it guarantees the tracked set is
+/// final so every repo fetches exactly once. Marks each repo's listing as
+/// Loading so the view swaps from "No open PRs" to "Loading pull requests…"
+/// until results land.
 fn maybe_fetch_open_prs(model: &mut Model) -> Vec<Cmd> {
-    let (Some(token), Some(repo)) = (model.auth_token.as_ref(), model.repo.as_ref()) else {
+    let (Some(token), Some(_)) = (model.auth_token.as_ref(), model.repo.as_ref()) else {
         return Vec::new();
     };
     if !model.config_loaded {
         return Vec::new();
     }
-    model.list.begin_fetch();
-    vec![Cmd::FetchOpenPRs {
-        repo: repo.clone(),
-        token: token.clone(),
-    }]
+    let token = token.clone();
+    model
+        .tracked_repos()
+        .into_iter()
+        .filter_map(|slug| {
+            let repo = RepoInfo::from_slug(&slug)?;
+            model.list.begin_fetch(&slug);
+            Some(Cmd::FetchOpenPRs {
+                repo,
+                token: token.clone(),
+            })
+        })
+        .collect()
 }
 
-/// Fan out per-PR enrichment after the REST list settles: one batched
-/// review-status query plus per-PR threads / reviews / issue-comments fetches.
-/// Checks are deferred until review-status reports each PR's head SHA. Yields
-/// nothing if auth/repo aren't ready or the list is empty.
-fn enrichment_cmds(model: &Model) -> Vec<Cmd> {
-    let (Some(token), Some(repo)) = (model.auth_token.as_ref(), model.repo.as_ref()) else {
+/// Fan out per-PR enrichment for one Tracked Repo after its REST list
+/// settles: one batched review-status query plus per-PR threads / reviews /
+/// issue-comments fetches. Checks are deferred until review-status reports
+/// each PR's head SHA. Yields nothing if auth isn't ready or the repo has no
+/// PRs in the list.
+fn enrichment_cmds(model: &Model, repo_slug: &str) -> Vec<Cmd> {
+    let Some(token) = model.auth_token.as_ref() else {
         return Vec::new();
     };
-    let prs = model.list.prs();
-    if prs.is_empty() {
+    let Some(repo) = RepoInfo::from_slug(repo_slug) else {
+        return Vec::new();
+    };
+    let numbers: Vec<u64> = model
+        .list
+        .prs()
+        .iter()
+        .filter(|pr| pr.repo_slug == repo_slug)
+        .map(|pr| pr.number)
+        .collect();
+    if numbers.is_empty() {
         return Vec::new();
     }
-    let ctx = request_context(repo, token, &model.config.bot_logins);
-    let mut cmds = Vec::with_capacity(prs.len() * 3 + 1);
+    let ctx = request_context(&repo, token, &model.config.bot_logins);
+    let mut cmds = Vec::with_capacity(numbers.len() * 3 + 1);
     cmds.push(Cmd::FetchReviewStatus {
         ctx: Arc::clone(&ctx),
-        pr_numbers: prs.iter().map(|pr| pr.number).collect(),
+        pr_numbers: numbers.clone(),
     });
-    for pr in prs {
+    for number in numbers {
         cmds.push(Cmd::FetchThreads {
             ctx: Arc::clone(&ctx),
-            number: pr.number,
+            number,
         });
         cmds.push(Cmd::FetchReviews {
             ctx: Arc::clone(&ctx),
-            number: pr.number,
+            number,
         });
         cmds.push(Cmd::FetchIssueComments {
             ctx: Arc::clone(&ctx),
-            number: pr.number,
+            number,
         });
     }
     cmds
@@ -102,20 +122,22 @@ fn request_context(
     })
 }
 
-/// Build a checks fetch for a freshly-learned head SHA, unless checks for it
-/// already arrived. A `None` SHA (a PR with no commits yet) yields nothing.
-fn maybe_fetch_checks(model: &Model, head_sha: Option<String>) -> Vec<Cmd> {
+/// Build a checks fetch for a freshly-learned head SHA against the Tracked
+/// Repo it belongs to, unless checks for it already arrived. A `None` SHA (a
+/// PR with no commits yet) yields nothing.
+fn maybe_fetch_checks(model: &Model, head_sha: Option<String>, repo_slug: &str) -> Vec<Cmd> {
     let Some(sha) = head_sha else {
         return Vec::new();
     };
     if model.enrichment.checks.contains_key(&sha) {
         return Vec::new();
     }
-    let (Some(token), Some(repo)) = (model.auth_token.as_ref(), model.repo.as_ref()) else {
+    let (Some(token), Some(repo)) = (model.auth_token.as_ref(), RepoInfo::from_slug(repo_slug))
+    else {
         return Vec::new();
     };
     vec![Cmd::FetchChecks {
-        ctx: request_context(repo, token, &model.config.bot_logins),
+        ctx: request_context(&repo, token, &model.config.bot_logins),
         head_sha: sha,
     }]
 }
@@ -170,11 +192,11 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             model.relayout();
             Vec::new()
         }
-        Msg::PrListLoaded => {
-            model.list.complete_fetch();
-            // The REST stream has settled — fan out enrichment for every PR now
-            // in the list.
-            enrichment_cmds(model)
+        Msg::PrListLoaded { repo_slug } => {
+            model.list.complete_fetch(&repo_slug);
+            // This repo's REST stream has settled — fan out enrichment for its
+            // PRs now, without waiting on slower repos.
+            enrichment_cmds(model, &repo_slug)
         }
         Msg::NetworkStatsChanged(stats) => {
             model.network_stats = stats;
@@ -197,7 +219,7 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             }
             // review_decision/mergeable feed the blocker rules, so re-derive.
             model.refresh_blockers();
-            maybe_fetch_checks(model, head_sha)
+            maybe_fetch_checks(model, head_sha, &pr.repo_slug)
         }
         Msg::ThreadsArrived { pr, threads } => {
             model.enrichment.review_threads.insert(pr, threads);
@@ -218,8 +240,13 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             model.enrichment.issue_comments.insert(pr, comments);
             Vec::new()
         }
-        Msg::PrListFailed { context, error } => {
-            model.list.fail_fetch(format!("{context}: {error}"));
+        Msg::PrListFailed {
+            repo_slug,
+            context,
+            error,
+        } => {
+            let message = format!("{context} ({repo_slug}): {error}");
+            model.list.fail_fetch(&repo_slug, message);
             Vec::new()
         }
         Msg::ConfigLoadFailed { error } => {
@@ -227,7 +254,7 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             // smart-status), so a malformed config halts the list with a
             // persistent failure instead of fetching with wrong defaults.
             // `config_loaded` stays false, so `maybe_fetch_open_prs` never fires.
-            model.list.fail_fetch(format!("config error: {error}"));
+            model.list.halt(format!("config error: {error}"));
             Vec::new()
         }
         Msg::CommandFailed { context, error } => {

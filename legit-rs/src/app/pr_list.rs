@@ -8,19 +8,18 @@
 //! works over display rows (headers included). `j`/`k` step PR-to-PR, skipping
 //! header rows; the scroll viewport keeps the selected PR's row on-screen.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::app::grouping::{DisplayRow, Grouping, display_rows};
 use crate::blocker::Tier;
 use crate::github::rest::{PR, PrKey};
 
-/// Lifecycle of the open-PR fetch. At most one variant holds at a time, so the
-/// view never has to ask "are we loading AND failed?".
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+/// Lifecycle of one Tracked Repo's open-PR fetch. A repo with no entry in
+/// `PrList::phases` hasn't had a fetch dispatched yet. At most one variant
+/// holds per repo, so the view never has to ask "are we loading AND failed?".
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Phase {
-    /// No fetch has been dispatched yet.
-    #[default]
-    Idle,
     /// Fetch in flight.
     Loading,
     /// Fetch completed (rows may still be 0).
@@ -32,7 +31,12 @@ pub enum Phase {
 #[derive(Clone, Default)]
 pub struct PrList {
     prs: Vec<PR>,
-    phase: Phase,
+    /// Per-Tracked-Repo fetch lifecycle, keyed by slug. BTreeMap so `failure`
+    /// reports deterministically (alphabetical) when several repos fail.
+    phases: BTreeMap<String, Phase>,
+    /// A failure that halts the whole list regardless of per-repo phases
+    /// (today: a malformed config, which blocks every fetch).
+    halt: Option<String>,
     grouping: Grouping,
     /// Flattened display layout (headers + PR rows). Rebuilt by `relayout`
     /// whenever the PRs, their tiers, or the grouping change.
@@ -49,7 +53,7 @@ impl fmt::Debug for PrList {
     /// noisy in `tracing` output and rarely informative compared to its length.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrList")
-            .field("phase", &self.phase)
+            .field("phases", &self.phases)
             .field("prs", &self.prs.len())
             .field("grouping", &self.grouping)
             .field("selected", &self.selected)
@@ -64,16 +68,23 @@ impl PrList {
         Self::default()
     }
 
-    pub fn begin_fetch(&mut self) {
-        self.phase = Phase::Loading;
+    pub fn begin_fetch(&mut self, repo_slug: &str) {
+        self.phases.insert(repo_slug.to_owned(), Phase::Loading);
     }
 
-    pub fn complete_fetch(&mut self) {
-        self.phase = Phase::Loaded;
+    pub fn complete_fetch(&mut self, repo_slug: &str) {
+        self.phases.insert(repo_slug.to_owned(), Phase::Loaded);
     }
 
-    pub fn fail_fetch(&mut self, message: String) {
-        self.phase = Phase::Failed(message);
+    pub fn fail_fetch(&mut self, repo_slug: &str, message: String) {
+        self.phases
+            .insert(repo_slug.to_owned(), Phase::Failed(message));
+    }
+
+    /// Record a failure that halts the whole list (no per-repo fetch will
+    /// recover it). Takes precedence over per-repo failures in `failure`.
+    pub fn halt(&mut self, message: String) {
+        self.halt = Some(message);
     }
 
     pub fn push(&mut self, pr: PR) {
@@ -223,15 +234,33 @@ impl PrList {
             .map(move |row| (row, row == &DisplayRow::Pr(selected)))
     }
 
-    pub fn phase(&self) -> &Phase {
-        &self.phase
+    /// Fetch phase for one Tracked Repo, or `None` when no fetch has been
+    /// dispatched for it yet. Exposed for tests/inspection; the view asks the
+    /// scope-aware `is_loading` instead.
+    #[allow(dead_code)]
+    pub fn phase_of(&self, repo_slug: &str) -> Option<&Phase> {
+        self.phases.get(repo_slug)
     }
 
-    pub fn failure(&self) -> Option<&str> {
-        match &self.phase {
-            Phase::Failed(message) => Some(message),
-            _ => None,
+    /// Whether a listing is still in flight for `scope`: a specific repo slug,
+    /// or `None` meaning "any Tracked Repo" (the All tab).
+    pub fn is_loading(&self, scope: Option<&str>) -> bool {
+        match scope {
+            Some(slug) => self.phases.get(slug) == Some(&Phase::Loading),
+            None => self.phases.values().any(|p| *p == Phase::Loading),
         }
+    }
+
+    /// The failure the status bar surfaces: a halting failure first, then the
+    /// first per-repo failure in slug order. `None` when everything is healthy.
+    pub fn failure(&self) -> Option<&str> {
+        if let Some(message) = &self.halt {
+            return Some(message);
+        }
+        self.phases.values().find_map(|phase| match phase {
+            Phase::Failed(message) => Some(message.as_str()),
+            _ => None,
+        })
     }
 
     /// The PR index of the nearest selectable row in `direction` from `from`,
@@ -324,9 +353,10 @@ mod tests {
     }
 
     #[test]
-    fn new_list_starts_idle() {
+    fn new_list_has_no_fetch_in_flight_and_no_failure() {
         let list = PrList::new();
-        assert!(matches!(list.phase(), super::Phase::Idle));
+        assert!(!list.is_loading(None));
+        assert_eq!(list.failure(), None);
     }
 
     #[test]
@@ -336,18 +366,30 @@ mod tests {
     }
 
     #[test]
-    fn begin_fetch_transitions_to_loading() {
+    fn begin_fetch_marks_only_that_repo_loading() {
         let mut list = PrList::new();
-        list.begin_fetch();
-        assert!(matches!(list.phase(), super::Phase::Loading));
+        list.begin_fetch("acme/web");
+
+        assert!(list.is_loading(None), "any-repo scope sees the fetch");
+        assert!(list.is_loading(Some("acme/web")));
+        assert!(
+            !list.is_loading(Some("acme/api")),
+            "an untouched repo is not loading"
+        );
     }
 
     #[test]
-    fn complete_fetch_transitions_to_loaded() {
+    fn complete_fetch_clears_loading_for_that_repo_only() {
         let mut list = PrList::new();
-        list.begin_fetch();
-        list.complete_fetch();
-        assert!(matches!(list.phase(), super::Phase::Loaded));
+        list.begin_fetch("acme/web");
+        list.begin_fetch("acme/api");
+
+        list.complete_fetch("acme/web");
+
+        assert!(!list.is_loading(Some("acme/web")));
+        assert!(list.is_loading(Some("acme/api")));
+        assert!(list.is_loading(None), "another repo is still in flight");
+        assert_eq!(list.phase_of("acme/web"), Some(&super::Phase::Loaded));
     }
 
     #[test]
@@ -503,12 +545,40 @@ mod tests {
     }
 
     #[test]
-    fn fail_fetch_records_failure_message() {
+    fn fail_fetch_records_failure_without_masking_other_repos() {
         let mut list = PrList::new();
-        list.begin_fetch();
-        list.fail_fetch("network down".to_owned());
+        list.begin_fetch("acme/web");
+        list.begin_fetch("acme/api");
 
-        assert!(matches!(list.phase(), super::Phase::Failed(_)));
+        list.fail_fetch("acme/web", "network down".to_owned());
+
         assert_eq!(list.failure(), Some("network down"));
+        assert!(
+            list.is_loading(Some("acme/api")),
+            "the other repo's fetch keeps going"
+        );
+        assert!(!list.is_loading(Some("acme/web")));
+    }
+
+    #[test]
+    fn failure_reports_first_failed_repo_in_slug_order() {
+        let mut list = PrList::new();
+        list.fail_fetch("zeta/repo", "zeta down".to_owned());
+        list.fail_fetch("acme/web", "acme down".to_owned());
+
+        assert_eq!(
+            list.failure(),
+            Some("acme down"),
+            "BTreeMap order makes the report deterministic"
+        );
+    }
+
+    #[test]
+    fn halt_takes_precedence_over_per_repo_failures() {
+        let mut list = PrList::new();
+        list.fail_fetch("acme/web", "network down".to_owned());
+        list.halt("config error: bad json".to_owned());
+
+        assert_eq!(list.failure(), Some("config error: bad json"));
     }
 }
