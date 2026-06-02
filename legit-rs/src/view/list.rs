@@ -23,7 +23,9 @@ mod tests;
 pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, now: DateTime<Utc>) {
     let pr_list = &model.list;
     if pr_list.visible_is_empty() {
-        let text = if pr_list.is_loading(None) {
+        // Loading is judged against the active tab's scope: a repo tab shows
+        // its own repo's listing state, the All tab any repo still in flight.
+        let text = if pr_list.is_loading(model.active_scope().as_deref()) {
             "Loading pull requests…"
         } else {
             "No open pull requests"

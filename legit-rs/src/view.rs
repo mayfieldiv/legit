@@ -23,13 +23,42 @@ fn grouping_label(model: &Model) -> &'static str {
 
 pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
     let area = frame.area();
-    let [main, status] = Layout::default()
+    let [tabs, main, status] = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
         .areas(area);
 
+    render_tabs(model, frame, tabs);
     list::render(model, frame, main, now);
     render_status(model, frame, status);
+}
+
+/// The Repo Tab bar: `All` plus one tab per Tracked Repo, the active tab
+/// bracketed and accented (`[All]  acme/web `), matching the TS tab bar.
+fn render_tabs(model: &Model, frame: &mut Frame<'_>, area: Rect) {
+    let repos = model.tracked_repos();
+    let active = model.active_tab.min(repos.len());
+    let labels = std::iter::once("All".to_owned()).chain(repos);
+    let mut spans = Vec::new();
+    for (i, label) in labels.enumerate() {
+        let (text, style) = if i == active {
+            (
+                format!("[{label}]"),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            (format!(" {label} "), Style::default())
+        };
+        spans.push(Span::styled(text, style));
+        spans.push(Span::raw(" "));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn render_status(model: &Model, frame: &mut Frame<'_>, area: Rect) {
@@ -58,6 +87,12 @@ fn render_status(model: &Model, frame: &mut Frame<'_>, area: Rect) {
         Style::default().add_modifier(Modifier::BOLD),
     ));
     left.push(Span::raw(format!(" group: {}", grouping_label(model))));
+    left.push(Span::raw("  "));
+    left.push(Span::styled(
+        "h/l",
+        Style::default().add_modifier(Modifier::BOLD),
+    ));
+    left.push(Span::raw(" tabs"));
     frame.render_widget(Paragraph::new(Line::from(left)), area);
 
     // Right: a hard list-load failure takes precedence; otherwise the transient

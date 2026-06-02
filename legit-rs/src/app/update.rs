@@ -142,6 +142,34 @@ fn maybe_fetch_checks(model: &Model, head_sha: Option<String>, repo_slug: &str) 
     }]
 }
 
+/// Switch to the Repo Tab at `index` (0 = All): re-derive the visible list
+/// under the new scope and reset the selection to its top. A no-op for the
+/// already-active tab so re-pressing its digit doesn't lose the selection.
+fn select_tab(model: &mut Model, index: usize) {
+    if index == model.active_tab {
+        return;
+    }
+    model.active_tab = index;
+    model.relayout();
+    model.list.select_first_visible();
+}
+
+/// Step the active tab by `delta`, wrapping at the ends (h from All lands on
+/// the last repo, l from the last repo lands on All).
+fn step_tab(model: &mut Model, delta: isize) {
+    let count = (model.tracked_repos().len() + 1) as isize;
+    let next = (model.active_tab as isize + delta).rem_euclid(count) as usize;
+    select_tab(model, next);
+}
+
+/// Jump straight to tab `index` (digit keys; 0 = All). Digits past the last
+/// tab are ignored.
+fn jump_to_tab(model: &mut Model, index: usize) {
+    if index <= model.tracked_repos().len() {
+        select_tab(model, index);
+    }
+}
+
 pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
     match msg {
         Msg::TerminalEvent(Event::Key(key)) => {
@@ -157,15 +185,23 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
                         model.list.cycle_grouping();
                         model.relayout();
                     }
+                    KeyCode::Char('h') | KeyCode::Left | KeyCode::Char('[') => {
+                        step_tab(model, -1);
+                    }
+                    KeyCode::Char('l') | KeyCode::Right | KeyCode::Char(']') => {
+                        step_tab(model, 1);
+                    }
+                    KeyCode::Char(c) if c.is_ascii_digit() => {
+                        jump_to_tab(model, (c as u8 - b'0') as usize);
+                    }
                     _ => {}
                 }
             }
             Vec::new()
         }
         Msg::TerminalEvent(Event::Resize(_, height)) => {
-            // The status bar takes one row; everything above belongs to the
-            // list. Saturating-sub keeps a 0-row viewport handled gracefully.
-            model.list.resize((height as usize).saturating_sub(1));
+            model.terminal_height = height;
+            model.sync_viewport();
             Vec::new()
         }
         Msg::TerminalEvent(_) => Vec::new(),

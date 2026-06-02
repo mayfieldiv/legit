@@ -152,6 +152,16 @@ impl PrList {
         self.scroll_offset = 0;
     }
 
+    /// Reset the selection to the first visible PR and scroll to the top. Used
+    /// on tab switches, where the spec resets to the top of the new tab rather
+    /// than chasing the previously selected PR.
+    pub fn select_first_visible(&mut self) {
+        let first = self.visible_pr_indices().next().unwrap_or(0);
+        self.selected = first;
+        self.scroll_offset = 0;
+        self.normalize_scroll();
+    }
+
     /// Move the selection to the next PR row in display order, skipping headers.
     pub fn move_down(&mut self) {
         if let Some(next) = self.adjacent_pr(self.selected, Direction::Down) {

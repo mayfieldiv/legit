@@ -124,10 +124,11 @@ fn buffer_text(terminal: &Terminal<TestBackend>) -> Vec<String> {
         .collect()
 }
 
-/// Rows excluding the status bar (the last row).
+/// Rows excluding the tab bar (the first row) and the status bar (the last).
 fn list_rows(terminal: &Terminal<TestBackend>) -> Vec<String> {
     let mut rows = buffer_text(terminal);
     rows.pop();
+    rows.remove(0);
     rows
 }
 
@@ -140,11 +141,11 @@ fn empty_pr_list_renders_no_open_pull_requests_placeholder() {
     assert_eq!(
         buffer_text(&terminal),
         vec![
+            "[All]                                   ",
             "          No open pull requests         ",
             "                                        ",
             "                                        ",
-            "                                        ",
-            "q quit  g group: smart-status           ",
+            "q quit  g group: smart-status  h/l tabs ",
         ]
     );
 }
@@ -169,7 +170,6 @@ fn flat_list_renders_one_row_per_pull_request() {
             "#42  Add streaming PR list    octocat       +5/-3 3h    Awaiting review         ",
             "#43  Wire FetchOpenPRs cmd    alice         +5/-3 1d    Awaiting review         ",
             "#44  Render list view         bob           +5/-3 7d    Awaiting review         ",
-            "                                                                                ",
         ]
     );
 }
@@ -261,6 +261,71 @@ fn repo_grouping_renders_one_header_for_the_detected_repo() {
     assert!(rows[0].starts_with("── acme/web "), "{rows:?}");
     assert!(rows[1].contains("#1"), "{rows:?}");
     assert!(rows[2].contains("#2"), "{rows:?}");
+}
+
+#[test]
+fn all_tab_grouped_by_repo_shows_one_header_per_repo() {
+    let mut other = pr(2, "two", "dave", 2);
+    other.repo_slug = "zeta/api".to_owned();
+    let model = model_with(
+        vec![pr(1, "one", "carol", 1), other],
+        Grouping::Repo,
+        |_| Some(Tier::NeedsReview),
+    );
+
+    let terminal = render_snapshot(&model, 80, 7);
+    let rows = list_rows(&terminal);
+
+    assert!(rows[0].starts_with("── acme/web "), "{rows:?}");
+    assert!(rows[1].contains("#1"), "{rows:?}");
+    assert!(rows[2].starts_with("── zeta/api "), "{rows:?}");
+    assert!(rows[3].contains("#2"), "{rows:?}");
+}
+
+// ── repo tabs ──────────────────────────────────────────────────────────────
+
+/// First row of a rendered snapshot — the Repo Tab bar.
+fn tab_row(terminal: &Terminal<TestBackend>) -> String {
+    buffer_text(terminal).remove(0)
+}
+
+/// `model_with` plus a second Tracked Repo (acme/api) in config, so the tab
+/// set is `All | acme/api | acme/web`.
+fn two_repo_model() -> Model {
+    let mut model = model_with(vec![pr(1, "one", "carol", 1)], Grouping::None, |_| {
+        Some(Tier::NeedsReview)
+    });
+    model.config.repos = vec![crate::config::RepoConfig {
+        slug: "acme/api".to_owned(),
+        ..Default::default()
+    }];
+    model
+}
+
+#[test]
+fn tab_bar_lists_all_plus_tracked_repos_with_active_bracketed() {
+    let model = two_repo_model();
+
+    let row = tab_row(&render_snapshot(&model, 50, 4));
+
+    assert!(
+        row.starts_with("[All]  acme/api   acme/web "),
+        "All active: {row:?}"
+    );
+}
+
+#[test]
+fn tab_bar_brackets_follow_the_active_tab() {
+    let mut model = two_repo_model();
+    model.active_tab = 2; // acme/web (config repo first, detected second)
+    model.relayout();
+
+    let row = tab_row(&render_snapshot(&model, 50, 4));
+
+    assert!(
+        row.starts_with(" All   acme/api  [acme/web] "),
+        "acme/web active: {row:?}"
+    );
 }
 
 #[test]
@@ -432,11 +497,11 @@ fn loading_pr_list_renders_loading_placeholder() {
     assert_eq!(
         buffer_text(&terminal),
         vec![
+            "[All]                                   ",
             "         Loading pull requests…         ",
             "                                        ",
             "                                        ",
-            "                                        ",
-            "q quit  g group: smart-status           ",
+            "q quit  g group: smart-status  h/l tabs ",
         ]
     );
 }

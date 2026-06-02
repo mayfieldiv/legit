@@ -63,6 +63,14 @@ pub struct Model {
     pub auth_token: Option<Secret<String>>,
     pub repo: Option<RepoInfo>,
     pub list: PrList,
+    /// Active Repo Tab index: 0 is the All tab, `i >= 1` is `tracked_repos()[i-1]`.
+    /// Clamped at read time by `active_scope` (the tracked set only ever grows,
+    /// and only until config + repo detection settle).
+    pub active_tab: usize,
+    /// Last reported terminal height, kept so `sync_viewport` can re-derive the
+    /// list viewport when chrome rows (tab bar, filter chip) appear or vanish
+    /// without a resize event.
+    pub terminal_height: u16,
     /// Transient status message + a generation counter. A scheduled clear only
     /// fires if its token still matches `status_gen`, so a newer message is
     /// never wiped by an older message's timer.
@@ -88,6 +96,8 @@ impl Model {
                 auth_token: None,
                 repo: None,
                 list: PrList::new(),
+                active_tab: 0,
+                terminal_height: 0,
                 status: None,
                 status_gen: 0,
                 network_stats: NetworkStats::default(),
@@ -124,6 +134,24 @@ impl Model {
             push_unique(repo.slug(), &mut slugs);
         }
         slugs
+    }
+
+    /// The repo slug the active tab narrows the list to, or `None` for the All
+    /// tab. An out-of-range `active_tab` clamps to All rather than panicking.
+    pub fn active_scope(&self) -> Option<String> {
+        if self.active_tab == 0 {
+            return None;
+        }
+        self.tracked_repos().into_iter().nth(self.active_tab - 1)
+    }
+
+    /// Re-derive the list viewport from the terminal height minus the chrome
+    /// rows (tab bar + status bar). Called on terminal resize — and whenever a
+    /// chrome row appears or vanishes without one.
+    pub fn sync_viewport(&mut self) {
+        const CHROME_ROWS: usize = 2;
+        self.list
+            .resize((self.terminal_height as usize).saturating_sub(CHROME_ROWS));
     }
 
     /// Smart-status tier for the PR at `index` in the list, or `None` when its
@@ -178,7 +206,8 @@ impl Model {
     }
 
     /// Rebuild the list's display layout from the current PRs, cached tiers,
-    /// and grouping. Cheap; safe to call after selection/grouping changes too.
+    /// grouping, and active Repo Tab. Cheap; safe to call after
+    /// selection/grouping/tab changes too.
     pub fn relayout(&mut self) {
         // Snapshot the inputs the closures need so they don't borrow `self`
         // while `self.list` is mutably borrowed.
@@ -191,7 +220,9 @@ impl Model {
             .iter()
             .map(|pr| pr.repo_slug.clone())
             .collect();
-        self.list.relayout(None, |i| tiers[i], |i| slugs[i].clone());
+        let scope = self.active_scope();
+        self.list
+            .relayout(scope.as_deref(), |i| tiers[i], |i| slugs[i].clone());
     }
 }
 
