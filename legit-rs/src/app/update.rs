@@ -170,31 +170,71 @@ fn jump_to_tab(model: &mut Model, index: usize) {
     }
 }
 
+/// Handle one keypress while the filter editor is open. The editor consumes
+/// every key (a digit must type, not switch tabs; `q` must type, not quit) —
+/// only Esc and Enter leave it. Every text change re-filters live; the
+/// open/clear/submit transitions can add or remove the chip row, so they
+/// re-derive the viewport too.
+fn handle_filter_editing_key(model: &mut Model, code: KeyCode) {
+    match code {
+        KeyCode::Esc => {
+            model.list.filter_clear();
+            model.sync_viewport();
+        }
+        KeyCode::Enter => {
+            model.list.filter_submit();
+            model.sync_viewport();
+        }
+        KeyCode::Backspace => model.list.filter_backspace(),
+        KeyCode::Char(c) => model.list.filter_push(c),
+        // Anything else (arrows, etc.) is consumed without effect.
+        _ => return,
+    }
+    model.relayout();
+}
+
+/// Handle one keypress in normal mode (no filter editor open).
+fn handle_normal_key(model: &mut Model, code: KeyCode) {
+    match code {
+        KeyCode::Char('q') => model.should_quit = true,
+        KeyCode::Char('j') => model.list.move_down(),
+        KeyCode::Char('k') => model.list.move_up(),
+        KeyCode::Char('g') => {
+            // Cycle smart-status -> repo -> none -> smart-status, resetting
+            // selection, then rebuild the layout under the new grouping.
+            model.list.cycle_grouping();
+            model.relayout();
+        }
+        KeyCode::Char('h') | KeyCode::Left | KeyCode::Char('[') => step_tab(model, -1),
+        KeyCode::Char('l') | KeyCode::Right | KeyCode::Char(']') => step_tab(model, 1),
+        KeyCode::Char('/') => {
+            model.list.filter_open();
+            model.sync_viewport();
+            model.relayout();
+        }
+        KeyCode::Esc if model.list.filter().is_visible() => {
+            // Esc on an applied filter drops it (editing-mode Esc is handled
+            // by the editor).
+            model.list.filter_clear();
+            model.sync_viewport();
+            model.relayout();
+        }
+        KeyCode::Char(c) if c.is_ascii_digit() => {
+            jump_to_tab(model, (c as u8 - b'0') as usize);
+        }
+        _ => {}
+    }
+}
+
 pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
     match msg {
         Msg::TerminalEvent(Event::Key(key)) => {
             if key.kind == KeyEventKind::Press {
-                match key.code {
-                    KeyCode::Char('q') => model.should_quit = true,
-                    KeyCode::Char('j') => model.list.move_down(),
-                    KeyCode::Char('k') => model.list.move_up(),
-                    KeyCode::Char('g') => {
-                        // Cycle smart-status -> repo -> none -> smart-status,
-                        // resetting selection, then rebuild the layout under the
-                        // new grouping.
-                        model.list.cycle_grouping();
-                        model.relayout();
-                    }
-                    KeyCode::Char('h') | KeyCode::Left | KeyCode::Char('[') => {
-                        step_tab(model, -1);
-                    }
-                    KeyCode::Char('l') | KeyCode::Right | KeyCode::Char(']') => {
-                        step_tab(model, 1);
-                    }
-                    KeyCode::Char(c) if c.is_ascii_digit() => {
-                        jump_to_tab(model, (c as u8 - b'0') as usize);
-                    }
-                    _ => {}
+                // Modal precedence: an open filter editor sees every key first.
+                if model.list.filter().is_editing() {
+                    handle_filter_editing_key(model, key.code);
+                } else {
+                    handle_normal_key(model, key.code);
                 }
             }
             Vec::new()

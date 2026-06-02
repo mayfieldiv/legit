@@ -146,12 +146,13 @@ impl Model {
     }
 
     /// Re-derive the list viewport from the terminal height minus the chrome
-    /// rows (tab bar + status bar). Called on terminal resize — and whenever a
-    /// chrome row appears or vanishes without one.
+    /// rows (tab bar + status bar, plus the filter chip while visible). Called
+    /// on terminal resize — and whenever a chrome row appears or vanishes
+    /// without one (opening/closing the filter).
     pub fn sync_viewport(&mut self) {
-        const CHROME_ROWS: usize = 2;
+        let chrome = 2 + usize::from(self.list.filter().is_visible());
         self.list
-            .resize((self.terminal_height as usize).saturating_sub(CHROME_ROWS));
+            .resize((self.terminal_height as usize).saturating_sub(chrome));
     }
 
     /// Smart-status tier for the PR at `index` in the list, or `None` when its

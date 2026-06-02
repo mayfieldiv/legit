@@ -16,6 +16,52 @@ use crate::app::grouping::{DisplayRow, Grouping, display_rows};
 use crate::blocker::Tier;
 use crate::github::rest::{PR, PrKey};
 
+/// The substring filter over the Open PR List. `/` opens editing; Enter locks
+/// the text in; Esc clears. `Applied("")` is unrepresentable — submitting an
+/// empty filter returns to `Inactive` — so "filter active" is exactly
+/// "non-empty text".
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub enum Filter {
+    #[default]
+    Inactive,
+    /// `/` pressed; every keystroke edits the text and re-filters live, and
+    /// the editor consumes all keys except Esc/Enter.
+    Editing(String),
+    /// Enter pressed; the text keeps narrowing the list while normal-mode
+    /// keys work again.
+    Applied(String),
+}
+
+impl Filter {
+    /// The text currently narrowing the list (`""` when inactive).
+    pub fn text(&self) -> &str {
+        match self {
+            Filter::Inactive => "",
+            Filter::Editing(text) | Filter::Applied(text) => text,
+        }
+    }
+
+    pub fn is_editing(&self) -> bool {
+        matches!(self, Filter::Editing(_))
+    }
+
+    /// Whether the filter chip row is on screen (editing or applied).
+    pub fn is_visible(&self) -> bool {
+        !matches!(self, Filter::Inactive)
+    }
+}
+
+/// Case-insensitive substring match over a PR's title and author. An empty
+/// needle matches everything. The needle must already be lowercased (done
+/// once per relayout, not per PR).
+fn filter_matches(pr: &PR, lowercase_needle: &str) -> bool {
+    if lowercase_needle.is_empty() {
+        return true;
+    }
+    pr.title.to_lowercase().contains(lowercase_needle)
+        || pr.author.to_lowercase().contains(lowercase_needle)
+}
+
 /// Lifecycle of one Tracked Repo's open-PR fetch. A repo with no entry in
 /// `PrList::phases` hasn't had a fetch dispatched yet. At most one variant
 /// holds per repo, so the view never has to ask "are we loading AND failed?".
@@ -38,6 +84,12 @@ pub struct PrList {
     /// A failure that halts the whole list regardless of per-repo phases
     /// (today: a malformed config, which blocks every fetch).
     halt: Option<String>,
+    /// The substring filter narrowing the visible set (with the active tab).
+    filter: Filter,
+    /// PRs the active scope admitted before the filter ran, captured at
+    /// `relayout`. Lets the view distinguish "no PRs on this tab" from
+    /// "the filter matched none".
+    scoped_count: usize,
     grouping: Grouping,
     /// Flattened display layout (headers + PR rows). Rebuilt by `relayout`
     /// whenever the PRs, their tiers, or the grouping change.
@@ -107,7 +159,15 @@ impl PrList {
         tier_of: impl Fn(usize) -> Option<Tier>,
         slug_of: impl Fn(usize) -> String,
     ) {
-        let visible = self.visible_indices(scope);
+        let scoped: Vec<usize> = (0..self.prs.len())
+            .filter(|&i| scope.is_none_or(|slug| self.prs[i].repo_slug == slug))
+            .collect();
+        self.scoped_count = scoped.len();
+        let needle = self.filter.text().to_lowercase();
+        let visible: Vec<usize> = scoped
+            .into_iter()
+            .filter(|&i| filter_matches(&self.prs[i], &needle))
+            .collect();
         self.rows = display_rows(&visible, self.grouping, tier_of, slug_of);
         if !visible.contains(&self.selected) {
             self.selected = visible.first().copied().unwrap_or(0);
@@ -115,18 +175,57 @@ impl PrList {
         self.normalize_scroll();
     }
 
-    /// Absolute indices of the PRs `scope` admits, in input order.
-    fn visible_indices(&self, scope: Option<&str>) -> Vec<usize> {
-        (0..self.prs.len())
-            .filter(|&i| scope.is_none_or(|slug| self.prs[i].repo_slug == slug))
-            .collect()
-    }
-
     /// Whether the current layout shows no PR rows at all — the placeholder
     /// state. Distinct from `prs.is_empty()`: a Repo Tab or filter can hide
     /// every pooled PR.
     pub fn visible_is_empty(&self) -> bool {
         !self.rows.iter().any(|r| matches!(r, DisplayRow::Pr(_)))
+    }
+
+    /// True when the filter (not the tab) is why the list is empty: the scope
+    /// admitted PRs but the filter text matched none. Drives the
+    /// "No matching PRs" placeholder.
+    pub fn filter_hid_everything(&self) -> bool {
+        self.visible_is_empty() && self.scoped_count > 0 && !self.filter.text().is_empty()
+    }
+
+    pub fn filter(&self) -> &Filter {
+        &self.filter
+    }
+
+    /// `/` pressed: enter filter editing, resuming an applied filter's text so
+    /// `/` acts as "edit the current filter" rather than starting over.
+    pub fn filter_open(&mut self) {
+        self.filter = Filter::Editing(self.filter.text().to_owned());
+    }
+
+    pub fn filter_push(&mut self, c: char) {
+        if let Filter::Editing(text) = &mut self.filter {
+            text.push(c);
+        }
+    }
+
+    pub fn filter_backspace(&mut self) {
+        if let Filter::Editing(text) = &mut self.filter {
+            text.pop();
+        }
+    }
+
+    /// Enter pressed: lock the filter in (back to normal-mode keys, matches
+    /// still narrowed). Submitting empty text deactivates instead — an empty
+    /// `Applied` would be an invisible no-op chip.
+    pub fn filter_submit(&mut self) {
+        let text = self.filter.text().to_owned();
+        self.filter = if text.is_empty() {
+            Filter::Inactive
+        } else {
+            Filter::Applied(text)
+        };
+    }
+
+    /// Esc pressed (editing or applied): drop the filter entirely.
+    pub fn filter_clear(&mut self) {
+        self.filter = Filter::Inactive;
     }
 
     /// Absolute PR indices currently in the display layout (post scope), in

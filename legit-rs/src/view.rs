@@ -23,18 +23,48 @@ fn grouping_label(model: &Model) -> &'static str {
 
 pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
     let area = frame.area();
-    let [tabs, main, status] = Layout::default()
+    // The filter chip row only exists while the filter is editing/applied, so
+    // the list gets the row back when it's inactive (mirrored by
+    // `Model::sync_viewport`, which must agree on the chrome row count).
+    let filter_visible = model.list.filter().is_visible();
+    let mut constraints = vec![Constraint::Length(1)];
+    if filter_visible {
+        constraints.push(Constraint::Length(1));
+    }
+    constraints.push(Constraint::Min(1));
+    constraints.push(Constraint::Length(1));
+    let rects = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(1),
-            Constraint::Length(1),
-        ])
-        .areas(area);
+        .constraints(constraints)
+        .split(area);
 
-    render_tabs(model, frame, tabs);
-    list::render(model, frame, main, now);
-    render_status(model, frame, status);
+    render_tabs(model, frame, rects[0]);
+    let mut next = 1;
+    if filter_visible {
+        render_filter_chip(model, frame, rects[next]);
+        next += 1;
+    }
+    list::render(model, frame, rects[next], now);
+    render_status(model, frame, rects[next + 1]);
+}
+
+/// The filter chip above the list: `/text` plus a block cursor while editing;
+/// just the accented text once applied, so it reads as a sticky chip.
+fn render_filter_chip(model: &Model, frame: &mut Frame<'_>, area: Rect) {
+    let filter = model.list.filter();
+    let mut spans = vec![
+        Span::styled(
+            "/",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(filter.text().to_owned()),
+    ];
+    if filter.is_editing() {
+        spans.push(Span::styled("█", Style::default().fg(Color::Cyan)));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 /// The Repo Tab bar: `All` plus one tab per Tracked Repo, the active tab
@@ -63,7 +93,8 @@ fn render_tabs(model: &Model, frame: &mut Frame<'_>, area: Rect) {
 
 fn render_status(model: &Model, frame: &mut Frame<'_>, area: Rect) {
     // Left: a network-activity indicator (only while requests are in flight or
-    // queued) followed by key hints.
+    // queued) followed by key hints — the filter editor's own hints while it
+    // is open, the normal-mode hints otherwise.
     let mut left = Vec::new();
     let stats = model.network_stats;
     if stats.in_flight > 0 || stats.waiting > 0 {
@@ -77,22 +108,23 @@ fn render_status(model: &Model, frame: &mut Frame<'_>, area: Rect) {
         };
         left.push(Span::styled(indicator, Style::default().fg(Color::Cyan)));
     }
-    left.push(Span::styled(
-        "q",
-        Style::default().add_modifier(Modifier::BOLD),
-    ));
-    left.push(Span::raw(" quit  "));
-    left.push(Span::styled(
-        "g",
-        Style::default().add_modifier(Modifier::BOLD),
-    ));
-    left.push(Span::raw(format!(" group: {}", grouping_label(model))));
-    left.push(Span::raw("  "));
-    left.push(Span::styled(
-        "h/l",
-        Style::default().add_modifier(Modifier::BOLD),
-    ));
-    left.push(Span::raw(" tabs"));
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    if model.list.filter().is_editing() {
+        left.push(Span::styled("enter", bold));
+        left.push(Span::raw(" apply  "));
+        left.push(Span::styled("esc", bold));
+        left.push(Span::raw(" clear"));
+    } else {
+        left.push(Span::styled("q", bold));
+        left.push(Span::raw(" quit  "));
+        left.push(Span::styled("g", bold));
+        left.push(Span::raw(format!(" group: {}", grouping_label(model))));
+        left.push(Span::raw("  "));
+        left.push(Span::styled("h/l", bold));
+        left.push(Span::raw(" tabs  "));
+        left.push(Span::styled("/", bold));
+        left.push(Span::raw(" filter"));
+    }
     frame.render_widget(Paragraph::new(Line::from(left)), area);
 
     // Right: a hard list-load failure takes precedence; otherwise the transient

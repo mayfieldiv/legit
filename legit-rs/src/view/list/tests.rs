@@ -328,6 +328,77 @@ fn tab_bar_brackets_follow_the_active_tab() {
     );
 }
 
+// ── substring filter ────────────────────────────────────────────────────────
+
+/// `model_with` one matching and one non-matching PR plus the filter put into
+/// `state` ("editing" or "applied") with `text`.
+fn filtered_model(text: &str, editing: bool) -> Model {
+    let mut model = model_with(
+        vec![
+            pr(1, "Fix rust panic", "carol", 1),
+            pr(2, "Update docs", "dave", 2),
+        ],
+        Grouping::None,
+        |_| Some(Tier::NeedsReview),
+    );
+    model.list.filter_open();
+    for c in text.chars() {
+        model.list.filter_push(c);
+    }
+    if !editing {
+        model.list.filter_submit();
+    }
+    model.relayout();
+    model
+}
+
+#[test]
+fn filter_editing_renders_chip_with_cursor_and_editor_hints() {
+    let model = filtered_model("rust", true);
+
+    let terminal = render_snapshot(&model, 60, 5);
+    let rows = buffer_text(&terminal);
+
+    // Row 1 sits under the tab bar: the chip text plus a block cursor.
+    assert!(rows[1].starts_with("/rust█"), "{rows:?}");
+    assert!(rows[2].contains("#1"), "only the match renders: {rows:?}");
+    assert!(
+        !rows.iter().any(|r| r.contains("#2")),
+        "non-match hidden: {rows:?}"
+    );
+    let status = rows.last().expect("status row");
+    assert!(
+        status.starts_with("enter apply  esc clear"),
+        "editor hints while editing: {status:?}"
+    );
+}
+
+#[test]
+fn applied_filter_renders_chip_without_cursor_and_normal_hints() {
+    let model = filtered_model("rust", false);
+
+    let terminal = render_snapshot(&model, 60, 5);
+    let rows = buffer_text(&terminal);
+
+    assert!(rows[1].starts_with("/rust "), "{rows:?}");
+    assert!(!rows[1].contains('█'), "no cursor once applied: {rows:?}");
+    let status = rows.last().expect("status row");
+    assert!(status.starts_with("q quit"), "normal hints: {status:?}");
+}
+
+#[test]
+fn filter_with_no_matches_renders_no_matching_prs() {
+    let model = filtered_model("zzz", true);
+
+    let terminal = render_snapshot(&model, 60, 5);
+    let rows = buffer_text(&terminal);
+
+    assert!(
+        rows.iter().any(|r| r.contains("No matching PRs")),
+        "{rows:?}"
+    );
+}
+
 #[test]
 fn no_grouping_renders_no_headers() {
     let model = model_with(
