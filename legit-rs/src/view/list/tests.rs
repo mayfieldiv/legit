@@ -39,6 +39,7 @@ fn pr(number: u64, title: &str, author: &str, hours_ago: i64) -> PR {
     let created_at = fixed_now() - chrono::Duration::hours(hours_ago);
     PR {
         number,
+        repo_slug: "acme/web".to_owned(),
         title: title.to_owned(),
         author: author.to_owned(),
         created_at,

@@ -269,6 +269,7 @@ mod tests {
     fn sample_pr(number: u64) -> PR {
         PR {
             number,
+            repo_slug: "owner/repo".to_owned(),
             title: format!("PR #{number}"),
             author: "octocat".to_owned(),
             created_at: chrono::Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap(),

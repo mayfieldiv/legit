@@ -30,6 +30,11 @@ pub enum PRState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PR {
     pub number: u64,
+    /// `owner/repo` slug of the Tracked Repo this PR belongs to. Stamped by
+    /// `list_open_prs` from the repo it was fetched for (not parsed from the
+    /// wire) — PR numbers are only unique within a repo, so every cross-repo
+    /// keyed structure pairs this with `number` (see `PrKey`).
+    pub repo_slug: String,
     pub title: String,
     pub author: String,
     pub created_at: DateTime<Utc>,
@@ -143,6 +148,9 @@ fn parse_pr(raw: RawRestPR) -> PR {
 
     PR {
         number: raw.number,
+        // Stamped by `list_open_prs`; the wire shape doesn't carry the slug of
+        // the repo the listing was made against.
+        repo_slug: String::new(),
         title: raw.title,
         author: raw
             .user
@@ -210,11 +218,13 @@ impl OctocrabRest {
             .await
             .with_context(|| format!("listing open PRs for {owner}/{repo}"))?;
 
+        let repo_slug = format!("{owner}/{repo}");
         loop {
             let items = page.take_items();
             let count = items.len();
             for raw in items {
-                let pr = parse_pr(raw);
+                let mut pr = parse_pr(raw);
+                pr.repo_slug = repo_slug.clone();
                 if out.send(pr).is_err() {
                     tracing::debug!("pr receiver dropped; stopping pagination");
                     return Ok(());
@@ -478,6 +488,7 @@ mod tests {
             pr,
             PR {
                 number: 42,
+                repo_slug: String::new(),
                 title: "Add streaming PR list".to_owned(),
                 author: "octocat".to_owned(),
                 created_at: chrono::Utc.with_ymd_and_hms(2026, 5, 1, 10, 0, 0).unwrap(),

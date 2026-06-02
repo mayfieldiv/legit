@@ -17,6 +17,7 @@ use crate::{
 fn sample_pr(number: u64, title: &str) -> PR {
     PR {
         number,
+        repo_slug: "mayfieldiv/legit".to_owned(),
         title: title.to_owned(),
         author: "octocat".to_owned(),
         created_at: chrono::Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap(),
