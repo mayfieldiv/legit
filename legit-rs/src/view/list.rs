@@ -22,7 +22,7 @@ mod tests;
 /// `#number | title | author | size | age | reason` row per PR.
 pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, now: DateTime<Utc>) {
     let pr_list = &model.list;
-    if pr_list.prs().is_empty() {
+    if pr_list.visible_is_empty() {
         let text = if pr_list.is_loading(None) {
             "Loading pull requests…"
         } else {
@@ -35,8 +35,11 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, now: DateTime<Ut
 
     let width = area.width;
     let prs = pr_list.prs();
-    let pr_num_col = pr_num_col_width(prs);
-    let size_col = size_col_width(prs);
+    // Size columns to the visible PRs only, so an off-tab PR's wide number or
+    // diff size can't widen this tab's columns.
+    let visible: Vec<&PR> = pr_list.visible_pr_indices().map(|i| &prs[i]).collect();
+    let pr_num_col = pr_num_col_width(&visible);
+    let size_col = size_col_width(&visible);
     let lines: Vec<Line<'_>> = pr_list
         .visible_rows()
         .map(|(row, selected)| match row {
@@ -59,11 +62,11 @@ const AGE_COL: usize = 6;
 /// Width reserved for the trailing smart-status reason hint.
 const REASON_COL: usize = 24;
 
-/// Width of the `#<number>` column, sized to fit the widest PR number in the
-/// list. Floored at `PR_NUM_COL_MIN` so single-digit-PR repos still get a
+/// Width of the `#<number>` column, sized to fit the widest visible PR number.
+/// Floored at `PR_NUM_COL_MIN` so single-digit-PR repos still get a
 /// readable two-column gap; widens uniformly once PR numbers cross 5 chars
 /// (e.g. `#12345`) so the title column doesn't drift row-by-row.
-fn pr_num_col_width(prs: &[PR]) -> usize {
+fn pr_num_col_width(prs: &[&PR]) -> usize {
     let widest = prs
         .iter()
         .map(|pr| format!("#{}", pr.number).chars().count())
@@ -72,11 +75,11 @@ fn pr_num_col_width(prs: &[PR]) -> usize {
     widest.max(PR_NUM_COL_MIN)
 }
 
-/// Width of the `+A/-D` size column, sized to fit the widest size string in
-/// the list. Floored at `SIZE_COL_MIN` so the minimum `+0/-0` form sits in a
+/// Width of the `+A/-D` size column, sized to fit the widest visible size
+/// string. Floored at `SIZE_COL_MIN` so the minimum `+0/-0` form sits in a
 /// stable column; `format_size` has no upper bound (PRs can touch thousands
 /// of lines) so a fixed width would clip otherwise.
-fn size_col_width(prs: &[PR]) -> usize {
+fn size_col_width(prs: &[&PR]) -> usize {
     let widest = prs
         .iter()
         .map(|pr| format_size(pr.additions, pr.deletions).chars().count())

@@ -44,44 +44,50 @@ pub enum DisplayRow {
     Pr(usize),
 }
 
-/// Build the display rows for `pr_count` PRs under `grouping`.
+/// Build the display rows for the PRs at `visible` (absolute indices into the
+/// underlying PR list, in display order) under `grouping`. Indices excluded by
+/// the active Repo Tab or filter simply aren't passed in.
 ///
 /// - `tier_of` returns the Smart-status tier for a PR by index, or `None` when
 ///   its enrichment hasn't been derived yet (those PRs collect under a trailing
 ///   "Loading details…" group, matching the TS engine).
-/// - `repo_slug` is the slug shown for repo grouping; the Rust app is single-
-///   repo today, so every PR shares it.
+/// - `slug_of` returns a PR's Tracked Repo slug, used as its repo-grouping key
+///   (so the All tab groups under one header per repo).
 ///
 /// PR order within a group preserves input order (the REST stream order). Empty
 /// groups are never emitted.
 pub fn display_rows(
-    pr_count: usize,
+    visible: &[usize],
     grouping: Grouping,
     tier_of: impl Fn(usize) -> Option<Tier>,
-    repo_slug: &str,
+    slug_of: impl Fn(usize) -> String,
 ) -> Vec<DisplayRow> {
     match grouping {
-        Grouping::None => (0..pr_count).map(DisplayRow::Pr).collect(),
-        // Single-repo today, so every PR shares `repo_slug`; fall back to
-        // `"unknown"` (matching the TS engine) when no repo is detected yet.
-        Grouping::Repo => grouped_rows(pr_count, |_| {
-            if repo_slug.is_empty() {
+        Grouping::None => visible.iter().copied().map(DisplayRow::Pr).collect(),
+        // Fall back to `"unknown"` (matching the TS engine) for a PR with no
+        // slug stamped — only reachable for hand-built PRs in tests.
+        Grouping::Repo => grouped_rows(visible, |i| {
+            let slug = slug_of(i);
+            if slug.is_empty() {
                 "unknown".to_owned()
             } else {
-                repo_slug.to_owned()
+                slug
             }
         }),
-        Grouping::SmartStatus => smart_status_rows(pr_count, tier_of),
+        Grouping::SmartStatus => smart_status_rows(visible, tier_of),
     }
 }
 
 /// Smart-status grouping: tier-ordered groups, then a trailing "Loading details…"
 /// group for PRs whose tier hasn't been derived yet.
-fn smart_status_rows(pr_count: usize, tier_of: impl Fn(usize) -> Option<Tier>) -> Vec<DisplayRow> {
+fn smart_status_rows(
+    visible: &[usize],
+    tier_of: impl Fn(usize) -> Option<Tier>,
+) -> Vec<DisplayRow> {
     // Collect indices per tier, preserving input order within each tier.
     let mut tiers: Vec<(Tier, Vec<usize>)> = Vec::new();
     let mut loading: Vec<usize> = Vec::new();
-    for i in 0..pr_count {
+    for &i in visible {
         match tier_of(i) {
             Some(tier) => match tiers.iter_mut().find(|(t, _)| *t == tier) {
                 Some((_, members)) => members.push(i),
@@ -92,7 +98,7 @@ fn smart_status_rows(pr_count: usize, tier_of: impl Fn(usize) -> Option<Tier>) -
     }
     tiers.sort_by_key(|(tier, _)| tier.order());
 
-    let mut rows = Vec::with_capacity(pr_count + tiers.len() + 1);
+    let mut rows = Vec::with_capacity(visible.len() + tiers.len() + 1);
     for (tier, members) in tiers {
         rows.push(DisplayRow::Header(tier.label().to_owned()));
         rows.extend(members.into_iter().map(DisplayRow::Pr));
@@ -107,9 +113,9 @@ fn smart_status_rows(pr_count: usize, tier_of: impl Fn(usize) -> Option<Tier>) -
 /// Generic single-key grouping (used by repo): bucket indices by the key
 /// `key_of(i)` produces, emit groups sorted alphabetically by key, headers
 /// labelled with the key.
-fn grouped_rows(pr_count: usize, key_of: impl Fn(usize) -> String) -> Vec<DisplayRow> {
+fn grouped_rows(visible: &[usize], key_of: impl Fn(usize) -> String) -> Vec<DisplayRow> {
     let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
-    for i in 0..pr_count {
+    for &i in visible {
         let key = key_of(i);
         match groups.iter_mut().find(|(k, _)| *k == key) {
             Some((_, members)) => members.push(i),
@@ -118,7 +124,7 @@ fn grouped_rows(pr_count: usize, key_of: impl Fn(usize) -> String) -> Vec<Displa
     }
     groups.sort_by(|(a, _), (b, _)| a.cmp(b));
 
-    let mut rows = Vec::with_capacity(pr_count + groups.len());
+    let mut rows = Vec::with_capacity(visible.len() + groups.len());
     for (key, members) in groups {
         rows.push(DisplayRow::Header(key));
         rows.extend(members.into_iter().map(DisplayRow::Pr));

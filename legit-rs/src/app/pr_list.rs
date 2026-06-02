@@ -1,7 +1,8 @@
-//! Open PR List Module: PRs for the current Tracked Repo, plus the user's
-//! selection cursor, scroll viewport, fetch phase, and how the list is grouped.
-//! Concentrates the invariants that used to be spread across `Model` and
-//! `update.rs`.
+//! Open PR List Module: the pooled PRs of every Tracked Repo, plus the user's
+//! selection cursor, scroll viewport, per-repo fetch phases, and how the list
+//! is grouped. The active Repo Tab and filter narrow the pool to a visible
+//! subset at `relayout` time — there is no per-tab cache. Concentrates the
+//! invariants that used to be spread across `Model` and `update.rs`.
 //!
 //! Grouping turns the flat PR vec into a `Vec<DisplayRow>` (headers + PR rows).
 //! Selection tracks a *PR index* (so it survives regrouping), while scrolling
@@ -49,7 +50,7 @@ pub struct PrList {
 }
 
 impl fmt::Debug for PrList {
-    /// Renders the list as `{ phase, prs: <len>, ... }` — the full PR vec is
+    /// Renders the list as `{ phases, prs: <len>, ... }` — the full PR vec is
     /// noisy in `tracing` output and rarely informative compared to its length.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrList")
@@ -92,17 +93,50 @@ impl PrList {
     }
 
     /// Rebuild the display layout from the current PRs under the active
-    /// grouping. `tier_of(pr_index)` returns the Smart-status tier for a PR, or
-    /// `None` when its enrichment hasn't been derived yet. `repo_slug` is the
-    /// slug used for repo grouping. Re-clamps scroll so the selection stays
-    /// on-screen. Called by `update` after PRs arrive, enrichment lands, or the
-    /// grouping changes.
-    pub fn relayout(&mut self, tier_of: impl Fn(usize) -> Option<Tier>, repo_slug: &str) {
-        self.rows = display_rows(self.prs.len(), self.grouping, tier_of, repo_slug);
-        if self.selected >= self.prs.len() {
-            self.selected = self.prs.len().saturating_sub(1);
+    /// grouping, showing only the PRs in `scope` (a Repo Tab's slug, or `None`
+    /// for the All tab). `tier_of(pr_index)` returns the Smart-status tier for
+    /// a PR, or `None` when its enrichment hasn't been derived yet;
+    /// `slug_of(pr_index)` its Tracked Repo slug (the repo-grouping key).
+    /// Selection sticks to the same PR when it remains visible and snaps to
+    /// the first visible PR otherwise; scroll re-clamps so the selection stays
+    /// on-screen. Called by `update` after PRs arrive, enrichment lands, or
+    /// the grouping/scope changes.
+    pub fn relayout(
+        &mut self,
+        scope: Option<&str>,
+        tier_of: impl Fn(usize) -> Option<Tier>,
+        slug_of: impl Fn(usize) -> String,
+    ) {
+        let visible = self.visible_indices(scope);
+        self.rows = display_rows(&visible, self.grouping, tier_of, slug_of);
+        if !visible.contains(&self.selected) {
+            self.selected = visible.first().copied().unwrap_or(0);
         }
         self.normalize_scroll();
+    }
+
+    /// Absolute indices of the PRs `scope` admits, in input order.
+    fn visible_indices(&self, scope: Option<&str>) -> Vec<usize> {
+        (0..self.prs.len())
+            .filter(|&i| scope.is_none_or(|slug| self.prs[i].repo_slug == slug))
+            .collect()
+    }
+
+    /// Whether the current layout shows no PR rows at all — the placeholder
+    /// state. Distinct from `prs.is_empty()`: a Repo Tab or filter can hide
+    /// every pooled PR.
+    pub fn visible_is_empty(&self) -> bool {
+        !self.rows.iter().any(|r| matches!(r, DisplayRow::Pr(_)))
+    }
+
+    /// Absolute PR indices currently in the display layout (post scope), in
+    /// display order. The view sizes its columns from these so an off-tab PR
+    /// can't widen this tab's columns.
+    pub fn visible_pr_indices(&self) -> impl Iterator<Item = usize> + '_ {
+        self.rows.iter().filter_map(|row| match row {
+            DisplayRow::Pr(i) => Some(*i),
+            DisplayRow::Header(_) => None,
+        })
     }
 
     pub fn grouping(&self) -> Grouping {
@@ -328,7 +362,7 @@ mod tests {
             list.push(sample_pr(i));
         }
         list.grouping = Grouping::None;
-        list.relayout(|_| None, "owner/repo");
+        list.relayout(None, |_| None, |_| "owner/repo".to_owned());
         list
     }
 
@@ -426,6 +460,7 @@ mod tests {
         list.push(sample_pr(1));
         list.push(sample_pr(2));
         list.relayout(
+            None,
             |i| {
                 Some(if i == 0 {
                     Tier::MeBlocking
@@ -433,7 +468,7 @@ mod tests {
                     Tier::WaitingOnAuthor
                 })
             },
-            "owner/repo",
+            |_| "owner/repo".to_owned(),
         );
 
         assert_eq!(list.selected(), 0);

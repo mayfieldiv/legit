@@ -105,15 +105,6 @@ impl Model {
         &self.config.user
     }
 
-    /// `owner/repo` slug for the detected repo, or empty when none is detected
-    /// yet. Used as the repo-grouping label (single-repo today).
-    pub fn repo_slug(&self) -> String {
-        match &self.repo {
-            Some(repo) => repo.slug(),
-            None => String::new(),
-        }
-    }
-
     /// Every Tracked Repo slug: the configured repos in config order, then the
     /// CWD-detected repo appended when it isn't already configured. Deduped
     /// case-insensitively (GitHub slugs are case-insensitive); the first
@@ -186,16 +177,21 @@ impl Model {
         self.relayout();
     }
 
-    /// Rebuild the list's display layout from the current PRs, cached tiers, and
-    /// grouping. Cheap; safe to call after selection/grouping changes too.
+    /// Rebuild the list's display layout from the current PRs, cached tiers,
+    /// and grouping. Cheap; safe to call after selection/grouping changes too.
     pub fn relayout(&mut self) {
-        // Snapshot the inputs `tier_of` needs so the closure doesn't borrow
-        // `self` while `self.list` is mutably borrowed.
+        // Snapshot the inputs the closures need so they don't borrow `self`
+        // while `self.list` is mutably borrowed.
         let tiers: Vec<Option<Tier>> = (0..self.list.prs().len())
             .map(|i| self.tier_of(i))
             .collect();
-        let repo_slug = self.repo_slug();
-        self.list.relayout(|i| tiers[i], &repo_slug);
+        let slugs: Vec<String> = self
+            .list
+            .prs()
+            .iter()
+            .map(|pr| pr.repo_slug.clone())
+            .collect();
+        self.list.relayout(None, |i| tiers[i], |i| slugs[i].clone());
     }
 }
 
