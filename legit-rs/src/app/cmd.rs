@@ -52,6 +52,13 @@ pub enum Cmd {
         ctx: Arc<RequestContext>,
         head_sha: String,
     },
+    /// Fetch one PR's changed files (additions/deletions per file), dispatched
+    /// when the PR becomes selected. The raw `FileChange`s come back via
+    /// `Msg::FilesArrived`; categorisation happens in `update`.
+    FetchFiles {
+        ctx: Arc<RequestContext>,
+        number: u64,
+    },
     /// Clear the status message after `delay_ms`, but only if it's still the one
     /// identified by `token` (see `Model::status_gen`).
     ScheduleStatusClear {
@@ -231,6 +238,24 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                         checks,
                     }]
                 },
+            )
+            .await;
+        }
+        Cmd::FetchFiles { ctx, number } => {
+            let pr = PrKey {
+                repo_slug: ctx.repo.slug(),
+                number,
+            };
+            request(
+                &tx,
+                &limiter,
+                "fetch files",
+                async move {
+                    OctocrabRest::new(&ctx.token)?
+                        .list_files(&ctx.repo.owner, &ctx.repo.repo, number)
+                        .await
+                },
+                move |files| vec![Msg::FilesArrived { pr, files }],
             )
             .await;
         }

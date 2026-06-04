@@ -7,6 +7,7 @@ use serde::{Deserialize, de::DeserializeOwned};
 use tokio::sync::mpsc;
 
 use crate::{
+    file_category::FileChange,
     github::types::{CheckRun, IssueComment, Review, is_bot},
     secret::Secret,
 };
@@ -326,6 +327,32 @@ impl OctocrabRest {
         Ok(all)
     }
 
+    /// Fetch the changed files for a PR (path + additions/deletions per file).
+    /// Drives the summary panel's File Category breakdown; mirrors the TS
+    /// `fetchCategorizedFiles` minus the categorisation, which `update` does
+    /// against the config `file_rules`.
+    #[tracing::instrument(name = "list_files", skip(self))]
+    pub async fn list_files(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<Vec<FileChange>> {
+        let route = format!("/repos/{owner}/{repo}/pulls/{number}/files");
+        let raw = self
+            .get_all::<RawFile>(&route)
+            .await
+            .with_context(|| format!("listing files for {owner}/{repo}#{number}"))?;
+        Ok(raw
+            .into_iter()
+            .map(|file| FileChange {
+                path: file.filename,
+                additions: file.additions,
+                deletions: file.deletions,
+            })
+            .collect())
+    }
+
     /// Follow Link-header pagination for an array endpoint, collecting every
     /// page into one `Vec`. Mirrors the pagination in `list_open_prs`.
     async fn get_all<T: DeserializeOwned>(&self, route: &str) -> octocrab::Result<Vec<T>> {
@@ -403,6 +430,17 @@ struct RawCommentUser {
     login: String,
     #[serde(rename = "type", default)]
     user_type: Option<String>,
+}
+
+/// One entry from the PR `files` endpoint. Only the fields the breakdown needs;
+/// `additions`/`deletions` default to 0 so a stripped response still parses.
+#[derive(Debug, Clone, Deserialize)]
+struct RawFile {
+    filename: String,
+    #[serde(default)]
+    additions: u64,
+    #[serde(default)]
+    deletions: u64,
 }
 
 /// Reduce raw reviews to the latest decision per user. Drops `PENDING` reviews

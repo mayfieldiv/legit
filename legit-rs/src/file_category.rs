@@ -6,11 +6,8 @@
 //! `blocker` and `format` modules.
 //!
 //! The whole public surface (`categorize` + its result types) is consumed by
-//! the summary panel wiring in part 2 (issue #49); the `Cmd::FetchFiles` ->
-//! `Msg::FilesArrived` path that calls `categorize` from `update` lands in the
-//! same change set, so the module keeps opting out of `dead_code` wholesale
-//! until that wiring is in place.
-#![allow(dead_code)]
+//! the summary panel: `update` calls `categorize` on `Msg::FilesArrived` and
+//! the panel renders the resulting breakdown.
 
 use std::sync::LazyLock;
 

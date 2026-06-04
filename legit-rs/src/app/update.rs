@@ -149,6 +149,32 @@ fn maybe_fetch_checks(model: &Model, head_sha: Option<String>, repo_slug: &str) 
     }]
 }
 
+/// Request the currently-selected PR's changed files, unless they were already
+/// requested. Idempotent via `Model::files_requested`, so it's safe to call
+/// after every selection-changing event: each PR's files are fetched at most
+/// once, and a single keypress moves the cursor one PR, so at most one
+/// `FetchFiles` is ever dispatched per call. Yields nothing when auth isn't
+/// ready, no PR is selected, or the selected PR's repo isn't tracked.
+fn maybe_fetch_selected_files(model: &mut Model) -> Vec<Cmd> {
+    let Some(token) = model.auth_token.as_ref() else {
+        return Vec::new();
+    };
+    let Some(pr) = model.list.selected_pr() else {
+        return Vec::new();
+    };
+    let key = pr.key();
+    let number = pr.number;
+    if model.files_requested.contains(&key) {
+        return Vec::new();
+    }
+    let Some(repo) = model.tracked_repo(&key.repo_slug) else {
+        return Vec::new();
+    };
+    let ctx = request_context(&repo, token, &model.config.bot_logins);
+    model.files_requested.insert(key);
+    vec![Cmd::FetchFiles { ctx, number }]
+}
+
 /// Switch to the Repo Tab at `index` (0 = All): re-derive the visible list
 /// under the new scope and reset the selection to its top. A no-op for the
 /// already-active tab so re-pressing its digit doesn't lose the selection.
@@ -243,6 +269,11 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
                 } else {
                     handle_normal_key(model, key.code);
                 }
+                // Any key can move the selection (j/k, tab switch, filter
+                // narrowing, grouping cycle); fetch the now-selected PR's files
+                // just-in-time. The fetch is deduped per PR, so this is a no-op
+                // when the selection didn't change to a new, unfetched PR.
+                return maybe_fetch_selected_files(model);
             }
             Vec::new()
         }
@@ -280,7 +311,10 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             // The new PR has no enrichment yet, so it joins "Loading details…";
             // rebuild the layout so it renders immediately.
             model.relayout();
-            Vec::new()
+            // The first PR to arrive becomes selected; fetch its files for the
+            // summary panel (deduped, so later arrivals that don't move the
+            // selection cost nothing).
+            maybe_fetch_selected_files(model)
         }
         Msg::PrListLoaded { repo_slug } => {
             model.list.complete_fetch(&repo_slug);
@@ -335,6 +369,14 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
         }
         Msg::IssueCommentsArrived { pr, comments } => {
             model.enrichment.issue_comments.insert(pr, comments);
+            Vec::new()
+        }
+        Msg::FilesArrived { pr, files } => {
+            // Categorise the raw file changes against the config `file_rules`
+            // here (the pure layer, where config lives), mirroring how blockers
+            // are derived in `update` rather than in the impure command.
+            let categorization = crate::file_category::categorize(&files, &model.config.file_rules);
+            model.enrichment.files.insert(pr, categorization);
             Vec::new()
         }
         Msg::PrListFailed {

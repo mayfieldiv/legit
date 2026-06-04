@@ -2,6 +2,7 @@ use ratatui::crossterm::event::Event;
 
 use crate::{
     config::LegitConfig,
+    file_category::FileChange,
     git_remote::RepoInfo,
     github::limiter::NetworkStats,
     github::rest::{PR, PrKey},
@@ -49,6 +50,13 @@ pub enum Msg {
     IssueCommentsArrived {
         pr: PrKey,
         comments: Vec<IssueComment>,
+    },
+    /// A PR's changed files arrived (fetched on selection change). Carries the
+    /// raw `FileChange`s; `update` categorises them against the config
+    /// `file_rules` and stores the result for the summary panel's breakdown.
+    FilesArrived {
+        pr: PrKey,
+        files: Vec<FileChange>,
     },
     /// A scheduled status-message clear fired; honored only if `token` still
     /// matches the model's current status generation.

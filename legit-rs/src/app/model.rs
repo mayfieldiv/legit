@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     blocker::{BlockerOptions, BlockerResult, compute_blocker},
@@ -136,6 +136,11 @@ pub struct Model {
     /// whenever a PR arrives or its enrichment lands. A PR absent from the map
     /// hasn't been derived yet (it groups under "Loading details…").
     pub blockers: HashMap<PrKey, BlockerResult>,
+    /// PRs whose file changes have already been requested (`Cmd::FetchFiles`
+    /// dispatched). The summary panel fetches a PR's files just-in-time when it
+    /// becomes selected; this set makes that idempotent so scrolling back to a
+    /// PR — or a flurry of `j` presses — never refetches the same PR's files.
+    pub files_requested: HashSet<PrKey>,
 }
 
 impl Model {
@@ -156,6 +161,7 @@ impl Model {
                 network_stats: NetworkStats::default(),
                 enrichment: Enrichment::default(),
                 blockers: HashMap::new(),
+                files_requested: HashSet::new(),
             },
             vec![Cmd::LoadConfig, Cmd::ResolveAuthToken, Cmd::DetectRepo],
         )
