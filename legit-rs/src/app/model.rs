@@ -140,6 +140,14 @@ pub struct Model {
     /// dispatched). The summary panel fetches a PR's files just-in-time when it
     /// becomes selected; this set makes that idempotent so scrolling back to a
     /// PR — or a flurry of `j` presses — never refetches the same PR's files.
+    ///
+    /// Insert-only by design, so it doubles as a permanent "fetched once" guard.
+    /// That makes the files breakdown sticky: a Refresh (`r`/`R`, not yet
+    /// implemented) re-fetches the PR plus its other enrichments (threads,
+    /// checks, reviews), but files would silently stay stale because this set
+    /// blocks a re-dispatch. When refresh lands it must remove the refreshed
+    /// PR's key from here (and drop its `enrichment.files` entry) so files
+    /// re-fetch alongside the rest.
     pub files_requested: HashSet<PrKey>,
 }
 
