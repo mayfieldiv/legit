@@ -123,7 +123,8 @@ fn render_header(detail: &PRDetail, frame: &mut Frame<'_>, area: Rect, now: Date
 // ── Body (scrollable description + checks) ───────────────────────────────────
 
 /// Render the scrollable body: markdown description + CI checks, offset by
-/// `model.detail_scroll` rows from the top.
+/// `model.detail_scroll` rows from the top, clamped so the scroll offset
+/// never exceeds `content_lines - viewport_rows` (the last screenful).
 fn render_body(model: &Model, detail: &PRDetail, frame: &mut Frame<'_>, area: Rect) {
     let pr = &detail.pr;
 
@@ -187,7 +188,17 @@ fn render_body(model: &Model, detail: &PRDetail, frame: &mut Frame<'_>, area: Re
         }
     }
 
-    frame.render_widget(Paragraph::new(lines).scroll((model.detail_scroll, 0)), area);
+    // Clamp the scroll so the user can't scroll past the last line of content.
+    // The model holds the raw offset (the update layer cannot know the rendered
+    // line count), so we clamp here at render time before passing it to the
+    // Paragraph widget. This keeps detail_scroll as the source of intent and
+    // prevents blank space beyond the end of the body.
+    let content_lines = lines.len() as u16;
+    let viewport_rows = area.height;
+    let max_scroll = content_lines.saturating_sub(viewport_rows);
+    let scroll = model.detail_scroll.min(max_scroll);
+
+    frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), area);
 }
 
 // ── Status bar ────────────────────────────────────────────────────────────────
