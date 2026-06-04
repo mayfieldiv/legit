@@ -158,24 +158,20 @@ impl RenderCtx {
             Event::Start(Tag::Heading { level, .. }) => {
                 self.start_heading(level);
             }
-            Event::Start(Tag::Paragraph) => {
-                // Emit the blockquote bar once at the start of the paragraph
-                // so all inline runs (text, code, links, images) that follow
-                // share the same leading `│ ` — matching the TS reference that
-                // wraps the entire paragraph in a single `│ <InlineNodes/>`.
-                if self.in_blockquote {
-                    self.push_span(Span::styled("│ ", Style::default().fg(MUTED)));
-                }
+            // Emit the blockquote bar once at the start of the paragraph so
+            // all inline runs (text, code, links, images) that follow share
+            // the same leading `│ ` — matching the TS reference that wraps
+            // the entire paragraph in a single `│ <InlineNodes/>`.
+            Event::Start(Tag::Paragraph) if self.in_blockquote => {
+                self.push_span(Span::styled("│ ", Style::default().fg(MUTED)));
             }
+            Event::Start(Tag::Paragraph) => {}
             Event::Start(Tag::CodeBlock(kind)) => {
                 self.start_code_block(kind);
             }
             Event::Start(Tag::List(start)) => {
                 self.list_stack.push(start);
-                self.item_counters.push(match start {
-                    Some(n) => n,
-                    None => 0,
-                });
+                self.item_counters.push(start.unwrap_or(0));
                 self.list_depth += 1;
             }
             Event::Start(Tag::Item) => {
@@ -272,16 +268,14 @@ impl RenderCtx {
                 )));
                 self.blank_line();
             }
-            Event::SoftBreak | Event::HardBreak => {
-                // Within a paragraph, soft breaks become spaces; hard breaks
-                // flush the current line.
-                if !self.current.is_empty() {
-                    if matches!(event, Event::HardBreak) {
-                        self.flush_line();
-                    } else {
-                        self.push_span(Span::raw(" "));
-                    }
-                }
+            // Within a paragraph, soft breaks become spaces; hard breaks
+            // flush the current line. Guards skip the no-op when the buffer
+            // is already empty (avoids pushing a leading space at line start).
+            Event::SoftBreak if !self.current.is_empty() => {
+                self.push_span(Span::raw(" "));
+            }
+            Event::HardBreak if !self.current.is_empty() => {
+                self.flush_line();
             }
             // Ignore everything else (HTML, task markers, footnotes, …).
             _ => {}

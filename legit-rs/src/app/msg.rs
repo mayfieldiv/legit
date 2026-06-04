@@ -97,7 +97,7 @@ pub enum Msg {
         error: String,
     },
     /// The detail fetch for a PR completed. The full `PRDetail` (base PR fields
-    /// + body) is ready to display. If the model is still in `Detail` for this
+    /// plus body) is ready to display. If the model is still in `Detail` for this
     /// PR, the view swaps from the loading placeholder to the full content.
     PRDetailArrived(PRDetail),
     Quit,
