@@ -152,7 +152,6 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                         })
                         .collect()
                 },
-                Vec::new,
             )
             .await;
         }
@@ -176,7 +175,6 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                         .await
                 },
                 move |threads| vec![Msg::ThreadsArrived { pr, threads }],
-                Vec::new,
             )
             .await;
         }
@@ -195,7 +193,6 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                         .await
                 },
                 move |reviews| vec![Msg::ReviewsArrived { pr, reviews }],
-                Vec::new,
             )
             .await;
         }
@@ -219,7 +216,6 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                         .await
                 },
                 move |comments| vec![Msg::IssueCommentsArrived { pr, comments }],
-                Vec::new,
             )
             .await;
         }
@@ -242,7 +238,6 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                         checks,
                     }]
                 },
-                Vec::new,
             )
             .await;
         }
@@ -253,9 +248,10 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             };
             // Dispatching this command set the PR's `Enrichment::files` entry to
             // `Requested`; a failure must roll that back so re-selecting the PR
-            // retries.
+            // retries. `request` sends `CommandFailed` first, then we send
+            // `FilesFetchFailed` to clear the in-flight guard.
             let failed_pr = pr.clone();
-            request(
+            let ok = request(
                 &tx,
                 &limiter,
                 "fetch files",
@@ -265,9 +261,11 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                         .await
                 },
                 move |files| vec![Msg::FilesArrived { pr, files }],
-                move || vec![Msg::FilesFetchFailed { pr: failed_pr }],
             )
             .await;
+            if !ok {
+                let _ = tx.send(Msg::FilesFetchFailed { pr: failed_pr });
+            }
         }
         Cmd::ScheduleStatusClear { token, delay_ms } => {
             tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
@@ -320,34 +318,33 @@ async fn run_fetch_open_prs(
 
 /// Hold one concurrency permit, run a single GitHub request, and forward the
 /// messages it produces — or, on error, one `CommandFailed` (covering the
-/// client build inside the request too) followed by `on_fail()`'s messages.
-/// Captures the build-permit-dispatch shape every per-PR enrichment command
-/// shares; `context` names the operation so the failure reads e.g.
-/// "fetch reviews: ...". Most commands need no failure cleanup and pass
-/// `Vec::new`; `on_fail` exists for the ones whose dispatch recorded state in
-/// the model that must be rolled back (e.g. `FetchFiles`' in-flight guard).
-/// `op` is a lazy future, so the permit is held only across the actual await,
-/// not while it's constructed.
+/// client build inside the request too). Captures the build-permit-dispatch
+/// shape every per-PR enrichment command shares; `context` names the operation
+/// so the failure reads e.g. "fetch reviews: ...". `op` is a lazy future, so
+/// the permit is held only across the actual await, not while it's constructed.
+///
+/// Returns whether the request succeeded so a caller that recorded in-flight
+/// state in the model can send its own rollback message after the
+/// `CommandFailed` (e.g. `FetchFiles` sends `FilesFetchFailed`). Callers with
+/// no cleanup ignore the return.
 async fn request<T>(
     tx: &mpsc::UnboundedSender<Msg>,
     limiter: &Arc<NetworkLimiter>,
     context: &'static str,
     op: impl Future<Output = anyhow::Result<T>>,
     to_msgs: impl FnOnce(T) -> Vec<Msg>,
-    on_fail: impl FnOnce() -> Vec<Msg>,
-) {
+) -> bool {
     let _permit = limiter.acquire().await;
     match op.await {
         Ok(value) => {
             for msg in to_msgs(value) {
                 let _ = tx.send(msg);
             }
+            true
         }
         Err(error) => {
             let _ = tx.send(command_failed(context, error));
-            for msg in on_fail() {
-                let _ = tx.send(msg);
-            }
+            false
         }
     }
 }
