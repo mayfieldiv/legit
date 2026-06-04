@@ -21,9 +21,10 @@ use ratatui::{
 use crate::app::model::{FilesState, Model};
 use crate::blocker::Tier;
 use crate::format::{
-    CheckOutcome, check_icon, checks_summary, format_review_state, outcome, review_icon,
-    sort_check_runs,
+    CheckOutcome, check_icon, checks_summary, comment_counts, format_review_state, format_size,
+    outcome, review_icon, reviews_summary, sort_check_runs,
 };
+use crate::github::rest::PR;
 use crate::github::types::CheckRun;
 
 /// Placeholder text for a section whose enrichment hasn't arrived yet.
@@ -86,7 +87,7 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect) {
 /// The smart-status reason line, coloured by tier (me-blocking magenta,
 /// waiting-on-author yellow, needs-review gray). `Loading…` until the PR's
 /// blocker has been derived (both threads and reviews arrived).
-fn smart_status_line(model: &Model, pr: &crate::github::rest::PR) -> Line<'static> {
+fn smart_status_line(model: &Model, pr: &PR) -> Line<'static> {
     match model.blockers.get(&pr.key()) {
         Some(result) => Line::from(Span::styled(
             result.reason.clone(),
@@ -99,7 +100,7 @@ fn smart_status_line(model: &Model, pr: &crate::github::rest::PR) -> Line<'stati
 /// The mergeable-state line. Mirrors the TS `formatMergeable`: `CONFLICTING` ->
 /// "! conflict" (red), `MERGEABLE` -> "✓ mergeable" (green), anything else
 /// (including `UNKNOWN`) -> "? merge unknown" (gray).
-fn mergeable_line(pr: &crate::github::rest::PR) -> Line<'static> {
+fn mergeable_line(pr: &PR) -> Line<'static> {
     let (text, color) = match pr.mergeable.as_str() {
         "CONFLICTING" => ("! conflict", Color::Red),
         "MERGEABLE" => ("✓ mergeable", Color::Green),
@@ -112,24 +113,19 @@ fn mergeable_line(pr: &crate::github::rest::PR) -> Line<'static> {
 /// commented counts, then one indented row per reviewer with an icon and their
 /// state. `Loading…` beside the header until the reviews fetch arrives (`None`
 /// = not loaded, distinct from `Some(&[])` = loaded, no reviews).
-fn reviews_lines(model: &Model, pr: &crate::github::rest::PR) -> Vec<Line<'static>> {
+fn reviews_lines(model: &Model, pr: &PR) -> Vec<Line<'static>> {
     let Some(reviews) = model.enrichment.reviews.get(&pr.key()) else {
         return vec![header_with_loading("reviews")];
     };
 
-    let approved = reviews.iter().filter(|r| r.state == "APPROVED").count();
-    let changes = reviews
-        .iter()
-        .filter(|r| r.state == "CHANGES_REQUESTED")
-        .count();
-    let commented = reviews.iter().filter(|r| r.state == "COMMENTED").count();
-
-    let mut counts: Vec<Span<'static>> = vec![section_header("reviews")];
-    counts.push(Span::raw(" "));
-    counts.push(Span::raw(format!(
-        "{approved} approved, {changes} changes requested, {commented} commented"
-    )));
-    let mut lines = vec![Line::from(counts)];
+    let summary = reviews_summary(reviews);
+    let mut lines = vec![Line::from(vec![
+        section_header("reviews"),
+        Span::raw(format!(
+            " {} approved, {} changes requested, {} commented",
+            summary.approved, summary.changes_requested, summary.commented
+        )),
+    ])];
 
     for review in reviews {
         let (icon, color) = review_icon(&review.state);
@@ -147,40 +143,21 @@ fn reviews_lines(model: &Model, pr: &crate::github::rest::PR) -> Vec<Line<'stati
 }
 
 /// The threads summary line: `threads N total, M unresolved (H human, B bot)`.
-/// `Loading…` until the review-threads fetch arrives. Bot classification mirrors
-/// the TS `computeCommentCounts`: a thread is unresolved-bot when its first
-/// comment is a bot (the fetch-time `is_bot` flag) or its author is a configured
-/// bot login.
-fn threads_line(model: &Model, pr: &crate::github::rest::PR) -> Line<'static> {
+/// `Loading…` until the review-threads fetch arrives. A thin formatter over
+/// `format::comment_counts` (the canonical derivation shared with the detail
+/// view in issue #51), which mirrors the TS `computeCommentCounts` bot
+/// classification.
+fn threads_line(model: &Model, pr: &PR) -> Line<'static> {
     let Some(threads) = model.enrichment.review_threads.get(&pr.key()) else {
         return header_with_loading("threads");
     };
 
-    let bot_logins = &model.config.bot_logins;
-    let total = threads.len();
-    let mut unresolved = 0;
-    let mut human = 0;
-    let mut bot = 0;
-    for thread in threads {
-        if thread.is_resolved {
-            continue;
-        }
-        unresolved += 1;
-        let is_bot = thread
-            .comments
-            .first()
-            .is_some_and(|c| c.is_bot || bot_logins.iter().any(|b| b == &c.author));
-        if is_bot {
-            bot += 1;
-        } else {
-            human += 1;
-        }
-    }
-
+    let counts = comment_counts(threads, &model.config.bot_logins);
     Line::from(vec![
         section_header("threads"),
         Span::raw(format!(
-            " {total} total, {unresolved} unresolved ({human} human, {bot} bot)"
+            " {} total, {} unresolved ({} human, {} bot)",
+            counts.total, counts.unresolved, counts.unresolved_human, counts.unresolved_bot
         )),
     ])
 }
@@ -190,14 +167,8 @@ fn threads_line(model: &Model, pr: &crate::github::rest::PR) -> Line<'static> {
 /// summarised by the count alone). `Loading…` until the checks fetch arrives —
 /// which can't start until review-status reports the PR's head SHA, so a PR
 /// with no head SHA also reads as loading.
-fn checks_lines(model: &Model, pr: &crate::github::rest::PR) -> Vec<Line<'static>> {
-    let checks = pr.head_commit_sha.as_ref().and_then(|sha| {
-        model
-            .enrichment
-            .checks
-            .get(&(pr.repo_slug.clone(), sha.clone()))
-    });
-    let Some(checks) = checks else {
+fn checks_lines(model: &Model, pr: &PR) -> Vec<Line<'static>> {
+    let Some(checks) = model.enrichment.checks_for(pr) else {
         return vec![header_with_loading("checks")];
     };
 
@@ -258,7 +229,7 @@ fn checks_lines(model: &Model, pr: &crate::github::rest::PR) -> Vec<Line<'static
 /// per non-empty category (`code: +14/-3 (2)`), plus a `total` row. `Loading…`
 /// both before the fetch is requested (no entry) and while it's in flight
 /// (`Requested`); the breakdown renders once it's `Loaded` and categorised.
-fn files_lines(model: &Model, pr: &crate::github::rest::PR) -> Vec<Line<'static>> {
+fn files_lines(model: &Model, pr: &PR) -> Vec<Line<'static>> {
     let categorization = match model.enrichment.files.get(&pr.key()) {
         Some(FilesState::Loaded(categorization)) => categorization,
         None | Some(FilesState::Requested) => return vec![header_with_loading("files")],
@@ -291,12 +262,12 @@ fn files_lines(model: &Model, pr: &crate::github::rest::PR) -> Vec<Line<'static>
 /// The worktree path line. Worktree detection lands in #50, so for now this is
 /// a blank placeholder line — the section keeps its slot in the layout so the
 /// footer URL sits where it will once worktrees arrive.
-fn worktree_line(_pr: &crate::github::rest::PR) -> Line<'static> {
+fn worktree_line(_pr: &PR) -> Line<'static> {
     Line::from("")
 }
 
 /// The footer line: the PR's full GitHub URL. Mirrors the TS `prUrl`.
-fn url_footer_line(pr: &crate::github::rest::PR) -> Line<'static> {
+fn url_footer_line(pr: &PR) -> Line<'static> {
     let url = format!("https://github.com/{}/pull/{}", pr.repo_slug, pr.number);
     Line::from(Span::styled(url, Style::default().fg(Color::Cyan)))
 }
@@ -305,10 +276,7 @@ fn url_footer_line(pr: &crate::github::rest::PR) -> Line<'static> {
 fn category_row(label: &str, additions: u64, deletions: u64, files: u64) -> Line<'static> {
     Line::from(vec![
         Span::raw(format!("  {label}: ")),
-        Span::raw(format!(
-            "{} ({files})",
-            crate::format::format_size(additions, deletions)
-        )),
+        Span::raw(format!("{} ({files})", format_size(additions, deletions))),
     ])
 }
 

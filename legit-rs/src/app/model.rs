@@ -6,7 +6,7 @@ use crate::{
     file_category::FileCategorization,
     git_remote::RepoInfo,
     github::limiter::NetworkStats,
-    github::rest::PrKey,
+    github::rest::{PR, PrKey},
     github::types::{CheckRun, FullReviewThread, IssueComment, Review},
     secret::Secret,
 };
@@ -33,6 +33,22 @@ pub struct Enrichment {
     /// PR's files by removing its single entry here (no second collection to
     /// keep in sync). Consumed by the summary panel's File Category breakdown.
     pub files: HashMap<PrKey, FilesState>,
+}
+
+impl Enrichment {
+    /// The check runs fetched for `pr`'s head commit, or `None` until they
+    /// arrive. The `checks` map is keyed by (repo slug, head SHA) — not `PrKey`
+    /// — because check runs are repo-scoped on GitHub (a fork PR shares its
+    /// head SHA with upstream but not its check runs). This is the single place
+    /// that builds that key from a `PR`, so the blocker engine and the summary
+    /// panel resolve checks identically. A PR with no head SHA yet (no commits,
+    /// or review-status hasn't reported it) has no checks.
+    pub fn checks_for(&self, pr: &PR) -> Option<&[CheckRun]> {
+        let sha = pr.head_commit_sha.as_ref()?;
+        self.checks
+            .get(&(pr.repo_slug.clone(), sha.clone()))
+            .map(Vec::as_slice)
+    }
 }
 
 /// The three-state machine for one PR's changed-files fetch, collapsed into a
@@ -276,16 +292,7 @@ impl Model {
         ) else {
             return;
         };
-        let checks = pr
-            .head_commit_sha
-            .as_ref()
-            .and_then(|sha| {
-                self.enrichment
-                    .checks
-                    .get(&(pr.repo_slug.clone(), sha.clone()))
-            })
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
+        let checks = self.enrichment.checks_for(pr).unwrap_or(&[]);
         let result = compute_blocker(
             pr,
             self.current_user(),

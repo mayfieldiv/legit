@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use ratatui::style::Color;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::github::types::CheckRun;
+use crate::github::types::{CheckRun, FullReviewThread, Review};
 
 /// Conclusions that count as a failing check for *display*. Deliberately one
 /// entry wider than the TS `FAILING_CONCLUSIONS` and the blocker engine's set
@@ -226,6 +226,79 @@ pub fn checks_summary(checks: &[CheckRun]) -> ChecksSummary {
     summary
 }
 
+/// Review-thread comment counts. Mirrors the TS `CommentCounts`. `unresolved`
+/// is the sum of `unresolved_human` and `unresolved_bot`; `total` counts every
+/// thread including resolved ones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommentCounts {
+    pub total: usize,
+    pub unresolved: usize,
+    pub unresolved_human: usize,
+    pub unresolved_bot: usize,
+}
+
+/// Tally review threads into `CommentCounts`. Mirrors the TS
+/// `computeCommentCounts` exactly: every thread counts toward `total`; an
+/// unresolved thread is bot when its *first* comment is a bot — either the
+/// fetch-time `is_bot` flag or an author in `bot_logins` — else human. A thread
+/// with no comments has no first comment, so it falls through to human (the TS
+/// `firstComment != null` null-check).
+pub fn comment_counts(threads: &[FullReviewThread], bot_logins: &[String]) -> CommentCounts {
+    let mut counts = CommentCounts {
+        total: 0,
+        unresolved: 0,
+        unresolved_human: 0,
+        unresolved_bot: 0,
+    };
+    for thread in threads {
+        counts.total += 1;
+        if thread.is_resolved {
+            continue;
+        }
+        counts.unresolved += 1;
+        let is_bot = thread
+            .comments
+            .first()
+            .is_some_and(|c| c.is_bot || bot_logins.iter().any(|b| b == &c.author));
+        if is_bot {
+            counts.unresolved_bot += 1;
+        } else {
+            counts.unresolved_human += 1;
+        }
+    }
+    counts
+}
+
+/// Review counts by state. Mirrors `ChecksSummary`'s shape: the summary view's
+/// reviews header derives its counts from this single pass rather than three
+/// inline filters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReviewsSummary {
+    pub approved: usize,
+    pub changes_requested: usize,
+    pub commented: usize,
+}
+
+/// Tally reviews by state in a single pass. States other than the three counted
+/// here (e.g. `DISMISSED`) contribute to none of the buckets, matching the
+/// per-reviewer header the summary panel renders.
+pub fn reviews_summary(reviews: &[Review]) -> ReviewsSummary {
+    let mut summary = ReviewsSummary {
+        approved: 0,
+        changes_requested: 0,
+        commented: 0,
+    };
+    for review in reviews {
+        match review.state.as_str() {
+            "APPROVED" => summary.approved += 1,
+            "CHANGES_REQUESTED" => summary.changes_requested += 1,
+            "COMMENTED" => summary.commented += 1,
+            _ => {}
+        }
+    }
+    summary
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::TimeZone;
@@ -234,11 +307,11 @@ mod tests {
     use unicode_width::UnicodeWidthStr;
 
     use super::{
-        CheckOutcome, ChecksSummary, check_icon, check_sort_group, checks_summary, format_age,
-        format_review_state, format_size, outcome, pad_to_width, review_icon, sort_check_runs,
-        truncate,
+        CheckOutcome, ChecksSummary, CommentCounts, ReviewsSummary, check_icon, check_sort_group,
+        checks_summary, comment_counts, format_age, format_review_state, format_size, outcome,
+        pad_to_width, review_icon, reviews_summary, sort_check_runs, truncate,
     };
-    use crate::github::types::CheckRun;
+    use crate::github::types::{CheckRun, FullReviewThread, Review, ReviewComment};
 
     fn now() -> chrono::DateTime<chrono::Utc> {
         chrono::Utc.with_ymd_and_hms(2026, 5, 20, 12, 0, 0).unwrap()
@@ -249,6 +322,36 @@ mod tests {
             name: name.to_owned(),
             status: status.to_owned(),
             conclusion: conclusion.map(str::to_owned),
+        }
+    }
+
+    fn review(state: &str) -> Review {
+        Review {
+            user: "r".to_owned(),
+            state: state.to_owned(),
+        }
+    }
+
+    /// A thread resolved per `resolved`, whose comments are built from
+    /// `(author, is_bot)` pairs (the first one decides bot classification). An
+    /// empty `comments` slice models a thread with no first comment.
+    fn thread(resolved: bool, comments: &[(&str, bool)]) -> FullReviewThread {
+        FullReviewThread {
+            id: "T".to_owned(),
+            is_resolved: resolved,
+            path: "src/x.rs".to_owned(),
+            line: Some(1),
+            comments: comments
+                .iter()
+                .map(|(author, is_bot)| ReviewComment {
+                    id: "C".to_owned(),
+                    author: (*author).to_owned(),
+                    body: "b".to_owned(),
+                    created_at: now(),
+                    url: "u".to_owned(),
+                    is_bot: *is_bot,
+                })
+                .collect(),
         }
     }
 
@@ -444,6 +547,86 @@ mod tests {
                 pending: 1,
                 passed: 2,
                 total: 5,
+            }
+        );
+    }
+
+    #[test]
+    fn comment_counts_tallies_total_unresolved_human_and_bot() {
+        let no_bots: [String; 0] = [];
+        let threads = [
+            thread(false, &[("alice", false)]),     // unresolved human
+            thread(false, &[("dependabot", true)]), // unresolved bot (is_bot flag)
+            thread(true, &[("bob", false)]),        // resolved: total only
+        ];
+        assert_eq!(
+            comment_counts(&threads, &no_bots),
+            CommentCounts {
+                total: 3,
+                unresolved: 2,
+                unresolved_human: 1,
+                unresolved_bot: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn comment_counts_marks_configured_bot_login_as_bot() {
+        // The first comment's author isn't flagged `is_bot`, but a configured
+        // bot login still classifies the thread as unresolved-bot.
+        let bot_logins = ["renovate".to_owned()];
+        let threads = [thread(false, &[("renovate", false)])];
+        assert_eq!(
+            comment_counts(&threads, &bot_logins),
+            CommentCounts {
+                total: 1,
+                unresolved: 1,
+                unresolved_human: 0,
+                unresolved_bot: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn comment_counts_classifies_on_first_comment_only() {
+        // The first comment (human) decides; a later bot comment is ignored.
+        let no_bots: [String; 0] = [];
+        let threads = [thread(false, &[("alice", false), ("dependabot", true)])];
+        assert_eq!(comment_counts(&threads, &no_bots).unresolved_human, 1);
+    }
+
+    #[test]
+    fn comment_counts_treats_empty_comments_thread_as_human() {
+        // No first comment, so the TS `firstComment != null` null-check fails
+        // and the unresolved thread falls through to human.
+        let no_bots: [String; 0] = [];
+        let threads = [thread(false, &[])];
+        assert_eq!(
+            comment_counts(&threads, &no_bots),
+            CommentCounts {
+                total: 1,
+                unresolved: 1,
+                unresolved_human: 1,
+                unresolved_bot: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn reviews_summary_tallies_by_state() {
+        let reviews = [
+            review("APPROVED"),
+            review("APPROVED"),
+            review("CHANGES_REQUESTED"),
+            review("COMMENTED"),
+            review("DISMISSED"), // not counted in any bucket
+        ];
+        assert_eq!(
+            reviews_summary(&reviews),
+            ReviewsSummary {
+                approved: 2,
+                changes_requested: 1,
+                commented: 1,
             }
         );
     }
