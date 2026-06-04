@@ -160,6 +160,36 @@ pub fn check_icon(check: &CheckRun) -> (&'static str, Color) {
     }
 }
 
+/// The three-way classification of a check run's outcome. The single source of
+/// truth for "what counts as passing/pending/failed": both `checks_summary`
+/// (the header counts) and the summary view's per-row filter classify via
+/// `outcome`, so the header totals and the rendered failed+pending rows can
+/// never disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckOutcome {
+    Failed,
+    Pending,
+    Passed,
+}
+
+/// Classify a check run's outcome. Mirrors the TS `checksSummary` bucketing: a
+/// non-completed run is pending; a completed run whose conclusion is in
+/// `FAILING_CONCLUSIONS` is failed; every other completed run (success, neutral,
+/// skipped, stale, …) counts as passed.
+pub fn outcome(check: &CheckRun) -> CheckOutcome {
+    if check.status != "completed" {
+        CheckOutcome::Pending
+    } else if check
+        .conclusion
+        .as_deref()
+        .is_some_and(|c| FAILING_CONCLUSIONS.contains(&c))
+    {
+        CheckOutcome::Failed
+    } else {
+        CheckOutcome::Passed
+    }
+}
+
 /// Check-run counts by outcome. Mirrors the TS `checksSummary`'s shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChecksSummary {
@@ -169,10 +199,8 @@ pub struct ChecksSummary {
     pub total: usize,
 }
 
-/// Tally check runs by outcome. Mirrors the TS `checksSummary`: a non-completed
-/// run is pending; a completed run whose conclusion is in `FAILING_CONCLUSIONS`
-/// is failed; every other completed run (success, neutral, skipped, stale, …)
-/// counts as passed.
+/// Tally check runs by outcome, classifying each via `outcome` (the shared
+/// source of truth with the summary view's per-row filter).
 pub fn checks_summary(checks: &[CheckRun]) -> ChecksSummary {
     let mut summary = ChecksSummary {
         failed: 0,
@@ -181,24 +209,13 @@ pub fn checks_summary(checks: &[CheckRun]) -> ChecksSummary {
         total: checks.len(),
     };
     for check in checks {
-        if check.status != "completed" {
-            summary.pending += 1;
-        } else if is_failing(check) {
-            summary.failed += 1;
-        } else {
-            summary.passed += 1;
+        match outcome(check) {
+            CheckOutcome::Failed => summary.failed += 1,
+            CheckOutcome::Pending => summary.pending += 1,
+            CheckOutcome::Passed => summary.passed += 1,
         }
     }
     summary
-}
-
-/// Whether a completed check's conclusion counts as a failure.
-pub fn is_failing(check: &CheckRun) -> bool {
-    check.status == "completed"
-        && check
-            .conclusion
-            .as_deref()
-            .is_some_and(|c| FAILING_CONCLUSIONS.contains(&c))
 }
 
 #[cfg(test)]
@@ -209,8 +226,9 @@ mod tests {
     use unicode_width::UnicodeWidthStr;
 
     use super::{
-        ChecksSummary, check_icon, check_sort_group, checks_summary, format_age,
-        format_review_state, format_size, pad_to_width, review_icon, sort_check_runs, truncate,
+        CheckOutcome, ChecksSummary, check_icon, check_sort_group, checks_summary, format_age,
+        format_review_state, format_size, outcome, pad_to_width, review_icon, sort_check_runs,
+        truncate,
     };
     use crate::github::types::CheckRun;
 
@@ -368,6 +386,37 @@ mod tests {
         assert_eq!(
             check_icon(&check("a", "completed", None)),
             ("?", Color::Gray)
+        );
+    }
+
+    #[test]
+    fn outcome_classifies_pending_failed_and_passed() {
+        assert_eq!(
+            outcome(&check("a", "in_progress", None)),
+            CheckOutcome::Pending
+        );
+        assert_eq!(
+            outcome(&check("a", "completed", Some("failure"))),
+            CheckOutcome::Failed
+        );
+        assert_eq!(
+            outcome(&check("a", "completed", Some("timed_out"))),
+            CheckOutcome::Failed
+        );
+        assert_eq!(
+            outcome(&check("a", "completed", Some("success"))),
+            CheckOutcome::Passed
+        );
+        // Non-failing completed conclusions (neutral, skipped, …) count as
+        // passed, and `action_required` is *not* in FAILING_CONCLUSIONS so it
+        // passes too — matching `checks_summary`'s bucketing.
+        assert_eq!(
+            outcome(&check("a", "completed", Some("neutral"))),
+            CheckOutcome::Passed
+        );
+        assert_eq!(
+            outcome(&check("a", "completed", Some("action_required"))),
+            CheckOutcome::Passed
         );
     }
 

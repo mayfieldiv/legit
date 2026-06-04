@@ -21,7 +21,8 @@ use ratatui::{
 use crate::app::model::Model;
 use crate::blocker::Tier;
 use crate::format::{
-    check_icon, checks_summary, format_review_state, is_failing, review_icon, sort_check_runs,
+    CheckOutcome, check_icon, checks_summary, format_review_state, outcome, review_icon,
+    sort_check_runs,
 };
 use crate::github::types::CheckRun;
 
@@ -201,29 +202,23 @@ fn checks_lines(model: &Model, pr: &crate::github::rest::PR) -> Vec<Line<'static
     };
 
     let summary = checks_summary(checks);
-    let (failed, pending, passed, total) = (
-        summary.failed,
-        summary.pending,
-        summary.passed,
-        summary.total,
-    );
 
     let mut header: Vec<Span<'static>> = vec![section_header("checks"), Span::raw(" ")];
-    if failed > 0 {
+    if summary.failed > 0 {
         header.push(Span::styled(
-            format!("{failed} failed "),
+            format!("{} failed ", summary.failed),
             Style::default().fg(Color::Red),
         ));
     }
-    if pending > 0 {
+    if summary.pending > 0 {
         header.push(Span::styled(
-            format!("{pending} pending "),
+            format!("{} pending ", summary.pending),
             Style::default().fg(Color::Yellow),
         ));
     }
     header.push(Span::styled(
-        format!("{passed}/{total} passed"),
-        Style::default().fg(if passed == total {
+        format!("{}/{} passed", summary.passed, summary.total),
+        Style::default().fg(if summary.passed == summary.total {
             Color::Green
         } else {
             Color::Gray
@@ -233,9 +228,11 @@ fn checks_lines(model: &Model, pr: &crate::github::rest::PR) -> Vec<Line<'static
 
     // Per-check rows for the non-passing checks only, sorted (failing first,
     // then by name) and capped, mirroring the TS `sortCheckRuns` + visible cap.
+    // Classifying via `outcome` keeps this filter in lockstep with the header
+    // counts above, which `checks_summary` derives from the same predicate.
     let mut non_passing: Vec<&CheckRun> = checks
         .iter()
-        .filter(|c| c.status != "completed" || is_failing(c))
+        .filter(|c| outcome(c) != CheckOutcome::Passed)
         .collect();
     sort_check_runs(&mut non_passing);
 
