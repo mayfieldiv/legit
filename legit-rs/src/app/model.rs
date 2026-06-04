@@ -18,7 +18,7 @@ use super::{cmd::Cmd, pr_list::PrList};
 ///
 /// Keyed by `PrKey` (repo_slug + number) so the identity survives list
 /// refreshes without holding a `PR` clone here. The `Model::detail` field
-/// carries the fetched `PRDetail` once it arrives.
+/// carries the fetched markdown body once it arrives.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ViewMode {
     /// The open PR list with the summary panel.
