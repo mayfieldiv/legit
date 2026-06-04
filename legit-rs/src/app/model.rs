@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    blocker::{BlockerOptions, BlockerResult, Tier, compute_blocker},
+    blocker::{BlockerOptions, BlockerResult, compute_blocker},
     config::LegitConfig,
     git_remote::RepoInfo,
     github::limiter::NetworkStats,
@@ -155,13 +155,6 @@ impl Model {
             .resize((self.terminal_height as usize).saturating_sub(chrome));
     }
 
-    /// Smart-status tier for the PR at `index` in the list, or `None` when its
-    /// blocker hasn't been derived yet (enrichment still pending).
-    fn tier_of(&self, index: usize) -> Option<Tier> {
-        let pr = self.list.prs().get(index)?;
-        self.blockers.get(&pr.key()).map(|b| b.tier)
-    }
-
     /// Recompute the cached blocker result for one PR from whatever enrichment
     /// has arrived. A PR is only classified once both its threads and reviews
     /// are present (matching the TS `loading` gate); until then it stays absent
@@ -210,20 +203,13 @@ impl Model {
     /// grouping, and active Repo Tab. Cheap; safe to call after
     /// selection/grouping/tab changes too.
     pub fn relayout(&mut self) {
-        // Snapshot the inputs the closures need so they don't borrow `self`
-        // while `self.list` is mutably borrowed.
-        let tiers: Vec<Option<Tier>> = (0..self.list.prs().len())
-            .map(|i| self.tier_of(i))
-            .collect();
-        let slugs: Vec<String> = self
-            .list
-            .prs()
-            .iter()
-            .map(|pr| pr.repo_slug.clone())
-            .collect();
         let scope = self.active_scope();
-        self.list
-            .relayout(scope.as_deref(), |i| tiers[i], |i| slugs[i].clone());
+        // `blockers` is a field disjoint from `self.list`, so it can be borrowed
+        // by the tier closure while `self.list` is borrowed mutably.
+        let blockers = &self.blockers;
+        self.list.relayout(scope.as_deref(), |pr| {
+            blockers.get(&pr.key()).map(|b| b.tier)
+        });
     }
 }
 

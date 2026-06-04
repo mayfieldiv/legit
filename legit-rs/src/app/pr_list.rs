@@ -146,19 +146,14 @@ impl PrList {
 
     /// Rebuild the display layout from the current PRs under the active
     /// grouping, showing only the PRs in `scope` (a Repo Tab's slug, or `None`
-    /// for the All tab). `tier_of(pr_index)` returns the Smart-status tier for
-    /// a PR, or `None` when its enrichment hasn't been derived yet;
-    /// `slug_of(pr_index)` its Tracked Repo slug (the repo-grouping key).
-    /// Selection sticks to the same PR when it remains visible and snaps to
-    /// the first visible PR otherwise; scroll re-clamps so the selection stays
-    /// on-screen. Called by `update` after PRs arrive, enrichment lands, or
-    /// the grouping/scope changes.
-    pub fn relayout(
-        &mut self,
-        scope: Option<&str>,
-        tier_of: impl Fn(usize) -> Option<Tier>,
-        slug_of: impl Fn(usize) -> String,
-    ) {
+    /// for the All tab). `tier_of(pr)` returns the Smart-status tier for a PR,
+    /// or `None` when its enrichment hasn't been derived yet; the repo-grouping
+    /// key is read straight off each PR's `repo_slug`. Selection sticks to the
+    /// same PR when it remains visible and snaps to the first visible PR
+    /// otherwise; scroll re-clamps so the selection stays on-screen. Called by
+    /// `update` after PRs arrive, enrichment lands, or the grouping/scope
+    /// changes.
+    pub fn relayout(&mut self, scope: Option<&str>, tier_of: impl Fn(&PR) -> Option<Tier>) {
         let scoped: Vec<usize> = (0..self.prs.len())
             .filter(|&i| scope.is_none_or(|slug| self.prs[i].repo_slug == slug))
             .collect();
@@ -168,7 +163,17 @@ impl PrList {
             .into_iter()
             .filter(|&i| filter_matches(&self.prs[i], &needle))
             .collect();
-        self.rows = display_rows(&visible, self.grouping, tier_of, slug_of);
+        // `display_rows` keys on PR index; adapt the &PR closure (and the slug
+        // we own) into index closures. Build into a local so the index closures
+        // can borrow `self.prs` while we hold `&mut self`, then store the rows.
+        let prs = &self.prs;
+        let rows = display_rows(
+            &visible,
+            self.grouping,
+            |i| tier_of(&prs[i]),
+            |i| prs[i].repo_slug.clone(),
+        );
+        self.rows = rows;
         if !visible.contains(&self.selected) {
             self.selected = visible.first().copied().unwrap_or(0);
         }
@@ -471,7 +476,7 @@ mod tests {
             list.push(sample_pr(i));
         }
         list.grouping = Grouping::None;
-        list.relayout(None, |_| None, |_| "owner/repo".to_owned());
+        list.relayout(None, |_| None);
         list
     }
 
@@ -563,22 +568,18 @@ mod tests {
 
     #[test]
     fn navigation_skips_group_headers() {
-        // Two tiers: me-blocking (index 0) and waiting-on-author (index 1).
+        // Two tiers: me-blocking (PR #1) and waiting-on-author (PR #2).
         // Layout: [Header, Pr(0), Header, Pr(1)]. j must step Pr(0) -> Pr(1).
         let mut list = PrList::new();
         list.push(sample_pr(1));
         list.push(sample_pr(2));
-        list.relayout(
-            None,
-            |i| {
-                Some(if i == 0 {
-                    Tier::MeBlocking
-                } else {
-                    Tier::WaitingOnAuthor
-                })
-            },
-            |_| "owner/repo".to_owned(),
-        );
+        list.relayout(None, |pr| {
+            Some(if pr.number == 1 {
+                Tier::MeBlocking
+            } else {
+                Tier::WaitingOnAuthor
+            })
+        });
 
         assert_eq!(list.selected(), 0);
         list.move_down();
