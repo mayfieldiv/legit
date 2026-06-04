@@ -207,14 +207,22 @@ impl Model {
             .map(|repo| repo.slug())
     }
 
+    /// Number of non-list "chrome" rows around the list: the always-present tab
+    /// bar and status bar, plus the filter chip while it's visible. The single
+    /// source of truth shared by `sync_viewport` (which subtracts it from the
+    /// terminal height) and `view::view` (which lays out exactly this many
+    /// fixed rows around the list).
+    pub fn chrome_rows(&self) -> usize {
+        2 + usize::from(self.list.filter().is_visible())
+    }
+
     /// Re-derive the list viewport from the terminal height minus the chrome
     /// rows (tab bar + status bar, plus the filter chip while visible). Called
     /// on terminal resize — and whenever a chrome row appears or vanishes
     /// without one (opening/closing the filter).
     pub fn sync_viewport(&mut self) {
-        let chrome = 2 + usize::from(self.list.filter().is_visible());
         self.list
-            .resize((self.terminal_height as usize).saturating_sub(chrome));
+            .resize((self.terminal_height as usize).saturating_sub(self.chrome_rows()));
     }
 
     /// Recompute the cached blocker result for one PR from whatever enrichment

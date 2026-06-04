@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
@@ -24,29 +24,25 @@ fn grouping_label(model: &Model) -> &'static str {
 
 pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
     let area = frame.area();
-    // The filter chip row only exists while the filter is editing/applied, so
-    // the list gets the row back when it's inactive (mirrored by
-    // `Model::sync_viewport`, which must agree on the chrome row count).
+    // Fixed four-row layout: tab bar, filter chip, list, status bar. The chip
+    // collapses to zero height while the filter is inactive, giving its row back
+    // to the list — which keeps the row count in step with `Model::chrome_rows`,
+    // the shared definition `sync_viewport` derives the viewport height from.
     let filter_visible = model.list.filter().is_visible();
-    let mut constraints = vec![Constraint::Length(1)];
-    if filter_visible {
-        constraints.push(Constraint::Length(1));
-    }
-    constraints.push(Constraint::Min(1));
-    constraints.push(Constraint::Length(1));
-    let rects = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(constraints)
-        .split(area);
+    let [tabs, chip, main, status] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(u16::from(filter_visible)),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .areas(area);
 
-    render_tabs(model, frame, rects[0]);
-    let mut next = 1;
+    render_tabs(model, frame, tabs);
     if filter_visible {
-        render_filter_chip(model, frame, rects[next]);
-        next += 1;
+        render_filter_chip(model, frame, chip);
     }
-    list::render(model, frame, rects[next], now);
-    render_status(model, frame, rects[next + 1]);
+    list::render(model, frame, main, now);
+    render_status(model, frame, status);
 }
 
 /// The filter chip above the list: `/text` plus a block cursor while editing;
