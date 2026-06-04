@@ -77,6 +77,8 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect) {
     lines.push(threads_line(model, pr));
     lines.extend(checks_lines(model, pr));
     lines.extend(files_lines(model, pr));
+    lines.push(worktree_line(pr));
+    lines.push(url_footer_line(pr));
 
     frame.render_widget(Paragraph::new(lines), area);
 }
@@ -357,6 +359,19 @@ fn files_lines(model: &Model, pr: &crate::github::rest::PR) -> Vec<Line<'static>
         total.files,
     ));
     lines
+}
+
+/// The worktree path line. Worktree detection lands in #50, so for now this is
+/// a blank placeholder line — the section keeps its slot in the layout so the
+/// footer URL sits where it will once worktrees arrive.
+fn worktree_line(_pr: &crate::github::rest::PR) -> Line<'static> {
+    Line::from("")
+}
+
+/// The footer line: the PR's full GitHub URL. Mirrors the TS `prUrl`.
+fn url_footer_line(pr: &crate::github::rest::PR) -> Line<'static> {
+    let url = format!("https://github.com/{}/pull/{}", pr.repo_slug, pr.number);
+    Line::from(Span::styled(url, Style::default().fg(Color::Cyan)))
 }
 
 /// One indented breakdown row: `  <label>: +A/-D (N)`.

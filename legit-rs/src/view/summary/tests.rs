@@ -393,6 +393,19 @@ fn files_show_loading_until_arrived() {
 }
 
 #[test]
+fn renders_github_url_footer_line() {
+    let model = model_with_selected(sample_pr(42, "Add the thing"));
+
+    let rows = panel_rows(&model, 140, 34);
+
+    assert!(
+        rows.iter()
+            .any(|r| r.contains("https://github.com/acme/web/pull/42")),
+        "footer GitHub URL must render: {rows:?}"
+    );
+}
+
+#[test]
 fn panel_is_hidden_below_eighty_columns() {
     assert_eq!(panel_width(79), None);
     assert_eq!(panel_width(0), None);
