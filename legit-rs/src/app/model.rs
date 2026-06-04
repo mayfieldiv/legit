@@ -229,10 +229,11 @@ impl Model {
     /// has arrived. A PR is only classified once both its threads and reviews
     /// are present (matching the TS `loading` gate); until then it stays absent
     /// from the cache and groups under "Loading details…".
-    fn refresh_blocker(&mut self, key: PrKey) {
-        let Some(pr) = self.list.prs().iter().find(|pr| pr.key() == key) else {
+    fn refresh_blocker(&mut self, index: usize) {
+        let Some(pr) = self.list.prs().get(index) else {
             return;
         };
+        let key = pr.key();
         let (Some(threads), Some(reviews)) = (
             self.enrichment.review_threads.get(&key),
             self.enrichment.reviews.get(&key),
@@ -262,9 +263,8 @@ impl Model {
     /// fields changing, a fresh stream). Keeps the cache and the rendered groups
     /// in lockstep.
     pub fn refresh_blockers(&mut self) {
-        let keys: Vec<PrKey> = self.list.prs().iter().map(|pr| pr.key()).collect();
-        for key in keys {
-            self.refresh_blocker(key);
+        for index in 0..self.list.prs().len() {
+            self.refresh_blocker(index);
         }
         self.relayout();
     }

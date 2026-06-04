@@ -367,7 +367,9 @@ impl PrList {
     /// list fields in place (mergeable, review decision, size, head SHA). `None`
     /// if no PR with that key is in the list.
     pub fn pr_mut(&mut self, key: &PrKey) -> Option<&mut PR> {
-        self.prs.iter_mut().find(|pr| pr.key() == *key)
+        self.prs
+            .iter_mut()
+            .find(|pr| pr.repo_slug == key.repo_slug && pr.number == key.number)
     }
 
     /// Iterate the display rows currently inside the scroll viewport. Each item
