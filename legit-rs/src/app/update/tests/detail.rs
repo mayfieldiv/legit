@@ -176,3 +176,115 @@ fn r_in_list_mode_does_not_dispatch_fetch_pr_detail() {
         "r in list mode must not dispatch FetchPRDetail: {cmds:?}"
     );
 }
+
+#[test]
+fn entering_detail_resets_scroll_to_zero() {
+    let mut model = model_with_one_pr();
+    // Pre-seed a non-zero scroll so we can confirm it is reset.
+    model.detail_scroll = 5;
+
+    update(&mut model, key_event(KeyCode::Enter));
+
+    assert_eq!(
+        model.detail_scroll, 0,
+        "entering detail must reset scroll to the top"
+    );
+}
+
+#[test]
+fn j_in_detail_increments_scroll() {
+    let mut model = model_with_one_pr();
+    update(&mut model, key_event(KeyCode::Enter));
+    assert_eq!(model.detail_scroll, 0);
+
+    update(&mut model, key_event(KeyCode::Char('j')));
+    assert_eq!(model.detail_scroll, 1, "j must scroll down by 1");
+
+    update(&mut model, key_event(KeyCode::Char('j')));
+    assert_eq!(model.detail_scroll, 2, "second j must scroll down again");
+}
+
+#[test]
+fn k_in_detail_decrements_scroll_and_clamps_at_zero() {
+    let mut model = model_with_one_pr();
+    update(&mut model, key_event(KeyCode::Enter));
+    update(&mut model, key_event(KeyCode::Char('j')));
+    update(&mut model, key_event(KeyCode::Char('j')));
+    assert_eq!(model.detail_scroll, 2);
+
+    update(&mut model, key_event(KeyCode::Char('k')));
+    assert_eq!(model.detail_scroll, 1, "k must scroll up by 1");
+
+    update(&mut model, key_event(KeyCode::Char('k')));
+    update(&mut model, key_event(KeyCode::Char('k')));
+    assert_eq!(
+        model.detail_scroll, 0,
+        "k must clamp at zero, not underflow"
+    );
+}
+
+#[test]
+fn page_down_in_detail_scrolls_by_ten() {
+    let mut model = model_with_one_pr();
+    update(&mut model, key_event(KeyCode::Enter));
+
+    update(&mut model, key_event(KeyCode::PageDown));
+    assert_eq!(model.detail_scroll, 10, "PageDown must scroll down by 10");
+}
+
+#[test]
+fn page_up_in_detail_scrolls_by_ten_and_clamps_at_zero() {
+    let mut model = model_with_one_pr();
+    update(&mut model, key_event(KeyCode::Enter));
+    update(&mut model, key_event(KeyCode::PageDown));
+    assert_eq!(model.detail_scroll, 10);
+
+    update(&mut model, key_event(KeyCode::PageUp));
+    assert_eq!(model.detail_scroll, 0, "PageUp must scroll up by 10");
+
+    // Another PageUp from zero must not underflow.
+    update(&mut model, key_event(KeyCode::PageUp));
+    assert_eq!(
+        model.detail_scroll, 0,
+        "PageUp must clamp at zero, not underflow"
+    );
+}
+
+#[test]
+fn down_arrow_in_detail_increments_scroll() {
+    let mut model = model_with_one_pr();
+    update(&mut model, key_event(KeyCode::Enter));
+
+    update(&mut model, key_event(KeyCode::Down));
+    assert_eq!(model.detail_scroll, 1, "Down arrow must scroll down by 1");
+}
+
+#[test]
+fn up_arrow_in_detail_decrements_scroll() {
+    let mut model = model_with_one_pr();
+    update(&mut model, key_event(KeyCode::Enter));
+    update(&mut model, key_event(KeyCode::Down));
+    update(&mut model, key_event(KeyCode::Down));
+    assert_eq!(model.detail_scroll, 2);
+
+    update(&mut model, key_event(KeyCode::Up));
+    assert_eq!(model.detail_scroll, 1, "Up arrow must scroll up by 1");
+}
+
+#[test]
+fn esc_in_detail_resets_scroll_to_zero() {
+    let mut model = model_with_one_pr();
+    update(&mut model, key_event(KeyCode::Enter));
+    // Scroll down a few lines.
+    for _ in 0..5 {
+        update(&mut model, key_event(KeyCode::Char('j')));
+    }
+    assert_eq!(model.detail_scroll, 5);
+
+    update(&mut model, key_event(KeyCode::Esc));
+
+    assert_eq!(
+        model.detail_scroll, 0,
+        "Esc must reset scroll so the next detail open starts at the top"
+    );
+}

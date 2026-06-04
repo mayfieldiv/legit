@@ -197,6 +197,11 @@ pub struct Model {
     /// detail view shows a loading placeholder in that state). Cleared when the
     /// view returns to `List` so stale content can't bleed into the next open.
     pub detail: Option<PRDetail>,
+    /// Vertical scroll offset for the detail-view body (lines scrolled past the
+    /// top). Reset to zero on every `Detail` entry and on `Esc`-to-list. Stored
+    /// in the `Model` per the Elm architecture — the view reads it, `update`
+    /// mutates it in response to `j`/`k`/PageUp/PageDown/arrow keys.
+    pub detail_scroll: u16,
 }
 
 impl Model {
@@ -219,6 +224,7 @@ impl Model {
                 blockers: HashMap::new(),
                 view_mode: ViewMode::List,
                 detail: None,
+                detail_scroll: 0,
             },
             vec![Cmd::LoadConfig, Cmd::ResolveAuthToken, Cmd::DetectRepo],
         )

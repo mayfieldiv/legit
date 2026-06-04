@@ -4,8 +4,10 @@
 //! - Pinned header (number + title, author + repo + created/updated/size +
 //!   draft marker, full GitHub URL, head→base branch + mergeable, divider)
 //! - Scrollable body: markdown-rendered PR description (via `markdown::render`)
+//!   and CI checks, offset by `Model::detail_scroll` (lines from the top).
+//!   Scroll keys: `j`/`k`/arrows (1 line), PageDown/PageUp (10 lines).
 //! - CI checks section: summary line + per-check rows (icon from `check_icon`)
-//! - Status bar: "esc back  r refresh" hints
+//! - Status bar: "esc back  j/k scroll  r refresh" hints
 
 use chrono::{DateTime, Utc};
 use ratatui::{
@@ -127,6 +129,8 @@ fn format_mergeable(mergeable: &str) -> (&'static str, Color) {
 
 // ── Body (scrollable description + checks) ───────────────────────────────────
 
+/// Render the scrollable body: markdown description + CI checks, offset by
+/// `model.detail_scroll` rows from the top.
 fn render_body(model: &Model, detail: &PRDetail, frame: &mut Frame<'_>, area: Rect) {
     let pr = &detail.pr;
 
@@ -190,7 +194,7 @@ fn render_body(model: &Model, detail: &PRDetail, frame: &mut Frame<'_>, area: Re
         }
     }
 
-    frame.render_widget(Paragraph::new(lines), area);
+    frame.render_widget(Paragraph::new(lines).scroll((model.detail_scroll, 0)), area);
 }
 
 // ── Status bar ────────────────────────────────────────────────────────────────
@@ -200,6 +204,8 @@ fn render_status_bar(frame: &mut Frame<'_>, area: Rect) {
     let hints = Line::from(vec![
         Span::styled("esc", bold),
         Span::raw(" back  "),
+        Span::styled("j/k", bold),
+        Span::raw(" scroll  "),
         Span::styled("r", bold),
         Span::raw(" refresh"),
     ]);

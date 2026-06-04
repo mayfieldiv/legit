@@ -299,3 +299,47 @@ fn detail_draft_pr_shows_draft_marker() {
         "draft marker must appear: {rows:?}"
     );
 }
+
+#[test]
+fn detail_body_scrolls_when_detail_scroll_is_nonzero() {
+    // Build a multi-line body: lines "Line 1" … "Line 10" so the first line
+    // is distinct. A scroll offset of 1 must push "Line 1" off the top.
+    let body: String = (1..=10).map(|n| format!("Line {n}\n\n")).collect();
+    let mut model = model_in_detail(sample_pr(), &body);
+
+    // At scroll 0 the first line of the body must be visible.
+    let terminal = render_snapshot(&model, 80, 14);
+    let rows = buffer_text(&terminal);
+    assert!(
+        rows.iter().any(|r| r.contains("Line 1")),
+        "Line 1 must be visible at scroll 0: {rows:?}"
+    );
+
+    // With scroll offset 2 (skipping the first two rendered lines), "Line 1"
+    // should no longer be visible in the body area.
+    model.detail_scroll = 2;
+    let terminal = render_snapshot(&model, 80, 14);
+    let rows = buffer_text(&terminal);
+    assert!(
+        !rows.iter().any(|r| r.contains("Line 1")),
+        "Line 1 must be scrolled off at detail_scroll=2: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|r| r.contains("Line 2")),
+        "Line 2 must still be visible at detail_scroll=2: {rows:?}"
+    );
+}
+
+#[test]
+fn detail_status_bar_shows_jk_scroll_hint() {
+    let model = model_in_detail(sample_pr(), "");
+
+    let terminal = render_snapshot(&model, 80, 10);
+    let rows = buffer_text(&terminal);
+
+    let status = rows.last().expect("status row");
+    assert!(
+        status.contains("j/k"),
+        "status bar must mention j/k scroll hint: {status:?}"
+    );
+}

@@ -288,6 +288,7 @@ fn handle_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
                 let cmds = fetch_pr_detail_cmd(model, pr);
                 model.view_mode = ViewMode::Detail(key);
                 model.detail = None; // clear any stale detail from a prior open
+                model.detail_scroll = 0; // always start at the top
                 return cmds;
             }
         }
@@ -296,20 +297,27 @@ fn handle_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
     Vec::new()
 }
 
+/// Lines scrolled per `j`/`k`/arrow press in the detail body.
+const DETAIL_SCROLL_STEP: u16 = 1;
+/// Lines scrolled per PageUp/PageDown in the detail body.
+const DETAIL_SCROLL_PAGE: u16 = 10;
+
 /// Handle one keypress while the detail view is open.
 fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
     match code {
         KeyCode::Esc => {
-            // Return to the list view, clearing the fetched detail so the
-            // next Enter doesn't flash stale content.
+            // Return to the list view, clearing the fetched detail and the
+            // scroll position so the next Enter starts at the top.
             model.view_mode = ViewMode::List;
             model.detail = None;
+            model.detail_scroll = 0;
         }
         KeyCode::Char('r') => {
             // Refresh the current PR detail: refetch the detail (the PR body
             // and latest base fields). Clears the cached detail first so the
             // view briefly shows the loading placeholder, consistent with the
-            // initial enter-and-fetch flow.
+            // initial enter-and-fetch flow. Preserves the scroll position so
+            // the user stays at the same place after a quick re-fetch.
             if let ViewMode::Detail(key) = &model.view_mode.clone() {
                 if let Some(pr) = model.list.pr(key) {
                     let cmds = fetch_pr_detail_cmd(model, pr);
@@ -319,6 +327,22 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
                     return cmds;
                 }
             }
+        }
+        // Scroll down: j, Down arrow
+        KeyCode::Char('j') | KeyCode::Down => {
+            model.detail_scroll = model.detail_scroll.saturating_add(DETAIL_SCROLL_STEP);
+        }
+        // Scroll up: k, Up arrow
+        KeyCode::Char('k') | KeyCode::Up => {
+            model.detail_scroll = model.detail_scroll.saturating_sub(DETAIL_SCROLL_STEP);
+        }
+        // Page down
+        KeyCode::PageDown => {
+            model.detail_scroll = model.detail_scroll.saturating_add(DETAIL_SCROLL_PAGE);
+        }
+        // Page up
+        KeyCode::PageUp => {
+            model.detail_scroll = model.detail_scroll.saturating_sub(DETAIL_SCROLL_PAGE);
         }
         _ => {}
     }
