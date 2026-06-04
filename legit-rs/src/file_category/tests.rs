@@ -35,3 +35,26 @@ fn category_of(path: &str) -> FileCategory {
 fn unmatched_path_defaults_to_code() {
     assert_eq!(category_of("src/main.rs"), FileCategory::Code);
 }
+
+// ── breakdown totals ───────────────────────────────────────────────────────────
+
+#[test]
+fn breakdown_total_sums_all_files() {
+    let files = [
+        file("src/a.rs", 10, 2),
+        file("src/b.rs", 5, 1),
+        file("src/c.rs", 0, 7),
+    ];
+    let result = categorize(&files, &[]);
+
+    // All three default to code, so the code row and the total row both equal
+    // the input sums.
+    let expected = CategoryStats {
+        additions: 15,
+        deletions: 10,
+        files: 3,
+    };
+    assert_eq!(result.breakdown.code, expected);
+    assert_eq!(result.breakdown.total, expected);
+    assert_eq!(result.breakdown.test, CategoryStats::default());
+}

@@ -80,6 +80,8 @@ pub fn categorize(files: &[FileChange], user_rules: &[FileRule]) -> FileCategori
         .iter()
         .map(|f| {
             let category = match_category(&f.path, user_rules);
+            breakdown.row(category).accumulate(f);
+            breakdown.total.accumulate(f);
             FileChangeWithCategory {
                 path: f.path.clone(),
                 additions: f.additions,
@@ -92,6 +94,28 @@ pub fn categorize(files: &[FileChange], user_rules: &[FileRule]) -> FileCategori
     FileCategorization {
         files: categorized,
         breakdown,
+    }
+}
+
+impl Breakdown {
+    /// Mutable reference to the per-category row for `category`.
+    fn row(&mut self, category: FileCategory) -> &mut CategoryStats {
+        match category {
+            FileCategory::Code => &mut self.code,
+            FileCategory::Test => &mut self.test,
+            FileCategory::Generated => &mut self.generated,
+            FileCategory::Docs => &mut self.docs,
+            FileCategory::Config => &mut self.config,
+        }
+    }
+}
+
+impl CategoryStats {
+    /// Fold one file's additions / deletions into this row and bump its count.
+    fn accumulate(&mut self, file: &FileChange) {
+        self.additions += file.additions;
+        self.deletions += file.deletions;
+        self.files += 1;
     }
 }
 
