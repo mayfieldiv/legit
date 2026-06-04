@@ -4,7 +4,7 @@ use ratatui::{Terminal, backend::TestBackend};
 use crate::{
     app::model::{Model, RepoDetection, ViewMode},
     git_remote::RepoInfo,
-    github::rest::{PR, PRDetail, PRState, PrKey},
+    github::rest::{PR, PRDetail, PRState},
     github::types::CheckRun,
     view,
 };
