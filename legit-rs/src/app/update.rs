@@ -318,8 +318,12 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
             // view briefly shows the loading placeholder, consistent with the
             // initial enter-and-fetch flow. Preserves the scroll position so
             // the user stays at the same place after a quick re-fetch.
-            if let ViewMode::Detail(key) = &model.view_mode.clone() {
-                if let Some(pr) = model.list.pr(key) {
+            //
+            // Extract the key first so the view_mode borrow ends before the
+            // mutable model borrow in fetch_pr_detail_cmd.
+            if let ViewMode::Detail(key) = &model.view_mode {
+                let key = key.clone();
+                if let Some(pr) = model.list.pr(&key) {
                     let cmds = fetch_pr_detail_cmd(model, pr);
                     if !cmds.is_empty() {
                         model.detail = None;
@@ -353,21 +357,22 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
     match msg {
         Msg::TerminalEvent(Event::Key(key)) => {
             if key.kind == KeyEventKind::Press {
-                // Capture the view mode *before* the handler runs — Esc in
-                // detail transitions to List, and we must not then run the
-                // files-fetch path as if the key was pressed in List mode.
-                let was_in_list = model.view_mode == ViewMode::List;
-                let cmds = match &model.view_mode.clone() {
-                    ViewMode::Detail(_) => handle_detail_key(model, key.code),
-                    ViewMode::List => {
-                        // Modal precedence: an open filter editor sees every
-                        // key first.
-                        if model.list.filter().is_editing() {
-                            handle_filter_editing_key(model, key.code);
-                            Vec::new()
-                        } else {
-                            handle_list_key(model, key.code)
-                        }
+                // Capture whether we are in detail *before* the handler runs
+                // — Esc in detail transitions to List, and we must not then
+                // run the files-fetch path as if the key was pressed in List
+                // mode. A cheap discriminant check avoids cloning ViewMode
+                // (which allocates the inner PrKey String) on every keypress.
+                let is_detail = matches!(model.view_mode, ViewMode::Detail(_));
+                let cmds = if is_detail {
+                    handle_detail_key(model, key.code)
+                } else {
+                    // Modal precedence: an open filter editor sees every
+                    // key first.
+                    if model.list.filter().is_editing() {
+                        handle_filter_editing_key(model, key.code);
+                        Vec::new()
+                    } else {
+                        handle_list_key(model, key.code)
                     }
                 };
                 if !cmds.is_empty() {
@@ -377,7 +382,7 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
                 // now-selected PR's files just-in-time. Detail mode (including
                 // Esc-to-list transitions) doesn't change the list selection
                 // so no files fetch is needed.
-                if was_in_list {
+                if !is_detail {
                     return maybe_fetch_selected_files(model);
                 }
                 return Vec::new();
