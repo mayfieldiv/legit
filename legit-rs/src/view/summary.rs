@@ -21,8 +21,8 @@ use ratatui::{
 use crate::app::model::{FilesState, Model};
 use crate::blocker::Tier;
 use crate::format::{
-    CheckOutcome, check_icon, checks_summary, comment_counts, format_review_state, format_size,
-    outcome, review_icon, reviews_summary, sort_check_runs,
+    CheckOutcome, check_icon, checks_summary, comment_counts, format_mergeable,
+    format_review_state, format_size, outcome, review_icon, reviews_summary, sort_check_runs,
 };
 use crate::github::rest::PR;
 use crate::github::types::CheckRun;
@@ -97,15 +97,10 @@ fn smart_status_line(model: &Model, pr: &PR) -> Line<'static> {
     }
 }
 
-/// The mergeable-state line. Mirrors the TS `formatMergeable`: `CONFLICTING` ->
-/// "! conflict" (red), `MERGEABLE` -> "✓ mergeable" (green), anything else
-/// (including `UNKNOWN`) -> "? merge unknown" (gray).
+/// The mergeable-state line. Delegates to `format::format_mergeable` — the
+/// canonical display helper shared with the detail view.
 fn mergeable_line(pr: &PR) -> Line<'static> {
-    let (text, color) = match pr.mergeable.as_str() {
-        "CONFLICTING" => ("! conflict", Color::Red),
-        "MERGEABLE" => ("✓ mergeable", Color::Green),
-        _ => ("? merge unknown", Color::Gray),
-    };
+    let (text, color) = format_mergeable(&pr.mergeable);
     Line::from(Span::styled(text, Style::default().fg(color)))
 }
 

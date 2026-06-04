@@ -116,6 +116,18 @@ pub fn format_review_state(state: &str) -> &'static str {
     }
 }
 
+/// Text + colour for a PR's mergeable state. Mirrors the TS `formatMergeable`:
+/// `MERGEABLE` → "✓ mergeable" (green), `CONFLICTING` → "! conflict" (red),
+/// anything else (including `UNKNOWN`) → "? merge unknown" (gray).
+/// Single canonical source shared by the summary panel and the detail view.
+pub fn format_mergeable(mergeable: &str) -> (&'static str, Color) {
+    match mergeable {
+        "MERGEABLE" => ("✓ mergeable", Color::Green),
+        "CONFLICTING" => ("! conflict", Color::Red),
+        _ => ("? merge unknown", Color::Gray),
+    }
+}
+
 /// Icon + colour for a review state. Mirrors the TS `reviewIcon`.
 pub fn review_icon(state: &str) -> (&'static str, Color) {
     match state {

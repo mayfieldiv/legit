@@ -20,7 +20,9 @@ use ratatui::{
 
 use crate::{
     app::model::Model,
-    format::{check_icon, checks_summary, format_age, format_size, sort_check_runs},
+    format::{
+        check_icon, checks_summary, format_age, format_mergeable, format_size, sort_check_runs,
+    },
     github::rest::PRDetail,
     markdown,
 };
@@ -116,15 +118,6 @@ fn render_header(detail: &PRDetail, frame: &mut Frame<'_>, area: Rect, now: Date
 
     let lines = vec![title_line, meta_line, url_line, branch_line, divider_line];
     frame.render_widget(Paragraph::new(lines), area);
-}
-
-/// Mirrors the TS `formatMergeable`: text + colour for the mergeable state.
-fn format_mergeable(mergeable: &str) -> (&'static str, Color) {
-    match mergeable {
-        "MERGEABLE" => ("✓ mergeable", Color::Green),
-        "CONFLICTING" => ("! conflict", Color::Red),
-        _ => ("? merge unknown", Color::Gray),
-    }
 }
 
 // ── Body (scrollable description + checks) ───────────────────────────────────
