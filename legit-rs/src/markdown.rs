@@ -3,8 +3,8 @@
 //! as the TS implementation.
 //!
 //! The public entry point is `render(source: &str) -> Vec<Line<'static>>`.
-//! Each call to `render` allocates owned strings (via `into_static` on
-//! `CowStr`), so the caller has no lifetime dependency on the source string.
+//! Each call to `render` allocates owned strings (via `CowStr::into_string`),
+//! so the caller has no lifetime dependency on the source string.
 //!
 //! Supported block types: headings (h1–h3+ with decreasing visual weight),
 //! paragraphs, fenced code blocks (language tag + visual delineation),
@@ -66,10 +66,14 @@ struct InlineStyle {
     /// accumulated into `RenderCtx::image_alt` (not the shared line buffer)
     /// so that preceding inline content on the same line is not swallowed.
     image: bool,
-    /// Inside a link tag — accumulate text, emit as "text (url)" on End.
-    /// Also holds the image URL stashed at Start(Image) as a fallback when
-    /// the alt text is empty.
+    /// Destination URL for the innermost Link tag, set on Start(Link) and
+    /// consumed (taken) on End(Link) to emit " (url)".
     link_url: Option<String>,
+    /// Destination URL for the current Image tag, set on Start(Image) and
+    /// consumed (taken) on End(Image) as the fallback when alt text is empty.
+    /// Kept separate from `link_url` so that a nested image-in-link does not
+    /// overwrite the enclosing link's URL.
+    image_url: Option<String>,
 }
 
 impl InlineStyle {
@@ -223,8 +227,10 @@ impl RenderCtx {
             }
             Event::Start(Tag::Image { dest_url, .. }) => {
                 self.inline.image = true;
-                // Stash the URL so we can fall back to it when alt is empty.
-                self.inline.link_url = Some(dest_url.into_string());
+                // Stash the image URL separately so we can fall back to it
+                // when alt is empty, without clobbering any enclosing link's
+                // URL that may already be in `link_url`.
+                self.inline.image_url = Some(dest_url.into_string());
                 // Open a dedicated alt buffer; text children will append here
                 // instead of the shared line buffer.
                 self.image_alt = Some(String::new());
@@ -366,7 +372,7 @@ impl RenderCtx {
         // the shared line buffer `current`), so preceding inline content on the
         // same line is never swallowed into the placeholder.
         let alt = self.image_alt.take().unwrap_or_default();
-        let fallback = self.inline.link_url.take().unwrap_or_default();
+        let fallback = self.inline.image_url.take().unwrap_or_default();
         let label = if alt.is_empty() { fallback } else { alt };
         self.push_span(Span::styled(
             format!("[image: {label}]"),
@@ -809,6 +815,26 @@ mod tests {
         assert!(
             text.contains("[image: https://example.com/img.png]"),
             "image without alt should fall back to url: {text:?}"
+        );
+    }
+
+    #[test]
+    fn image_nested_in_link_preserves_outer_link_url() {
+        // pulldown-cmark emits: Start(Link href) -> Start(Image img) ->
+        // Text(alt) -> End(Image) -> End(Link).
+        // Before the fix, Start(Image) overwrote link_url with the image URL,
+        // so end_link found None and emitted no "(http://href)".
+        let lines = render("[![alt](http://img)](http://href)");
+        let text = all_text(&lines);
+        // The outer link's URL must appear in the output.
+        assert!(
+            text.contains("http://href"),
+            "outer link url was dropped: {text:?}"
+        );
+        // The image placeholder must appear.
+        assert!(
+            text.contains("[image: alt]"),
+            "image placeholder missing: {text:?}"
         );
     }
 }
