@@ -58,6 +58,14 @@ pub enum Msg {
         pr: PrKey,
         files: Vec<FileChange>,
     },
+    /// A `Cmd::FetchFiles` request failed. Sent alongside the generic
+    /// `CommandFailed` (which surfaces the error) so `update` can clear the
+    /// PR's `files_requested` guard — otherwise a transient error would
+    /// permanently suppress refetching and leave the summary panel's file
+    /// breakdown stuck on its loading placeholder.
+    FilesFetchFailed {
+        pr: PrKey,
+    },
     /// A scheduled status-message clear fired; honored only if `token` still
     /// matches the model's current status generation.
     StatusCleared {

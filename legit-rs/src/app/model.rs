@@ -141,8 +141,10 @@ pub struct Model {
     /// becomes selected; this set makes that idempotent so scrolling back to a
     /// PR — or a flurry of `j` presses — never refetches the same PR's files.
     ///
-    /// Insert-only by design, so it doubles as a permanent "fetched once" guard.
-    /// That makes the files breakdown sticky: a Refresh (`r`/`R`, not yet
+    /// A key is removed only when its fetch fails (`Msg::FilesFetchFailed`), so
+    /// a transient error doesn't permanently suppress refetching — re-selecting
+    /// the PR retries. After a *successful* fetch the key stays forever, which
+    /// makes the files breakdown sticky: a Refresh (`r`/`R`, not yet
     /// implemented) re-fetches the PR plus its other enrichments (threads,
     /// checks, reviews), but files would silently stay stale because this set
     /// blocks a re-dispatch. When refresh lands it must remove the refreshed

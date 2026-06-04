@@ -152,9 +152,11 @@ fn maybe_fetch_checks(model: &Model, head_sha: Option<String>, repo_slug: &str) 
 /// Request the currently-selected PR's changed files, unless they were already
 /// requested. Idempotent via `Model::files_requested`, so it's safe to call
 /// after every selection-changing event: each PR's files are fetched at most
-/// once, and a single keypress moves the cursor one PR, so at most one
-/// `FetchFiles` is ever dispatched per call. Yields nothing when auth isn't
-/// ready, no PR is selected, or the selected PR's repo isn't tracked.
+/// once (a failed fetch clears its guard via `Msg::FilesFetchFailed`, so
+/// re-selecting the PR retries), and a single keypress moves the cursor one
+/// PR, so at most one `FetchFiles` is ever dispatched per call. Yields nothing
+/// when auth isn't ready, no PR is selected, or the selected PR's repo isn't
+/// tracked.
 fn maybe_fetch_selected_files(model: &mut Model) -> Vec<Cmd> {
     let Some(token) = model.auth_token.as_ref() else {
         return Vec::new();
@@ -377,6 +379,14 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             // are derived in `update` rather than in the impure command.
             let categorization = crate::file_category::categorize(&files, &model.config.file_rules);
             model.enrichment.files.insert(pr, categorization);
+            Vec::new()
+        }
+        Msg::FilesFetchFailed { pr } => {
+            // The in-flight guard must not outlive a failed request: clearing
+            // it lets re-selecting the PR retry instead of leaving the file
+            // breakdown stuck on its loading placeholder. The error itself is
+            // surfaced by the accompanying `CommandFailed`.
+            model.files_requested.remove(&pr);
             Vec::new()
         }
         Msg::PrListFailed {

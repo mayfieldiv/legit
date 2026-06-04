@@ -88,6 +88,24 @@ fn a_single_keypress_fetches_at_most_one_prs_files() {
 }
 
 #[test]
+fn failed_files_fetch_retries_on_reselection() {
+    // PR 1's files were requested when it arrived; the request fails.
+    let mut model = model_with_prs(&[1, 2]);
+    update(&mut model, Msg::FilesFetchFailed { pr: key(1) });
+
+    // Move away and back: selecting PR 1 again must re-dispatch the fetch
+    // instead of staying suppressed by the (now-cleared) in-flight guard.
+    update(&mut model, key_event(KeyCode::Char('j')));
+    let cmds = update(&mut model, key_event(KeyCode::Char('k')));
+
+    assert_eq!(
+        file_fetch_numbers(&cmds),
+        [1],
+        "a failed fetch must not permanently block a retry"
+    );
+}
+
+#[test]
 fn files_arrived_categorises_and_stores_for_the_pr() {
     let mut model = model_with_prs(&[1]);
 

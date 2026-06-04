@@ -152,6 +152,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                         })
                         .collect()
                 },
+                Vec::new,
             )
             .await;
         }
@@ -175,6 +176,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                         .await
                 },
                 move |threads| vec![Msg::ThreadsArrived { pr, threads }],
+                Vec::new,
             )
             .await;
         }
@@ -193,6 +195,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                         .await
                 },
                 move |reviews| vec![Msg::ReviewsArrived { pr, reviews }],
+                Vec::new,
             )
             .await;
         }
@@ -216,6 +219,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                         .await
                 },
                 move |comments| vec![Msg::IssueCommentsArrived { pr, comments }],
+                Vec::new,
             )
             .await;
         }
@@ -238,6 +242,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                         checks,
                     }]
                 },
+                Vec::new,
             )
             .await;
         }
@@ -246,6 +251,9 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                 repo_slug: ctx.repo.slug(),
                 number,
             };
+            // Dispatching this command recorded the PR in `files_requested`;
+            // a failure must roll that back so re-selecting the PR retries.
+            let failed_pr = pr.clone();
             request(
                 &tx,
                 &limiter,
@@ -256,6 +264,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                         .await
                 },
                 move |files| vec![Msg::FilesArrived { pr, files }],
+                move || vec![Msg::FilesFetchFailed { pr: failed_pr }],
             )
             .await;
         }
@@ -309,17 +318,22 @@ async fn run_fetch_open_prs(
 }
 
 /// Hold one concurrency permit, run a single GitHub request, and forward the
-/// messages it produces — or one `CommandFailed` if the request (including the
-/// client build inside it) errors. Captures the build-permit-dispatch shape
-/// every per-PR enrichment command shares; `context` names the operation so
-/// the failure reads e.g. "fetch reviews: ...". `op` is a lazy future, so the
-/// permit is held only across the actual await, not while it's constructed.
+/// messages it produces — or, on error, one `CommandFailed` (covering the
+/// client build inside the request too) followed by `on_fail()`'s messages.
+/// Captures the build-permit-dispatch shape every per-PR enrichment command
+/// shares; `context` names the operation so the failure reads e.g.
+/// "fetch reviews: ...". Most commands need no failure cleanup and pass
+/// `Vec::new`; `on_fail` exists for the ones whose dispatch recorded state in
+/// the model that must be rolled back (e.g. `FetchFiles`' in-flight guard).
+/// `op` is a lazy future, so the permit is held only across the actual await,
+/// not while it's constructed.
 async fn request<T>(
     tx: &mpsc::UnboundedSender<Msg>,
     limiter: &Arc<NetworkLimiter>,
     context: &'static str,
     op: impl Future<Output = anyhow::Result<T>>,
     to_msgs: impl FnOnce(T) -> Vec<Msg>,
+    on_fail: impl FnOnce() -> Vec<Msg>,
 ) {
     let _permit = limiter.acquire().await;
     match op.await {
@@ -330,6 +344,9 @@ async fn request<T>(
         }
         Err(error) => {
             let _ = tx.send(command_failed(context, error));
+            for msg in on_fail() {
+                let _ = tx.send(msg);
+            }
         }
     }
 }
