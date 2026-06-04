@@ -4,7 +4,7 @@ use ratatui::{Terminal, backend::TestBackend};
 use crate::{
     app::{
         grouping::Grouping,
-        model::{Model, StatusKind, StatusMessage},
+        model::{Model, RepoDetection, StatusKind, StatusMessage},
     },
     blocker::{BlockerResult, Tier},
     git_remote::RepoInfo,
@@ -67,7 +67,7 @@ fn pr(number: u64, title: &str, author: &str, hours_ago: i64) -> PR {
 /// "Loading details…". Drives the same `relayout` path the runtime uses.
 fn model_with(prs: Vec<PR>, grouping: Grouping, tier_of: impl Fn(&PR) -> Option<Tier>) -> Model {
     let (mut model, _) = Model::new();
-    model.repo = Some(RepoInfo {
+    model.repo = RepoDetection::Detected(RepoInfo {
         owner: "acme".to_owned(),
         repo: "web".to_owned(),
     });

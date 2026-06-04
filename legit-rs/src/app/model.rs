@@ -50,6 +50,42 @@ pub struct StatusMessage {
     pub text: String,
 }
 
+/// Outcome of CWD repo detection (`Cmd::DetectRepo`). An explicit tri-state so
+/// the PR-fetch gate can tell "detection hasn't reported yet" apart from
+/// "detection reported, but there's no repo here". Conflating the two as
+/// `Option<RepoInfo>` (`None` = both) would wedge the app at an empty list
+/// whenever detection fails (outside a git repo / no GitHub remote): the gate
+/// would wait forever for a `Detected` that never comes, never fetching even
+/// the configured Tracked Repos.
+#[derive(Clone, Debug)]
+pub enum RepoDetection {
+    /// `Cmd::DetectRepo` is still in flight; the gate waits.
+    Pending,
+    /// Detection found a GitHub repo in the CWD — added to the tracked set.
+    Detected(RepoInfo),
+    /// Detection ran but found no repo (not a git repo / no GitHub remote).
+    /// The gate proceeds on configured repos alone; nothing is added to the
+    /// tracked set.
+    Failed,
+}
+
+impl RepoDetection {
+    /// True once detection has reported either way — the PR-fetch gate keys
+    /// off this rather than `Detected` alone, so a failed detection still lets
+    /// configured Tracked Repos fetch.
+    pub fn is_settled(&self) -> bool {
+        !matches!(self, RepoDetection::Pending)
+    }
+
+    /// The detected CWD repo, or `None` while pending or after a failure.
+    pub fn repo(&self) -> Option<&RepoInfo> {
+        match self {
+            RepoDetection::Detected(repo) => Some(repo),
+            RepoDetection::Pending | RepoDetection::Failed => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Model {
     pub should_quit: bool,
@@ -61,7 +97,10 @@ pub struct Model {
     /// halts the list instead).
     pub config_loaded: bool,
     pub auth_token: Option<Secret<String>>,
-    pub repo: Option<RepoInfo>,
+    /// CWD repo detection state. The PR-fetch gate waits for this to settle
+    /// (`Detected` or `Failed`), not for `Detected` specifically, so a failed
+    /// detection doesn't permanently block configured Tracked Repos.
+    pub repo: RepoDetection,
     pub list: PrList,
     /// Active Repo Tab index: 0 is the All tab, `i >= 1` is `tracked_repos()[i-1]`.
     /// Clamped at read time by `active_scope` (the tracked set only ever grows,
@@ -94,7 +133,7 @@ impl Model {
                 config: LegitConfig::default(),
                 config_loaded: false,
                 auth_token: None,
-                repo: None,
+                repo: RepoDetection::Pending,
                 list: PrList::new(),
                 active_tab: 0,
                 terminal_height: 0,
@@ -140,7 +179,7 @@ impl Model {
                 push_unique(info, &mut repos);
             }
         }
-        if let Some(repo) = &self.repo {
+        if let Some(repo) = self.repo.repo() {
             push_unique(repo.clone(), &mut repos);
         }
         repos

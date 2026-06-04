@@ -113,14 +113,19 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                 git_remote::detect_repo(&cwd)
             })
             .await;
-            let msg = match result {
+            match result {
                 Ok(repo) => {
                     tracing::info!(owner = %repo.owner, repo = %repo.repo, "repo detected");
-                    Msg::RepoDetected(repo)
+                    let _ = tx.send(Msg::RepoDetected(Some(repo)));
                 }
-                Err(error) => command_failed("detect repo", error),
-            };
-            let _ = tx.send(msg);
+                Err(error) => {
+                    // Surface the failure as a transient status, AND settle the
+                    // detection gate with `None` so the configured Tracked Repos
+                    // still fetch (running outside a git repo isn't fatal).
+                    let _ = tx.send(command_failed("detect repo", error));
+                    let _ = tx.send(Msg::RepoDetected(None));
+                }
+            }
         }
         Cmd::FetchOpenPRs { repo, token } => {
             run_fetch_open_prs(repo, token, tx, limiter).await;

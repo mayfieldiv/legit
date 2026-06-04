@@ -14,7 +14,11 @@ pub enum Msg {
     TerminalEvent(Event),
     ConfigLoaded(LegitConfig),
     AuthTokenResolved(Secret<String>),
-    RepoDetected(RepoInfo),
+    /// CWD repo detection settled. `Some` carries the detected GitHub repo;
+    /// `None` means detection ran but found none (not a git repo / no GitHub
+    /// remote). Either outcome settles the PR-fetch gate so configured Tracked
+    /// Repos still fetch when there's no CWD repo.
+    RepoDetected(Option<RepoInfo>),
     PrArrived(PR),
     /// One Tracked Repo's open-PR listing finished streaming.
     PrListLoaded {

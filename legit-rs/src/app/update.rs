@@ -6,7 +6,7 @@ use crate::{git_remote::RepoInfo, secret::Secret};
 
 use super::{
     cmd::{Cmd, RequestContext},
-    model::{Model, StatusKind, StatusMessage},
+    model::{Model, RepoDetection, StatusKind, StatusMessage},
     msg::Msg,
 };
 
@@ -33,19 +33,23 @@ fn set_status(model: &mut Model, kind: StatusKind, text: String) -> Vec<Cmd> {
 
 /// Fire one `Cmd::FetchOpenPRs` per Tracked Repo once all three startup
 /// prerequisites have landed: the auth token authorizes the requests, repo
-/// detection completes the tracked set (config repos + CWD repo), and a
-/// settled config supplies the current user and bot logins that drive
-/// smart-status. Any one missing yields no command — we wait for the last. The
-/// config gate is load-bearing twice over: it guarantees no PR's blocker is
-/// derived before the user is known, and it guarantees the tracked set is
-/// final so every repo fetches exactly once. Marks each repo's listing as
-/// Loading so the view swaps from "No open PRs" to "Loading pull requests…"
-/// until results land.
+/// detection has *settled* (it completes the tracked set with the CWD repo when
+/// detection succeeds, and contributes nothing when it fails — but either way
+/// the tracked set is final), and a settled config supplies the current user
+/// and bot logins that drive smart-status. Any one missing yields no command —
+/// we wait for the last. The detection gate keys off settled-ness, not success:
+/// gating on `Detected` would wedge the app at an empty list when detection
+/// fails (outside a git repo / no GitHub remote), never fetching even the
+/// configured Tracked Repos. The config gate is load-bearing twice over: it
+/// guarantees no PR's blocker is derived before the user is known, and it
+/// guarantees the tracked set is final so every repo fetches exactly once.
+/// Marks each repo's listing as Loading so the view swaps from "No open PRs" to
+/// "Loading pull requests…" until results land.
 fn maybe_fetch_open_prs(model: &mut Model) -> Vec<Cmd> {
-    let (Some(token), Some(_)) = (model.auth_token.as_ref(), model.repo.as_ref()) else {
+    let Some(token) = model.auth_token.as_ref() else {
         return Vec::new();
     };
-    if !model.config_loaded {
+    if !model.repo.is_settled() || !model.config_loaded {
         return Vec::new();
     }
     let token = token.clone();
@@ -255,7 +259,14 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             maybe_fetch_open_prs(model)
         }
         Msg::RepoDetected(repo) => {
-            model.repo = Some(repo);
+            // Settle the detection gate either way: `Some` adds the CWD repo to
+            // the tracked set, `None` (no git repo / no GitHub remote) leaves
+            // the tracked set to the configured repos alone. Both release the
+            // gate so configured Tracked Repos still fetch.
+            model.repo = match repo {
+                Some(repo) => RepoDetection::Detected(repo),
+                None => RepoDetection::Failed,
+            };
             maybe_fetch_open_prs(model)
         }
         Msg::PrArrived(pr) => {

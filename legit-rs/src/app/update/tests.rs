@@ -4,7 +4,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use crate::{
     app::{
         cmd::Cmd,
-        model::{Model, StatusKind},
+        model::{Model, RepoDetection, StatusKind},
         msg::Msg,
         pr_list::Phase,
         update::update,
@@ -164,10 +164,10 @@ fn dispatching_fetch_marks_list_as_loading() {
 
     let cmds = update(
         &mut model,
-        Msg::RepoDetected(RepoInfo {
+        Msg::RepoDetected(Some(RepoInfo {
             owner: "mayfieldiv".to_owned(),
             repo: "legit".to_owned(),
-        }),
+        })),
     );
 
     assert_eq!(cmds.len(), 1);
@@ -247,13 +247,13 @@ fn repo_detected_without_token_stores_repo_but_does_not_fetch() {
 
     let cmds = update(
         &mut model,
-        Msg::RepoDetected(RepoInfo {
+        Msg::RepoDetected(Some(RepoInfo {
             owner: "mayfieldiv".to_owned(),
             repo: "legit".to_owned(),
-        }),
+        })),
     );
 
-    let repo = model.repo.as_ref().expect("repo info stored");
+    let repo = model.repo.repo().expect("repo info stored");
     assert_eq!(repo.owner, "mayfieldiv");
     assert_eq!(repo.repo, "legit");
     assert!(
@@ -270,10 +270,10 @@ fn repo_detected_after_token_dispatches_fetch_open_prs() {
 
     let cmds = update(
         &mut model,
-        Msg::RepoDetected(RepoInfo {
+        Msg::RepoDetected(Some(RepoInfo {
             owner: "mayfieldiv".to_owned(),
             repo: "legit".to_owned(),
-        }),
+        })),
     );
 
     assert_eq!(cmds.len(), 1);
@@ -294,10 +294,10 @@ fn fetch_waits_for_config_even_with_auth_and_repo() {
 
     let cmds = update(
         &mut model,
-        Msg::RepoDetected(RepoInfo {
+        Msg::RepoDetected(Some(RepoInfo {
             owner: "mayfieldiv".to_owned(),
             repo: "legit".to_owned(),
-        }),
+        })),
     );
 
     assert!(
@@ -314,7 +314,7 @@ fn fetch_waits_for_config_even_with_auth_and_repo() {
 fn config_loaded_releases_the_fetch_when_auth_and_repo_already_landed() {
     let (mut model, _) = Model::new();
     model.auth_token = Some(Secret::new("ghp_test".to_owned()));
-    model.repo = Some(RepoInfo {
+    model.repo = RepoDetection::Detected(RepoInfo {
         owner: "mayfieldiv".to_owned(),
         repo: "legit".to_owned(),
     });
@@ -334,7 +334,7 @@ fn config_loaded_releases_the_fetch_when_auth_and_repo_already_landed() {
 fn config_load_failed_halts_the_list_and_does_not_fetch() {
     let (mut model, _) = Model::new();
     model.auth_token = Some(Secret::new("ghp_test".to_owned()));
-    model.repo = Some(RepoInfo {
+    model.repo = RepoDetection::Detected(RepoInfo {
         owner: "mayfieldiv".to_owned(),
         repo: "legit".to_owned(),
     });
@@ -360,6 +360,60 @@ fn config_load_failed_halts_the_list_and_does_not_fetch() {
         .expect("list should be in the Failed phase after ConfigLoadFailed");
     assert!(failure.contains("config error"));
     assert!(failure.contains("invalid bot_logins entry"));
+}
+
+#[test]
+fn detection_failure_with_config_repos_still_fetches_them() {
+    // Outside a git repo (or no GitHub remote), `Cmd::DetectRepo` fails and
+    // `update` sees `Msg::RepoDetected(None)`. That must settle the gate so the
+    // configured Tracked Repos still fetch — not wedge the app at an empty list.
+    let (mut model, _) = Model::new();
+    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.config = config_with_repos(&["acme/web", "acme/api"]);
+    model.config_loaded = true;
+
+    let cmds = update(&mut model, Msg::RepoDetected(None));
+
+    assert!(matches!(model.repo, RepoDetection::Failed));
+    // No CWD repo to append; only the configured repos fetch.
+    assert_eq!(fetched_slugs(&cmds), ["acme/web", "acme/api"]);
+}
+
+#[test]
+fn detection_failure_without_config_repos_does_not_fetch_but_surfaces_error() {
+    // Detection fails AND there are no configured repos: nothing to fetch, but
+    // the failure must still reach the user. `Cmd::DetectRepo` emits a
+    // `CommandFailed` (a transient error status) alongside `RepoDetected(None)`;
+    // assert that status surface and that the settled gate yields no fetch.
+    let (mut model, _) = Model::new();
+    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.config_loaded = true;
+
+    let status_cmds = update(
+        &mut model,
+        Msg::CommandFailed {
+            context: "detect repo",
+            error: "not a git repository".to_owned(),
+        },
+    );
+    let fetch_cmds = update(&mut model, Msg::RepoDetected(None));
+
+    assert!(matches!(model.repo, RepoDetection::Failed));
+    assert!(
+        fetch_cmds.is_empty(),
+        "no Tracked Repos at all, so nothing fetches"
+    );
+    // The user can see the detection error in the status bar.
+    let status = model.status.as_ref().expect("error status set");
+    assert_eq!(status.kind, StatusKind::Error);
+    assert!(status.text.contains("detect repo"));
+    assert!(status.text.contains("not a git repository"));
+    // And that error scheduled its own auto-clear.
+    assert!(
+        status_cmds
+            .iter()
+            .any(|c| matches!(c, Cmd::ScheduleStatusClear { .. })),
+    );
 }
 
 // ── multi-repo fan-out ────────────────────────────────────────────────────
@@ -400,7 +454,7 @@ fn fetched_slugs(cmds: &[Cmd]) -> Vec<String> {
 fn fetch_fans_out_to_every_tracked_repo() {
     let (mut model, _) = Model::new();
     model.auth_token = Some(Secret::new("ghp_test".to_owned()));
-    model.repo = Some(RepoInfo {
+    model.repo = RepoDetection::Detected(RepoInfo {
         owner: "mayfieldiv".to_owned(),
         repo: "legit".to_owned(),
     });
@@ -424,7 +478,7 @@ fn fetch_fans_out_to_every_tracked_repo() {
 fn detected_repo_already_in_config_is_fetched_once_with_config_casing() {
     let (mut model, _) = Model::new();
     model.auth_token = Some(Secret::new("ghp_test".to_owned()));
-    model.repo = Some(RepoInfo {
+    model.repo = RepoDetection::Detected(RepoInfo {
         owner: "mayfieldiv".to_owned(),
         repo: "legit".to_owned(),
     });
@@ -445,7 +499,7 @@ fn pr_list_loaded_fans_out_enrichment_only_for_that_repo() {
     // `acme/web` is a tracked repo so its slug resolves back to a `RepoInfo`;
     // `mayfieldiv/legit` is the CWD-detected repo.
     model.config = config_with_repos(&["acme/web"]);
-    model.repo = Some(RepoInfo {
+    model.repo = RepoDetection::Detected(RepoInfo {
         owner: "mayfieldiv".to_owned(),
         repo: "legit".to_owned(),
     });
@@ -517,7 +571,7 @@ fn same_pr_number_in_two_repos_does_not_collide() {
 fn tabbed_model() -> Model {
     let (mut model, _) = Model::new();
     model.config = config_with_repos(&["acme/web"]);
-    model.repo = Some(RepoInfo {
+    model.repo = RepoDetection::Detected(RepoInfo {
         owner: "mayfieldiv".to_owned(),
         repo: "legit".to_owned(),
     });
@@ -961,7 +1015,7 @@ use crate::github::types::ReviewStatus;
 fn enriched_model(numbers: &[u64]) -> Model {
     let (mut model, _) = Model::new();
     model.auth_token = Some(Secret::new("ghp_test".to_owned()));
-    model.repo = Some(RepoInfo {
+    model.repo = RepoDetection::Detected(RepoInfo {
         owner: "mayfieldiv".to_owned(),
         repo: "legit".to_owned(),
     });
@@ -1034,7 +1088,7 @@ fn pr_list_loaded_with_empty_list_fans_out_nothing() {
 #[test]
 fn pr_list_loaded_without_auth_fans_out_nothing() {
     let (mut model, _) = Model::new();
-    model.repo = Some(RepoInfo {
+    model.repo = RepoDetection::Detected(RepoInfo {
         owner: "mayfieldiv".to_owned(),
         repo: "legit".to_owned(),
     });
