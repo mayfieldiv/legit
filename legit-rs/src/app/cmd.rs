@@ -69,9 +69,13 @@ pub enum Cmd {
     /// user enters the detail view (`Enter` on the list); result comes back as
     /// `Msg::PRDetailArrived`. Also dispatched on `r` to refresh the current
     /// PR's detail without going through the refresh-queue (#11).
+    ///
+    /// `pr` is boxed behind `Arc` so this variant stays pointer-sized; PR is a
+    /// wide struct and without indirection the entire `Cmd` enum and every
+    /// `Vec<Cmd>` would be padded to ~360 bytes per element.
     FetchPRDetail {
         ctx: Arc<RequestContext>,
-        pr: PR,
+        pr: Arc<PR>,
     },
 }
 

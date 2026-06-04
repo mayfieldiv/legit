@@ -192,7 +192,7 @@ fn fetch_pr_detail_cmd(model: &Model, pr: &crate::github::rest::PR) -> Vec<Cmd> 
     let ctx = request_context(&repo, token, &model.config.bot_logins);
     vec![Cmd::FetchPRDetail {
         ctx,
-        pr: pr.clone(),
+        pr: Arc::new(pr.clone()),
     }]
 }
 
