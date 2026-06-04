@@ -5,7 +5,9 @@
 //! passed explicitly so the engine is unit-tested synchronously, mirroring the
 //! `blocker` and `format` modules.
 
-use globset::GlobBuilder;
+use std::sync::LazyLock;
+
+use globset::{GlobBuilder, GlobMatcher};
 
 use crate::config::FileRule;
 
@@ -123,8 +125,83 @@ impl CategoryStats {
 /// the first matching built-in rule, defaulting to `Code`. Mirrors the TS
 /// `matchCategory`.
 fn match_category(path: &str, _user_rules: &[FileRule]) -> FileCategory {
+    for rule in BUILT_IN_RULES.iter() {
+        if rule.glob.is_match(path) {
+            return rule.category;
+        }
+    }
     FileCategory::Code
 }
+
+// ── Built-in rules ──────────────────────────────────────────────────────────
+
+/// A compiled built-in pattern and the category it assigns.
+struct BuiltInRule {
+    glob: GlobMatcher,
+    category: FileCategory,
+}
+
+/// Compile a glob with Bun.Glob semantics: `*` and `?` stop at path separators
+/// (`literal_separator`), `**` still crosses them, and `\` escapes specials —
+/// matching the TS `Bun.Glob` the built-in patterns were written against.
+fn compile(pattern: &str) -> GlobMatcher {
+    GlobBuilder::new(pattern)
+        .literal_separator(true)
+        .backslash_escape(true)
+        .build()
+        .expect("built-in glob pattern is valid")
+        .compile_matcher()
+}
+
+/// Built-in pattern rules, in priority order. First match wins. Mirrors the TS
+/// `BUILT_IN_RULES`.
+static BUILT_IN_RULES: LazyLock<Vec<BuiltInRule>> = LazyLock::new(|| {
+    use FileCategory::*;
+    [
+        // generated
+        ("**/*.lock", Generated),
+        ("**/*-lock.json", Generated),
+        ("**/*.snap", Generated),
+        ("**/*.generated.*", Generated),
+        ("**/generated/**", Generated),
+        ("**/*.Designer.cs", Generated),
+        ("**/*ModelSnapshot.cs", Generated),
+        // test
+        ("**/test/**", Test),
+        ("**/tests/**", Test),
+        ("**/__tests__/**", Test),
+        ("**/*.test.*", Test),
+        ("**/*.spec.*", Test),
+        // .NET test conventions: project dirs like `Foo.UnitTests`, file names
+        // like `FooTests.cs`.
+        ("**/*Tests/**", Test),
+        ("**/*Tests.cs", Test),
+        ("**/*Test.cs", Test),
+        // docs
+        ("**/*.md", Docs),
+        ("docs/**", Docs),
+        ("README*", Docs),
+        ("LICENSE*", Docs),
+        ("CHANGELOG*", Docs),
+        // config
+        (".github/**", Config),
+        ("**/*.yml", Config),
+        ("**/*.yaml", Config),
+        ("**/*.toml", Config),
+        ("**/*.ini", Config),
+        (".eslintrc*", Config),
+        (".prettierrc*", Config),
+        ("**/tsconfig*.json", Config),
+        ("biome.json", Config),
+        ("bunfig.toml", Config),
+    ]
+    .into_iter()
+    .map(|(pattern, category)| BuiltInRule {
+        glob: compile(pattern),
+        category,
+    })
+    .collect()
+});
 
 #[cfg(test)]
 mod tests;
