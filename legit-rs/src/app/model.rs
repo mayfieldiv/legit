@@ -214,19 +214,6 @@ impl Model {
             .map(|repo| repo.slug())
     }
 
-    /// The tab index the bar should highlight: `active_tab` when it points to a
-    /// real tab, falling back to 0 (the All tab) when it is out of range. Shares
-    /// the All-fallback policy with `active_scope` — an out-of-range `active_tab`
-    /// resolves to no scope there and to the All tab here — so the rendered
-    /// highlight always matches the scope the list is filtered by.
-    pub fn active_tab_index(&self) -> usize {
-        if self.active_scope().is_none() {
-            0
-        } else {
-            self.active_tab
-        }
-    }
-
     /// Number of non-list "chrome" rows around the list: the always-present tab
     /// bar and status bar, plus the filter chip while it's visible. The single
     /// source of truth shared by `sync_viewport` (which subtracts it from the

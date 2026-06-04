@@ -68,7 +68,16 @@ fn render_filter_chip(model: &Model, frame: &mut Frame<'_>, area: Rect) {
 /// bracketed and accented (`[All]  acme/web `), matching the TS tab bar.
 fn render_tabs(model: &Model, frame: &mut Frame<'_>, area: Rect) {
     let repos = model.tracked_repos();
-    let active = model.active_tab_index();
+    // Highlight the active tab, falling back to the All tab (0) when `active_tab`
+    // is out of range — the same All-fallback policy `active_scope` applies to the
+    // list filter, mirrored here from the repos already in hand so the bar never
+    // rebuilds `tracked_repos`. Tab `i >= 1` maps to `repos[i - 1]`, so the
+    // highest in-range index is `repos.len()`.
+    let active = if model.active_tab <= repos.len() {
+        model.active_tab
+    } else {
+        0
+    };
     let labels = std::iter::once("All".to_owned()).chain(repos.iter().map(RepoInfo::slug));
     let mut spans = Vec::new();
     for (i, label) in labels.enumerate() {
