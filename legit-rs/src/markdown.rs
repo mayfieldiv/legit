@@ -40,6 +40,19 @@ pub fn render(source: &str) -> Vec<Line<'static>> {
     ctx.lines
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Return the ratatui style for a heading at the given depth: accent always;
+/// bold for h1/h2 (depth <= 2), plain accent for h3+.
+fn heading_style(depth: u8) -> Style {
+    let s = Style::default().fg(ACCENT);
+    if depth <= 2 {
+        s.add_modifier(Modifier::BOLD)
+    } else {
+        s
+    }
+}
+
 // ── Internal state machine ────────────────────────────────────────────────────
 
 /// Tracks which inline modifiers are currently active. Each modifier is a
@@ -218,15 +231,10 @@ impl RenderCtx {
                 // Inline code inside a heading keeps the heading style (accent
                 // + bold for h1/h2) for consistency with the TS single-span
                 // behavior; outside a heading use code colour, no bold/italic.
-                let style = if let Some(depth) = self.in_heading {
-                    if depth <= 2 {
-                        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(ACCENT)
-                    }
-                } else {
-                    Style::default().fg(CODE)
-                };
+                let style = self
+                    .in_heading
+                    .map(heading_style)
+                    .unwrap_or_else(|| Style::default().fg(CODE));
                 self.push_span(Span::styled(text.into_string(), style));
             }
             Event::Rule => {
@@ -266,12 +274,7 @@ impl RenderCtx {
         };
         let prefix = format!("{} ", "#".repeat(depth));
         // h1/h2: bold + accent; h3+: accent only (less prominent).
-        let style = if depth <= 2 {
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(ACCENT)
-        };
-        self.push_span(Span::styled(prefix, style));
+        self.push_span(Span::styled(prefix, heading_style(depth as u8)));
         // Record the heading depth so handle_text and Event::Code can apply
         // accent (+ bold for h1/h2) to all children of this heading. The TS
         // wraps the entire heading — prefix and children — in one accented bold
@@ -372,11 +375,10 @@ impl RenderCtx {
             return;
         }
         if self.in_blockquote {
-            // Prefix each text run with the blockquote bar.
-            let mut style = self.inline.to_ratatui().fg(MUTED);
-            if self.inline.bold {
-                style = style.add_modifier(Modifier::BOLD);
-            }
+            // Prefix each text run with the blockquote bar. Bold/italic from
+            // the inline stack flow through to_ratatui(); .fg(MUTED) is the
+            // only blockquote-specific override.
+            let style = self.inline.to_ratatui().fg(MUTED);
             self.push_span(Span::styled(format!("│ {text}"), style));
             return;
         }
@@ -385,12 +387,7 @@ impl RenderCtx {
         // span, so we match that here via the explicit in_heading depth rather
         // than heuristically sniffing the first span's colour.
         if let Some(depth) = self.in_heading {
-            let style = if depth <= 2 {
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(ACCENT)
-            };
-            self.push_span(Span::styled(text, style));
+            self.push_span(Span::styled(text, heading_style(depth)));
             return;
         }
         // Normal inline text outside any heading.
