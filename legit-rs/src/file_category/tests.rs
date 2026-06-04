@@ -3,7 +3,7 @@
 //! the built-in extension / path heuristics, and breakdown totals. Pure and
 //! synchronous — no tokio.
 
-use super::{Breakdown, CategoryStats, FileCategory, FileChange, categorize};
+use super::{CategoryStats, FileCategory, FileChange, categorize};
 use crate::config::FileRule;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
