@@ -20,14 +20,13 @@ use ratatui::{
 
 use crate::app::model::Model;
 use crate::blocker::Tier;
+use crate::format::{
+    check_icon, checks_summary, format_review_state, is_failing, review_icon, sort_check_runs,
+};
 use crate::github::types::CheckRun;
 
 /// Placeholder text for a section whose enrichment hasn't arrived yet.
 const LOADING: &str = "Loading…";
-
-/// Conclusions that count as a failing check. Mirrors the TS
-/// `FAILING_CONCLUSIONS` (and the blocker engine's set).
-const FAILING_CONCLUSIONS: [&str; 3] = ["failure", "timed_out", "cancelled"];
 
 /// Max number of individual check rows before collapsing the rest into a
 /// `+N more` line. Mirrors the TS `MAX_VISIBLE_CHECKS`.
@@ -185,29 +184,6 @@ fn threads_line(model: &Model, pr: &crate::github::rest::PR) -> Line<'static> {
     ])
 }
 
-/// Icon + colour for a review state. Mirrors the TS `reviewIcon`.
-fn review_icon(state: &str) -> (&'static str, Color) {
-    match state {
-        "APPROVED" => ("✓", Color::Green),
-        "CHANGES_REQUESTED" => ("✗", Color::Red),
-        "COMMENTED" => ("●", Color::Blue),
-        "DISMISSED" => ("–", Color::Gray),
-        _ => ("?", Color::Gray),
-    }
-}
-
-/// Human label for a review state. Mirrors the TS `formatReviewState`.
-fn format_review_state(state: &str) -> String {
-    match state {
-        "APPROVED" => "approved",
-        "CHANGES_REQUESTED" => "changes requested",
-        "COMMENTED" => "commented",
-        "DISMISSED" => "dismissed",
-        other => other,
-    }
-    .to_owned()
-}
-
 /// The CI checks section: a `checks` header with failed / pending / passed
 /// counts, then one indented row per non-passing check (passing checks are
 /// summarised by the count alone). `Loading…` until the checks fetch arrives —
@@ -224,20 +200,13 @@ fn checks_lines(model: &Model, pr: &crate::github::rest::PR) -> Vec<Line<'static
         return vec![header_with_loading("checks")];
     };
 
-    let mut failed = 0;
-    let mut pending = 0;
-    let mut passed = 0;
-    for check in checks {
-        if check.status != "completed" {
-            pending += 1;
-        } else if is_failing(check) {
-            failed += 1;
-        } else {
-            // neutral / skipped / stale / success all count as non-failures.
-            passed += 1;
-        }
-    }
-    let total = checks.len();
+    let summary = checks_summary(checks);
+    let (failed, pending, passed, total) = (
+        summary.failed,
+        summary.pending,
+        summary.passed,
+        summary.total,
+    );
 
     let mut header: Vec<Span<'static>> = vec![section_header("checks"), Span::raw(" ")];
     if failed > 0 {
@@ -268,11 +237,7 @@ fn checks_lines(model: &Model, pr: &crate::github::rest::PR) -> Vec<Line<'static
         .iter()
         .filter(|c| c.status != "completed" || is_failing(c))
         .collect();
-    non_passing.sort_by(|a, b| {
-        check_sort_group(a)
-            .cmp(&check_sort_group(b))
-            .then(a.name.cmp(&b.name))
-    });
+    sort_check_runs(&mut non_passing);
 
     for check in non_passing.iter().take(MAX_VISIBLE_CHECKS) {
         let (icon, color) = check_icon(check);
@@ -290,43 +255,6 @@ fn checks_lines(model: &Model, pr: &crate::github::rest::PR) -> Vec<Line<'static
         )));
     }
     lines
-}
-
-/// Whether a completed check's conclusion counts as a failure.
-fn is_failing(check: &CheckRun) -> bool {
-    check.status == "completed"
-        && check
-            .conclusion
-            .as_deref()
-            .is_some_and(|c| FAILING_CONCLUSIONS.contains(&c))
-}
-
-/// Sort group for a check row. Mirrors the TS `checkSortGroup`: failing first
-/// (0), then pending (1), then everything else (2).
-fn check_sort_group(check: &CheckRun) -> u8 {
-    if check.status != "completed" {
-        return 1;
-    }
-    match check.conclusion.as_deref() {
-        Some("failure" | "timed_out" | "cancelled" | "action_required") => 0,
-        _ => 2,
-    }
-}
-
-/// Icon + colour for a check run. Mirrors the TS `checkIcon`.
-fn check_icon(check: &CheckRun) -> (&'static str, Color) {
-    if check.status != "completed" {
-        return ("●", Color::Yellow);
-    }
-    match check.conclusion.as_deref() {
-        Some("success") => ("✓", Color::Green),
-        Some("failure" | "timed_out" | "cancelled") => ("✗", Color::Red),
-        Some("action_required") => ("✗", Color::Yellow),
-        Some("neutral") => ("–", Color::Gray),
-        Some("skipped") => ("⊘", Color::Gray),
-        Some("stale") => ("⟳", Color::Yellow),
-        _ => ("?", Color::Gray),
-    }
 }
 
 /// The File Category breakdown section: a `files` header, then one indented row

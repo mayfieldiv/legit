@@ -1,8 +1,22 @@
 //! Pure display formatters. Take inputs explicitly (no `Utc::now()` or other
 //! ambient state) so they're trivially testable.
+//!
+//! This is the canonical display layer mirroring the TS `src/lib/format.ts`:
+//! the check/review icon, colour, label, sort, and summary helpers live here so
+//! both the summary panel and the detail view (issue #51) consume them rather
+//! than re-deriving them per panel. The icon/colour helpers return a data-only
+//! `(&'static str, Color)` tuple — mirroring TS's plain `{ icon, fg }` shape —
+//! so this module depends on ratatui's `Color`, not on any widget types.
 
 use chrono::{DateTime, Utc};
+use ratatui::style::Color;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+use crate::github::types::CheckRun;
+
+/// Conclusions that count as a failing check. Mirrors the TS
+/// `FAILING_CONCLUSIONS` (and the blocker engine's set).
+const FAILING_CONCLUSIONS: [&str; 3] = ["failure", "timed_out", "cancelled"];
 
 /// Format a past instant as a compact age relative to `now`. Mirrors the TS
 /// `formatAge` in `src/lib/format.ts`: "now", "Nm", "Nh", "Nd", "Nmo",
@@ -81,16 +95,135 @@ pub fn pad_to_width(s: &str, width: usize) -> String {
     format!("{s}{}", " ".repeat(width - used))
 }
 
+// ── Check & review display helpers ──────────────────────────────────────────
+
+/// Human label for a review state. Mirrors the TS `formatReviewState`.
+pub fn format_review_state(state: &str) -> &'static str {
+    match state {
+        "APPROVED" => "approved",
+        "CHANGES_REQUESTED" => "changes requested",
+        "COMMENTED" => "commented",
+        "DISMISSED" => "dismissed",
+        // The TS enum is exhaustive over the four states above; an unknown
+        // value falls back to a question mark like the icon helper.
+        _ => "?",
+    }
+}
+
+/// Icon + colour for a review state. Mirrors the TS `reviewIcon`.
+pub fn review_icon(state: &str) -> (&'static str, Color) {
+    match state {
+        "APPROVED" => ("✓", Color::Green),
+        "CHANGES_REQUESTED" => ("✗", Color::Red),
+        "COMMENTED" => ("●", Color::Blue),
+        "DISMISSED" => ("–", Color::Gray),
+        _ => ("?", Color::Gray),
+    }
+}
+
+/// Sort group for a check row. Mirrors the TS `checkSortGroup`: failing first
+/// (0), then pending (1), then everything else (2).
+pub fn check_sort_group(check: &CheckRun) -> u8 {
+    if check.status != "completed" {
+        return 1;
+    }
+    match check.conclusion.as_deref() {
+        Some("failure" | "timed_out" | "cancelled" | "action_required") => 0,
+        _ => 2,
+    }
+}
+
+/// Sort `checks` in place by sort group then name. Mirrors the TS
+/// `sortCheckRuns` (which returns a sorted copy); callers that need the
+/// original order untouched sort a borrowed slice of references.
+pub fn sort_check_runs(checks: &mut [&CheckRun]) {
+    checks.sort_by(|a, b| {
+        check_sort_group(a)
+            .cmp(&check_sort_group(b))
+            .then(a.name.cmp(&b.name))
+    });
+}
+
+/// Icon + colour for a check run. Mirrors the TS `checkIcon`.
+pub fn check_icon(check: &CheckRun) -> (&'static str, Color) {
+    if check.status != "completed" {
+        return ("●", Color::Yellow);
+    }
+    match check.conclusion.as_deref() {
+        Some("success") => ("✓", Color::Green),
+        Some("failure" | "timed_out" | "cancelled") => ("✗", Color::Red),
+        Some("action_required") => ("✗", Color::Yellow),
+        Some("neutral") => ("–", Color::Gray),
+        Some("skipped") => ("⊘", Color::Gray),
+        Some("stale") => ("⟳", Color::Yellow),
+        _ => ("?", Color::Gray),
+    }
+}
+
+/// Check-run counts by outcome. Mirrors the TS `checksSummary`'s shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChecksSummary {
+    pub failed: usize,
+    pub pending: usize,
+    pub passed: usize,
+    pub total: usize,
+}
+
+/// Tally check runs by outcome. Mirrors the TS `checksSummary`: a non-completed
+/// run is pending; a completed run whose conclusion is in `FAILING_CONCLUSIONS`
+/// is failed; every other completed run (success, neutral, skipped, stale, …)
+/// counts as passed.
+pub fn checks_summary(checks: &[CheckRun]) -> ChecksSummary {
+    let mut summary = ChecksSummary {
+        failed: 0,
+        pending: 0,
+        passed: 0,
+        total: checks.len(),
+    };
+    for check in checks {
+        if check.status != "completed" {
+            summary.pending += 1;
+        } else if is_failing(check) {
+            summary.failed += 1;
+        } else {
+            summary.passed += 1;
+        }
+    }
+    summary
+}
+
+/// Whether a completed check's conclusion counts as a failure.
+pub fn is_failing(check: &CheckRun) -> bool {
+    check.status == "completed"
+        && check
+            .conclusion
+            .as_deref()
+            .is_some_and(|c| FAILING_CONCLUSIONS.contains(&c))
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::TimeZone;
+    use ratatui::style::Color;
 
     use unicode_width::UnicodeWidthStr;
 
-    use super::{format_age, format_size, pad_to_width, truncate};
+    use super::{
+        ChecksSummary, check_icon, check_sort_group, checks_summary, format_age,
+        format_review_state, format_size, pad_to_width, review_icon, sort_check_runs, truncate,
+    };
+    use crate::github::types::CheckRun;
 
     fn now() -> chrono::DateTime<chrono::Utc> {
         chrono::Utc.with_ymd_and_hms(2026, 5, 20, 12, 0, 0).unwrap()
+    }
+
+    fn check(name: &str, status: &str, conclusion: Option<&str>) -> CheckRun {
+        CheckRun {
+            name: name.to_owned(),
+            status: status.to_owned(),
+            conclusion: conclusion.map(str::to_owned),
+        }
     }
 
     #[test]
@@ -142,5 +275,118 @@ mod tests {
         assert_eq!(pad_to_width("一二", 6), "一二  ");
         assert_eq!(pad_to_width("ab", 5), "ab   ");
         assert_eq!(pad_to_width("already wide", 4), "already wide");
+    }
+
+    #[test]
+    fn format_review_state_labels_the_four_states() {
+        assert_eq!(format_review_state("APPROVED"), "approved");
+        assert_eq!(
+            format_review_state("CHANGES_REQUESTED"),
+            "changes requested"
+        );
+        assert_eq!(format_review_state("COMMENTED"), "commented");
+        assert_eq!(format_review_state("DISMISSED"), "dismissed");
+        assert_eq!(format_review_state("WAT"), "?");
+    }
+
+    #[test]
+    fn review_icon_maps_state_to_icon_and_colour() {
+        assert_eq!(review_icon("APPROVED"), ("✓", Color::Green));
+        assert_eq!(review_icon("CHANGES_REQUESTED"), ("✗", Color::Red));
+        assert_eq!(review_icon("COMMENTED"), ("●", Color::Blue));
+        assert_eq!(review_icon("DISMISSED"), ("–", Color::Gray));
+        assert_eq!(review_icon("WAT"), ("?", Color::Gray));
+    }
+
+    #[test]
+    fn check_sort_group_orders_failing_then_pending_then_rest() {
+        assert_eq!(
+            check_sort_group(&check("a", "completed", Some("failure"))),
+            0
+        );
+        assert_eq!(
+            check_sort_group(&check("a", "completed", Some("action_required"))),
+            0
+        );
+        assert_eq!(check_sort_group(&check("a", "in_progress", None)), 1);
+        assert_eq!(
+            check_sort_group(&check("a", "completed", Some("success"))),
+            2
+        );
+        assert_eq!(
+            check_sort_group(&check("a", "completed", Some("skipped"))),
+            2
+        );
+    }
+
+    #[test]
+    fn sort_check_runs_groups_then_sorts_by_name() {
+        let runs = [
+            check("zebra", "completed", Some("success")),
+            check("alpha", "in_progress", None),
+            check("yak", "completed", Some("failure")),
+            check("beta", "completed", Some("failure")),
+        ];
+        let mut refs: Vec<&CheckRun> = runs.iter().collect();
+        sort_check_runs(&mut refs);
+        let names: Vec<&str> = refs.iter().map(|c| c.name.as_str()).collect();
+        // Failing group (beta, yak) first, then pending (alpha), then passing
+        // (zebra); ties within a group sort by name.
+        assert_eq!(names, ["beta", "yak", "alpha", "zebra"]);
+    }
+
+    #[test]
+    fn check_icon_maps_status_and_conclusion() {
+        assert_eq!(
+            check_icon(&check("a", "in_progress", None)),
+            ("●", Color::Yellow)
+        );
+        assert_eq!(
+            check_icon(&check("a", "completed", Some("success"))),
+            ("✓", Color::Green)
+        );
+        assert_eq!(
+            check_icon(&check("a", "completed", Some("failure"))),
+            ("✗", Color::Red)
+        );
+        assert_eq!(
+            check_icon(&check("a", "completed", Some("action_required"))),
+            ("✗", Color::Yellow)
+        );
+        assert_eq!(
+            check_icon(&check("a", "completed", Some("neutral"))),
+            ("–", Color::Gray)
+        );
+        assert_eq!(
+            check_icon(&check("a", "completed", Some("skipped"))),
+            ("⊘", Color::Gray)
+        );
+        assert_eq!(
+            check_icon(&check("a", "completed", Some("stale"))),
+            ("⟳", Color::Yellow)
+        );
+        assert_eq!(
+            check_icon(&check("a", "completed", None)),
+            ("?", Color::Gray)
+        );
+    }
+
+    #[test]
+    fn checks_summary_tallies_by_outcome() {
+        let checks = vec![
+            check("build", "completed", Some("success")),
+            check("lint", "completed", Some("failure")),
+            check("deploy", "in_progress", None),
+            check("audit", "completed", Some("neutral")), // counts as passed
+        ];
+        assert_eq!(
+            checks_summary(&checks),
+            ChecksSummary {
+                failed: 1,
+                pending: 1,
+                passed: 2,
+                total: 4,
+            }
+        );
     }
 }
