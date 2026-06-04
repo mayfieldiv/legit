@@ -133,8 +133,8 @@ fn files_arrived_categorises_and_stores_for_the_pr() {
         .files
         .get(&key(1))
         .expect("files stored for the PR");
-    assert_eq!(categorization.breakdown.total.files, 2);
-    assert_eq!(categorization.breakdown.total.additions, 13);
+    assert_eq!(categorization.breakdown.total().files, 2);
+    assert_eq!(categorization.breakdown.total().additions, 13);
     assert_eq!(
         categorization.breakdown.stats(FileCategory::Code).files,
         1,

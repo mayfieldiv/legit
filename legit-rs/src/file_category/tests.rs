@@ -55,7 +55,7 @@ fn breakdown_total_sums_all_files() {
         files: 3,
     };
     assert_eq!(result.breakdown.stats(FileCategory::Code), expected);
-    assert_eq!(result.breakdown.total, expected);
+    assert_eq!(result.breakdown.total(), expected);
     assert_eq!(
         result.breakdown.stats(FileCategory::Test),
         CategoryStats::default()

@@ -276,7 +276,7 @@ fn files_lines(model: &Model, pr: &crate::github::rest::PR) -> Vec<Line<'static>
         ));
     }
     // The total row sums every category (or reads 0/0 (0) for an empty diff).
-    let total = breakdown.total;
+    let total = breakdown.total();
     lines.push(category_row(
         "total",
         total.additions,
