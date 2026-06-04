@@ -6,12 +6,27 @@ use crate::{
     file_category::FileCategorization,
     git_remote::RepoInfo,
     github::limiter::NetworkStats,
-    github::rest::{PR, PrKey},
+    github::rest::{PR, PRDetail, PrKey},
     github::types::{CheckRun, FullReviewThread, IssueComment, Review},
     secret::Secret,
 };
 
 use super::{cmd::Cmd, pr_list::PrList};
+
+/// Which top-level view is active. `List` is the default PR list; `Detail`
+/// shows the full detail page for a specific PR.
+///
+/// Keyed by `PrKey` (repo_slug + number) so the identity survives list
+/// refreshes without holding a `PR` clone here. The `Model::detail` field
+/// carries the fetched `PRDetail` once it arrives.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ViewMode {
+    /// The open PR list with the summary panel.
+    List,
+    /// The PR detail view for the identified PR. The detail content lives in
+    /// `Model::detail`; while it's `None` the view shows a loading placeholder.
+    Detail(PrKey),
+}
 
 /// Per-PR enrichment landed by the GraphQL/REST fan-out. Keyed by `PrKey`
 /// (slug + number — numbers collide across repos), except `checks` which is
@@ -173,6 +188,15 @@ pub struct Model {
     /// whenever a PR arrives or its enrichment lands. A PR absent from the map
     /// hasn't been derived yet (it groups under "Loading details…").
     pub blockers: HashMap<PrKey, BlockerResult>,
+    /// Which top-level view is active. Starts at `List`; transitions to
+    /// `Detail(key)` when Enter is pressed on a PR. `Esc` in the detail view
+    /// returns to `List`.
+    pub view_mode: ViewMode,
+    /// The fetched PR detail (body + base PR fields) for the currently open
+    /// detail view. `None` while the `Cmd::FetchPRDetail` is in flight (the
+    /// detail view shows a loading placeholder in that state). Cleared when the
+    /// view returns to `List` so stale content can't bleed into the next open.
+    pub detail: Option<PRDetail>,
 }
 
 impl Model {
@@ -193,6 +217,8 @@ impl Model {
                 network_stats: NetworkStats::default(),
                 enrichment: Enrichment::default(),
                 blockers: HashMap::new(),
+                view_mode: ViewMode::List,
+                detail: None,
             },
             vec![Cmd::LoadConfig, Cmd::ResolveAuthToken, Cmd::DetectRepo],
         )

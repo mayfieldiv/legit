@@ -4,8 +4,8 @@ use tokio::sync::mpsc;
 
 use crate::{
     app::msg::Msg, auth, config, git_remote, git_remote::RepoInfo, github::graphql::GraphQlClient,
-    github::limiter::NetworkLimiter, github::rest::OctocrabRest, github::rest::PrKey,
-    secret::Secret,
+    github::limiter::NetworkLimiter, github::rest::OctocrabRest, github::rest::PR,
+    github::rest::PrKey, secret::Secret,
 };
 
 /// The inputs every per-PR enrichment request shares: which repo, the auth
@@ -64,6 +64,14 @@ pub enum Cmd {
     ScheduleStatusClear {
         token: u64,
         delay_ms: u64,
+    },
+    /// Fetch a single PR's detail (base PR fields + body). Dispatched when the
+    /// user enters the detail view (`Enter` on the list); result comes back as
+    /// `Msg::PRDetailArrived`. Also dispatched on `r` to refresh the current
+    /// PR's detail without going through the refresh-queue (#11).
+    FetchPRDetail {
+        ctx: Arc<RequestContext>,
+        pr: PR,
     },
 }
 
@@ -270,6 +278,21 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
         Cmd::ScheduleStatusClear { token, delay_ms } => {
             tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
             let _ = tx.send(Msg::StatusCleared { token });
+        }
+        Cmd::FetchPRDetail { ctx, pr } => {
+            let number = pr.number;
+            request(
+                &tx,
+                &limiter,
+                "fetch PR detail",
+                async move {
+                    OctocrabRest::new(&ctx.token)?
+                        .fetch_pr_detail(&ctx.repo.owner, &ctx.repo.repo, number)
+                        .await
+                },
+                move |detail| vec![Msg::PRDetailArrived(detail)],
+            )
+            .await;
         }
     }
 }

@@ -6,7 +6,7 @@ use crate::{git_remote::RepoInfo, secret::Secret};
 
 use super::{
     cmd::{Cmd, RequestContext},
-    model::{FilesState, Model, RepoDetection, StatusKind, StatusMessage},
+    model::{FilesState, Model, RepoDetection, StatusKind, StatusMessage, ViewMode},
     msg::Msg,
 };
 
@@ -178,6 +178,24 @@ fn maybe_fetch_selected_files(model: &mut Model) -> Vec<Cmd> {
     vec![Cmd::FetchFiles { ctx, number }]
 }
 
+/// Dispatch `Cmd::FetchPRDetail` for `pr`, using the model's current auth token
+/// and the tracked repo the PR belongs to. Yields nothing when auth isn't ready
+/// or the PR's repo isn't tracked (the caller is already guarded, but this is
+/// defensive).
+fn fetch_pr_detail_cmd(model: &Model, pr: &crate::github::rest::PR) -> Vec<Cmd> {
+    let Some(token) = model.auth_token.as_ref() else {
+        return Vec::new();
+    };
+    let Some(repo) = model.tracked_repo(&pr.repo_slug) else {
+        return Vec::new();
+    };
+    let ctx = request_context(&repo, token, &model.config.bot_logins);
+    vec![Cmd::FetchPRDetail {
+        ctx,
+        pr: pr.clone(),
+    }]
+}
+
 /// Switch to the Repo Tab at `index` (0 = All): re-derive the visible list
 /// under the new scope and reset the selection to its top. A no-op for the
 /// already-active tab so re-pressing its digit doesn't lose the selection.
@@ -229,8 +247,8 @@ fn handle_filter_editing_key(model: &mut Model, code: KeyCode) {
     model.relayout();
 }
 
-/// Handle one keypress in normal mode (no filter editor open).
-fn handle_normal_key(model: &mut Model, code: KeyCode) {
+/// Handle one keypress in normal list mode (no filter editor open).
+fn handle_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
     match code {
         KeyCode::Char('q') => model.should_quit = true,
         KeyCode::Char('j') => model.list.move_down(),
@@ -258,25 +276,87 @@ fn handle_normal_key(model: &mut Model, code: KeyCode) {
         KeyCode::Char(c) if c.is_ascii_digit() => {
             jump_to_tab(model, (c as u8 - b'0') as usize);
         }
+        KeyCode::Enter => {
+            // Enter on the selected PR enters the Detail view. If auth is
+            // ready and the PR's repo is tracked the fetch fires immediately;
+            // otherwise the detail view shows "Loading PR detail…" and the
+            // fetch fires once auth/config land (rare startup-race case, not
+            // guarded further — the user must re-press Enter if it fires
+            // before auth lands, which doesn't happen in practice).
+            if let Some(pr) = model.list.selected_pr() {
+                let key = pr.key();
+                let cmds = fetch_pr_detail_cmd(model, pr);
+                model.view_mode = ViewMode::Detail(key);
+                model.detail = None; // clear any stale detail from a prior open
+                return cmds;
+            }
+        }
         _ => {}
     }
+    Vec::new()
+}
+
+/// Handle one keypress while the detail view is open.
+fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
+    match code {
+        KeyCode::Esc => {
+            // Return to the list view, clearing the fetched detail so the
+            // next Enter doesn't flash stale content.
+            model.view_mode = ViewMode::List;
+            model.detail = None;
+        }
+        KeyCode::Char('r') => {
+            // Refresh the current PR detail: refetch the detail (the PR body
+            // and latest base fields). Clears the cached detail first so the
+            // view briefly shows the loading placeholder, consistent with the
+            // initial enter-and-fetch flow.
+            if let ViewMode::Detail(key) = &model.view_mode.clone() {
+                if let Some(pr) = model.list.pr(key) {
+                    let cmds = fetch_pr_detail_cmd(model, pr);
+                    if !cmds.is_empty() {
+                        model.detail = None;
+                    }
+                    return cmds;
+                }
+            }
+        }
+        _ => {}
+    }
+    Vec::new()
 }
 
 pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
     match msg {
         Msg::TerminalEvent(Event::Key(key)) => {
             if key.kind == KeyEventKind::Press {
-                // Modal precedence: an open filter editor sees every key first.
-                if model.list.filter().is_editing() {
-                    handle_filter_editing_key(model, key.code);
-                } else {
-                    handle_normal_key(model, key.code);
+                // Capture the view mode *before* the handler runs — Esc in
+                // detail transitions to List, and we must not then run the
+                // files-fetch path as if the key was pressed in List mode.
+                let was_in_list = model.view_mode == ViewMode::List;
+                let cmds = match &model.view_mode.clone() {
+                    ViewMode::Detail(_) => handle_detail_key(model, key.code),
+                    ViewMode::List => {
+                        // Modal precedence: an open filter editor sees every
+                        // key first.
+                        if model.list.filter().is_editing() {
+                            handle_filter_editing_key(model, key.code);
+                            Vec::new()
+                        } else {
+                            handle_list_key(model, key.code)
+                        }
+                    }
+                };
+                if !cmds.is_empty() {
+                    return cmds;
                 }
-                // Any key can move the selection (j/k, tab switch, filter
-                // narrowing, grouping cycle); fetch the now-selected PR's files
-                // just-in-time. The fetch is deduped per PR, so this is a no-op
-                // when the selection didn't change to a new, unfetched PR.
-                return maybe_fetch_selected_files(model);
+                // Any key in list mode can move the selection; fetch the
+                // now-selected PR's files just-in-time. Detail mode (including
+                // Esc-to-list transitions) doesn't change the list selection
+                // so no files fetch is needed.
+                if was_in_list {
+                    return maybe_fetch_selected_files(model);
+                }
+                return Vec::new();
             }
             Vec::new()
         }
@@ -422,6 +502,16 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             // Ignore a stale timer — a newer message has since taken the slot.
             if model.status_gen == token {
                 model.status = None;
+            }
+            Vec::new()
+        }
+        Msg::PRDetailArrived(detail) => {
+            // Store the fetched detail only when the view is still open for
+            // this PR; discard it if the user already navigated back to the
+            // list or entered a different PR's detail.
+            let key = detail.pr.key();
+            if model.view_mode == ViewMode::Detail(key) {
+                model.detail = Some(detail);
             }
             Vec::new()
         }

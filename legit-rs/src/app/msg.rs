@@ -5,7 +5,7 @@ use crate::{
     file_category::FileChange,
     git_remote::RepoInfo,
     github::limiter::NetworkStats,
-    github::rest::{PR, PrKey},
+    github::rest::{PR, PRDetail, PrKey},
     github::types::{CheckRun, FullReviewThread, IssueComment, Review, ReviewStatus},
     secret::Secret,
 };
@@ -96,6 +96,10 @@ pub enum Msg {
         context: &'static str,
         error: String,
     },
+    /// The detail fetch for a PR completed. The full `PRDetail` (base PR fields
+    /// + body) is ready to display. If the model is still in `Detail` for this
+    /// PR, the view swaps from the loading placeholder to the full content.
+    PRDetailArrived(PRDetail),
     Quit,
 }
 
