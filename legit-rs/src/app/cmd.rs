@@ -293,12 +293,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                         .fetch_pr_detail(&ctx.repo.owner, &ctx.repo.repo, number)
                         .await
                 },
-                move |detail| {
-                    vec![Msg::PRDetailArrived {
-                        key,
-                        body: detail.body,
-                    }]
-                },
+                move |body| vec![Msg::PRDetailArrived { key, body }],
             )
             .await;
         }

@@ -56,17 +56,6 @@ pub struct PR {
     pub state: PRState,
 }
 
-/// The lazily-fetched detail content for a PR. Carries only the body
-/// (markdown) because the PR itself is already held in the enriched list and
-/// `ViewMode::Detail(key)` identifies which list PR to pair it with. Keeping
-/// only the body avoids storing a second, de-enriched copy of a PR the model
-/// already holds with correct `mergeable`, `head_commit_sha`, etc.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PRDetail {
-    /// The raw markdown body of the pull request, as authored on GitHub.
-    pub body: String,
-}
-
 /// Globally-unique PR identity across Tracked Repos: PR numbers alone collide
 /// between repos, so every cross-repo keyed structure (enrichment maps, cached
 /// blockers) keys on slug + number.
@@ -341,17 +330,16 @@ impl OctocrabRest {
     /// Fetch a single PR's body (markdown). The single-PR endpoint at
     /// `/repos/{owner}/{repo}/pulls/{number}` is used because the list
     /// endpoint omits `body`; all other PR fields are sourced from the
-    /// enriched list PR rather than this response (see `PRDetail`).
+    /// enriched list PR rather than this response.
     #[tracing::instrument(name = "fetch_pr_detail", skip(self))]
-    pub async fn fetch_pr_detail(&self, owner: &str, repo: &str, number: u64) -> Result<PRDetail> {
+    pub async fn fetch_pr_detail(&self, owner: &str, repo: &str, number: u64) -> Result<String> {
         let route = format!("/repos/{owner}/{repo}/pulls/{number}");
         let raw: RawRestPRDetail = self
             .client
             .get(&route, None::<&()>)
             .await
             .with_context(|| format!("fetching PR detail for {owner}/{repo}#{number}"))?;
-        let body = raw.body.unwrap_or_default();
-        Ok(PRDetail { body })
+        Ok(raw.body.unwrap_or_default())
     }
 
     /// Fetch the changed files for a PR (path + additions/deletions per file).
@@ -461,7 +449,7 @@ struct RawCommentUser {
 
 /// Wire shape for the single-PR detail endpoint (`GET /repos/:owner/:repo/pulls/:number`).
 /// We only need the `body` field here; all other PR fields are sourced from
-/// the enriched list PR rather than re-parsed from this response (see `PRDetail`).
+/// the enriched list PR rather than re-parsed from this response.
 #[derive(Debug, Clone, Deserialize)]
 struct RawRestPRDetail {
     /// The PR's markdown body, or `null` / absent when the author left it empty.
