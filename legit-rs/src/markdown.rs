@@ -62,9 +62,13 @@ fn heading_style(depth: u8) -> Style {
 struct InlineStyle {
     bold: bool,
     italic: bool,
-    /// Inside an image tag — text children become the alt text.
+    /// Inside an image tag — text children become the alt text. Alt text is
+    /// accumulated into `RenderCtx::image_alt` (not the shared line buffer)
+    /// so that preceding inline content on the same line is not swallowed.
     image: bool,
     /// Inside a link tag — accumulate text, emit as "text (url)" on End.
+    /// Also holds the image URL stashed at Start(Image) as a fallback when
+    /// the alt text is empty.
     link_url: Option<String>,
 }
 
@@ -106,12 +110,20 @@ struct RenderCtx {
     /// Counter for the current ordered list item (1-based, incremented on
     /// each `Start(Item)`).
     item_counters: Vec<u64>,
-    /// Whether we are inside a blockquote.
+    /// Whether we are inside a blockquote. When true, `Start(Paragraph)`
+    /// emits the `│ ` bar once as a leading muted span; subsequent inline
+    /// runs (text, code, links) flow through normally with muted foreground.
     in_blockquote: bool,
     /// Whether we are inside a code block and collecting its text.
     in_code_block: bool,
     /// Language tag for the current fenced code block (empty = no language).
     code_lang: String,
+    /// Accumulates alt text for the current image. Kept separate from
+    /// `current` (the shared line buffer) so that inline content that
+    /// preceded the image on the same line is never swallowed into the
+    /// placeholder. Set to `Some("")` on `Start(Image)`, appended to by
+    /// text-event children, consumed and cleared by `end_image`.
+    image_alt: Option<String>,
 }
 
 impl RenderCtx {
@@ -146,7 +158,15 @@ impl RenderCtx {
             Event::Start(Tag::Heading { level, .. }) => {
                 self.start_heading(level);
             }
-            Event::Start(Tag::Paragraph) => {}
+            Event::Start(Tag::Paragraph) => {
+                // Emit the blockquote bar once at the start of the paragraph
+                // so all inline runs (text, code, links, images) that follow
+                // share the same leading `│ ` — matching the TS reference that
+                // wraps the entire paragraph in a single `│ <InlineNodes/>`.
+                if self.in_blockquote {
+                    self.push_span(Span::styled("│ ", Style::default().fg(MUTED)));
+                }
+            }
             Event::Start(Tag::CodeBlock(kind)) => {
                 self.start_code_block(kind);
             }
@@ -209,6 +229,9 @@ impl RenderCtx {
                 self.inline.image = true;
                 // Stash the URL so we can fall back to it when alt is empty.
                 self.inline.link_url = Some(dest_url.into_string());
+                // Open a dedicated alt buffer; text children will append here
+                // instead of the shared line buffer.
+                self.image_alt = Some(String::new());
             }
             // ── Inline closes ────────────────────────────────────────────────
             Event::End(TagEnd::Strong) => {
@@ -230,11 +253,16 @@ impl RenderCtx {
             Event::Code(text) => {
                 // Inline code inside a heading keeps the heading style (accent
                 // + bold for h1/h2) for consistency with the TS single-span
-                // behavior; outside a heading use code colour, no bold/italic.
-                let style = self
-                    .in_heading
-                    .map(heading_style)
-                    .unwrap_or_else(|| Style::default().fg(CODE));
+                // behavior. Inside a blockquote, apply muted foreground so the
+                // inline code reads as part of the quoted text. Otherwise use
+                // code colour with no bold/italic.
+                let style = if let Some(depth) = self.in_heading {
+                    heading_style(depth)
+                } else if self.in_blockquote {
+                    Style::default().fg(MUTED)
+                } else {
+                    Style::default().fg(CODE)
+                };
                 self.push_span(Span::styled(text.into_string(), style));
             }
             Event::Rule => {
@@ -340,12 +368,10 @@ impl RenderCtx {
 
     fn end_image(&mut self) {
         // Images render as "[image: alt]" or "[image: url]" when alt is empty.
-        // The alt text was accumulated into `current` by Text events; extract it.
-        let alt: String = self
-            .current
-            .drain(..)
-            .map(|s| s.content.into_owned())
-            .collect();
+        // Alt text was accumulated into the dedicated `image_alt` buffer (not
+        // the shared line buffer `current`), so preceding inline content on the
+        // same line is never swallowed into the placeholder.
+        let alt = self.image_alt.take().unwrap_or_default();
         let fallback = self.inline.link_url.take().unwrap_or_default();
         let label = if alt.is_empty() { fallback } else { alt };
         self.push_span(Span::styled(
@@ -370,16 +396,22 @@ impl RenderCtx {
             return;
         }
         if self.inline.image {
-            // Accumulate alt text; it will be consumed by end_image.
-            self.current.push(Span::raw(text));
+            // Accumulate alt text into the dedicated buffer; consumed by
+            // end_image. Writing to `image_alt` (not the shared `current`)
+            // ensures preceding inline content on the same line is never
+            // swallowed into the placeholder.
+            if let Some(buf) = &mut self.image_alt {
+                buf.push_str(&text);
+            }
             return;
         }
         if self.in_blockquote {
-            // Prefix each text run with the blockquote bar. Bold/italic from
-            // the inline stack flow through to_ratatui(); .fg(MUTED) is the
-            // only blockquote-specific override.
+            // The `│ ` bar was already emitted once as a leading span when the
+            // blockquote paragraph opened (see Start(Paragraph) handler).
+            // Here we only apply the muted foreground; bold/italic from the
+            // inline stack flow through to_ratatui() as usual.
             let style = self.inline.to_ratatui().fg(MUTED);
-            self.push_span(Span::styled(format!("│ {text}"), style));
+            self.push_span(Span::styled(text, style));
             return;
         }
         // Inside a heading: accent always; bold for h1/h2 (depth <= 2). The TS
@@ -640,14 +672,94 @@ mod tests {
     fn blockquote_prefixes_text_with_bar() {
         let lines = render("> quoted text");
         let text = all_text(&lines);
+        // Bar and text appear in order (may be separate spans).
+        assert!(text.contains("│ "), "missing blockquote bar: {text:?}");
         assert!(
-            text.contains("│ quoted text"),
-            "missing blockquote bar: {text:?}"
+            text.contains("quoted text"),
+            "missing blockquote body: {text:?}"
         );
 
-        // The bar + text must be muted.
-        let span = find_span(&lines, "│ quoted text").expect("blockquote span");
-        assert_eq!(span.style.fg, Some(MUTED));
+        // The bar span must be muted.
+        let bar = find_span(&lines, "│ ").expect("blockquote bar span");
+        assert_eq!(bar.style.fg, Some(MUTED));
+        // The text span must be muted.
+        let body = find_span(&lines, "quoted text").expect("blockquote text span");
+        assert_eq!(body.style.fg, Some(MUTED));
+    }
+
+    #[test]
+    fn blockquote_inline_formatting_no_repeated_bar() {
+        // A blockquote with bold, italic, and inline-code inside: the bar must
+        // appear exactly once at the line start; inline styles render normally.
+        let lines = render("> some **bold** and `code` text");
+        let text = all_text(&lines);
+
+        // Bar appears exactly once.
+        assert_eq!(
+            text.matches("│").count(),
+            1,
+            "bar must appear exactly once: {text:?}"
+        );
+
+        // Inline content is present.
+        assert!(text.contains("some"), "missing plain text: {text:?}");
+        assert!(text.contains("bold"), "missing bold text: {text:?}");
+        assert!(text.contains("code"), "missing code text: {text:?}");
+
+        // Bold span retains bold modifier (with muted foreground from blockquote).
+        let bold_span = find_span(&lines, "bold").expect("bold span");
+        assert!(
+            bold_span.style.add_modifier.contains(Modifier::BOLD),
+            "bold text must have BOLD modifier: {bold_span:?}"
+        );
+
+        // Inline code is muted (not CODE colour) inside a blockquote.
+        let code_span = find_span(&lines, "code").expect("code span");
+        assert_eq!(
+            code_span.style.fg,
+            Some(MUTED),
+            "inline code in blockquote must be muted: {code_span:?}"
+        );
+    }
+
+    #[test]
+    fn image_preceded_by_text_does_not_swallow_preceding_content() {
+        // Preceding "Hello " must remain in `current`; only "alt" goes into
+        // the image placeholder.
+        let lines = render("Hello ![alt](https://example.com/img.png) world");
+        let text = all_text(&lines);
+        assert!(
+            text.contains("Hello"),
+            "preceding text was swallowed: {text:?}"
+        );
+        assert!(
+            text.contains("[image: alt]"),
+            "image placeholder missing or wrong: {text:?}"
+        );
+        assert!(text.contains("world"), "trailing text missing: {text:?}");
+        // "Hello" must NOT appear inside the image placeholder.
+        assert!(
+            !text.contains("[image: Hello"),
+            "preceding text was folded into image: {text:?}"
+        );
+    }
+
+    #[test]
+    fn link_then_image_on_same_line() {
+        // Link text and URL must not be folded into the image placeholder.
+        let lines = render("[docs](http://d) and ![img](http://i)");
+        let text = all_text(&lines);
+        assert!(text.contains("docs"), "link text missing: {text:?}");
+        assert!(text.contains("http://d"), "link url missing: {text:?}");
+        assert!(
+            text.contains("[image: img]"),
+            "image placeholder missing: {text:?}"
+        );
+        // The image placeholder must not contain the link text or URL.
+        assert!(
+            !text.contains("[image: docs"),
+            "link text folded into image: {text:?}"
+        );
     }
 
     // ── Thematic break ───────────────────────────────────────────────────────
