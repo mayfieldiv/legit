@@ -4,6 +4,12 @@
 //! deletions / file counts plus a `total` row. No IO, no async — inputs are
 //! passed explicitly so the engine is unit-tested synchronously, mirroring the
 //! `blocker` and `format` modules.
+//!
+//! The whole public surface (`categorize` + its result types) is consumed by
+//! the summary panel wiring in part 2 (issue #49); until that lands nothing in
+//! the binary calls it, so the module opts out of `dead_code` wholesale rather
+//! than scattering `#[allow]` over every type.
+#![allow(dead_code)]
 
 use std::sync::LazyLock;
 
@@ -30,6 +36,22 @@ pub enum FileCategory {
     Generated,
     Docs,
     Config,
+}
+
+impl FileCategory {
+    /// Parse a config `fileRules` category string into a `FileCategory`. Returns
+    /// `None` for anything outside the TS `FileCategory` union so an unknown
+    /// string makes the rule a no-op rather than inventing a category.
+    fn parse(s: &str) -> Option<FileCategory> {
+        match s {
+            "code" => Some(FileCategory::Code),
+            "test" => Some(FileCategory::Test),
+            "generated" => Some(FileCategory::Generated),
+            "docs" => Some(FileCategory::Docs),
+            "config" => Some(FileCategory::Config),
+            _ => None,
+        }
+    }
 }
 
 /// A changed file plus its resolved category. Mirrors the TS
@@ -124,7 +146,22 @@ impl CategoryStats {
 /// Resolve the category for one path: the first matching user rule wins, then
 /// the first matching built-in rule, defaulting to `Code`. Mirrors the TS
 /// `matchCategory`.
-fn match_category(path: &str, _user_rules: &[FileRule]) -> FileCategory {
+fn match_category(path: &str, user_rules: &[FileRule]) -> FileCategory {
+    for rule in user_rules {
+        // A rule with an unparseable category or an invalid glob can't decide
+        // anything, so it's skipped rather than treated as a match — the TS
+        // never reaches this state because its `category` is typed, but config
+        // here is untyped JSON.
+        let (Some(category), Ok(glob)) = (
+            FileCategory::parse(&rule.category),
+            build_glob(&rule.pattern),
+        ) else {
+            continue;
+        };
+        if glob.is_match(path) {
+            return category;
+        }
+    }
     for rule in BUILT_IN_RULES.iter() {
         if rule.glob.is_match(path) {
             return rule.category;
@@ -143,14 +180,19 @@ struct BuiltInRule {
 
 /// Compile a glob with Bun.Glob semantics: `*` and `?` stop at path separators
 /// (`literal_separator`), `**` still crosses them, and `\` escapes specials —
-/// matching the TS `Bun.Glob` the built-in patterns were written against.
-fn compile(pattern: &str) -> GlobMatcher {
-    GlobBuilder::new(pattern)
+/// matching the TS `Bun.Glob` the patterns were written against. Fallible so a
+/// malformed user pattern degrades gracefully rather than panicking.
+fn build_glob(pattern: &str) -> Result<GlobMatcher, globset::Error> {
+    Ok(GlobBuilder::new(pattern)
         .literal_separator(true)
         .backslash_escape(true)
-        .build()
-        .expect("built-in glob pattern is valid")
-        .compile_matcher()
+        .build()?
+        .compile_matcher())
+}
+
+/// Compile a built-in pattern, which is known-valid at authoring time.
+fn compile(pattern: &str) -> GlobMatcher {
+    build_glob(pattern).expect("built-in glob pattern is valid")
 }
 
 /// Built-in pattern rules, in priority order. First match wins. Mirrors the TS

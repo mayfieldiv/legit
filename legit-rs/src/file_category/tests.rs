@@ -151,3 +151,31 @@ fn earlier_built_in_rule_wins() {
     // match first: `**/tests/**` (test) precedes `**/*.md` (docs), so it's test.
     assert_eq!(category_of("tests/README.md"), FileCategory::Test);
 }
+
+// ── user rules ─────────────────────────────────────────────────────────────────
+
+#[test]
+fn user_rule_overrides_built_in() {
+    // `.md` is docs by built-in, but a user rule classifying everything under
+    // `docs/` as code must win because user rules are checked first.
+    let rules = [rule("docs/**", "code")];
+    let result = categorize(&[file("docs/design.md", 1, 0)], &rules);
+    assert_eq!(result.files[0].category, FileCategory::Code);
+}
+
+#[test]
+fn first_matching_user_rule_wins() {
+    // Two user rules match the same path; the earlier one decides the category.
+    let rules = [rule("src/**", "generated"), rule("src/**/*.rs", "test")];
+    let result = categorize(&[file("src/app/main.rs", 1, 0)], &rules);
+    assert_eq!(result.files[0].category, FileCategory::Generated);
+}
+
+#[test]
+fn user_rule_with_unknown_category_is_skipped() {
+    // An unrecognised category can't classify anything, so the rule is ignored
+    // and the path falls through to the built-in docs rule.
+    let rules = [rule("**/*.md", "prose")];
+    let result = categorize(&[file("notes.md", 1, 0)], &rules);
+    assert_eq!(result.files[0].category, FileCategory::Docs);
+}
