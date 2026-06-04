@@ -24,11 +24,12 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, now: DateTime<Ut
     let pr_list = &model.list;
     if pr_list.visible_is_empty() {
         // A filter that hid everything beats the fetch-state placeholders;
-        // loading is judged against the active tab's scope (a repo tab shows
-        // its own repo's listing state, the All tab any repo still in flight).
-        let text = if pr_list.filter_hid_everything() {
+        // both checks are judged against the active tab's scope (a repo tab
+        // shows its own repo's PRs and listing state, the All tab any repo).
+        let scope = model.active_scope();
+        let text = if pr_list.filter_hid_everything(scope.as_deref()) {
             "No matching PRs"
-        } else if pr_list.is_loading(model.active_scope().as_deref()) {
+        } else if pr_list.is_loading(scope.as_deref()) {
             "Loading pull requests…"
         } else {
             "No open pull requests"

@@ -86,10 +86,6 @@ pub struct PrList {
     halt: Option<String>,
     /// The substring filter narrowing the visible set (with the active tab).
     filter: Filter,
-    /// PRs the active scope admitted before the filter ran, captured at
-    /// `relayout`. Lets the view distinguish "no PRs on this tab" from
-    /// "the filter matched none".
-    scoped_count: usize,
     grouping: Grouping,
     /// Flattened display layout (headers + PR rows). Rebuilt by `relayout`
     /// whenever the PRs, their tiers, or the grouping change.
@@ -157,7 +153,6 @@ impl PrList {
         let scoped: Vec<usize> = (0..self.prs.len())
             .filter(|&i| scope.is_none_or(|slug| self.prs[i].repo_slug == slug))
             .collect();
-        self.scoped_count = scoped.len();
         let needle = self.filter.text().to_lowercase();
         let visible: Vec<usize> = scoped
             .into_iter()
@@ -187,11 +182,20 @@ impl PrList {
         !self.rows.iter().any(|r| matches!(r, DisplayRow::Pr(_)))
     }
 
-    /// True when the filter (not the tab) is why the list is empty: the scope
+    /// Whether `scope` (a Repo Tab's slug, or `None` for the All tab) admits any
+    /// pooled PR, ignoring the filter. Stateless — recomputed from `prs` rather
+    /// than cached — so it can't drift from the current PRs.
+    fn any_in_scope(&self, scope: Option<&str>) -> bool {
+        self.prs
+            .iter()
+            .any(|pr| scope.is_none_or(|s| pr.repo_slug == s))
+    }
+
+    /// True when the filter (not the tab) is why the list is empty: `scope`
     /// admitted PRs but the filter text matched none. Drives the
     /// "No matching PRs" placeholder.
-    pub fn filter_hid_everything(&self) -> bool {
-        self.visible_is_empty() && self.scoped_count > 0 && !self.filter.text().is_empty()
+    pub fn filter_hid_everything(&self, scope: Option<&str>) -> bool {
+        self.visible_is_empty() && self.any_in_scope(scope) && !self.filter.text().is_empty()
     }
 
     pub fn filter(&self) -> &Filter {

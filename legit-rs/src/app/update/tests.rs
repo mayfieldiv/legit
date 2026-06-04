@@ -796,7 +796,11 @@ fn filter_composes_with_the_active_tab_scope() {
     // "web" only matches the other tab's PR — nothing here.
     type_filter(&mut model, "x");
     assert!(visible(&model).is_empty());
-    assert!(model.list.filter_hid_everything());
+    assert!(
+        model
+            .list
+            .filter_hid_everything(model.active_scope().as_deref())
+    );
 }
 
 #[test]
