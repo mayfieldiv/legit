@@ -72,9 +72,9 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, now: DateTime<Ut
     }
 }
 
-/// Number of rows in the pinned header. Fixed at 5: title, meta, URL,
-/// branch+mergeable, divider. If the body hasn't arrived yet we still
-/// reserve these rows for the loading placeholder.
+/// Number of rows in the pinned header: 5 once the body has arrived
+/// (title, meta, URL, branch+mergeable, divider), or 0 while the fetch is
+/// in flight — the loading placeholder then fills the whole body area.
 fn header_height(model: &Model) -> u16 {
     if model.detail.is_some() { 5 } else { 0 }
 }

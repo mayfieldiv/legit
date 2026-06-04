@@ -319,8 +319,9 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
             // Preserves the scroll position so the user stays at the same
             // place after a quick re-fetch.
             //
-            // Extract the key first so the view_mode borrow ends before the
-            // mutable model borrow in fetch_pr_detail_cmd.
+            // Clone the key so the borrow of model.view_mode ends before
+            // model.detail is reassigned below (which needs a unique borrow
+            // of the model).
             if let ViewMode::Detail(key) = &model.view_mode {
                 let key = key.clone();
                 let cmds = fetch_pr_detail_cmd(model, &key);
