@@ -79,6 +79,12 @@ struct RenderCtx {
     current: Vec<Span<'static>>,
     /// Active inline style stack (simple boolean flags, not a true stack).
     inline: InlineStyle,
+    /// Heading depth currently being rendered (`1`–`6`), or `None` outside a
+    /// heading block. Set in `start_heading`, cleared in `End(TagEnd::Heading)`.
+    /// Scopes heading-specific styling (accent colour, h1/h2 bold) explicitly
+    /// so it never leaks into subsequent paragraphs or lists, and replaces the
+    /// former approach of overloading `inline.bold` to carry heading weight.
+    in_heading: Option<u8>,
     /// Nesting depth for lists; 0 = top-level.
     list_depth: u32,
     /// Bullet/counter for the current list nesting level. `None` = unordered,
@@ -149,6 +155,7 @@ impl RenderCtx {
             Event::End(TagEnd::Heading(_)) => {
                 self.flush_line();
                 self.blank_line();
+                self.in_heading = None;
             }
             Event::End(TagEnd::Paragraph) => {
                 self.flush_line();
@@ -208,9 +215,19 @@ impl RenderCtx {
                 self.handle_text(text.into_string());
             }
             Event::Code(text) => {
-                // Inline code: code colour, no bold/italic.
-                let span = Span::styled(text.into_string(), Style::default().fg(CODE));
-                self.push_span(span);
+                // Inline code inside a heading keeps the heading style (accent
+                // + bold for h1/h2) for consistency with the TS single-span
+                // behavior; outside a heading use code colour, no bold/italic.
+                let style = if let Some(depth) = self.in_heading {
+                    if depth <= 2 {
+                        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(ACCENT)
+                    }
+                } else {
+                    Style::default().fg(CODE)
+                };
+                self.push_span(Span::styled(text.into_string(), style));
             }
             Event::Rule => {
                 self.lines.push(Line::from(Span::styled(
@@ -255,10 +272,12 @@ impl RenderCtx {
             Style::default().fg(ACCENT)
         };
         self.push_span(Span::styled(prefix, style));
-        // Inline text events will also get this style via the heading state.
-        // We keep the inline text at the same accent colour: the TS wraps the
-        // entire heading (prefix + children) in one accented bold span.
-        self.inline.bold = depth <= 2;
+        // Record the heading depth so handle_text and Event::Code can apply
+        // accent (+ bold for h1/h2) to all children of this heading. The TS
+        // wraps the entire heading — prefix and children — in one accented bold
+        // span; we replicate that by consulting in_heading from the text/code
+        // handlers rather than overloading inline.bold.
+        self.in_heading = Some(depth as u8);
     }
 
     // ── Code block ───────────────────────────────────────────────────────────
@@ -361,25 +380,21 @@ impl RenderCtx {
             self.push_span(Span::styled(format!("│ {text}"), style));
             return;
         }
-        // Normal inline text.
-        let style = self.inline.to_ratatui();
-        // Headings set bold via inline.bold; apply accent colour when bold is
-        // set by a heading (no other bold source sets a prefix span with ACCENT).
-        let style = if !self.current.is_empty() {
-            // Check if the last prefix span was an accent span (heading prefix).
-            if self
-                .current
-                .first()
-                .map(|s| s.style.fg == Some(ACCENT))
-                .unwrap_or(false)
-            {
-                style.fg(ACCENT)
+        // Inside a heading: accent always; bold for h1/h2 (depth <= 2). The TS
+        // wraps the entire heading (prefix + children) in one accented bold
+        // span, so we match that here via the explicit in_heading depth rather
+        // than heuristically sniffing the first span's colour.
+        if let Some(depth) = self.in_heading {
+            let style = if depth <= 2 {
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
             } else {
-                style
-            }
-        } else {
-            style
-        };
+                Style::default().fg(ACCENT)
+            };
+            self.push_span(Span::styled(text, style));
+            return;
+        }
+        // Normal inline text outside any heading.
+        let style = self.inline.to_ratatui();
         self.push_span(Span::styled(text, style));
     }
 }
@@ -459,6 +474,53 @@ mod tests {
         assert!(
             !prefix.style.add_modifier.contains(Modifier::BOLD),
             "h3 prefix should not be bold"
+        );
+    }
+
+    #[test]
+    fn heading_bold_does_not_leak_into_following_paragraph() {
+        // h1 followed by a paragraph: the paragraph text must not be bold.
+        let lines = render("# Title\n\nsome paragraph");
+        let para_span = find_span(&lines, "some paragraph").expect("para span not found");
+        assert!(
+            !para_span.style.add_modifier.contains(Modifier::BOLD),
+            "paragraph after h1 must not be bold (heading bold leaked): {para_span:?}"
+        );
+        assert_eq!(
+            para_span.style.fg, None,
+            "paragraph after h1 must not be accent-coloured: {para_span:?}"
+        );
+    }
+
+    #[test]
+    fn heading_text_is_accented() {
+        // The text child of an h1 heading must carry accent colour and bold.
+        let lines = render("# Hello world");
+        let text_span = find_span(&lines, "Hello world").expect("heading text span not found");
+        assert_eq!(
+            text_span.style.fg,
+            Some(ACCENT),
+            "h1 text must be accent: {text_span:?}"
+        );
+        assert!(
+            text_span.style.add_modifier.contains(Modifier::BOLD),
+            "h1 text must be bold: {text_span:?}"
+        );
+    }
+
+    #[test]
+    fn h3_text_is_accented_not_bold() {
+        // h3 text child: accent, no bold.
+        let lines = render("### Sub section");
+        let text_span = find_span(&lines, "Sub section").expect("heading text span not found");
+        assert_eq!(
+            text_span.style.fg,
+            Some(ACCENT),
+            "h3 text must be accent: {text_span:?}"
+        );
+        assert!(
+            !text_span.style.add_modifier.contains(Modifier::BOLD),
+            "h3 text must not be bold: {text_span:?}"
         );
     }
 
