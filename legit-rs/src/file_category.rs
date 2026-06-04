@@ -37,6 +37,17 @@ pub enum FileCategory {
 }
 
 impl FileCategory {
+    /// The five categories in display order. The order is also the discriminant
+    /// order, so `category as usize` indexes `Breakdown::rows`; the two must stay
+    /// in sync (both are this list, spelled once here).
+    pub const ALL: [FileCategory; 5] = [
+        FileCategory::Code,
+        FileCategory::Test,
+        FileCategory::Generated,
+        FileCategory::Docs,
+        FileCategory::Config,
+    ];
+
     /// Parse a config `fileRules` category string into a `FileCategory`. Returns
     /// `None` for anything outside the TS `FileCategory` union so an unknown
     /// string makes the rule a no-op rather than inventing a category.
@@ -93,13 +104,11 @@ pub struct FileCategorization {
 
 /// Per-category stats with a `total` row. Mirrors the TS
 /// `StatsByFileCategory` (a `Record<FileCategory, CategoryStats>` plus `total`).
+/// `rows` is indexed by `FileCategory as usize` (the variant order is stable),
+/// so the per-category fields never have to be enumerated by name.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Breakdown {
-    pub code: CategoryStats,
-    pub test: CategoryStats,
-    pub generated: CategoryStats,
-    pub docs: CategoryStats,
-    pub config: CategoryStats,
+    rows: [CategoryStats; 5],
     pub total: CategoryStats,
 }
 
@@ -133,28 +142,23 @@ pub fn categorize(files: &[FileChange], user_rules: &[FileRule]) -> FileCategori
 
 impl Breakdown {
     /// The five per-category rows in display order, paired with their category.
-    /// The summary panel iterates this rather than reaching into the named
-    /// fields, so the render and the struct can't drift out of order. The
-    /// `total` row is read separately.
+    /// The summary panel iterates this rather than reaching into `rows` by index,
+    /// so the render and the storage can't drift out of order. The `total` row is
+    /// read separately.
     pub fn category_rows(&self) -> [(FileCategory, CategoryStats); 5] {
-        [
-            (FileCategory::Code, self.code),
-            (FileCategory::Test, self.test),
-            (FileCategory::Generated, self.generated),
-            (FileCategory::Docs, self.docs),
-            (FileCategory::Config, self.config),
-        ]
+        FileCategory::ALL.map(|category| (category, self.rows[category as usize]))
+    }
+
+    /// The per-category row for `category`. Tests assert against a single
+    /// category by name; the view reads every row through `category_rows`.
+    #[cfg(test)]
+    pub fn stats(&self, category: FileCategory) -> CategoryStats {
+        self.rows[category as usize]
     }
 
     /// Mutable reference to the per-category row for `category`.
     fn row(&mut self, category: FileCategory) -> &mut CategoryStats {
-        match category {
-            FileCategory::Code => &mut self.code,
-            FileCategory::Test => &mut self.test,
-            FileCategory::Generated => &mut self.generated,
-            FileCategory::Docs => &mut self.docs,
-            FileCategory::Config => &mut self.config,
-        }
+        &mut self.rows[category as usize]
     }
 }
 

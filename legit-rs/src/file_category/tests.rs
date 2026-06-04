@@ -54,9 +54,12 @@ fn breakdown_total_sums_all_files() {
         deletions: 10,
         files: 3,
     };
-    assert_eq!(result.breakdown.code, expected);
+    assert_eq!(result.breakdown.stats(FileCategory::Code), expected);
     assert_eq!(result.breakdown.total, expected);
-    assert_eq!(result.breakdown.test, CategoryStats::default());
+    assert_eq!(
+        result.breakdown.stats(FileCategory::Test),
+        CategoryStats::default()
+    );
 }
 
 // ── built-in rules: generated ──────────────────────────────────────────────────

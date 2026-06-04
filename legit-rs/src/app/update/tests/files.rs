@@ -1,7 +1,7 @@
 // ── file fetch on selection + categorisation on arrival ──────────────────
 
 use super::*;
-use crate::file_category::FileChange;
+use crate::file_category::{FileCategory, FileChange};
 
 /// A model with auth + repo resolved and `numbers` streamed in via
 /// `Msg::PrArrived` (so the list is laid out and a PR is selected).
@@ -117,8 +117,16 @@ fn files_arrived_categorises_and_stores_for_the_pr() {
         .expect("files stored for the PR");
     assert_eq!(categorization.breakdown.total.files, 2);
     assert_eq!(categorization.breakdown.total.additions, 13);
-    assert_eq!(categorization.breakdown.code.files, 1, "src/app.rs is code");
-    assert_eq!(categorization.breakdown.docs.files, 1, "README.md is docs");
+    assert_eq!(
+        categorization.breakdown.stats(FileCategory::Code).files,
+        1,
+        "src/app.rs is code"
+    );
+    assert_eq!(
+        categorization.breakdown.stats(FileCategory::Docs).files,
+        1,
+        "README.md is docs"
+    );
 }
 
 #[test]
