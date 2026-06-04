@@ -124,13 +124,19 @@ fn request_context(
 }
 
 /// Build a checks fetch for a freshly-learned head SHA against the Tracked
-/// Repo it belongs to, unless checks for it already arrived. A `None` SHA (a
-/// PR with no commits yet) yields nothing.
+/// Repo it belongs to, unless checks for that (repo, SHA) already arrived —
+/// the same SHA in another repo (a fork) has its own check runs, so it never
+/// suppresses this repo's fetch. A `None` SHA (a PR with no commits yet)
+/// yields nothing.
 fn maybe_fetch_checks(model: &Model, head_sha: Option<String>, repo_slug: &str) -> Vec<Cmd> {
     let Some(sha) = head_sha else {
         return Vec::new();
     };
-    if model.enrichment.checks.contains_key(&sha) {
+    if model
+        .enrichment
+        .checks
+        .contains_key(&(repo_slug.to_owned(), sha.clone()))
+    {
         return Vec::new();
     }
     let (Some(token), Some(repo)) = (model.auth_token.as_ref(), model.tracked_repo(repo_slug))
@@ -315,8 +321,15 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             model.refresh_blockers();
             Vec::new()
         }
-        Msg::ChecksArrived { head_sha, checks } => {
-            model.enrichment.checks.insert(head_sha, checks);
+        Msg::ChecksArrived {
+            repo_slug,
+            head_sha,
+            checks,
+        } => {
+            model
+                .enrichment
+                .checks
+                .insert((repo_slug, head_sha), checks);
             model.refresh_blockers();
             Vec::new()
         }

@@ -213,6 +213,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             .await;
         }
         Cmd::FetchChecks { ctx, head_sha } => {
+            let repo_slug = ctx.repo.slug();
             request(
                 &tx,
                 &limiter,
@@ -223,7 +224,13 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                         .await?;
                     Ok((head_sha, checks))
                 },
-                |(head_sha, checks)| vec![Msg::ChecksArrived { head_sha, checks }],
+                move |(head_sha, checks)| {
+                    vec![Msg::ChecksArrived {
+                        repo_slug,
+                        head_sha,
+                        checks,
+                    }]
+                },
             )
             .await;
         }

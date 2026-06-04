@@ -38,7 +38,11 @@ pub enum Msg {
         pr: PrKey,
         reviews: Vec<Review>,
     },
+    /// Check runs for one commit in one Tracked Repo. Carries `repo_slug`
+    /// because check runs are repo-scoped: a fork PR shares its head SHA with
+    /// upstream but not its check runs.
     ChecksArrived {
+        repo_slug: String,
         head_sha: String,
         checks: Vec<CheckRun>,
     },

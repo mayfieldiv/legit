@@ -147,10 +147,10 @@ fn review_status_arrived_for_unknown_pr_is_a_noop() {
 #[test]
 fn review_status_arrived_skips_checks_already_fetched_for_sha() {
     let mut model = enriched_model(&[1]);
-    model
-        .enrichment
-        .checks
-        .insert("abc123".to_owned(), Vec::new());
+    model.enrichment.checks.insert(
+        ("mayfieldiv/legit".to_owned(), "abc123".to_owned()),
+        Vec::new(),
+    );
 
     let cmds = update(
         &mut model,
@@ -162,8 +162,40 @@ fn review_status_arrived_skips_checks_already_fetched_for_sha() {
 
     assert!(
         cmds.is_empty(),
-        "checks already present for this SHA; don't refetch"
+        "checks already present for this repo's SHA; don't refetch"
     );
+}
+
+#[test]
+fn same_sha_in_another_repo_still_fetches_checks() {
+    // A fork shares its head SHA with upstream but has its own check runs:
+    // upstream's cached checks must not suppress the fork repo's fetch.
+    let mut model = enriched_model(&[1]);
+    model.config = config_with_repos(&["acme/web"]);
+    model.list.push(sample_pr_in("acme/web", 7, "fork pr"));
+    model.enrichment.checks.insert(
+        ("mayfieldiv/legit".to_owned(), "abc123".to_owned()),
+        Vec::new(),
+    );
+
+    let cmds = update(
+        &mut model,
+        Msg::ReviewStatusArrived {
+            pr: PrKey {
+                repo_slug: "acme/web".to_owned(),
+                number: 7,
+            },
+            status: review_status(Some("abc123")),
+        },
+    );
+
+    match cmds.as_slice() {
+        [Cmd::FetchChecks { ctx, head_sha }] => {
+            assert_eq!(ctx.repo.slug(), "acme/web");
+            assert_eq!(head_sha, "abc123");
+        }
+        other => panic!("expected a FetchChecks for the other repo, got {other:?}"),
+    }
 }
 
 #[test]
@@ -212,7 +244,7 @@ fn reviews_arrived_stores_reviews_by_pr_number() {
 }
 
 #[test]
-fn checks_arrived_stores_checks_by_head_sha() {
+fn checks_arrived_stores_checks_by_repo_and_head_sha() {
     let mut model = enriched_model(&[1]);
     let check = crate::github::types::CheckRun {
         name: "build".to_owned(),
@@ -223,12 +255,19 @@ fn checks_arrived_stores_checks_by_head_sha() {
     update(
         &mut model,
         Msg::ChecksArrived {
+            repo_slug: "mayfieldiv/legit".to_owned(),
             head_sha: "abc123".to_owned(),
             checks: vec![check.clone()],
         },
     );
 
-    assert_eq!(model.enrichment.checks.get("abc123"), Some(&vec![check]));
+    assert_eq!(
+        model
+            .enrichment
+            .checks
+            .get(&("mayfieldiv/legit".to_owned(), "abc123".to_owned())),
+        Some(&vec![check])
+    );
 }
 
 #[test]

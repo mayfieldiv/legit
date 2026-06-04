@@ -14,15 +14,17 @@ use super::{cmd::Cmd, pr_list::PrList};
 
 /// Per-PR enrichment landed by the GraphQL/REST fan-out. Keyed by `PrKey`
 /// (slug + number — numbers collide across repos), except `checks` which is
-/// keyed by head commit SHA (checks belong to a commit and are shared across
-/// PRs that point at it). Written here in M3; the blocker engine, summary
-/// panel, and detail view consume these in later milestones.
+/// keyed by (repo slug, head commit SHA): check runs are repo-scoped on
+/// GitHub — a fork PR shares its head SHA with upstream but not its check
+/// runs — while still being shared across same-repo PRs that point at the
+/// same commit. Written here in M3; the blocker engine, summary panel, and
+/// detail view consume these in later milestones.
 #[derive(Clone, Debug, Default)]
 pub struct Enrichment {
     pub review_threads: HashMap<PrKey, Vec<FullReviewThread>>,
     pub reviews: HashMap<PrKey, Vec<Review>>,
     pub issue_comments: HashMap<PrKey, Vec<IssueComment>>,
-    pub checks: HashMap<String, Vec<CheckRun>>,
+    pub checks: HashMap<(String, String), Vec<CheckRun>>,
 }
 
 /// Severity of a transient status-bar message. Drives both styling and how long
@@ -250,7 +252,11 @@ impl Model {
         let checks = pr
             .head_commit_sha
             .as_ref()
-            .and_then(|sha| self.enrichment.checks.get(sha))
+            .and_then(|sha| {
+                self.enrichment
+                    .checks
+                    .get(&(pr.repo_slug.clone(), sha.clone()))
+            })
             .map(Vec::as_slice)
             .unwrap_or(&[]);
         let result = compute_blocker(
