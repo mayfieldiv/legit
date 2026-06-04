@@ -5,7 +5,7 @@ use crate::{
     file_category::FileChange,
     git_remote::RepoInfo,
     github::limiter::NetworkStats,
-    github::rest::{PR, PRDetail, PrKey},
+    github::rest::{PR, PrKey},
     github::types::{CheckRun, FullReviewThread, IssueComment, Review, ReviewStatus},
     secret::Secret,
 };
@@ -96,10 +96,15 @@ pub enum Msg {
         context: &'static str,
         error: String,
     },
-    /// The detail fetch for a PR completed. The full `PRDetail` (base PR fields
-    /// plus body) is ready to display. If the model is still in `Detail` for this
-    /// PR, the view swaps from the loading placeholder to the full content.
-    PRDetailArrived(PRDetail),
+    /// The detail fetch for a PR completed. Carries the PR's key so `update`
+    /// can check whether the view is still open for this PR, and the body
+    /// (markdown) to display. The PR itself is sourced from the enriched list
+    /// (`model.list.pr(key)`) rather than stored here, so the detail view
+    /// always reads the up-to-date mergeable/head_commit_sha/etc.
+    PRDetailArrived {
+        key: PrKey,
+        body: String,
+    },
     Quit,
 }
 

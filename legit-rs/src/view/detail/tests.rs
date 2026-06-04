@@ -4,7 +4,7 @@ use ratatui::{Terminal, backend::TestBackend};
 use crate::{
     app::model::{Model, RepoDetection, ViewMode},
     git_remote::RepoInfo,
-    github::rest::{PR, PRDetail, PRState},
+    github::rest::{PR, PRState},
     github::types::CheckRun,
     view,
 };
@@ -74,36 +74,33 @@ fn model_with_pr_in_list(pr: PR) -> Model {
     model
 }
 
-/// Build a model in Detail mode for `pr`, with `detail` already arrived.
+/// Build a model in Detail mode for `pr`, with the body already arrived.
+/// The PR is held in the list (enriched source of truth); `model.detail`
+/// carries only the body string.
 fn model_in_detail(pr: PR, body: &str) -> Model {
     let key = pr.key();
-    let detail = PRDetail {
-        pr: pr.clone(),
-        body: body.to_owned(),
-    };
     let mut model = model_with_pr_in_list(pr);
     model.view_mode = ViewMode::Detail(key);
-    model.detail = Some(detail);
+    model.detail = Some(body.to_owned());
     model
 }
 
 /// Build a model in Detail mode for `pr`, with checks seeded in enrichment.
+/// `head_commit_sha` is set on the **list PR** (the enriched copy) so that
+/// `checks_for` can resolve the check runs — this exercises the real data path
+/// where `Msg::ReviewStatusArrived` populates the list PR's SHA.
 fn model_in_detail_with_checks(pr: PR, body: &str, checks: Vec<CheckRun>) -> Model {
     let sha = "abc123".to_owned();
     let mut pr = pr;
+    // Set the SHA on the PR before pushing it into the list so the enriched
+    // copy has the SHA, matching how ReviewStatusArrived writes it.
     pr.head_commit_sha = Some(sha.clone());
     let key = pr.key();
-    let detail = PRDetail {
-        pr: pr.clone(),
-        body: body.to_owned(),
-    };
-    let mut model = model_with_pr_in_list(pr.clone());
+    let repo_slug = pr.repo_slug.clone();
+    let mut model = model_with_pr_in_list(pr);
     model.view_mode = ViewMode::Detail(key);
-    model.detail = Some(detail);
-    model
-        .enrichment
-        .checks
-        .insert((pr.repo_slug.clone(), sha), checks);
+    model.detail = Some(body.to_owned());
+    model.enrichment.checks.insert((repo_slug, sha), checks);
     model
 }
 

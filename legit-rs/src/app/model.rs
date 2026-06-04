@@ -6,7 +6,7 @@ use crate::{
     file_category::FileCategorization,
     git_remote::RepoInfo,
     github::limiter::NetworkStats,
-    github::rest::{PR, PRDetail, PrKey},
+    github::rest::{PR, PrKey},
     github::types::{CheckRun, FullReviewThread, IssueComment, Review},
     secret::Secret,
 };
@@ -192,11 +192,13 @@ pub struct Model {
     /// `Detail(key)` when Enter is pressed on a PR. `Esc` in the detail view
     /// returns to `List`.
     pub view_mode: ViewMode,
-    /// The fetched PR detail (body + base PR fields) for the currently open
-    /// detail view. `None` while the `Cmd::FetchPRDetail` is in flight (the
-    /// detail view shows a loading placeholder in that state). Cleared when the
-    /// view returns to `List` so stale content can't bleed into the next open.
-    pub detail: Option<PRDetail>,
+    /// The fetched markdown body for the currently open detail view. `None`
+    /// while `Cmd::FetchPRDetail` is in flight (the detail view shows a
+    /// loading placeholder in that state). The PR itself is sourced from the
+    /// enriched `model.list` via `ViewMode::Detail(key)` so mergeable,
+    /// head_commit_sha, etc. are always current. Cleared when the view returns
+    /// to `List` so stale content can't bleed into the next open.
+    pub detail: Option<String>,
     /// Vertical scroll offset for the detail-view body (lines scrolled past the
     /// top). Reset to zero on every `Detail` entry and on `Esc`-to-list. Stored
     /// in the `Model` per the Elm architecture — the view reads it, `update`

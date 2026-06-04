@@ -19,19 +19,40 @@ use ratatui::{
 };
 
 use crate::{
-    app::model::Model,
+    app::model::{Model, ViewMode},
     format::{
         check_icon, checks_summary, format_age, format_mergeable, format_size, sort_check_runs,
     },
-    github::rest::PRDetail,
+    github::rest::PR,
     markdown,
 };
 
 #[cfg(test)]
 mod tests;
 
-/// Render the detail view into the full frame area.
+/// Render the detail view into the full frame area. The PR is sourced from
+/// `model.list` via the key in `ViewMode::Detail(key)` so it carries the
+/// enriched values (mergeable, head_commit_sha, etc.) written by
+/// `Msg::ReviewStatusArrived` rather than a de-enriched copy.
 pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, now: DateTime<Utc>) {
+    // Resolve the PR key from the current view mode. If somehow called while
+    // not in Detail mode (shouldn't happen), fall back to the loading layout.
+    let key = match &model.view_mode {
+        ViewMode::Detail(key) => key,
+        _ => {
+            render_loading(frame, frame.area());
+            return;
+        }
+    };
+
+    // Look up the enriched PR from the list. If it has been removed (e.g.
+    // a list refresh completed between navigation and this render), show the
+    // loading placeholder so the view degrades gracefully.
+    let Some(pr) = model.list.pr(key) else {
+        render_loading(frame, frame.area());
+        return;
+    };
+
     // The detail area is split into: header, body (fills remaining), status bar.
     let [header_area, body_area, status_area] = Layout::vertical([
         Constraint::Length(header_height(model)),
@@ -44,15 +65,15 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, now: DateTime<Ut
 
     match &model.detail {
         None => render_loading(frame, body_area),
-        Some(detail) => {
-            render_header(detail, frame, header_area, now);
-            render_body(model, detail, frame, body_area);
+        Some(body) => {
+            render_header(pr, frame, header_area, now);
+            render_body(model, pr, body, frame, body_area);
         }
     }
 }
 
 /// Number of rows in the pinned header. Fixed at 5: title, meta, URL,
-/// branch+mergeable, divider. If the detail hasn't arrived yet we still
+/// branch+mergeable, divider. If the body hasn't arrived yet we still
 /// reserve these rows for the loading placeholder.
 fn header_height(model: &Model) -> u16 {
     if model.detail.is_some() { 5 } else { 0 }
@@ -69,9 +90,7 @@ fn render_loading(frame: &mut Frame<'_>, area: Rect) {
 
 // ── Header ────────────────────────────────────────────────────────────────────
 
-fn render_header(detail: &PRDetail, frame: &mut Frame<'_>, area: Rect, now: DateTime<Utc>) {
-    let pr = &detail.pr;
-
+fn render_header(pr: &PR, frame: &mut Frame<'_>, area: Rect, now: DateTime<Utc>) {
     // Row 0: #number title (bold)
     let title_text = format!("#{} {}", pr.number, pr.title);
     let title_line = Line::from(Span::styled(
@@ -178,14 +197,12 @@ fn checks_section_lines(model: &Model, pr: &crate::github::rest::PR) -> Vec<Line
 /// Render the scrollable body: markdown description + CI checks, offset by
 /// `model.detail_scroll` rows from the top, clamped so the scroll offset
 /// never exceeds `content_lines - viewport_rows` (the last screenful).
-fn render_body(model: &Model, detail: &PRDetail, frame: &mut Frame<'_>, area: Rect) {
-    let pr = &detail.pr;
-
+fn render_body(model: &Model, pr: &PR, body: &str, frame: &mut Frame<'_>, area: Rect) {
     // Build the lines for the scrollable body: description + checks section.
     let mut lines: Vec<Line<'static>> = Vec::new();
 
     // Description (markdown-rendered body, or placeholder when empty)
-    let trimmed = detail.body.trim();
+    let trimmed = body.trim();
     if trimmed.is_empty() {
         lines.push(Line::from(Span::styled(
             "No description.",

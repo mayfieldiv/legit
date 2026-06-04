@@ -3,11 +3,11 @@ use ratatui::crossterm::event::KeyCode;
 use crate::{
     app::{cmd::Cmd, model::ViewMode, msg::Msg, update::update},
     git_remote::RepoInfo,
-    github::rest::{PRDetail, PrKey},
+    github::rest::PrKey,
     secret::Secret,
 };
 
-use super::{enriched_model, key_event, sample_pr};
+use super::{enriched_model, key_event};
 
 /// A model with auth + repo detected and one PR streamed in and selected.
 fn model_with_one_pr() -> crate::app::model::Model {
@@ -52,11 +52,8 @@ fn enter_on_selected_pr_transitions_to_detail_and_dispatches_fetch() {
 #[test]
 fn enter_on_selected_pr_clears_stale_detail() {
     let mut model = model_with_one_pr();
-    // Pre-seed a stale detail from a previous open
-    model.detail = Some(PRDetail {
-        pr: sample_pr(42, "old"),
-        body: "stale body".to_owned(),
-    });
+    // Pre-seed a stale body from a previous open
+    model.detail = Some("stale body".to_owned());
 
     update(&mut model, key_event(KeyCode::Enter));
 
@@ -82,10 +79,7 @@ fn esc_in_detail_returns_to_list() {
 fn esc_in_detail_clears_the_fetched_detail() {
     let mut model = model_with_one_pr();
     update(&mut model, key_event(KeyCode::Enter));
-    model.detail = Some(PRDetail {
-        pr: sample_pr(42, "Add streaming PR list"),
-        body: "Some body".to_owned(),
-    });
+    model.detail = Some("Some body".to_owned());
 
     update(&mut model, key_event(KeyCode::Esc));
 
@@ -101,16 +95,19 @@ fn pr_detail_arrived_stores_detail_when_still_in_detail_view() {
     update(&mut model, key_event(KeyCode::Enter));
     assert!(model.detail.is_none(), "detail not yet arrived");
 
-    let detail = PRDetail {
-        pr: sample_pr(42, "Add streaming PR list"),
-        body: "The body".to_owned(),
-    };
-    update(&mut model, Msg::PRDetailArrived(detail.clone()));
+    let body = "The body".to_owned();
+    update(
+        &mut model,
+        Msg::PRDetailArrived {
+            key: pr_key_42(),
+            body: body.clone(),
+        },
+    );
 
     assert_eq!(
         model.detail.as_ref(),
-        Some(&detail),
-        "arrived detail must be stored"
+        Some(&body),
+        "arrived body must be stored"
     );
 }
 
@@ -122,15 +119,17 @@ fn pr_detail_arrived_discarded_after_navigating_back() {
     update(&mut model, key_event(KeyCode::Esc));
     assert_eq!(model.view_mode, ViewMode::List);
 
-    let detail = PRDetail {
-        pr: sample_pr(42, "Add streaming PR list"),
-        body: "The body".to_owned(),
-    };
-    update(&mut model, Msg::PRDetailArrived(detail));
+    update(
+        &mut model,
+        Msg::PRDetailArrived {
+            key: pr_key_42(),
+            body: "The body".to_owned(),
+        },
+    );
 
     assert!(
         model.detail.is_none(),
-        "a late-arriving detail for a closed view must be discarded"
+        "a late-arriving body for a closed view must be discarded"
     );
 }
 
@@ -138,10 +137,7 @@ fn pr_detail_arrived_discarded_after_navigating_back() {
 fn r_in_detail_dispatches_refetch_and_clears_detail() {
     let mut model = model_with_one_pr();
     update(&mut model, key_event(KeyCode::Enter));
-    model.detail = Some(PRDetail {
-        pr: sample_pr(42, "Add streaming PR list"),
-        body: "current body".to_owned(),
-    });
+    model.detail = Some("current body".to_owned());
 
     let cmds = update(&mut model, key_event(KeyCode::Char('r')));
 

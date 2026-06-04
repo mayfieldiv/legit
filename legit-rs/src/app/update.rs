@@ -178,21 +178,21 @@ fn maybe_fetch_selected_files(model: &mut Model) -> Vec<Cmd> {
     vec![Cmd::FetchFiles { ctx, number }]
 }
 
-/// Dispatch `Cmd::FetchPRDetail` for `pr`, using the model's current auth token
-/// and the tracked repo the PR belongs to. Yields nothing when auth isn't ready
-/// or the PR's repo isn't tracked (the caller is already guarded, but this is
-/// defensive).
-fn fetch_pr_detail_cmd(model: &Model, pr: &crate::github::rest::PR) -> Vec<Cmd> {
+/// Dispatch `Cmd::FetchPRDetail` for `key`, using the model's current auth
+/// token and the tracked repo the PR belongs to. Yields nothing when auth
+/// isn't ready or the PR's repo isn't tracked (the caller is already guarded,
+/// but this is defensive).
+fn fetch_pr_detail_cmd(model: &Model, key: &crate::github::rest::PrKey) -> Vec<Cmd> {
     let Some(token) = model.auth_token.as_ref() else {
         return Vec::new();
     };
-    let Some(repo) = model.tracked_repo(&pr.repo_slug) else {
+    let Some(repo) = model.tracked_repo(&key.repo_slug) else {
         return Vec::new();
     };
     let ctx = request_context(&repo, token, &model.config.bot_logins);
     vec![Cmd::FetchPRDetail {
         ctx,
-        pr: Arc::new(pr.clone()),
+        key: key.clone(),
     }]
 }
 
@@ -285,7 +285,7 @@ fn handle_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
             // before auth lands, which doesn't happen in practice).
             if let Some(pr) = model.list.selected_pr() {
                 let key = pr.key();
-                let cmds = fetch_pr_detail_cmd(model, pr);
+                let cmds = fetch_pr_detail_cmd(model, &key);
                 model.view_mode = ViewMode::Detail(key);
                 model.detail = None; // clear any stale detail from a prior open
                 model.detail_scroll = 0; // always start at the top
@@ -313,23 +313,21 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
             model.detail_scroll = 0;
         }
         KeyCode::Char('r') => {
-            // Refresh the current PR detail: refetch the detail (the PR body
-            // and latest base fields). Clears the cached detail first so the
-            // view briefly shows the loading placeholder, consistent with the
-            // initial enter-and-fetch flow. Preserves the scroll position so
-            // the user stays at the same place after a quick re-fetch.
+            // Refresh the current PR detail: refetch the body. Clears the
+            // cached body first so the view briefly shows the loading
+            // placeholder, consistent with the initial enter-and-fetch flow.
+            // Preserves the scroll position so the user stays at the same
+            // place after a quick re-fetch.
             //
             // Extract the key first so the view_mode borrow ends before the
             // mutable model borrow in fetch_pr_detail_cmd.
             if let ViewMode::Detail(key) = &model.view_mode {
                 let key = key.clone();
-                if let Some(pr) = model.list.pr(&key) {
-                    let cmds = fetch_pr_detail_cmd(model, pr);
-                    if !cmds.is_empty() {
-                        model.detail = None;
-                    }
-                    return cmds;
+                let cmds = fetch_pr_detail_cmd(model, &key);
+                if !cmds.is_empty() {
+                    model.detail = None;
                 }
+                return cmds;
             }
         }
         // Scroll down: j, Down arrow
@@ -534,13 +532,12 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             }
             Vec::new()
         }
-        Msg::PRDetailArrived(detail) => {
-            // Store the fetched detail only when the view is still open for
+        Msg::PRDetailArrived { key, body } => {
+            // Store the fetched body only when the view is still open for
             // this PR; discard it if the user already navigated back to the
             // list or entered a different PR's detail.
-            let key = detail.pr.key();
             if model.view_mode == ViewMode::Detail(key) {
-                model.detail = Some(detail);
+                model.detail = Some(body);
             }
             Vec::new()
         }

@@ -4,8 +4,8 @@ use tokio::sync::mpsc;
 
 use crate::{
     app::msg::Msg, auth, config, git_remote, git_remote::RepoInfo, github::graphql::GraphQlClient,
-    github::limiter::NetworkLimiter, github::rest::OctocrabRest, github::rest::PR,
-    github::rest::PrKey, secret::Secret,
+    github::limiter::NetworkLimiter, github::rest::OctocrabRest, github::rest::PrKey,
+    secret::Secret,
 };
 
 /// The inputs every per-PR enrichment request shares: which repo, the auth
@@ -65,17 +65,16 @@ pub enum Cmd {
         token: u64,
         delay_ms: u64,
     },
-    /// Fetch a single PR's detail (base PR fields + body). Dispatched when the
-    /// user enters the detail view (`Enter` on the list); result comes back as
+    /// Fetch a single PR's body (markdown). Dispatched when the user enters
+    /// the detail view (`Enter` on the list); result comes back as
     /// `Msg::PRDetailArrived`. Also dispatched on `r` to refresh the current
-    /// PR's detail without going through the refresh-queue (#11).
-    ///
-    /// `pr` is boxed behind `Arc` so this variant stays pointer-sized; PR is a
-    /// wide struct and without indirection the entire `Cmd` enum and every
-    /// `Vec<Cmd>` would be padded to ~360 bytes per element.
+    /// PR's detail without going through the refresh-queue (#11). The PR
+    /// number is extracted from `key`; `key` is also echoed back in
+    /// `PRDetailArrived` so `update` can check whether the view is still open
+    /// for this PR before storing the body.
     FetchPRDetail {
         ctx: Arc<RequestContext>,
-        pr: Arc<PR>,
+        key: PrKey,
     },
 }
 
@@ -283,8 +282,8 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
             let _ = tx.send(Msg::StatusCleared { token });
         }
-        Cmd::FetchPRDetail { ctx, pr } => {
-            let number = pr.number;
+        Cmd::FetchPRDetail { ctx, key } => {
+            let number = key.number;
             request(
                 &tx,
                 &limiter,
@@ -294,7 +293,12 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                         .fetch_pr_detail(&ctx.repo.owner, &ctx.repo.repo, number)
                         .await
                 },
-                move |detail| vec![Msg::PRDetailArrived(detail)],
+                move |detail| {
+                    vec![Msg::PRDetailArrived {
+                        key,
+                        body: detail.body,
+                    }]
+                },
             )
             .await;
         }
