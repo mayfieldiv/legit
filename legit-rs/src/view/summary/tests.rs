@@ -422,3 +422,128 @@ fn panel_is_fifty_columns_at_one_forty_and_above() {
     assert_eq!(panel_width(140), Some(50));
     assert_eq!(panel_width(200), Some(50));
 }
+
+// ── full-panel snapshot scenarios across the supported widths ────────────────
+
+/// A model with every section's enrichment present: a derived blocker, reviews,
+/// threads, checks, and categorised files. Drives the "fully loaded" snapshots.
+fn fully_loaded_model() -> Model {
+    let mut pr = sample_pr(42, "Add the thing");
+    pr.mergeable = "MERGEABLE".to_owned();
+    let mut model = model_with_selected(pr);
+    with_blocker(&mut model, Tier::NeedsReview, "alice", "Awaiting reviewer");
+    with_reviews(
+        &mut model,
+        vec![review("alice", "APPROVED"), review("bob", "COMMENTED")],
+    );
+    with_threads(
+        &mut model,
+        vec![thread("carol", false, false), thread("bot", true, false)],
+    );
+    with_checks(
+        &mut model,
+        "abc123",
+        vec![
+            check("build", "completed", Some("success")),
+            check("lint", "completed", Some("failure")),
+        ],
+    );
+    with_files(&mut model, &[("src/app.rs", 10, 2), ("README.md", 3, 0)]);
+    model
+}
+
+/// Every section of a fully-loaded panel renders, with no `Loading…`
+/// placeholders, at all three supported widths.
+#[test]
+fn fully_loaded_panel_renders_every_section_at_each_width() {
+    for width in [80, 140, 200] {
+        let model = fully_loaded_model();
+        let rows = panel_rows(&model, width, 40);
+        let joined = rows.join("\n");
+
+        assert!(
+            joined.contains("Awaiting reviewer"),
+            "smart-status @ {width}: {rows:?}"
+        );
+        assert!(
+            joined.contains("mergeable"),
+            "mergeable @ {width}: {rows:?}"
+        );
+        assert!(joined.contains("reviews"), "reviews @ {width}: {rows:?}");
+        assert!(joined.contains("threads"), "threads @ {width}: {rows:?}");
+        assert!(joined.contains("checks"), "checks @ {width}: {rows:?}");
+        assert!(joined.contains("files"), "files @ {width}: {rows:?}");
+        assert!(
+            joined.contains("https://github.com/acme/web/pull/42"),
+            "footer URL @ {width}: {rows:?}"
+        );
+        assert!(
+            !joined.contains("Loading…"),
+            "fully loaded panel has no loading placeholders @ {width}: {rows:?}"
+        );
+    }
+}
+
+/// With only some enrichment in, the arrived sections render their data while
+/// the missing ones show `Loading…`, at all three widths.
+#[test]
+fn partial_enrichment_mixes_data_and_loading_placeholders() {
+    for width in [80, 140, 200] {
+        // Reviews arrived; threads, checks, files have not.
+        let mut model = model_with_selected(sample_pr(42, "Add the thing"));
+        with_blocker(&mut model, Tier::NeedsReview, "", "Awaiting review");
+        with_reviews(&mut model, vec![review("alice", "APPROVED")]);
+
+        let rows = panel_rows(&model, width, 40);
+        let joined = rows.join("\n");
+
+        assert!(
+            joined.contains("1 approved"),
+            "reviews data present @ {width}: {rows:?}"
+        );
+        assert!(
+            joined.contains("Loading…"),
+            "missing sections show loading @ {width}: {rows:?}"
+        );
+    }
+}
+
+/// Everything else loaded but the files fetch still in flight: the files
+/// section shows `Loading…` while the rest render, at all three widths.
+#[test]
+fn missing_files_shows_loading_for_the_breakdown_only() {
+    for width in [80, 140, 200] {
+        let mut model = fully_loaded_model();
+        // Drop just the files enrichment.
+        let key = model.list.selected_pr().unwrap().key();
+        model.enrichment.files.remove(&key);
+
+        let rows = panel_rows(&model, width, 40);
+        let joined = rows.join("\n");
+
+        // The files header is still there, now with a loading placeholder.
+        let files_line = rows
+            .iter()
+            .find(|r| r.to_lowercase().contains("files"))
+            .unwrap_or_else(|| panic!("files section present @ {width}: {rows:?}"));
+        assert!(
+            files_line.contains("Loading…"),
+            "files breakdown loading @ {width}: {files_line:?}"
+        );
+        // Other sections still rendered their data.
+        assert!(joined.contains("checks"), "checks still present @ {width}");
+    }
+}
+
+/// No PR selected: the panel shows only the placeholder, at all three widths.
+#[test]
+fn no_pr_selected_at_each_width() {
+    for width in [80, 140, 200] {
+        let (model, _) = Model::new();
+        let rows = panel_rows(&model, width, 40);
+        assert!(
+            rows[0].trim_start().starts_with("No PR selected"),
+            "no-PR placeholder @ {width}: {rows:?}"
+        );
+    }
+}
