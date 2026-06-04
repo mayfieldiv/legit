@@ -107,6 +107,27 @@ fn thread(author: &str, is_bot: bool, resolved: bool) -> crate::github::types::F
     }
 }
 
+/// Seed loaded check runs for the selected PR. Stamps the PR's head SHA so the
+/// checks key (repo slug, head SHA) resolves.
+fn with_checks(model: &mut Model, head_sha: &str, checks: Vec<crate::github::types::CheckRun>) {
+    let key = model.list.selected_pr().expect("a PR is selected").key();
+    if let Some(pr) = model.list.pr_mut(&key) {
+        pr.head_commit_sha = Some(head_sha.to_owned());
+    }
+    model
+        .enrichment
+        .checks
+        .insert((key.repo_slug, head_sha.to_owned()), checks);
+}
+
+fn check(name: &str, status: &str, conclusion: Option<&str>) -> crate::github::types::CheckRun {
+    crate::github::types::CheckRun {
+        name: name.to_owned(),
+        status: status.to_owned(),
+        conclusion: conclusion.map(str::to_owned),
+    }
+}
+
 /// Render the whole frame at `width`x`height` and return the panel's columns
 /// (everything right of the list/summary split), excluding the tab bar and
 /// status bar rows. The panel width matches `panel_width(width)`.
@@ -277,6 +298,46 @@ fn threads_show_loading_until_arrived() {
     assert!(
         rows.iter().any(|r| r.to_lowercase().contains("thread")),
         "threads section present: {rows:?}"
+    );
+}
+
+#[test]
+fn renders_check_counts_and_rows_for_non_passing_only() {
+    let mut model = model_with_selected(sample_pr(42, "Add the thing"));
+    with_checks(
+        &mut model,
+        "abc123",
+        vec![
+            check("build", "completed", Some("success")),
+            check("lint", "completed", Some("failure")),
+            check("deploy", "in_progress", None),
+        ],
+    );
+
+    let rows = panel_rows(&model, 140, 30);
+    let joined = rows.join("\n");
+
+    assert!(joined.contains("1 failed"), "failed count: {rows:?}");
+    assert!(joined.contains("1 pending"), "pending count: {rows:?}");
+    assert!(joined.contains("passed"), "passed count: {rows:?}");
+    // Non-passing checks get their own rows; the passing one does not.
+    assert!(joined.contains("lint"), "failed check row: {rows:?}");
+    assert!(joined.contains("deploy"), "pending check row: {rows:?}");
+    assert!(
+        !joined.contains("build"),
+        "passing check must not get its own row: {rows:?}"
+    );
+}
+
+#[test]
+fn checks_show_loading_until_arrived() {
+    let model = model_with_selected(sample_pr(42, "Add the thing"));
+
+    let rows = panel_rows(&model, 140, 30);
+
+    assert!(
+        rows.iter().any(|r| r.to_lowercase().contains("check")),
+        "checks section present: {rows:?}"
     );
 }
 

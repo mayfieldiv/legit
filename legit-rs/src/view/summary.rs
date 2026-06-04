@@ -20,9 +20,18 @@ use ratatui::{
 
 use crate::app::model::Model;
 use crate::blocker::Tier;
+use crate::github::types::CheckRun;
 
 /// Placeholder text for a section whose enrichment hasn't arrived yet.
 const LOADING: &str = "Loading…";
+
+/// Conclusions that count as a failing check. Mirrors the TS
+/// `FAILING_CONCLUSIONS` (and the blocker engine's set).
+const FAILING_CONCLUSIONS: [&str; 3] = ["failure", "timed_out", "cancelled"];
+
+/// Max number of individual check rows before collapsing the rest into a
+/// `+N more` line. Mirrors the TS `MAX_VISIBLE_CHECKS`.
+const MAX_VISIBLE_CHECKS: usize = 6;
 
 #[cfg(test)]
 mod tests;
@@ -66,6 +75,7 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect) {
     lines.push(mergeable_line(pr));
     lines.extend(reviews_lines(model, pr));
     lines.push(threads_line(model, pr));
+    lines.extend(checks_lines(model, pr));
 
     frame.render_widget(Paragraph::new(lines), area);
 }
@@ -193,6 +203,127 @@ fn format_review_state(state: &str) -> String {
         other => other,
     }
     .to_owned()
+}
+
+/// The CI checks section: a `checks` header with failed / pending / passed
+/// counts, then one indented row per non-passing check (passing checks are
+/// summarised by the count alone). `Loading…` until the checks fetch arrives —
+/// which can't start until review-status reports the PR's head SHA, so a PR
+/// with no head SHA also reads as loading.
+fn checks_lines(model: &Model, pr: &crate::github::rest::PR) -> Vec<Line<'static>> {
+    let checks = pr.head_commit_sha.as_ref().and_then(|sha| {
+        model
+            .enrichment
+            .checks
+            .get(&(pr.repo_slug.clone(), sha.clone()))
+    });
+    let Some(checks) = checks else {
+        return vec![header_with_loading("checks")];
+    };
+
+    let mut failed = 0;
+    let mut pending = 0;
+    let mut passed = 0;
+    for check in checks {
+        if check.status != "completed" {
+            pending += 1;
+        } else if is_failing(check) {
+            failed += 1;
+        } else {
+            // neutral / skipped / stale / success all count as non-failures.
+            passed += 1;
+        }
+    }
+    let total = checks.len();
+
+    let mut header: Vec<Span<'static>> = vec![section_header("checks"), Span::raw(" ")];
+    if failed > 0 {
+        header.push(Span::styled(
+            format!("{failed} failed "),
+            Style::default().fg(Color::Red),
+        ));
+    }
+    if pending > 0 {
+        header.push(Span::styled(
+            format!("{pending} pending "),
+            Style::default().fg(Color::Yellow),
+        ));
+    }
+    header.push(Span::styled(
+        format!("{passed}/{total} passed"),
+        Style::default().fg(if passed == total {
+            Color::Green
+        } else {
+            Color::Gray
+        }),
+    ));
+    let mut lines = vec![Line::from(header)];
+
+    // Per-check rows for the non-passing checks only, sorted (failing first,
+    // then by name) and capped, mirroring the TS `sortCheckRuns` + visible cap.
+    let mut non_passing: Vec<&CheckRun> = checks
+        .iter()
+        .filter(|c| c.status != "completed" || is_failing(c))
+        .collect();
+    non_passing.sort_by(|a, b| {
+        check_sort_group(a)
+            .cmp(&check_sort_group(b))
+            .then(a.name.cmp(&b.name))
+    });
+
+    for check in non_passing.iter().take(MAX_VISIBLE_CHECKS) {
+        let (icon, color) = check_icon(check);
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(icon, Style::default().fg(color)),
+            Span::raw(format!(" {}", check.name)),
+        ]));
+    }
+    let overflow = non_passing.len().saturating_sub(MAX_VISIBLE_CHECKS);
+    if overflow > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("  +{overflow} more"),
+            Style::default().fg(Color::Gray),
+        )));
+    }
+    lines
+}
+
+/// Whether a completed check's conclusion counts as a failure.
+fn is_failing(check: &CheckRun) -> bool {
+    check.status == "completed"
+        && check
+            .conclusion
+            .as_deref()
+            .is_some_and(|c| FAILING_CONCLUSIONS.contains(&c))
+}
+
+/// Sort group for a check row. Mirrors the TS `checkSortGroup`: failing first
+/// (0), then pending (1), then everything else (2).
+fn check_sort_group(check: &CheckRun) -> u8 {
+    if check.status != "completed" {
+        return 1;
+    }
+    match check.conclusion.as_deref() {
+        Some("failure" | "timed_out" | "cancelled" | "action_required") => 0,
+        _ => 2,
+    }
+}
+
+/// Icon + colour for a check run. Mirrors the TS `checkIcon`.
+fn check_icon(check: &CheckRun) -> (&'static str, Color) {
+    if check.status != "completed" {
+        return ("●", Color::Yellow);
+    }
+    match check.conclusion.as_deref() {
+        Some("success") => ("✓", Color::Green),
+        Some("failure" | "timed_out" | "cancelled") => ("✗", Color::Red),
+        Some("action_required") => ("✗", Color::Yellow),
+        Some("neutral") => ("–", Color::Gray),
+        Some("skipped") => ("⊘", Color::Gray),
+        Some("stale") => ("⟳", Color::Yellow),
+        _ => ("?", Color::Gray),
+    }
 }
 
 /// A muted section-header span (e.g. `reviews`, `checks`).
