@@ -93,12 +93,6 @@ fn rows_carry_absolute_indices_for_a_visible_subset() {
 }
 
 #[test]
-fn repo_with_no_slug_falls_back_to_unknown() {
-    let rows = display_rows(&[0], Grouping::Repo, |_| None, |_| String::new());
-    assert_eq!(headers(&rows), vec!["unknown"]);
-}
-
-#[test]
 fn repo_empty_list_is_empty() {
     let rows = display_rows(&[], Grouping::Repo, |_| None, |_| "acme/web".to_owned());
     assert!(rows.is_empty());

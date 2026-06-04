@@ -64,16 +64,9 @@ pub fn display_rows(
 ) -> Vec<DisplayRow> {
     match grouping {
         Grouping::None => visible.iter().copied().map(DisplayRow::Pr).collect(),
-        // Fall back to `"unknown"` (matching the TS engine) for a PR with no
-        // slug stamped — only reachable for hand-built PRs in tests.
-        Grouping::Repo => grouped_rows(visible, |i| {
-            let slug = slug_of(i);
-            if slug.is_empty() {
-                "unknown".to_owned()
-            } else {
-                slug
-            }
-        }),
+        // Each PR's slug is its group key. `parse_pr` always stamps a non-empty
+        // `owner/repo`, so no header-key normalization is needed here.
+        Grouping::Repo => grouped_rows(visible, slug_of),
         Grouping::SmartStatus => smart_status_rows(visible, tier_of),
     }
 }
