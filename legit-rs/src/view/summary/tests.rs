@@ -69,6 +69,44 @@ fn with_blocker(model: &mut Model, tier: Tier, blocker: &str, reason: &str) {
     );
 }
 
+/// Seed loaded reviews for the selected PR.
+fn with_reviews(model: &mut Model, reviews: Vec<crate::github::types::Review>) {
+    let key = model.list.selected_pr().expect("a PR is selected").key();
+    model.enrichment.reviews.insert(key, reviews);
+}
+
+fn review(user: &str, state: &str) -> crate::github::types::Review {
+    crate::github::types::Review {
+        user: user.to_owned(),
+        state: state.to_owned(),
+    }
+}
+
+/// Seed loaded review threads for the selected PR.
+fn with_threads(model: &mut Model, threads: Vec<crate::github::types::FullReviewThread>) {
+    let key = model.list.selected_pr().expect("a PR is selected").key();
+    model.enrichment.review_threads.insert(key, threads);
+}
+
+/// A review thread whose first comment is by `author` (a bot iff `is_bot`),
+/// resolved per `resolved`.
+fn thread(author: &str, is_bot: bool, resolved: bool) -> crate::github::types::FullReviewThread {
+    crate::github::types::FullReviewThread {
+        id: format!("T-{author}"),
+        is_resolved: resolved,
+        path: "src/x.rs".to_owned(),
+        line: Some(1),
+        comments: vec![crate::github::types::ReviewComment {
+            id: "C1".to_owned(),
+            author: author.to_owned(),
+            body: "b".to_owned(),
+            created_at: fixed_now(),
+            url: "u".to_owned(),
+            is_bot,
+        }],
+    }
+}
+
 /// Render the whole frame at `width`x`height` and return the panel's columns
 /// (everything right of the list/summary split), excluding the tab bar and
 /// status bar rows. The panel width matches `panel_width(width)`.
@@ -166,6 +204,79 @@ fn renders_conflict_when_pr_is_conflicting() {
     assert!(
         rows.iter().any(|r| r.contains("conflict")),
         "conflicting PR shows a conflict line: {rows:?}"
+    );
+}
+
+#[test]
+fn renders_review_counts_and_per_reviewer_states() {
+    let mut model = model_with_selected(sample_pr(42, "Add the thing"));
+    with_reviews(
+        &mut model,
+        vec![
+            review("alice", "APPROVED"),
+            review("bob", "CHANGES_REQUESTED"),
+            review("carol", "COMMENTED"),
+        ],
+    );
+
+    let rows = panel_rows(&model, 140, 24);
+    let joined = rows.join("\n");
+
+    // Counts: one approved, one changes-requested, one commented.
+    assert!(joined.contains("1 approved"), "approved count: {rows:?}");
+    assert!(
+        joined.contains("1 changes requested") || joined.contains("1 changes-requested"),
+        "changes-requested count: {rows:?}"
+    );
+    // Per-reviewer rows name each reviewer.
+    assert!(joined.contains("alice"), "alice row: {rows:?}");
+    assert!(joined.contains("bob"), "bob row: {rows:?}");
+    assert!(joined.contains("carol"), "carol row: {rows:?}");
+}
+
+#[test]
+fn reviews_show_loading_until_arrived() {
+    let model = model_with_selected(sample_pr(42, "Add the thing"));
+
+    let rows = panel_rows(&model, 140, 24);
+    // The reviews section header should still appear with a loading placeholder
+    // beside it.
+    assert!(
+        rows.iter().any(|r| r.to_lowercase().contains("review")),
+        "reviews section present: {rows:?}"
+    );
+}
+
+#[test]
+fn renders_thread_counts_total_unresolved_human_and_bot() {
+    let mut model = model_with_selected(sample_pr(42, "Add the thing"));
+    with_threads(
+        &mut model,
+        vec![
+            thread("alice", false, false),     // unresolved human
+            thread("dependabot", true, false), // unresolved bot
+            thread("bob", false, true),        // resolved (counts to total only)
+        ],
+    );
+
+    let rows = panel_rows(&model, 140, 28);
+    let joined = rows.join("\n");
+
+    assert!(joined.contains("3 total"), "total threads: {rows:?}");
+    assert!(joined.contains("2 unresolved"), "unresolved: {rows:?}");
+    assert!(joined.contains("1 human"), "unresolved human: {rows:?}");
+    assert!(joined.contains("1 bot"), "unresolved bot: {rows:?}");
+}
+
+#[test]
+fn threads_show_loading_until_arrived() {
+    let model = model_with_selected(sample_pr(42, "Add the thing"));
+
+    let rows = panel_rows(&model, 140, 28);
+
+    assert!(
+        rows.iter().any(|r| r.to_lowercase().contains("thread")),
+        "threads section present: {rows:?}"
     );
 }
 

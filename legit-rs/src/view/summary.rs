@@ -64,6 +64,8 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect) {
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push(smart_status_line(model, pr));
     lines.push(mergeable_line(pr));
+    lines.extend(reviews_lines(model, pr));
+    lines.push(threads_line(model, pr));
 
     frame.render_widget(Paragraph::new(lines), area);
 }
@@ -91,6 +93,121 @@ fn mergeable_line(pr: &crate::github::rest::PR) -> Line<'static> {
         _ => ("? merge unknown", Color::Gray),
     };
     Line::from(Span::styled(text, Style::default().fg(color)))
+}
+
+/// The reviews section: a `reviews` header with approved / changes-requested /
+/// commented counts, then one indented row per reviewer with an icon and their
+/// state. `Loading…` beside the header until the reviews fetch arrives (`None`
+/// = not loaded, distinct from `Some(&[])` = loaded, no reviews).
+fn reviews_lines(model: &Model, pr: &crate::github::rest::PR) -> Vec<Line<'static>> {
+    let Some(reviews) = model.enrichment.reviews.get(&pr.key()) else {
+        return vec![header_with_loading("reviews")];
+    };
+
+    let approved = reviews.iter().filter(|r| r.state == "APPROVED").count();
+    let changes = reviews
+        .iter()
+        .filter(|r| r.state == "CHANGES_REQUESTED")
+        .count();
+    let commented = reviews.iter().filter(|r| r.state == "COMMENTED").count();
+
+    let mut counts: Vec<Span<'static>> = vec![section_header("reviews")];
+    counts.push(Span::raw(" "));
+    counts.push(Span::raw(format!(
+        "{approved} approved, {changes} changes requested, {commented} commented"
+    )));
+    let mut lines = vec![Line::from(counts)];
+
+    for review in reviews {
+        let (icon, color) = review_icon(&review.state);
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(icon, Style::default().fg(color)),
+            Span::raw(format!(" {} ", review.user)),
+            Span::styled(
+                format_review_state(&review.state),
+                Style::default().fg(Color::Gray),
+            ),
+        ]));
+    }
+    lines
+}
+
+/// The threads summary line: `threads N total, M unresolved (H human, B bot)`.
+/// `Loading…` until the review-threads fetch arrives. Bot classification mirrors
+/// the TS `computeCommentCounts`: a thread is unresolved-bot when its first
+/// comment is a bot (the fetch-time `is_bot` flag) or its author is a configured
+/// bot login.
+fn threads_line(model: &Model, pr: &crate::github::rest::PR) -> Line<'static> {
+    let Some(threads) = model.enrichment.review_threads.get(&pr.key()) else {
+        return header_with_loading("threads");
+    };
+
+    let bot_logins = &model.config.bot_logins;
+    let total = threads.len();
+    let mut unresolved = 0;
+    let mut human = 0;
+    let mut bot = 0;
+    for thread in threads {
+        if thread.is_resolved {
+            continue;
+        }
+        unresolved += 1;
+        let is_bot = thread
+            .comments
+            .first()
+            .is_some_and(|c| c.is_bot || bot_logins.iter().any(|b| b == &c.author));
+        if is_bot {
+            bot += 1;
+        } else {
+            human += 1;
+        }
+    }
+
+    Line::from(vec![
+        section_header("threads"),
+        Span::raw(format!(
+            " {total} total, {unresolved} unresolved ({human} human, {bot} bot)"
+        )),
+    ])
+}
+
+/// Icon + colour for a review state. Mirrors the TS `reviewIcon`.
+fn review_icon(state: &str) -> (&'static str, Color) {
+    match state {
+        "APPROVED" => ("✓", Color::Green),
+        "CHANGES_REQUESTED" => ("✗", Color::Red),
+        "COMMENTED" => ("●", Color::Blue),
+        "DISMISSED" => ("–", Color::Gray),
+        _ => ("?", Color::Gray),
+    }
+}
+
+/// Human label for a review state. Mirrors the TS `formatReviewState`.
+fn format_review_state(state: &str) -> String {
+    match state {
+        "APPROVED" => "approved",
+        "CHANGES_REQUESTED" => "changes requested",
+        "COMMENTED" => "commented",
+        "DISMISSED" => "dismissed",
+        other => other,
+    }
+    .to_owned()
+}
+
+/// A muted section-header span (e.g. `reviews`, `checks`).
+fn section_header(label: &str) -> Span<'static> {
+    Span::styled(label.to_owned(), Style::default().fg(Color::Cyan))
+}
+
+/// A section header followed by a `Loading…` placeholder, for a section whose
+/// enrichment hasn't arrived.
+fn header_with_loading(label: &str) -> Line<'static> {
+    Line::from(vec![
+        section_header(label),
+        Span::raw(" "),
+        Span::styled(LOADING, Style::default().fg(Color::Gray)),
+    ])
 }
 
 /// Theme colour for a smart-status tier. Mirrors the TS `blockerTierColor`.
