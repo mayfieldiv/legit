@@ -12,6 +12,7 @@ use crate::app::model::{Model, StatusKind};
 use crate::git_remote::RepoInfo;
 
 pub mod list;
+pub mod summary;
 
 /// Short label for the active grouping mode, shown in the status-bar `g` hint.
 fn grouping_label(model: &Model) -> &'static str {
@@ -41,7 +42,18 @@ pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
     if filter_visible {
         render_filter_chip(model, frame, chip);
     }
-    list::render(model, frame, main, now);
+    // Split the main region into the list and the summary panel when the
+    // terminal is wide enough; below 80 columns the list takes the whole row.
+    match summary::panel_width(main.width) {
+        Some(panel_width) => {
+            let [list_area, summary_area] =
+                Layout::horizontal([Constraint::Min(1), Constraint::Length(panel_width)])
+                    .areas(main);
+            list::render(model, frame, list_area, now);
+            summary::render(model, frame, summary_area);
+        }
+        None => list::render(model, frame, main, now),
+    }
     render_status(model, frame, status);
 }
 

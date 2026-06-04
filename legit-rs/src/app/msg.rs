@@ -2,6 +2,7 @@ use ratatui::crossterm::event::Event;
 
 use crate::{
     config::LegitConfig,
+    file_category::FileChange,
     git_remote::RepoInfo,
     github::limiter::NetworkStats,
     github::rest::{PR, PrKey},
@@ -49,6 +50,22 @@ pub enum Msg {
     IssueCommentsArrived {
         pr: PrKey,
         comments: Vec<IssueComment>,
+    },
+    /// A PR's changed files arrived (fetched on selection change). Carries the
+    /// raw `FileChange`s; `update` categorises them against the config
+    /// `file_rules` and stores the result for the summary panel's breakdown.
+    FilesArrived {
+        pr: PrKey,
+        files: Vec<FileChange>,
+    },
+    /// A `Cmd::FetchFiles` request failed. Sent alongside the generic
+    /// `CommandFailed` (which surfaces the error) so `update` can remove the
+    /// PR's `Enrichment::files` entry, returning it from `Requested` to
+    /// "never requested" — otherwise a transient error would permanently
+    /// suppress refetching and leave the summary panel's file breakdown stuck
+    /// on its loading placeholder.
+    FilesFetchFailed {
+        pr: PrKey,
     },
     /// A scheduled status-message clear fired; honored only if `token` still
     /// matches the model's current status generation.

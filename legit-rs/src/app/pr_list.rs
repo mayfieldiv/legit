@@ -351,6 +351,17 @@ impl PrList {
         &self.prs
     }
 
+    /// The currently selected PR, or `None` when the visible list is empty.
+    /// Returns the PR only when its index is among the visible display rows, so
+    /// a stale `selected` (from an empty list, or one a tab/filter just hid)
+    /// never points the summary panel at an off-screen PR. The summary panel
+    /// reads this to know which PR to render.
+    pub fn selected_pr(&self) -> Option<&PR> {
+        self.visible_pr_indices()
+            .any(|i| i == self.selected)
+            .then(|| &self.prs[self.selected])
+    }
+
     /// Mutable access to a streamed PR by key, for enrichment that overwrites
     /// list fields in place (mergeable, review decision, size, head SHA). `None`
     /// if no PR with that key is in the list.

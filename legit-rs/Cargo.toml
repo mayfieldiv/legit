@@ -7,6 +7,7 @@ edition = "2024"
 anyhow = "1.0"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 futures = "0.3"
+globset = { version = "0.4.18", default-features = false }
 octocrab = "0.51"
 # crossterm is not a direct dependency: we use `ratatui::crossterm` so the
 # whole app shares the exact crossterm version ratatui renders through (one

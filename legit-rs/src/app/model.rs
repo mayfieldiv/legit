@@ -3,9 +3,10 @@ use std::collections::HashMap;
 use crate::{
     blocker::{BlockerOptions, BlockerResult, compute_blocker},
     config::LegitConfig,
+    file_category::FileCategorization,
     git_remote::RepoInfo,
     github::limiter::NetworkStats,
-    github::rest::PrKey,
+    github::rest::{PR, PrKey},
     github::types::{CheckRun, FullReviewThread, IssueComment, Review},
     secret::Secret,
 };
@@ -25,6 +26,48 @@ pub struct Enrichment {
     pub reviews: HashMap<PrKey, Vec<Review>>,
     pub issue_comments: HashMap<PrKey, Vec<IssueComment>>,
     pub checks: HashMap<(String, String), Vec<CheckRun>>,
+    /// Per-PR changed-files fetch state, fetched just-in-time on selection
+    /// change. Keyed by `PrKey`; absent until the PR's files are first
+    /// requested. This one map IS the files fetch's whole state machine
+    /// (`absent` -> `Requested` -> `Loaded`), so a future Refresh invalidates a
+    /// PR's files by removing its single entry here (no second collection to
+    /// keep in sync). Consumed by the summary panel's File Category breakdown.
+    pub files: HashMap<PrKey, FilesState>,
+}
+
+impl Enrichment {
+    /// The check runs fetched for `pr`'s head commit, or `None` until they
+    /// arrive. The `checks` map is keyed by (repo slug, head SHA) — not `PrKey`
+    /// — because check runs are repo-scoped on GitHub (a fork PR shares its
+    /// head SHA with upstream but not its check runs). This is the single place
+    /// that builds that key from a `PR`, so the blocker engine and the summary
+    /// panel resolve checks identically. A PR with no head SHA yet (no commits,
+    /// or review-status hasn't reported it) has no checks.
+    pub fn checks_for(&self, pr: &PR) -> Option<&[CheckRun]> {
+        let sha = pr.head_commit_sha.as_ref()?;
+        self.checks
+            .get(&(pr.repo_slug.clone(), sha.clone()))
+            .map(Vec::as_slice)
+    }
+}
+
+/// The three-state machine for one PR's changed-files fetch, collapsed into a
+/// single map entry in `Enrichment::files`. An absent key is the third state
+/// ("never requested"). Modelled as an enum over conflated parallel
+/// collections for the same reason as `RepoDetection`: the states are mutually
+/// exclusive, so one value that can only be in one of them at a time can't
+/// drift out of sync.
+#[derive(Clone, Debug)]
+pub enum FilesState {
+    /// `Cmd::FetchFiles` dispatched; the dedupe guard so scrolling back to a PR
+    /// — or a flurry of `j` presses — never refetches. The summary panel renders
+    /// its Loading placeholder, same as a never-requested PR. Cleared by
+    /// `Msg::FilesFetchFailed` (removing the entry) so a transient error lets
+    /// re-selecting the PR retry.
+    Requested,
+    /// Files arrived and were categorised against the config `file_rules`. The
+    /// summary panel renders the File Category breakdown.
+    Loaded(FileCategorization),
 }
 
 /// Severity of a transient status-bar message. Drives both styling and how long
@@ -249,16 +292,7 @@ impl Model {
         ) else {
             return;
         };
-        let checks = pr
-            .head_commit_sha
-            .as_ref()
-            .and_then(|sha| {
-                self.enrichment
-                    .checks
-                    .get(&(pr.repo_slug.clone(), sha.clone()))
-            })
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
+        let checks = self.enrichment.checks_for(pr).unwrap_or(&[]);
         let result = compute_blocker(
             pr,
             self.current_user(),

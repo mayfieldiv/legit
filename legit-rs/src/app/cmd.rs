@@ -52,6 +52,13 @@ pub enum Cmd {
         ctx: Arc<RequestContext>,
         head_sha: String,
     },
+    /// Fetch one PR's changed files (additions/deletions per file), dispatched
+    /// when the PR becomes selected. The raw `FileChange`s come back via
+    /// `Msg::FilesArrived`; categorisation happens in `update`.
+    FetchFiles {
+        ctx: Arc<RequestContext>,
+        number: u64,
+    },
     /// Clear the status message after `delay_ms`, but only if it's still the one
     /// identified by `token` (see `Model::status_gen`).
     ScheduleStatusClear {
@@ -234,6 +241,32 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             )
             .await;
         }
+        Cmd::FetchFiles { ctx, number } => {
+            let pr = PrKey {
+                repo_slug: ctx.repo.slug(),
+                number,
+            };
+            // Dispatching this command set the PR's `Enrichment::files` entry to
+            // `Requested`; a failure must roll that back so re-selecting the PR
+            // retries. `request` sends `CommandFailed` first, then we send
+            // `FilesFetchFailed` to clear the in-flight guard.
+            let failed_pr = pr.clone();
+            let ok = request(
+                &tx,
+                &limiter,
+                "fetch files",
+                async move {
+                    OctocrabRest::new(&ctx.token)?
+                        .list_files(&ctx.repo.owner, &ctx.repo.repo, number)
+                        .await
+                },
+                move |files| vec![Msg::FilesArrived { pr, files }],
+            )
+            .await;
+            if !ok {
+                let _ = tx.send(Msg::FilesFetchFailed { pr: failed_pr });
+            }
+        }
         Cmd::ScheduleStatusClear { token, delay_ms } => {
             tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
             let _ = tx.send(Msg::StatusCleared { token });
@@ -284,27 +317,34 @@ async fn run_fetch_open_prs(
 }
 
 /// Hold one concurrency permit, run a single GitHub request, and forward the
-/// messages it produces — or one `CommandFailed` if the request (including the
-/// client build inside it) errors. Captures the build-permit-dispatch shape
-/// every per-PR enrichment command shares; `context` names the operation so
-/// the failure reads e.g. "fetch reviews: ...". `op` is a lazy future, so the
-/// permit is held only across the actual await, not while it's constructed.
+/// messages it produces — or, on error, one `CommandFailed` (covering the
+/// client build inside the request too). Captures the build-permit-dispatch
+/// shape every per-PR enrichment command shares; `context` names the operation
+/// so the failure reads e.g. "fetch reviews: ...". `op` is a lazy future, so
+/// the permit is held only across the actual await, not while it's constructed.
+///
+/// Returns whether the request succeeded so a caller that recorded in-flight
+/// state in the model can send its own rollback message after the
+/// `CommandFailed` (e.g. `FetchFiles` sends `FilesFetchFailed`). Callers with
+/// no cleanup ignore the return.
 async fn request<T>(
     tx: &mpsc::UnboundedSender<Msg>,
     limiter: &Arc<NetworkLimiter>,
     context: &'static str,
     op: impl Future<Output = anyhow::Result<T>>,
     to_msgs: impl FnOnce(T) -> Vec<Msg>,
-) {
+) -> bool {
     let _permit = limiter.acquire().await;
     match op.await {
         Ok(value) => {
             for msg in to_msgs(value) {
                 let _ = tx.send(msg);
             }
+            true
         }
         Err(error) => {
             let _ = tx.send(command_failed(context, error));
+            false
         }
     }
 }

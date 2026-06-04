@@ -15,6 +15,7 @@ use crate::{
 };
 
 mod enrichment;
+mod files;
 mod filter;
 mod multi_repo;
 mod tabs;

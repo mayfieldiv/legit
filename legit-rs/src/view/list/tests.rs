@@ -124,9 +124,17 @@ fn buffer_text(terminal: &Terminal<TestBackend>) -> Vec<String> {
         .collect()
 }
 
-/// Rows excluding the tab bar (the first row) and the status bar (the last).
+/// Rows of the list region only: excluding the tab bar (first row), the status
+/// bar (last row), and — at >=80 columns — the summary panel that splits off the
+/// right of the row. Slicing to the list columns keeps these list-layout
+/// assertions about the list alone, independent of the panel beside it.
 fn list_rows(terminal: &Terminal<TestBackend>) -> Vec<String> {
-    let mut rows = buffer_text(terminal);
+    let width = terminal.backend().buffer().area().width;
+    let list_width = width - view::summary::panel_width(width).unwrap_or(0);
+    let mut rows: Vec<String> = buffer_text(terminal)
+        .into_iter()
+        .map(|row| row.chars().take(list_width as usize).collect())
+        .collect();
     rows.pop();
     rows.remove(0);
     rows
@@ -162,7 +170,9 @@ fn flat_list_renders_one_row_per_pull_request() {
         |_| Some(Tier::NeedsReview),
     );
 
-    let terminal = render_snapshot(&model, 80, 5);
+    // Render at 116 so the list region is 80 columns wide (the panel takes the
+    // right 36); the list-layout assertions stay about the same 80-col list.
+    let terminal = render_snapshot(&model, 116, 5);
 
     assert_eq!(
         list_rows(&terminal),
@@ -485,7 +495,8 @@ fn long_titles_truncate_with_ellipsis_to_fit_column() {
         |_| Some(Tier::NeedsReview),
     );
 
-    let terminal = render_snapshot(&model, 80, 3);
+    // 116 total -> 80-col list region (panel takes the right 36).
+    let terminal = render_snapshot(&model, 116, 3);
 
     let rows = list_rows(&terminal);
     assert!(
@@ -516,7 +527,8 @@ fn draft_pr_is_marked_in_its_row() {
     draft.is_draft = true;
     let model = model_with(vec![draft], Grouping::None, |_| Some(Tier::WaitingOnAuthor));
 
-    let terminal = render_snapshot(&model, 80, 3);
+    // 116 total -> 80-col list region, leaving room for the draft title.
+    let terminal = render_snapshot(&model, 116, 3);
     let rows = list_rows(&terminal);
 
     assert!(rows[0].contains("[draft] Polish things"), "{rows:?}");
@@ -534,7 +546,8 @@ fn large_diff_size_widens_size_column_for_all_rows() {
         |_| Some(Tier::NeedsReview),
     );
 
-    let terminal = render_snapshot(&model, 90, 4);
+    // 126 total -> 90-col list region (panel takes the right 36).
+    let terminal = render_snapshot(&model, 126, 4);
     let rows = list_rows(&terminal);
 
     assert!(
@@ -562,7 +575,8 @@ fn wide_pr_number_widens_num_column_for_all_rows() {
         |_| Some(Tier::NeedsReview),
     );
 
-    let terminal = render_snapshot(&model, 90, 4);
+    // 126 total -> 90-col list region (panel takes the right 36).
+    let terminal = render_snapshot(&model, 126, 4);
     let rows = list_rows(&terminal);
 
     let title_start = rows[0]
