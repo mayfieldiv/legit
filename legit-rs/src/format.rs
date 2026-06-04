@@ -14,9 +14,15 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::github::types::CheckRun;
 
-/// Conclusions that count as a failing check. Mirrors the TS
-/// `FAILING_CONCLUSIONS` (and the blocker engine's set).
-const FAILING_CONCLUSIONS: [&str; 3] = ["failure", "timed_out", "cancelled"];
+/// Conclusions that count as a failing check for *display*. Deliberately one
+/// entry wider than the TS `FAILING_CONCLUSIONS` and the blocker engine's set
+/// (which both omit `action_required`): the TS code was internally
+/// inconsistent — `checkSortGroup`/`checkIcon` treated `action_required` as
+/// failing while `checksSummary` counted it as passed — and because this panel
+/// renders only non-passing rows, porting that would hide a check that's
+/// blocked on human action behind "N/N passed". Smart-status is unaffected;
+/// the blocker engine keeps its own TS-faithful set.
+const FAILING_CONCLUSIONS: [&str; 4] = ["failure", "timed_out", "cancelled", "action_required"];
 
 /// Format a past instant as a compact age relative to `now`. Mirrors the TS
 /// `formatAge` in `src/lib/format.ts`: "now", "Nm", "Nh", "Nd", "Nmo",
@@ -121,15 +127,16 @@ pub fn review_icon(state: &str) -> (&'static str, Color) {
     }
 }
 
-/// Sort group for a check row. Mirrors the TS `checkSortGroup`: failing first
-/// (0), then pending (1), then everything else (2).
+/// Sort group for a check row: failing first (0), then pending (1), then
+/// everything else (2). Derived from `outcome` so sorting can never disagree
+/// with the header counts about which checks are failing; the derived groups
+/// match the TS `checkSortGroup` exactly (it already put `action_required` in
+/// the failing group).
 pub fn check_sort_group(check: &CheckRun) -> u8 {
-    if check.status != "completed" {
-        return 1;
-    }
-    match check.conclusion.as_deref() {
-        Some("failure" | "timed_out" | "cancelled" | "action_required") => 0,
-        _ => 2,
+    match outcome(check) {
+        CheckOutcome::Failed => 0,
+        CheckOutcome::Pending => 1,
+        CheckOutcome::Passed => 2,
     }
 }
 
@@ -161,10 +168,10 @@ pub fn check_icon(check: &CheckRun) -> (&'static str, Color) {
 }
 
 /// The three-way classification of a check run's outcome. The single source of
-/// truth for "what counts as passing/pending/failed": both `checks_summary`
-/// (the header counts) and the summary view's per-row filter classify via
-/// `outcome`, so the header totals and the rendered failed+pending rows can
-/// never disagree.
+/// truth for "what counts as passing/pending/failed": `checks_summary` (the
+/// header counts), the summary view's per-row filter, and `check_sort_group`
+/// all classify via `outcome`, so the header totals, the rendered
+/// failed+pending rows, and the sort order can never disagree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckOutcome {
     Failed,
@@ -172,10 +179,11 @@ pub enum CheckOutcome {
     Passed,
 }
 
-/// Classify a check run's outcome. Mirrors the TS `checksSummary` bucketing: a
-/// non-completed run is pending; a completed run whose conclusion is in
-/// `FAILING_CONCLUSIONS` is failed; every other completed run (success, neutral,
-/// skipped, stale, …) counts as passed.
+/// Classify a check run's outcome: a non-completed run is pending; a completed
+/// run whose conclusion is in `FAILING_CONCLUSIONS` is failed; every other
+/// completed run (success, neutral, skipped, stale, …) counts as passed.
+/// Follows the TS `checksSummary` bucketing except for `action_required`,
+/// which counts as failed here — see `FAILING_CONCLUSIONS`.
 pub fn outcome(check: &CheckRun) -> CheckOutcome {
     if check.status != "completed" {
         CheckOutcome::Pending
@@ -408,15 +416,15 @@ mod tests {
             CheckOutcome::Passed
         );
         // Non-failing completed conclusions (neutral, skipped, …) count as
-        // passed, and `action_required` is *not* in FAILING_CONCLUSIONS so it
-        // passes too — matching `checks_summary`'s bucketing.
+        // passed; `action_required` is failed — the check is blocked on human
+        // action, so it must not hide behind "N/N passed".
         assert_eq!(
             outcome(&check("a", "completed", Some("neutral"))),
             CheckOutcome::Passed
         );
         assert_eq!(
             outcome(&check("a", "completed", Some("action_required"))),
-            CheckOutcome::Passed
+            CheckOutcome::Failed
         );
     }
 
@@ -427,14 +435,15 @@ mod tests {
             check("lint", "completed", Some("failure")),
             check("deploy", "in_progress", None),
             check("audit", "completed", Some("neutral")), // counts as passed
+            check("e2e", "completed", Some("action_required")), // counts as failed
         ];
         assert_eq!(
             checks_summary(&checks),
             ChecksSummary {
-                failed: 1,
+                failed: 2,
                 pending: 1,
                 passed: 2,
-                total: 4,
+                total: 5,
             }
         );
     }
