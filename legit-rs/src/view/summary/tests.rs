@@ -141,7 +141,10 @@ fn with_files(model: &mut Model, paths: &[(&str, u64, u64)]) {
         })
         .collect();
     let categorization = crate::file_category::categorize(&changes, &[]);
-    model.enrichment.files.insert(key, categorization);
+    model
+        .enrichment
+        .files
+        .insert(key, crate::app::model::FilesState::Loaded(categorization));
 }
 
 /// Render the whole frame at `width`x`height` and return the panel's columns

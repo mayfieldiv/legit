@@ -59,10 +59,11 @@ pub enum Msg {
         files: Vec<FileChange>,
     },
     /// A `Cmd::FetchFiles` request failed. Sent alongside the generic
-    /// `CommandFailed` (which surfaces the error) so `update` can clear the
-    /// PR's `files_requested` guard — otherwise a transient error would
-    /// permanently suppress refetching and leave the summary panel's file
-    /// breakdown stuck on its loading placeholder.
+    /// `CommandFailed` (which surfaces the error) so `update` can remove the
+    /// PR's `Enrichment::files` entry, returning it from `Requested` to
+    /// "never requested" — otherwise a transient error would permanently
+    /// suppress refetching and leave the summary panel's file breakdown stuck
+    /// on its loading placeholder.
     FilesFetchFailed {
         pr: PrKey,
     },

@@ -1,7 +1,14 @@
 // ── file fetch on selection + categorisation on arrival ──────────────────
 
 use super::*;
+use crate::app::model::FilesState;
 use crate::file_category::{FileCategory, FileChange};
+
+/// The `FilesState` recorded for `key(number)`, or `None` when the PR has no
+/// `Enrichment::files` entry (never requested).
+fn files_state(model: &Model, number: u64) -> Option<&FilesState> {
+    model.enrichment.files.get(&key(number))
+}
 
 /// A model with auth + repo resolved and `numbers` streamed in via
 /// `Msg::PrArrived` (so the list is laid out and a PR is selected).
@@ -44,6 +51,10 @@ fn first_pr_arriving_requests_its_files() {
     let cmds = update(&mut model, Msg::PrArrived(sample_pr(1, "first")));
 
     assert_eq!(file_fetch_numbers(&cmds), [1]);
+    assert!(
+        matches!(files_state(&model, 1), Some(FilesState::Requested)),
+        "dispatching the fetch records the PR as Requested"
+    );
 }
 
 #[test]
@@ -73,6 +84,10 @@ fn re_selecting_a_pr_does_not_refetch_its_files() {
         file_fetch_numbers(&cmds).is_empty(),
         "PR 2's files were already requested; no refetch: {cmds:?}"
     );
+    assert!(
+        matches!(files_state(&model, 2), Some(FilesState::Requested)),
+        "PR 2 stays Requested across the re-selection"
+    );
 }
 
 #[test]
@@ -92,9 +107,13 @@ fn failed_files_fetch_retries_on_reselection() {
     // PR 1's files were requested when it arrived; the request fails.
     let mut model = model_with_prs(&[1, 2]);
     update(&mut model, Msg::FilesFetchFailed { pr: key(1) });
+    assert!(
+        files_state(&model, 1).is_none(),
+        "a failed fetch removes the entry, returning PR 1 to never-requested"
+    );
 
     // Move away and back: selecting PR 1 again must re-dispatch the fetch
-    // instead of staying suppressed by the (now-cleared) in-flight guard.
+    // instead of staying suppressed by the (now-cleared) Requested state.
     update(&mut model, key_event(KeyCode::Char('j')));
     let cmds = update(&mut model, key_event(KeyCode::Char('k')));
 
@@ -128,11 +147,10 @@ fn files_arrived_categorises_and_stores_for_the_pr() {
         },
     );
 
-    let categorization = model
-        .enrichment
-        .files
-        .get(&key(1))
-        .expect("files stored for the PR");
+    let categorization = match files_state(&model, 1) {
+        Some(FilesState::Loaded(categorization)) => categorization,
+        other => panic!("files arrival must store a Loaded categorization, got {other:?}"),
+    };
     assert_eq!(categorization.breakdown.total().files, 2);
     assert_eq!(categorization.breakdown.total().additions, 13);
     assert_eq!(

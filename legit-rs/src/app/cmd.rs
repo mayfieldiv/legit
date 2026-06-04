@@ -251,8 +251,9 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                 repo_slug: ctx.repo.slug(),
                 number,
             };
-            // Dispatching this command recorded the PR in `files_requested`;
-            // a failure must roll that back so re-selecting the PR retries.
+            // Dispatching this command set the PR's `Enrichment::files` entry to
+            // `Requested`; a failure must roll that back so re-selecting the PR
+            // retries.
             let failed_pr = pr.clone();
             request(
                 &tx,

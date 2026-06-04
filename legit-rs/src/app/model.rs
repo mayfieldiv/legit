@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::{
     blocker::{BlockerOptions, BlockerResult, compute_blocker},
@@ -26,11 +26,32 @@ pub struct Enrichment {
     pub reviews: HashMap<PrKey, Vec<Review>>,
     pub issue_comments: HashMap<PrKey, Vec<IssueComment>>,
     pub checks: HashMap<(String, String), Vec<CheckRun>>,
-    /// Categorised file changes per PR, fetched on selection change and
-    /// categorised in `update` against the config `file_rules`. Keyed by
-    /// `PrKey`; absent until `Msg::FilesArrived` lands for that PR. Consumed by
-    /// the summary panel's File Category breakdown.
-    pub files: HashMap<PrKey, FileCategorization>,
+    /// Per-PR changed-files fetch state, fetched just-in-time on selection
+    /// change. Keyed by `PrKey`; absent until the PR's files are first
+    /// requested. This one map IS the files fetch's whole state machine
+    /// (`absent` -> `Requested` -> `Loaded`), so a future Refresh invalidates a
+    /// PR's files by removing its single entry here (no second collection to
+    /// keep in sync). Consumed by the summary panel's File Category breakdown.
+    pub files: HashMap<PrKey, FilesState>,
+}
+
+/// The three-state machine for one PR's changed-files fetch, collapsed into a
+/// single map entry in `Enrichment::files`. An absent key is the third state
+/// ("never requested"). Modelled as an enum over conflated parallel
+/// collections for the same reason as `RepoDetection`: the states are mutually
+/// exclusive, so one value that can only be in one of them at a time can't
+/// drift out of sync.
+#[derive(Clone, Debug)]
+pub enum FilesState {
+    /// `Cmd::FetchFiles` dispatched; the dedupe guard so scrolling back to a PR
+    /// — or a flurry of `j` presses — never refetches. The summary panel renders
+    /// its Loading placeholder, same as a never-requested PR. Cleared by
+    /// `Msg::FilesFetchFailed` (removing the entry) so a transient error lets
+    /// re-selecting the PR retry.
+    Requested,
+    /// Files arrived and were categorised against the config `file_rules`. The
+    /// summary panel renders the File Category breakdown.
+    Loaded(FileCategorization),
 }
 
 /// Severity of a transient status-bar message. Drives both styling and how long
@@ -136,21 +157,6 @@ pub struct Model {
     /// whenever a PR arrives or its enrichment lands. A PR absent from the map
     /// hasn't been derived yet (it groups under "Loading details…").
     pub blockers: HashMap<PrKey, BlockerResult>,
-    /// PRs whose file changes have already been requested (`Cmd::FetchFiles`
-    /// dispatched). The summary panel fetches a PR's files just-in-time when it
-    /// becomes selected; this set makes that idempotent so scrolling back to a
-    /// PR — or a flurry of `j` presses — never refetches the same PR's files.
-    ///
-    /// A key is removed only when its fetch fails (`Msg::FilesFetchFailed`), so
-    /// a transient error doesn't permanently suppress refetching — re-selecting
-    /// the PR retries. After a *successful* fetch the key stays forever, which
-    /// makes the files breakdown sticky: a Refresh (`r`/`R`, not yet
-    /// implemented) re-fetches the PR plus its other enrichments (threads,
-    /// checks, reviews), but files would silently stay stale because this set
-    /// blocks a re-dispatch. When refresh lands it must remove the refreshed
-    /// PR's key from here (and drop its `enrichment.files` entry) so files
-    /// re-fetch alongside the rest.
-    pub files_requested: HashSet<PrKey>,
 }
 
 impl Model {
@@ -171,7 +177,6 @@ impl Model {
                 network_stats: NetworkStats::default(),
                 enrichment: Enrichment::default(),
                 blockers: HashMap::new(),
-                files_requested: HashSet::new(),
             },
             vec![Cmd::LoadConfig, Cmd::ResolveAuthToken, Cmd::DetectRepo],
         )

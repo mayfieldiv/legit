@@ -18,7 +18,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use crate::app::model::Model;
+use crate::app::model::{FilesState, Model};
 use crate::blocker::Tier;
 use crate::format::{
     CheckOutcome, check_icon, checks_summary, format_review_state, outcome, review_icon,
@@ -256,10 +256,12 @@ fn checks_lines(model: &Model, pr: &crate::github::rest::PR) -> Vec<Line<'static
 
 /// The File Category breakdown section: a `files` header, then one indented row
 /// per non-empty category (`code: +14/-3 (2)`), plus a `total` row. `Loading…`
-/// until the files fetch arrives and is categorised in `update`.
+/// both before the fetch is requested (no entry) and while it's in flight
+/// (`Requested`); the breakdown renders once it's `Loaded` and categorised.
 fn files_lines(model: &Model, pr: &crate::github::rest::PR) -> Vec<Line<'static>> {
-    let Some(categorization) = model.enrichment.files.get(&pr.key()) else {
-        return vec![header_with_loading("files")];
+    let categorization = match model.enrichment.files.get(&pr.key()) {
+        Some(FilesState::Loaded(categorization)) => categorization,
+        None | Some(FilesState::Requested) => return vec![header_with_loading("files")],
     };
     let breakdown = &categorization.breakdown;
 

@@ -6,7 +6,7 @@ use crate::{git_remote::RepoInfo, secret::Secret};
 
 use super::{
     cmd::{Cmd, RequestContext},
-    model::{Model, RepoDetection, StatusKind, StatusMessage},
+    model::{FilesState, Model, RepoDetection, StatusKind, StatusMessage},
     msg::Msg,
 };
 
@@ -150,10 +150,11 @@ fn maybe_fetch_checks(model: &Model, head_sha: Option<String>, repo_slug: &str) 
 }
 
 /// Request the currently-selected PR's changed files, unless they were already
-/// requested. Idempotent via `Model::files_requested`, so it's safe to call
-/// after every selection-changing event: each PR's files are fetched at most
-/// once (a failed fetch clears its guard via `Msg::FilesFetchFailed`, so
-/// re-selecting the PR retries), and a single keypress moves the cursor one
+/// requested. Idempotent via the PR's `Enrichment::files` entry, so it's safe
+/// to call after every selection-changing event: each PR's files are fetched at
+/// most once (any existing entry — `Requested` or `Loaded` — suppresses a
+/// re-dispatch, and a failed fetch removes the entry via `Msg::FilesFetchFailed`
+/// so re-selecting the PR retries), and a single keypress moves the cursor one
 /// PR, so at most one `FetchFiles` is ever dispatched per call. Yields nothing
 /// when auth isn't ready, no PR is selected, or the selected PR's repo isn't
 /// tracked.
@@ -166,14 +167,14 @@ fn maybe_fetch_selected_files(model: &mut Model) -> Vec<Cmd> {
     };
     let key = pr.key();
     let number = pr.number;
-    if model.files_requested.contains(&key) {
+    if model.enrichment.files.contains_key(&key) {
         return Vec::new();
     }
     let Some(repo) = model.tracked_repo(&key.repo_slug) else {
         return Vec::new();
     };
     let ctx = request_context(&repo, token, &model.config.bot_logins);
-    model.files_requested.insert(key);
+    model.enrichment.files.insert(key, FilesState::Requested);
     vec![Cmd::FetchFiles { ctx, number }]
 }
 
@@ -377,16 +378,21 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             // Categorise the raw file changes against the config `file_rules`
             // here (the pure layer, where config lives), mirroring how blockers
             // are derived in `update` rather than in the impure command.
+            // Overwrites the PR's `Requested` state with `Loaded`.
             let categorization = crate::file_category::categorize(&files, &model.config.file_rules);
-            model.enrichment.files.insert(pr, categorization);
+            model
+                .enrichment
+                .files
+                .insert(pr, FilesState::Loaded(categorization));
             Vec::new()
         }
         Msg::FilesFetchFailed { pr } => {
-            // The in-flight guard must not outlive a failed request: clearing
-            // it lets re-selecting the PR retry instead of leaving the file
-            // breakdown stuck on its loading placeholder. The error itself is
-            // surfaced by the accompanying `CommandFailed`.
-            model.files_requested.remove(&pr);
+            // The `Requested` state must not outlive a failed request: removing
+            // the entry returns the PR to "never requested", so re-selecting it
+            // retries instead of leaving the file breakdown stuck on its loading
+            // placeholder. The error itself is surfaced by the accompanying
+            // `CommandFailed`.
+            model.enrichment.files.remove(&pr);
             Vec::new()
         }
         Msg::PrListFailed {
