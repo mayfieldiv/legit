@@ -141,12 +141,9 @@ impl PrList {
     /// `update` after PRs arrive, enrichment lands, or the grouping/scope
     /// changes.
     pub fn relayout(&mut self, scope: Option<&str>, tier_of: impl Fn(&PR) -> Option<Tier>) {
-        let scoped: Vec<usize> = (0..self.prs.len())
-            .filter(|&i| scope.is_none_or(|slug| self.prs[i].repo_slug == slug))
-            .collect();
         let needle = self.filter.text().to_lowercase();
-        let visible: Vec<usize> = scoped
-            .into_iter()
+        let visible: Vec<usize> = (0..self.prs.len())
+            .filter(|&i| scope.is_none_or(|slug| self.prs[i].repo_slug == slug))
             .filter(|&i| filter_matches(&self.prs[i], &needle))
             .collect();
         // `display_rows` keys on PR index; adapt the &PR closure (and the slug
