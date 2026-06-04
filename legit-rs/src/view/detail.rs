@@ -122,6 +122,62 @@ fn render_header(detail: &PRDetail, frame: &mut Frame<'_>, area: Rect, now: Date
 
 // ── Body (scrollable description + checks) ───────────────────────────────────
 
+/// Build the CI checks section lines: blank separator + bold header with
+/// pass/fail/pending counts + one row per check (sorted failing-first, then
+/// pending, then passed). Returns an empty `Vec` when checks haven't arrived
+/// for this PR's commit or the check list is empty. Mirrors `summary::checks_lines`.
+fn checks_section_lines(model: &Model, pr: &crate::github::rest::PR) -> Vec<Line<'static>> {
+    let Some(checks) = model.enrichment.checks_for(pr) else {
+        return Vec::new();
+    };
+    if checks.is_empty() {
+        return Vec::new();
+    }
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from(""));
+
+    let summary = checks_summary(checks);
+    let mut header_spans: Vec<Span<'static>> = vec![
+        Span::styled(
+            "## CI Checks",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" {}/{} passed", summary.passed, summary.total),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ];
+    if summary.failed > 0 {
+        header_spans.push(Span::styled(
+            format!(" · {} failed", summary.failed),
+            Style::default().fg(Color::Red),
+        ));
+    }
+    if summary.pending > 0 {
+        header_spans.push(Span::styled(
+            format!(" · {} pending", summary.pending),
+            Style::default().fg(Color::Yellow),
+        ));
+    }
+    lines.push(Line::from(header_spans));
+
+    // All check rows, sorted (failing first, then pending, then passed).
+    let mut sorted: Vec<&crate::github::types::CheckRun> = checks.iter().collect();
+    sort_check_runs(&mut sorted);
+    for check in sorted {
+        let (icon, color) = check_icon(check);
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(icon, Style::default().fg(color)),
+            Span::raw(format!(" {}", check.name)),
+        ]));
+    }
+    lines
+}
+
 /// Render the scrollable body: markdown description + CI checks, offset by
 /// `model.detail_scroll` rows from the top, clamped so the scroll offset
 /// never exceeds `content_lines - viewport_rows` (the last screenful).
@@ -142,51 +198,7 @@ fn render_body(model: &Model, detail: &PRDetail, frame: &mut Frame<'_>, area: Re
         lines.extend(markdown::render(trimmed));
     }
 
-    // CI Checks section (only when checks have arrived for this PR's commit)
-    if let Some(checks) = model.enrichment.checks_for(pr) {
-        if !checks.is_empty() {
-            lines.push(Line::from(""));
-
-            let summary = checks_summary(checks);
-            let mut header_spans: Vec<Span<'static>> = vec![
-                Span::styled(
-                    "## CI Checks",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!(" {}/{} passed", summary.passed, summary.total),
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ];
-            if summary.failed > 0 {
-                header_spans.push(Span::styled(
-                    format!(" · {} failed", summary.failed),
-                    Style::default().fg(Color::Red),
-                ));
-            }
-            if summary.pending > 0 {
-                header_spans.push(Span::styled(
-                    format!(" · {} pending", summary.pending),
-                    Style::default().fg(Color::Yellow),
-                ));
-            }
-            lines.push(Line::from(header_spans));
-
-            // All check rows, sorted (failing first, then pending, then passed).
-            let mut sorted: Vec<&crate::github::types::CheckRun> = checks.iter().collect();
-            sort_check_runs(&mut sorted);
-            for check in sorted {
-                let (icon, color) = check_icon(check);
-                lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(icon, Style::default().fg(color)),
-                    Span::raw(format!(" {}", check.name)),
-                ]));
-            }
-        }
-    }
+    lines.extend(checks_section_lines(model, pr));
 
     // Clamp the scroll so the user can't scroll past the last line of content.
     // The model holds the raw offset (the update layer cannot know the rendered
