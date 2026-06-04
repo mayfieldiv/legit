@@ -8,6 +8,32 @@ pub struct RepoInfo {
     pub repo: String,
 }
 
+impl RepoInfo {
+    /// Parse an `owner/repo` slug (the config `repos` format) back into parts.
+    /// `None` for malformed slugs. The owner/repo split agrees with
+    /// `config::validate_repo_slug`: a `/` inside the repo part (a three-or-more
+    /// segment slug like `a/b/c`) is rejected, so the two parsers can't disagree
+    /// at the edges. Only `Model::tracked_repos` calls this, on slugs that have
+    /// already passed config validation, so `None` is an unreachable guard
+    /// there rather than an error path.
+    pub fn from_slug(slug: &str) -> Option<Self> {
+        let (owner, repo) = slug.split_once('/')?;
+        if owner.is_empty() || repo.is_empty() || repo.contains('/') {
+            return None;
+        }
+        Some(Self {
+            owner: owner.to_owned(),
+            repo: repo.to_owned(),
+        })
+    }
+
+    /// The `owner/repo` slug for this repo — the form config, tabs, and
+    /// `PR::repo_slug` all use.
+    pub fn slug(&self) -> String {
+        format!("{}/{}", self.owner, self.repo)
+    }
+}
+
 /// Parse a GitHub remote URL into (owner, repo). Mirrors the TS `parseRemoteUrl`
 /// in `src/lib/legit.ts` so dotted repo names (e.g. `angular.js`) and both SSH
 /// and HTTPS forms parse identically.
@@ -162,5 +188,24 @@ mod tests {
     fn rejects_malformed_url() {
         let err = parse_remote_url("not-a-url").unwrap_err();
         assert!(format!("{err}").contains("Cannot parse"));
+    }
+
+    #[test]
+    fn from_slug_parses_owner_repo() {
+        assert_eq!(RepoInfo::from_slug("acme/web"), Some(info("acme", "web")));
+    }
+
+    #[test]
+    fn from_slug_rejects_empty_segments() {
+        assert_eq!(RepoInfo::from_slug("acme"), None);
+        assert_eq!(RepoInfo::from_slug("acme/"), None);
+        assert_eq!(RepoInfo::from_slug("/web"), None);
+    }
+
+    #[test]
+    fn from_slug_rejects_extra_segment_to_agree_with_validate_repo_slug() {
+        // `a/b/c` would split into owner=a, repo=b/c; rejecting it keeps
+        // `from_slug` in lockstep with `config::validate_repo_slug`.
+        assert_eq!(RepoInfo::from_slug("a/b/c"), None);
     }
 }

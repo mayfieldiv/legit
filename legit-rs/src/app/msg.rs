@@ -4,7 +4,7 @@ use crate::{
     config::LegitConfig,
     git_remote::RepoInfo,
     github::limiter::NetworkStats,
-    github::rest::PR,
+    github::rest::{PR, PrKey},
     github::types::{CheckRun, FullReviewThread, IssueComment, Review, ReviewStatus},
     secret::Secret,
 };
@@ -14,29 +14,40 @@ pub enum Msg {
     TerminalEvent(Event),
     ConfigLoaded(LegitConfig),
     AuthTokenResolved(Secret<String>),
-    RepoDetected(RepoInfo),
+    /// CWD repo detection settled. `Some` carries the detected GitHub repo;
+    /// `None` means detection ran but found none (not a git repo / no GitHub
+    /// remote). Either outcome settles the PR-fetch gate so configured Tracked
+    /// Repos still fetch when there's no CWD repo.
+    RepoDetected(Option<RepoInfo>),
     PrArrived(PR),
-    PrListLoaded,
+    /// One Tracked Repo's open-PR listing finished streaming.
+    PrListLoaded {
+        repo_slug: String,
+    },
     NetworkStatsChanged(NetworkStats),
-    // ── enrichment arrivals ──
+    // ── enrichment arrivals (keyed by PrKey — numbers collide across repos) ──
     ReviewStatusArrived {
-        pr_number: u64,
+        pr: PrKey,
         status: ReviewStatus,
     },
     ThreadsArrived {
-        pr_number: u64,
+        pr: PrKey,
         threads: Vec<FullReviewThread>,
     },
     ReviewsArrived {
-        pr_number: u64,
+        pr: PrKey,
         reviews: Vec<Review>,
     },
+    /// Check runs for one commit in one Tracked Repo. Carries `repo_slug`
+    /// because check runs are repo-scoped: a fork PR shares its head SHA with
+    /// upstream but not its check runs.
     ChecksArrived {
+        repo_slug: String,
         head_sha: String,
         checks: Vec<CheckRun>,
     },
     IssueCommentsArrived {
-        pr_number: u64,
+        pr: PrKey,
         comments: Vec<IssueComment>,
     },
     /// A scheduled status-message clear fired; honored only if `token` still
@@ -44,9 +55,11 @@ pub enum Msg {
     StatusCleared {
         token: u64,
     },
-    /// The open-PR listing failed; routes to the list's `Failed` phase so the
-    /// view can surface it distinctly from transient command errors.
+    /// One Tracked Repo's open-PR listing failed; routes to that repo's
+    /// `Failed` phase so the view can surface it distinctly from transient
+    /// command errors (and without masking other repos' results).
     PrListFailed {
+        repo_slug: String,
         context: &'static str,
         error: String,
     },

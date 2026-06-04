@@ -6,7 +6,7 @@ use crate::{git_remote::RepoInfo, secret::Secret};
 
 use super::{
     cmd::{Cmd, RequestContext},
-    model::{Model, StatusKind, StatusMessage},
+    model::{Model, RepoDetection, StatusKind, StatusMessage},
     msg::Msg,
 };
 
@@ -31,58 +31,79 @@ fn set_status(model: &mut Model, kind: StatusKind, text: String) -> Vec<Cmd> {
     }]
 }
 
-/// Fire `Cmd::FetchOpenPRs` once all three startup prerequisites have landed:
-/// the auth token authorizes the request, repo detection defines what to fetch,
-/// and a settled config supplies the current user and bot logins that drive
-/// smart-status. Any one missing yields no command — we wait for the last. The
-/// config gate is load-bearing: it guarantees no PR's blocker is derived before
-/// the user is known, so a lost startup race can never misclassify a PR.
-/// Marks the PR list as Loading so the view swaps from "No open PRs" to
+/// Fire one `Cmd::FetchOpenPRs` per Tracked Repo once all three startup
+/// prerequisites have landed: the auth token authorizes the requests, repo
+/// detection has *settled* (it completes the tracked set with the CWD repo when
+/// detection succeeds, and contributes nothing when it fails — but either way
+/// the tracked set is final), and a settled config supplies the current user
+/// and bot logins that drive smart-status. Any one missing yields no command —
+/// we wait for the last. The detection gate keys off settled-ness, not success:
+/// gating on `Detected` would wedge the app at an empty list when detection
+/// fails (outside a git repo / no GitHub remote), never fetching even the
+/// configured Tracked Repos. The config gate is load-bearing twice over: it
+/// guarantees no PR's blocker is derived before the user is known, and it
+/// guarantees the tracked set is final so every repo fetches exactly once.
+/// Marks each repo's listing as Loading so the view swaps from "No open PRs" to
 /// "Loading pull requests…" until results land.
 fn maybe_fetch_open_prs(model: &mut Model) -> Vec<Cmd> {
-    let (Some(token), Some(repo)) = (model.auth_token.as_ref(), model.repo.as_ref()) else {
+    let Some(token) = model.auth_token.as_ref() else {
         return Vec::new();
     };
-    if !model.config_loaded {
+    if !model.repo.is_settled() || !model.config_loaded {
         return Vec::new();
     }
-    model.list.begin_fetch();
-    vec![Cmd::FetchOpenPRs {
-        repo: repo.clone(),
-        token: token.clone(),
-    }]
+    let token = token.clone();
+    let mut cmds = Vec::new();
+    for repo in model.tracked_repos() {
+        model.list.begin_fetch(&repo.slug());
+        cmds.push(Cmd::FetchOpenPRs {
+            repo,
+            token: token.clone(),
+        });
+    }
+    cmds
 }
 
-/// Fan out per-PR enrichment after the REST list settles: one batched
-/// review-status query plus per-PR threads / reviews / issue-comments fetches.
-/// Checks are deferred until review-status reports each PR's head SHA. Yields
-/// nothing if auth/repo aren't ready or the list is empty.
-fn enrichment_cmds(model: &Model) -> Vec<Cmd> {
-    let (Some(token), Some(repo)) = (model.auth_token.as_ref(), model.repo.as_ref()) else {
+/// Fan out per-PR enrichment for one Tracked Repo after its REST list
+/// settles: one batched review-status query plus per-PR threads / reviews /
+/// issue-comments fetches. Checks are deferred until review-status reports
+/// each PR's head SHA. Yields nothing if auth isn't ready or the repo has no
+/// PRs in the list.
+fn enrichment_cmds(model: &Model, repo_slug: &str) -> Vec<Cmd> {
+    let Some(token) = model.auth_token.as_ref() else {
         return Vec::new();
     };
-    let prs = model.list.prs();
-    if prs.is_empty() {
+    let Some(repo) = model.tracked_repo(repo_slug) else {
+        return Vec::new();
+    };
+    let numbers: Vec<u64> = model
+        .list
+        .prs()
+        .iter()
+        .filter(|pr| pr.repo_slug == repo_slug)
+        .map(|pr| pr.number)
+        .collect();
+    if numbers.is_empty() {
         return Vec::new();
     }
-    let ctx = request_context(repo, token, &model.config.bot_logins);
-    let mut cmds = Vec::with_capacity(prs.len() * 3 + 1);
+    let ctx = request_context(&repo, token, &model.config.bot_logins);
+    let mut cmds = Vec::with_capacity(numbers.len() * 3 + 1);
     cmds.push(Cmd::FetchReviewStatus {
         ctx: Arc::clone(&ctx),
-        pr_numbers: prs.iter().map(|pr| pr.number).collect(),
+        pr_numbers: numbers.clone(),
     });
-    for pr in prs {
+    for number in numbers {
         cmds.push(Cmd::FetchThreads {
             ctx: Arc::clone(&ctx),
-            number: pr.number,
+            number,
         });
         cmds.push(Cmd::FetchReviews {
             ctx: Arc::clone(&ctx),
-            number: pr.number,
+            number,
         });
         cmds.push(Cmd::FetchIssueComments {
             ctx: Arc::clone(&ctx),
-            number: pr.number,
+            number,
         });
     }
     cmds
@@ -102,48 +123,132 @@ fn request_context(
     })
 }
 
-/// Build a checks fetch for a freshly-learned head SHA, unless checks for it
-/// already arrived. A `None` SHA (a PR with no commits yet) yields nothing.
-fn maybe_fetch_checks(model: &Model, head_sha: Option<String>) -> Vec<Cmd> {
+/// Build a checks fetch for a freshly-learned head SHA against the Tracked
+/// Repo it belongs to, unless checks for that (repo, SHA) already arrived —
+/// the same SHA in another repo (a fork) has its own check runs, so it never
+/// suppresses this repo's fetch. A `None` SHA (a PR with no commits yet)
+/// yields nothing.
+fn maybe_fetch_checks(model: &Model, head_sha: Option<String>, repo_slug: &str) -> Vec<Cmd> {
     let Some(sha) = head_sha else {
         return Vec::new();
     };
-    if model.enrichment.checks.contains_key(&sha) {
+    if model
+        .enrichment
+        .checks
+        .contains_key(&(repo_slug.to_owned(), sha.clone()))
+    {
         return Vec::new();
     }
-    let (Some(token), Some(repo)) = (model.auth_token.as_ref(), model.repo.as_ref()) else {
+    let (Some(token), Some(repo)) = (model.auth_token.as_ref(), model.tracked_repo(repo_slug))
+    else {
         return Vec::new();
     };
     vec![Cmd::FetchChecks {
-        ctx: request_context(repo, token, &model.config.bot_logins),
+        ctx: request_context(&repo, token, &model.config.bot_logins),
         head_sha: sha,
     }]
+}
+
+/// Switch to the Repo Tab at `index` (0 = All): re-derive the visible list
+/// under the new scope and reset the selection to its top. A no-op for the
+/// already-active tab so re-pressing its digit doesn't lose the selection.
+fn select_tab(model: &mut Model, index: usize) {
+    if index == model.active_tab {
+        return;
+    }
+    model.active_tab = index;
+    model.relayout();
+    model.list.select_first_visible();
+}
+
+/// Step the active tab by `delta`, wrapping at the ends (h from All lands on
+/// the last repo, l from the last repo lands on All).
+fn step_tab(model: &mut Model, delta: isize) {
+    let count = (model.tracked_repos().len() + 1) as isize;
+    let next = (model.active_tab as isize + delta).rem_euclid(count) as usize;
+    select_tab(model, next);
+}
+
+/// Jump straight to tab `index` (digit keys; 0 = All). Digits past the last
+/// tab are ignored.
+fn jump_to_tab(model: &mut Model, index: usize) {
+    if index <= model.tracked_repos().len() {
+        select_tab(model, index);
+    }
+}
+
+/// Handle one keypress while the filter editor is open. The editor consumes
+/// every key (a digit must type, not switch tabs; `q` must type, not quit) —
+/// only Esc and Enter leave it. Every text change re-filters live; the
+/// open/clear/submit transitions can add or remove the chip row, so they
+/// re-derive the viewport too.
+fn handle_filter_editing_key(model: &mut Model, code: KeyCode) {
+    match code {
+        KeyCode::Esc => {
+            model.list.filter_clear();
+            model.sync_viewport();
+        }
+        KeyCode::Enter => {
+            model.list.filter_submit();
+            model.sync_viewport();
+        }
+        KeyCode::Backspace => model.list.filter_backspace(),
+        KeyCode::Char(c) => model.list.filter_push(c),
+        // Anything else (arrows, etc.) is consumed without effect.
+        _ => return,
+    }
+    model.relayout();
+}
+
+/// Handle one keypress in normal mode (no filter editor open).
+fn handle_normal_key(model: &mut Model, code: KeyCode) {
+    match code {
+        KeyCode::Char('q') => model.should_quit = true,
+        KeyCode::Char('j') => model.list.move_down(),
+        KeyCode::Char('k') => model.list.move_up(),
+        KeyCode::Char('g') => {
+            // Cycle smart-status -> repo -> none -> smart-status, resetting
+            // selection, then rebuild the layout under the new grouping.
+            model.list.cycle_grouping();
+            model.relayout();
+        }
+        KeyCode::Char('h') | KeyCode::Left | KeyCode::Char('[') => step_tab(model, -1),
+        KeyCode::Char('l') | KeyCode::Right | KeyCode::Char(']') => step_tab(model, 1),
+        KeyCode::Char('/') => {
+            model.list.filter_open();
+            model.sync_viewport();
+            model.relayout();
+        }
+        KeyCode::Esc if model.list.filter().is_visible() => {
+            // Esc on an applied filter drops it (editing-mode Esc is handled
+            // by the editor).
+            model.list.filter_clear();
+            model.sync_viewport();
+            model.relayout();
+        }
+        KeyCode::Char(c) if c.is_ascii_digit() => {
+            jump_to_tab(model, (c as u8 - b'0') as usize);
+        }
+        _ => {}
+    }
 }
 
 pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
     match msg {
         Msg::TerminalEvent(Event::Key(key)) => {
             if key.kind == KeyEventKind::Press {
-                match key.code {
-                    KeyCode::Char('q') => model.should_quit = true,
-                    KeyCode::Char('j') => model.list.move_down(),
-                    KeyCode::Char('k') => model.list.move_up(),
-                    KeyCode::Char('g') => {
-                        // Cycle smart-status -> repo -> none -> smart-status,
-                        // resetting selection, then rebuild the layout under the
-                        // new grouping.
-                        model.list.cycle_grouping();
-                        model.relayout();
-                    }
-                    _ => {}
+                // Modal precedence: an open filter editor sees every key first.
+                if model.list.filter().is_editing() {
+                    handle_filter_editing_key(model, key.code);
+                } else {
+                    handle_normal_key(model, key.code);
                 }
             }
             Vec::new()
         }
         Msg::TerminalEvent(Event::Resize(_, height)) => {
-            // The status bar takes one row; everything above belongs to the
-            // list. Saturating-sub keeps a 0-row viewport handled gracefully.
-            model.list.resize((height as usize).saturating_sub(1));
+            model.terminal_height = height;
+            model.sync_viewport();
             Vec::new()
         }
         Msg::TerminalEvent(_) => Vec::new(),
@@ -160,7 +265,14 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             maybe_fetch_open_prs(model)
         }
         Msg::RepoDetected(repo) => {
-            model.repo = Some(repo);
+            // Settle the detection gate either way: `Some` adds the CWD repo to
+            // the tracked set, `None` (no git repo / no GitHub remote) leaves
+            // the tracked set to the configured repos alone. Both release the
+            // gate so configured Tracked Repos still fetch.
+            model.repo = match repo {
+                Some(repo) => RepoDetection::Detected(repo),
+                None => RepoDetection::Failed,
+            };
             maybe_fetch_open_prs(model)
         }
         Msg::PrArrived(pr) => {
@@ -170,67 +282,76 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             model.relayout();
             Vec::new()
         }
-        Msg::PrListLoaded => {
-            model.list.complete_fetch();
-            // The REST stream has settled — fan out enrichment for every PR now
-            // in the list.
-            enrichment_cmds(model)
+        Msg::PrListLoaded { repo_slug } => {
+            model.list.complete_fetch(&repo_slug);
+            // This repo's REST stream has settled — fan out enrichment for its
+            // PRs now, without waiting on slower repos.
+            enrichment_cmds(model, &repo_slug)
         }
         Msg::NetworkStatsChanged(stats) => {
             model.network_stats = stats;
             Vec::new()
         }
-        Msg::ReviewStatusArrived { pr_number, status } => {
+        Msg::ReviewStatusArrived { pr, status } => {
             // Overwrite the list fields the REST endpoint couldn't supply, then
             // — once we know the head SHA — fan out the checks fetch for it.
             let head_sha = status.head_commit_sha.clone();
-            if let Some(pr) = model.list.pr_mut(pr_number) {
-                pr.additions = status.additions;
-                pr.deletions = status.deletions;
-                pr.review_decision = status.review_decision;
-                pr.mergeable = status.mergeable;
-                pr.last_commit_date = status.last_commit_date;
-                pr.head_commit_sha = status.head_commit_sha;
+            if let Some(entry) = model.list.pr_mut(&pr) {
+                entry.additions = status.additions;
+                entry.deletions = status.deletions;
+                entry.review_decision = status.review_decision;
+                entry.mergeable = status.mergeable;
+                entry.last_commit_date = status.last_commit_date;
+                entry.head_commit_sha = status.head_commit_sha;
             } else {
                 // PR no longer in the list (e.g. filtered/refetched); drop it.
                 return Vec::new();
             }
             // review_decision/mergeable feed the blocker rules, so re-derive.
             model.refresh_blockers();
-            maybe_fetch_checks(model, head_sha)
+            maybe_fetch_checks(model, head_sha, &pr.repo_slug)
         }
-        Msg::ThreadsArrived { pr_number, threads } => {
-            model.enrichment.review_threads.insert(pr_number, threads);
+        Msg::ThreadsArrived { pr, threads } => {
+            model.enrichment.review_threads.insert(pr, threads);
             model.refresh_blockers();
             Vec::new()
         }
-        Msg::ReviewsArrived { pr_number, reviews } => {
-            model.enrichment.reviews.insert(pr_number, reviews);
+        Msg::ReviewsArrived { pr, reviews } => {
+            model.enrichment.reviews.insert(pr, reviews);
             model.refresh_blockers();
             Vec::new()
         }
-        Msg::ChecksArrived { head_sha, checks } => {
-            model.enrichment.checks.insert(head_sha, checks);
-            model.refresh_blockers();
-            Vec::new()
-        }
-        Msg::IssueCommentsArrived {
-            pr_number,
-            comments,
+        Msg::ChecksArrived {
+            repo_slug,
+            head_sha,
+            checks,
         } => {
-            model.enrichment.issue_comments.insert(pr_number, comments);
+            model
+                .enrichment
+                .checks
+                .insert((repo_slug, head_sha), checks);
+            model.refresh_blockers();
             Vec::new()
         }
-        Msg::PrListFailed { context, error } => {
-            model.list.fail_fetch(format!("{context}: {error}"));
+        Msg::IssueCommentsArrived { pr, comments } => {
+            model.enrichment.issue_comments.insert(pr, comments);
+            Vec::new()
+        }
+        Msg::PrListFailed {
+            repo_slug,
+            context,
+            error,
+        } => {
+            let message = format!("{context} ({repo_slug}): {error}");
+            model.list.fail_fetch(&repo_slug, message);
             Vec::new()
         }
         Msg::ConfigLoadFailed { error } => {
             // Config is a hard prerequisite (current user + bot logins drive
-            // smart-status), so a malformed config halts the list with a
-            // persistent failure instead of fetching with wrong defaults.
+            // smart-status), so a malformed config is an app-level fatal that
+            // blocks every fetch instead of fetching with wrong defaults.
             // `config_loaded` stays false, so `maybe_fetch_open_prs` never fires.
-            model.list.fail_fetch(format!("config error: {error}"));
+            model.fatal = Some(format!("config error: {error}"));
             Vec::new()
         }
         Msg::CommandFailed { context, error } => {

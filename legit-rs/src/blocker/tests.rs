@@ -15,6 +15,7 @@ use crate::github::types::{CheckRun, FullReviewThread, Review, ReviewComment};
 fn make_pr(author: &str) -> PR {
     PR {
         number: 1,
+        repo_slug: "mayfieldiv/legit".to_owned(),
         title: "Test PR".to_owned(),
         author: author.to_owned(),
         created_at: Utc.with_ymd_and_hms(2026, 3, 1, 0, 0, 0).unwrap(),

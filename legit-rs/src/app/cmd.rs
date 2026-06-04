@@ -4,7 +4,8 @@ use tokio::sync::mpsc;
 
 use crate::{
     app::msg::Msg, auth, config, git_remote, git_remote::RepoInfo, github::graphql::GraphQlClient,
-    github::limiter::NetworkLimiter, github::rest::OctocrabRest, secret::Secret,
+    github::limiter::NetworkLimiter, github::rest::OctocrabRest, github::rest::PrKey,
+    secret::Secret,
 };
 
 /// The inputs every per-PR enrichment request shares: which repo, the auth
@@ -104,19 +105,25 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                 git_remote::detect_repo(&cwd)
             })
             .await;
-            let msg = match result {
+            match result {
                 Ok(repo) => {
                     tracing::info!(owner = %repo.owner, repo = %repo.repo, "repo detected");
-                    Msg::RepoDetected(repo)
+                    let _ = tx.send(Msg::RepoDetected(Some(repo)));
                 }
-                Err(error) => command_failed("detect repo", error),
-            };
-            let _ = tx.send(msg);
+                Err(error) => {
+                    // Surface the failure as a transient status, AND settle the
+                    // detection gate with `None` so the configured Tracked Repos
+                    // still fetch (running outside a git repo isn't fatal).
+                    let _ = tx.send(command_failed("detect repo", error));
+                    let _ = tx.send(Msg::RepoDetected(None));
+                }
+            }
         }
         Cmd::FetchOpenPRs { repo, token } => {
             run_fetch_open_prs(repo, token, tx, limiter).await;
         }
         Cmd::FetchReviewStatus { ctx, pr_numbers } => {
+            let repo_slug = ctx.repo.slug();
             request(
                 &tx,
                 &limiter,
@@ -126,16 +133,26 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                         .fetch_review_status(&ctx.repo.owner, &ctx.repo.repo, &pr_numbers)
                         .await
                 },
-                |results| {
+                move |results| {
                     results
                         .into_iter()
-                        .map(|(pr_number, status)| Msg::ReviewStatusArrived { pr_number, status })
+                        .map(|(number, status)| Msg::ReviewStatusArrived {
+                            pr: PrKey {
+                                repo_slug: repo_slug.clone(),
+                                number,
+                            },
+                            status,
+                        })
                         .collect()
                 },
             )
             .await;
         }
         Cmd::FetchThreads { ctx, number } => {
+            let pr = PrKey {
+                repo_slug: ctx.repo.slug(),
+                number,
+            };
             request(
                 &tx,
                 &limiter,
@@ -150,16 +167,15 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                         )
                         .await
                 },
-                move |threads| {
-                    vec![Msg::ThreadsArrived {
-                        pr_number: number,
-                        threads,
-                    }]
-                },
+                move |threads| vec![Msg::ThreadsArrived { pr, threads }],
             )
             .await;
         }
         Cmd::FetchReviews { ctx, number } => {
+            let pr = PrKey {
+                repo_slug: ctx.repo.slug(),
+                number,
+            };
             request(
                 &tx,
                 &limiter,
@@ -169,16 +185,15 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                         .list_reviews(&ctx.repo.owner, &ctx.repo.repo, number)
                         .await
                 },
-                move |reviews| {
-                    vec![Msg::ReviewsArrived {
-                        pr_number: number,
-                        reviews,
-                    }]
-                },
+                move |reviews| vec![Msg::ReviewsArrived { pr, reviews }],
             )
             .await;
         }
         Cmd::FetchIssueComments { ctx, number } => {
+            let pr = PrKey {
+                repo_slug: ctx.repo.slug(),
+                number,
+            };
             request(
                 &tx,
                 &limiter,
@@ -193,16 +208,12 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                         )
                         .await
                 },
-                move |comments| {
-                    vec![Msg::IssueCommentsArrived {
-                        pr_number: number,
-                        comments,
-                    }]
-                },
+                move |comments| vec![Msg::IssueCommentsArrived { pr, comments }],
             )
             .await;
         }
         Cmd::FetchChecks { ctx, head_sha } => {
+            let repo_slug = ctx.repo.slug();
             request(
                 &tx,
                 &limiter,
@@ -213,7 +224,13 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                         .await?;
                     Ok((head_sha, checks))
                 },
-                |(head_sha, checks)| vec![Msg::ChecksArrived { head_sha, checks }],
+                move |(head_sha, checks)| {
+                    vec![Msg::ChecksArrived {
+                        repo_slug,
+                        head_sha,
+                        checks,
+                    }]
+                },
             )
             .await;
         }
@@ -230,10 +247,11 @@ async fn run_fetch_open_prs(
     tx: mpsc::UnboundedSender<Msg>,
     limiter: Arc<NetworkLimiter>,
 ) {
+    let repo_slug = repo.slug();
     let client = match OctocrabRest::new(&token) {
         Ok(client) => client,
         Err(error) => {
-            let _ = tx.send(pr_list_failed("build github client", error));
+            let _ = tx.send(pr_list_failed(repo_slug, "build github client", error));
             return;
         }
     };
@@ -257,10 +275,10 @@ async fn run_fetch_open_prs(
     match result {
         Ok(()) => {
             tracing::info!(owner = %repo.owner, repo = %repo.repo, "open PR listing finished");
-            let _ = tx.send(Msg::PrListLoaded);
+            let _ = tx.send(Msg::PrListLoaded { repo_slug });
         }
         Err(error) => {
-            let _ = tx.send(pr_list_failed("list open PRs", error));
+            let _ = tx.send(pr_list_failed(repo_slug, "list open PRs", error));
         }
     }
 }
@@ -304,11 +322,16 @@ fn command_failed(context: &'static str, error: anyhow::Error) -> Msg {
 
 /// Same as `command_failed`, but for the PR-listing pipeline (which has its
 /// own `Msg` variant so the status bar can prioritise list errors over
-/// generic command errors).
-fn pr_list_failed(context: &'static str, error: anyhow::Error) -> Msg {
+/// generic command errors). `repo_slug` names the Tracked Repo whose listing
+/// failed so other repos' phases are untouched.
+fn pr_list_failed(repo_slug: String, context: &'static str, error: anyhow::Error) -> Msg {
     let error = format!("{error:#}");
-    tracing::warn!(context, %error, "pr listing failed");
-    Msg::PrListFailed { context, error }
+    tracing::warn!(%repo_slug, context, %error, "pr listing failed");
+    Msg::PrListFailed {
+        repo_slug,
+        context,
+        error,
+    }
 }
 
 /// Run `f` on the blocking pool and fold the `JoinError` into the same

@@ -42,14 +42,19 @@ fn default_grouping_is_smart_status() {
 
 #[test]
 fn none_emits_one_row_per_pr_no_headers() {
-    let rows = display_rows(3, Grouping::None, |_| None, "acme/web");
+    let rows = display_rows(
+        &[0, 1, 2],
+        Grouping::None,
+        |_| None,
+        |_| "acme/web".to_owned(),
+    );
     assert!(headers(&rows).is_empty());
     assert_eq!(pr_indices(&rows), vec![0, 1, 2]);
 }
 
 #[test]
 fn none_empty_list_is_empty() {
-    let rows = display_rows(0, Grouping::None, |_| None, "acme/web");
+    let rows = display_rows(&[], Grouping::None, |_| None, |_| "acme/web".to_owned());
     assert!(rows.is_empty());
 }
 
@@ -57,20 +62,39 @@ fn none_empty_list_is_empty() {
 
 #[test]
 fn repo_groups_under_single_slug_header() {
-    let rows = display_rows(2, Grouping::Repo, |_| None, "acme/web");
+    let rows = display_rows(&[0, 1], Grouping::Repo, |_| None, |_| "acme/web".to_owned());
     assert_eq!(headers(&rows), vec!["acme/web"]);
     assert_eq!(pr_indices(&rows), vec![0, 1]);
 }
 
 #[test]
-fn repo_with_no_slug_falls_back_to_unknown() {
-    let rows = display_rows(1, Grouping::Repo, |_| None, "");
-    assert_eq!(headers(&rows), vec!["unknown"]);
+fn repo_groups_each_slug_separately_in_alphabetical_order() {
+    // Pooled multi-repo list: indices 0/2 belong to zeta, 1/3 to acme.
+    let slugs = ["zeta/repo", "acme/web", "zeta/repo", "acme/web"];
+    let rows = display_rows(
+        &[0, 1, 2, 3],
+        Grouping::Repo,
+        |_| None,
+        |i| slugs[i].to_owned(),
+    );
+
+    assert_eq!(headers(&rows), vec!["acme/web", "zeta/repo"]);
+    // Alphabetical groups; input order preserved within each.
+    assert_eq!(pr_indices(&rows), vec![1, 3, 0, 2]);
+}
+
+#[test]
+fn rows_carry_absolute_indices_for_a_visible_subset() {
+    // Scope/filter admitted only indices 2 and 5 of the pooled list; the rows
+    // must reference them absolutely so selection maps back to the right PR.
+    let rows = display_rows(&[2, 5], Grouping::None, |_| None, |_| "acme/web".to_owned());
+
+    assert_eq!(pr_indices(&rows), vec![2, 5]);
 }
 
 #[test]
 fn repo_empty_list_is_empty() {
-    let rows = display_rows(0, Grouping::Repo, |_| None, "acme/web");
+    let rows = display_rows(&[], Grouping::Repo, |_| None, |_| "acme/web".to_owned());
     assert!(rows.is_empty());
 }
 
@@ -85,7 +109,12 @@ fn smart_status_orders_tiers_me_blocking_needs_review_waiting() {
         Tier::MeBlocking,
         Tier::NeedsReview,
     ];
-    let rows = display_rows(4, Grouping::SmartStatus, |i| Some(tiers[i]), "acme/web");
+    let rows = display_rows(
+        &[0, 1, 2, 3],
+        Grouping::SmartStatus,
+        |i| Some(tiers[i]),
+        |_| "acme/web".to_owned(),
+    );
     assert_eq!(
         headers(&rows),
         vec!["Me blocking", "Needs review", "Waiting on author"]
@@ -97,13 +126,23 @@ fn smart_status_orders_tiers_me_blocking_needs_review_waiting() {
 #[test]
 fn smart_status_omits_empty_tiers() {
     // All needs-review.
-    let rows = display_rows(2, Grouping::SmartStatus, |_| Some(Tier::NeedsReview), "r");
+    let rows = display_rows(
+        &[0, 1],
+        Grouping::SmartStatus,
+        |_| Some(Tier::NeedsReview),
+        |_| "r".to_owned(),
+    );
     assert_eq!(headers(&rows), vec!["Needs review"]);
 }
 
 #[test]
 fn smart_status_single_tier_list() {
-    let rows = display_rows(3, Grouping::SmartStatus, |_| Some(Tier::MeBlocking), "r");
+    let rows = display_rows(
+        &[0, 1, 2],
+        Grouping::SmartStatus,
+        |_| Some(Tier::MeBlocking),
+        |_| "r".to_owned(),
+    );
     assert_eq!(headers(&rows), vec!["Me blocking"]);
     assert_eq!(pr_indices(&rows), vec![0, 1, 2]);
 }
@@ -112,7 +151,7 @@ fn smart_status_single_tier_list() {
 fn smart_status_undelivered_tiers_collect_under_loading() {
     // index 0 derived, 1 and 2 still loading.
     let rows = display_rows(
-        3,
+        &[0, 1, 2],
         Grouping::SmartStatus,
         |i| {
             if i == 0 {
@@ -121,7 +160,7 @@ fn smart_status_undelivered_tiers_collect_under_loading() {
                 None
             }
         },
-        "r",
+        |_| "r".to_owned(),
     );
     assert_eq!(headers(&rows), vec!["Needs review", "Loading details…"]);
     assert_eq!(pr_indices(&rows), vec![0, 1, 2]);
@@ -129,13 +168,18 @@ fn smart_status_undelivered_tiers_collect_under_loading() {
 
 #[test]
 fn smart_status_empty_list_is_empty() {
-    let rows = display_rows(0, Grouping::SmartStatus, |_| None, "r");
+    let rows = display_rows(&[], Grouping::SmartStatus, |_| None, |_| "r".to_owned());
     assert!(rows.is_empty());
 }
 
 #[test]
 fn smart_status_preserves_input_order_within_tier() {
     // Indices stay in input order within a single tier.
-    let rows = display_rows(3, Grouping::SmartStatus, |_| Some(Tier::NeedsReview), "r");
+    let rows = display_rows(
+        &[0, 1, 2],
+        Grouping::SmartStatus,
+        |_| Some(Tier::NeedsReview),
+        |_| "r".to_owned(),
+    );
     assert_eq!(pr_indices(&rows), vec![0, 1, 2]);
 }

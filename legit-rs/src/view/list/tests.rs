@@ -4,7 +4,7 @@ use ratatui::{Terminal, backend::TestBackend};
 use crate::{
     app::{
         grouping::Grouping,
-        model::{Model, StatusKind, StatusMessage},
+        model::{Model, RepoDetection, StatusKind, StatusMessage},
     },
     blocker::{BlockerResult, Tier},
     git_remote::RepoInfo,
@@ -39,6 +39,7 @@ fn pr(number: u64, title: &str, author: &str, hours_ago: i64) -> PR {
     let created_at = fixed_now() - chrono::Duration::hours(hours_ago);
     PR {
         number,
+        repo_slug: "acme/web".to_owned(),
         title: title.to_owned(),
         author: author.to_owned(),
         created_at,
@@ -66,15 +67,15 @@ fn pr(number: u64, title: &str, author: &str, hours_ago: i64) -> PR {
 /// "Loading details…". Drives the same `relayout` path the runtime uses.
 fn model_with(prs: Vec<PR>, grouping: Grouping, tier_of: impl Fn(&PR) -> Option<Tier>) -> Model {
     let (mut model, _) = Model::new();
-    model.repo = Some(RepoInfo {
+    model.repo = RepoDetection::Detected(RepoInfo {
         owner: "acme".to_owned(),
         repo: "web".to_owned(),
     });
-    model.list.begin_fetch();
+    model.list.begin_fetch("acme/web");
     for pr in prs {
         if let Some(tier) = tier_of(&pr) {
             model.blockers.insert(
-                pr.number,
+                pr.key(),
                 BlockerResult {
                     blocker: "someone".to_owned(),
                     tier,
@@ -84,7 +85,7 @@ fn model_with(prs: Vec<PR>, grouping: Grouping, tier_of: impl Fn(&PR) -> Option<
         }
         model.list.push(pr);
     }
-    model.list.complete_fetch();
+    model.list.complete_fetch("acme/web");
     set_grouping(&mut model, grouping);
     model
 }
@@ -123,10 +124,11 @@ fn buffer_text(terminal: &Terminal<TestBackend>) -> Vec<String> {
         .collect()
 }
 
-/// Rows excluding the status bar (the last row).
+/// Rows excluding the tab bar (the first row) and the status bar (the last).
 fn list_rows(terminal: &Terminal<TestBackend>) -> Vec<String> {
     let mut rows = buffer_text(terminal);
     rows.pop();
+    rows.remove(0);
     rows
 }
 
@@ -139,11 +141,11 @@ fn empty_pr_list_renders_no_open_pull_requests_placeholder() {
     assert_eq!(
         buffer_text(&terminal),
         vec![
+            "[All]                                   ",
             "          No open pull requests         ",
             "                                        ",
             "                                        ",
-            "                                        ",
-            "q quit  g group: smart-status           ",
+            "q quit  g group: smart-status  h/l tabs ",
         ]
     );
 }
@@ -168,7 +170,6 @@ fn flat_list_renders_one_row_per_pull_request() {
             "#42  Add streaming PR list    octocat       +5/-3 3h    Awaiting review         ",
             "#43  Wire FetchOpenPRs cmd    alice         +5/-3 1d    Awaiting review         ",
             "#44  Render list view         bob           +5/-3 7d    Awaiting review         ",
-            "                                                                                ",
         ]
     );
 }
@@ -263,6 +264,142 @@ fn repo_grouping_renders_one_header_for_the_detected_repo() {
 }
 
 #[test]
+fn all_tab_grouped_by_repo_shows_one_header_per_repo() {
+    let mut other = pr(2, "two", "dave", 2);
+    other.repo_slug = "zeta/api".to_owned();
+    let model = model_with(
+        vec![pr(1, "one", "carol", 1), other],
+        Grouping::Repo,
+        |_| Some(Tier::NeedsReview),
+    );
+
+    let terminal = render_snapshot(&model, 80, 7);
+    let rows = list_rows(&terminal);
+
+    assert!(rows[0].starts_with("── acme/web "), "{rows:?}");
+    assert!(rows[1].contains("#1"), "{rows:?}");
+    assert!(rows[2].starts_with("── zeta/api "), "{rows:?}");
+    assert!(rows[3].contains("#2"), "{rows:?}");
+}
+
+// ── repo tabs ──────────────────────────────────────────────────────────────
+
+/// First row of a rendered snapshot — the Repo Tab bar.
+fn tab_row(terminal: &Terminal<TestBackend>) -> String {
+    buffer_text(terminal).remove(0)
+}
+
+/// `model_with` plus a second Tracked Repo (acme/api) in config, so the tab
+/// set is `All | acme/api | acme/web`.
+fn two_repo_model() -> Model {
+    let mut model = model_with(vec![pr(1, "one", "carol", 1)], Grouping::None, |_| {
+        Some(Tier::NeedsReview)
+    });
+    model.config.repos = vec![crate::config::RepoConfig {
+        slug: "acme/api".to_owned(),
+        ..Default::default()
+    }];
+    model
+}
+
+#[test]
+fn tab_bar_lists_all_plus_tracked_repos_with_active_bracketed() {
+    let model = two_repo_model();
+
+    let row = tab_row(&render_snapshot(&model, 50, 4));
+
+    assert!(
+        row.starts_with("[All]  acme/api   acme/web "),
+        "All active: {row:?}"
+    );
+}
+
+#[test]
+fn tab_bar_brackets_follow_the_active_tab() {
+    let mut model = two_repo_model();
+    model.active_tab = 2; // acme/web (config repo first, detected second)
+    model.relayout();
+
+    let row = tab_row(&render_snapshot(&model, 50, 4));
+
+    assert!(
+        row.starts_with(" All   acme/api  [acme/web] "),
+        "acme/web active: {row:?}"
+    );
+}
+
+// ── substring filter ────────────────────────────────────────────────────────
+
+/// `model_with` one matching and one non-matching PR plus the filter put into
+/// `state` ("editing" or "applied") with `text`.
+fn filtered_model(text: &str, editing: bool) -> Model {
+    let mut model = model_with(
+        vec![
+            pr(1, "Fix rust panic", "carol", 1),
+            pr(2, "Update docs", "dave", 2),
+        ],
+        Grouping::None,
+        |_| Some(Tier::NeedsReview),
+    );
+    model.list.filter_open();
+    for c in text.chars() {
+        model.list.filter_push(c);
+    }
+    if !editing {
+        model.list.filter_submit();
+    }
+    model.relayout();
+    model
+}
+
+#[test]
+fn filter_editing_renders_chip_with_cursor_and_editor_hints() {
+    let model = filtered_model("rust", true);
+
+    let terminal = render_snapshot(&model, 60, 5);
+    let rows = buffer_text(&terminal);
+
+    // Row 1 sits under the tab bar: the chip text plus a block cursor.
+    assert!(rows[1].starts_with("/rust█"), "{rows:?}");
+    assert!(rows[2].contains("#1"), "only the match renders: {rows:?}");
+    assert!(
+        !rows.iter().any(|r| r.contains("#2")),
+        "non-match hidden: {rows:?}"
+    );
+    let status = rows.last().expect("status row");
+    assert!(
+        status.starts_with("enter apply  esc clear"),
+        "editor hints while editing: {status:?}"
+    );
+}
+
+#[test]
+fn applied_filter_renders_chip_without_cursor_and_normal_hints() {
+    let model = filtered_model("rust", false);
+
+    let terminal = render_snapshot(&model, 60, 5);
+    let rows = buffer_text(&terminal);
+
+    assert!(rows[1].starts_with("/rust "), "{rows:?}");
+    assert!(!rows[1].contains('█'), "no cursor once applied: {rows:?}");
+    let status = rows.last().expect("status row");
+    assert!(status.starts_with("q quit"), "normal hints: {status:?}");
+}
+
+#[test]
+fn filter_with_no_matches_renders_no_matching_prs() {
+    let model = filtered_model("zzz", true);
+
+    let terminal = render_snapshot(&model, 60, 5);
+    let rows = buffer_text(&terminal);
+
+    assert!(
+        rows.iter().any(|r| r.contains("No matching PRs")),
+        "{rows:?}"
+    );
+}
+
+#[test]
 fn no_grouping_renders_no_headers() {
     let model = model_with(
         vec![pr(1, "one", "carol", 1), pr(2, "two", "dave", 2)],
@@ -297,10 +434,10 @@ fn empty_list_with_smart_status_grouping_shows_placeholder() {
 #[test]
 fn pr_list_error_appears_in_the_status_bar() {
     let (mut model, _) = Model::new();
-    model.list.begin_fetch();
+    model.list.begin_fetch("acme/web");
     model
         .list
-        .fail_fetch("list open PRs: network down".to_owned());
+        .fail_fetch("acme/web", "list open PRs: network down".to_owned());
 
     let terminal = render_snapshot(&model, 60, 3);
 
@@ -310,6 +447,28 @@ fn pr_list_error_appears_in_the_status_bar() {
         status.contains("list open PRs: network down"),
         "status row should surface the fetch failure: {:?}",
         status,
+    );
+}
+
+#[test]
+fn fatal_error_appears_in_the_status_bar_ahead_of_a_list_failure() {
+    let (mut model, _) = Model::new();
+    // A per-repo listing failed too; the fatal must win the status bar.
+    model.list.begin_fetch("acme/web");
+    model
+        .list
+        .fail_fetch("acme/web", "list open PRs: network down".to_owned());
+    model.fatal = Some("config error: invalid bot_logins entry".to_owned());
+
+    let status = status_row(&render_snapshot(&model, 80, 3));
+
+    assert!(
+        status.contains("config error: invalid bot_logins entry"),
+        "the app-level fatal takes precedence over the list failure: {status:?}"
+    );
+    assert!(
+        !status.contains("network down"),
+        "the list failure must be masked by the fatal: {status:?}"
     );
 }
 
@@ -424,18 +583,18 @@ fn wide_pr_number_widens_num_column_for_all_rows() {
 #[test]
 fn loading_pr_list_renders_loading_placeholder() {
     let (mut model, _) = Model::new();
-    model.list.begin_fetch();
+    model.list.begin_fetch("acme/web");
 
     let terminal = render_snapshot(&model, 40, 5);
 
     assert_eq!(
         buffer_text(&terminal),
         vec![
+            "[All]                                   ",
             "         Loading pull requests…         ",
             "                                        ",
             "                                        ",
-            "                                        ",
-            "q quit  g group: smart-status           ",
+            "q quit  g group: smart-status  h/l tabs ",
         ]
     );
 }

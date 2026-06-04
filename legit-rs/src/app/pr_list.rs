@@ -1,26 +1,72 @@
-//! Open PR List Module: PRs for the current Tracked Repo, plus the user's
-//! selection cursor, scroll viewport, fetch phase, and how the list is grouped.
-//! Concentrates the invariants that used to be spread across `Model` and
-//! `update.rs`.
+//! Open PR List Module: the pooled PRs of every Tracked Repo, plus the user's
+//! selection cursor, scroll viewport, per-repo fetch phases, and how the list
+//! is grouped. The active Repo Tab and filter narrow the pool to a visible
+//! subset at `relayout` time — there is no per-tab cache. Concentrates the
+//! invariants that used to be spread across `Model` and `update.rs`.
 //!
 //! Grouping turns the flat PR vec into a `Vec<DisplayRow>` (headers + PR rows).
 //! Selection tracks a *PR index* (so it survives regrouping), while scrolling
 //! works over display rows (headers included). `j`/`k` step PR-to-PR, skipping
 //! header rows; the scroll viewport keeps the selected PR's row on-screen.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::app::grouping::{DisplayRow, Grouping, display_rows};
 use crate::blocker::Tier;
-use crate::github::rest::PR;
+use crate::github::rest::{PR, PrKey};
 
-/// Lifecycle of the open-PR fetch. At most one variant holds at a time, so the
-/// view never has to ask "are we loading AND failed?".
+/// The substring filter over the Open PR List. `/` opens editing; Enter locks
+/// the text in; Esc clears. `Applied("")` is unrepresentable — submitting an
+/// empty filter returns to `Inactive` — so "filter active" is exactly
+/// "non-empty text".
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
-pub enum Phase {
-    /// No fetch has been dispatched yet.
+pub enum Filter {
     #[default]
-    Idle,
+    Inactive,
+    /// `/` pressed; every keystroke edits the text and re-filters live, and
+    /// the editor consumes all keys except Esc/Enter.
+    Editing(String),
+    /// Enter pressed; the text keeps narrowing the list while normal-mode
+    /// keys work again.
+    Applied(String),
+}
+
+impl Filter {
+    /// The text currently narrowing the list (`""` when inactive).
+    pub fn text(&self) -> &str {
+        match self {
+            Filter::Inactive => "",
+            Filter::Editing(text) | Filter::Applied(text) => text,
+        }
+    }
+
+    pub fn is_editing(&self) -> bool {
+        matches!(self, Filter::Editing(_))
+    }
+
+    /// Whether the filter chip row is on screen (editing or applied).
+    pub fn is_visible(&self) -> bool {
+        !matches!(self, Filter::Inactive)
+    }
+}
+
+/// Case-insensitive substring match over a PR's title and author. An empty
+/// needle matches everything. The needle must already be lowercased (done
+/// once per relayout, not per PR).
+fn filter_matches(pr: &PR, lowercase_needle: &str) -> bool {
+    if lowercase_needle.is_empty() {
+        return true;
+    }
+    pr.title.to_lowercase().contains(lowercase_needle)
+        || pr.author.to_lowercase().contains(lowercase_needle)
+}
+
+/// Lifecycle of one Tracked Repo's open-PR fetch. A repo with no entry in
+/// `PrList::phases` hasn't had a fetch dispatched yet. At most one variant
+/// holds per repo, so the view never has to ask "are we loading AND failed?".
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Phase {
     /// Fetch in flight.
     Loading,
     /// Fetch completed (rows may still be 0).
@@ -32,7 +78,11 @@ pub enum Phase {
 #[derive(Clone, Default)]
 pub struct PrList {
     prs: Vec<PR>,
-    phase: Phase,
+    /// Per-Tracked-Repo fetch lifecycle, keyed by slug. BTreeMap so `failure`
+    /// reports deterministically (alphabetical) when several repos fail.
+    phases: BTreeMap<String, Phase>,
+    /// The substring filter narrowing the visible set (with the active tab).
+    filter: Filter,
     grouping: Grouping,
     /// Flattened display layout (headers + PR rows). Rebuilt by `relayout`
     /// whenever the PRs, their tiers, or the grouping change.
@@ -45,11 +95,11 @@ pub struct PrList {
 }
 
 impl fmt::Debug for PrList {
-    /// Renders the list as `{ phase, prs: <len>, ... }` — the full PR vec is
+    /// Renders the list as `{ phases, prs: <len>, ... }` — the full PR vec is
     /// noisy in `tracing` output and rarely informative compared to its length.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrList")
-            .field("phase", &self.phase)
+            .field("phases", &self.phases)
             .field("prs", &self.prs.len())
             .field("grouping", &self.grouping)
             .field("selected", &self.selected)
@@ -64,16 +114,17 @@ impl PrList {
         Self::default()
     }
 
-    pub fn begin_fetch(&mut self) {
-        self.phase = Phase::Loading;
+    pub fn begin_fetch(&mut self, repo_slug: &str) {
+        self.phases.insert(repo_slug.to_owned(), Phase::Loading);
     }
 
-    pub fn complete_fetch(&mut self) {
-        self.phase = Phase::Loaded;
+    pub fn complete_fetch(&mut self, repo_slug: &str) {
+        self.phases.insert(repo_slug.to_owned(), Phase::Loaded);
     }
 
-    pub fn fail_fetch(&mut self, message: String) {
-        self.phase = Phase::Failed(message);
+    pub fn fail_fetch(&mut self, repo_slug: &str, message: String) {
+        self.phases
+            .insert(repo_slug.to_owned(), Phase::Failed(message));
     }
 
     pub fn push(&mut self, pr: PR) {
@@ -81,17 +132,107 @@ impl PrList {
     }
 
     /// Rebuild the display layout from the current PRs under the active
-    /// grouping. `tier_of(pr_index)` returns the Smart-status tier for a PR, or
-    /// `None` when its enrichment hasn't been derived yet. `repo_slug` is the
-    /// slug used for repo grouping. Re-clamps scroll so the selection stays
-    /// on-screen. Called by `update` after PRs arrive, enrichment lands, or the
-    /// grouping changes.
-    pub fn relayout(&mut self, tier_of: impl Fn(usize) -> Option<Tier>, repo_slug: &str) {
-        self.rows = display_rows(self.prs.len(), self.grouping, tier_of, repo_slug);
-        if self.selected >= self.prs.len() {
-            self.selected = self.prs.len().saturating_sub(1);
+    /// grouping, showing only the PRs in `scope` (a Repo Tab's slug, or `None`
+    /// for the All tab). `tier_of(pr)` returns the Smart-status tier for a PR,
+    /// or `None` when its enrichment hasn't been derived yet; the repo-grouping
+    /// key is read straight off each PR's `repo_slug`. Selection sticks to the
+    /// same PR when it remains visible and snaps to the first visible PR
+    /// otherwise; scroll re-clamps so the selection stays on-screen. Called by
+    /// `update` after PRs arrive, enrichment lands, or the grouping/scope
+    /// changes.
+    pub fn relayout(&mut self, scope: Option<&str>, tier_of: impl Fn(&PR) -> Option<Tier>) {
+        let needle = self.filter.text().to_lowercase();
+        let visible: Vec<usize> = (0..self.prs.len())
+            .filter(|&i| scope.is_none_or(|slug| self.prs[i].repo_slug == slug))
+            .filter(|&i| filter_matches(&self.prs[i], &needle))
+            .collect();
+        // `display_rows` keys on PR index; adapt the &PR closure (and the slug
+        // we own) into index closures. Build into a local so the index closures
+        // can borrow `self.prs` while we hold `&mut self`, then store the rows.
+        let prs = &self.prs;
+        let rows = display_rows(
+            &visible,
+            self.grouping,
+            |i| tier_of(&prs[i]),
+            |i| prs[i].repo_slug.clone(),
+        );
+        self.rows = rows;
+        if !visible.contains(&self.selected) {
+            self.selected = visible.first().copied().unwrap_or(0);
         }
         self.normalize_scroll();
+    }
+
+    /// Whether the current layout shows no PR rows at all — the placeholder
+    /// state. Distinct from `prs.is_empty()`: a Repo Tab or filter can hide
+    /// every pooled PR.
+    pub fn visible_is_empty(&self) -> bool {
+        !self.rows.iter().any(|r| matches!(r, DisplayRow::Pr(_)))
+    }
+
+    /// Whether `scope` (a Repo Tab's slug, or `None` for the All tab) admits any
+    /// pooled PR, ignoring the filter. Stateless — recomputed from `prs` rather
+    /// than cached — so it can't drift from the current PRs.
+    fn any_in_scope(&self, scope: Option<&str>) -> bool {
+        self.prs
+            .iter()
+            .any(|pr| scope.is_none_or(|s| pr.repo_slug == s))
+    }
+
+    /// True when the filter (not the tab) is why the list is empty: `scope`
+    /// admitted PRs but the filter text matched none. Drives the
+    /// "No matching PRs" placeholder.
+    pub fn filter_hid_everything(&self, scope: Option<&str>) -> bool {
+        self.visible_is_empty() && self.any_in_scope(scope) && !self.filter.text().is_empty()
+    }
+
+    pub fn filter(&self) -> &Filter {
+        &self.filter
+    }
+
+    /// `/` pressed: enter filter editing, resuming an applied filter's text so
+    /// `/` acts as "edit the current filter" rather than starting over.
+    pub fn filter_open(&mut self) {
+        self.filter = Filter::Editing(self.filter.text().to_owned());
+    }
+
+    pub fn filter_push(&mut self, c: char) {
+        if let Filter::Editing(text) = &mut self.filter {
+            text.push(c);
+        }
+    }
+
+    pub fn filter_backspace(&mut self) {
+        if let Filter::Editing(text) = &mut self.filter {
+            text.pop();
+        }
+    }
+
+    /// Enter pressed: lock the filter in (back to normal-mode keys, matches
+    /// still narrowed). Submitting empty text deactivates instead — an empty
+    /// `Applied` would be an invisible no-op chip.
+    pub fn filter_submit(&mut self) {
+        let text = self.filter.text().to_owned();
+        self.filter = if text.is_empty() {
+            Filter::Inactive
+        } else {
+            Filter::Applied(text)
+        };
+    }
+
+    /// Esc pressed (editing or applied): drop the filter entirely.
+    pub fn filter_clear(&mut self) {
+        self.filter = Filter::Inactive;
+    }
+
+    /// Absolute PR indices currently in the display layout (post scope), in
+    /// display order. The view sizes its columns from these so an off-tab PR
+    /// can't widen this tab's columns.
+    pub fn visible_pr_indices(&self) -> impl Iterator<Item = usize> + '_ {
+        self.rows.iter().filter_map(|row| match row {
+            DisplayRow::Pr(i) => Some(*i),
+            DisplayRow::Header(_) => None,
+        })
     }
 
     pub fn grouping(&self) -> Grouping {
@@ -105,6 +246,16 @@ impl PrList {
         self.grouping = self.grouping.next();
         self.selected = 0;
         self.scroll_offset = 0;
+    }
+
+    /// Reset the selection to the first visible PR and scroll to the top. Used
+    /// on tab switches, where the spec resets to the top of the new tab rather
+    /// than chasing the previously selected PR.
+    pub fn select_first_visible(&mut self) {
+        let first = self.visible_pr_indices().next().unwrap_or(0);
+        self.selected = first;
+        self.scroll_offset = 0;
+        self.normalize_scroll();
     }
 
     /// Move the selection to the next PR row in display order, skipping headers.
@@ -200,11 +351,13 @@ impl PrList {
         &self.prs
     }
 
-    /// Mutable access to a streamed PR by number, for enrichment that overwrites
+    /// Mutable access to a streamed PR by key, for enrichment that overwrites
     /// list fields in place (mergeable, review decision, size, head SHA). `None`
-    /// if no PR with that number is in the list.
-    pub fn pr_mut(&mut self, number: u64) -> Option<&mut PR> {
-        self.prs.iter_mut().find(|pr| pr.number == number)
+    /// if no PR with that key is in the list.
+    pub fn pr_mut(&mut self, key: &PrKey) -> Option<&mut PR> {
+        self.prs
+            .iter_mut()
+            .find(|pr| pr.repo_slug == key.repo_slug && pr.number == key.number)
     }
 
     /// Iterate the display rows currently inside the scroll viewport. Each item
@@ -223,15 +376,31 @@ impl PrList {
             .map(move |row| (row, row == &DisplayRow::Pr(selected)))
     }
 
-    pub fn phase(&self) -> &Phase {
-        &self.phase
+    /// Fetch phase for one Tracked Repo, or `None` when no fetch has been
+    /// dispatched for it yet. Test-only; the view asks the scope-aware
+    /// `is_loading` instead.
+    #[cfg(test)]
+    pub fn phase_of(&self, repo_slug: &str) -> Option<&Phase> {
+        self.phases.get(repo_slug)
     }
 
-    pub fn failure(&self) -> Option<&str> {
-        match &self.phase {
-            Phase::Failed(message) => Some(message),
-            _ => None,
+    /// Whether a listing is still in flight for `scope`: a specific repo slug,
+    /// or `None` meaning "any Tracked Repo" (the All tab).
+    pub fn is_loading(&self, scope: Option<&str>) -> bool {
+        match scope {
+            Some(slug) => self.phases.get(slug) == Some(&Phase::Loading),
+            None => self.phases.values().any(|p| *p == Phase::Loading),
         }
+    }
+
+    /// The per-repo failure the status bar surfaces: the first `Failed` phase in
+    /// slug order. `None` when no listing has failed. App-level fatals (a
+    /// malformed config) live on `Model::fatal` and take precedence in the view.
+    pub fn failure(&self) -> Option<&str> {
+        self.phases.values().find_map(|phase| match phase {
+            Phase::Failed(message) => Some(message.as_str()),
+            _ => None,
+        })
     }
 
     /// The PR index of the nearest selectable row in `direction` from `from`,
@@ -269,6 +438,7 @@ mod tests {
     fn sample_pr(number: u64) -> PR {
         PR {
             number,
+            repo_slug: "owner/repo".to_owned(),
             title: format!("PR #{number}"),
             author: "octocat".to_owned(),
             created_at: chrono::Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap(),
@@ -298,7 +468,7 @@ mod tests {
             list.push(sample_pr(i));
         }
         list.grouping = Grouping::None;
-        list.relayout(|_| None, "owner/repo");
+        list.relayout(None, |_| None);
         list
     }
 
@@ -323,9 +493,10 @@ mod tests {
     }
 
     #[test]
-    fn new_list_starts_idle() {
+    fn new_list_has_no_fetch_in_flight_and_no_failure() {
         let list = PrList::new();
-        assert!(matches!(list.phase(), super::Phase::Idle));
+        assert!(!list.is_loading(None));
+        assert_eq!(list.failure(), None);
     }
 
     #[test]
@@ -335,18 +506,30 @@ mod tests {
     }
 
     #[test]
-    fn begin_fetch_transitions_to_loading() {
+    fn begin_fetch_marks_only_that_repo_loading() {
         let mut list = PrList::new();
-        list.begin_fetch();
-        assert!(matches!(list.phase(), super::Phase::Loading));
+        list.begin_fetch("acme/web");
+
+        assert!(list.is_loading(None), "any-repo scope sees the fetch");
+        assert!(list.is_loading(Some("acme/web")));
+        assert!(
+            !list.is_loading(Some("acme/api")),
+            "an untouched repo is not loading"
+        );
     }
 
     #[test]
-    fn complete_fetch_transitions_to_loaded() {
+    fn complete_fetch_clears_loading_for_that_repo_only() {
         let mut list = PrList::new();
-        list.begin_fetch();
-        list.complete_fetch();
-        assert!(matches!(list.phase(), super::Phase::Loaded));
+        list.begin_fetch("acme/web");
+        list.begin_fetch("acme/api");
+
+        list.complete_fetch("acme/web");
+
+        assert!(!list.is_loading(Some("acme/web")));
+        assert!(list.is_loading(Some("acme/api")));
+        assert!(list.is_loading(None), "another repo is still in flight");
+        assert_eq!(list.phase_of("acme/web"), Some(&super::Phase::Loaded));
     }
 
     #[test]
@@ -377,21 +560,18 @@ mod tests {
 
     #[test]
     fn navigation_skips_group_headers() {
-        // Two tiers: me-blocking (index 0) and waiting-on-author (index 1).
+        // Two tiers: me-blocking (PR #1) and waiting-on-author (PR #2).
         // Layout: [Header, Pr(0), Header, Pr(1)]. j must step Pr(0) -> Pr(1).
         let mut list = PrList::new();
         list.push(sample_pr(1));
         list.push(sample_pr(2));
-        list.relayout(
-            |i| {
-                Some(if i == 0 {
-                    Tier::MeBlocking
-                } else {
-                    Tier::WaitingOnAuthor
-                })
-            },
-            "owner/repo",
-        );
+        list.relayout(None, |pr| {
+            Some(if pr.number == 1 {
+                Tier::MeBlocking
+            } else {
+                Tier::WaitingOnAuthor
+            })
+        });
 
         assert_eq!(list.selected(), 0);
         list.move_down();
@@ -502,12 +682,31 @@ mod tests {
     }
 
     #[test]
-    fn fail_fetch_records_failure_message() {
+    fn fail_fetch_records_failure_without_masking_other_repos() {
         let mut list = PrList::new();
-        list.begin_fetch();
-        list.fail_fetch("network down".to_owned());
+        list.begin_fetch("acme/web");
+        list.begin_fetch("acme/api");
 
-        assert!(matches!(list.phase(), super::Phase::Failed(_)));
+        list.fail_fetch("acme/web", "network down".to_owned());
+
         assert_eq!(list.failure(), Some("network down"));
+        assert!(
+            list.is_loading(Some("acme/api")),
+            "the other repo's fetch keeps going"
+        );
+        assert!(!list.is_loading(Some("acme/web")));
+    }
+
+    #[test]
+    fn failure_reports_first_failed_repo_in_slug_order() {
+        let mut list = PrList::new();
+        list.fail_fetch("zeta/repo", "zeta down".to_owned());
+        list.fail_fetch("acme/web", "acme down".to_owned());
+
+        assert_eq!(
+            list.failure(),
+            Some("acme down"),
+            "BTreeMap order makes the report deterministic"
+        );
     }
 }

@@ -22,10 +22,17 @@ mod tests;
 /// `#number | title | author | size | age | reason` row per PR.
 pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, now: DateTime<Utc>) {
     let pr_list = &model.list;
-    if pr_list.prs().is_empty() {
-        let text = match pr_list.phase() {
-            crate::app::pr_list::Phase::Loading => "Loading pull requests…",
-            _ => "No open pull requests",
+    if pr_list.visible_is_empty() {
+        // A filter that hid everything beats the fetch-state placeholders;
+        // both checks are judged against the active tab's scope (a repo tab
+        // shows its own repo's PRs and listing state, the All tab any repo).
+        let scope = model.active_scope();
+        let text = if pr_list.filter_hid_everything(scope.as_deref()) {
+            "No matching PRs"
+        } else if pr_list.is_loading(scope.as_deref()) {
+            "Loading pull requests…"
+        } else {
+            "No open pull requests"
         };
         let placeholder = Paragraph::new(Line::from(text)).alignment(Alignment::Center);
         frame.render_widget(placeholder, area);
@@ -34,15 +41,18 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, now: DateTime<Ut
 
     let width = area.width;
     let prs = pr_list.prs();
-    let pr_num_col = pr_num_col_width(prs);
-    let size_col = size_col_width(prs);
+    // Size columns to the visible PRs only, so an off-tab PR's wide number or
+    // diff size can't widen this tab's columns.
+    let visible: Vec<&PR> = pr_list.visible_pr_indices().map(|i| &prs[i]).collect();
+    let pr_num_col = pr_num_col_width(&visible);
+    let size_col = size_col_width(&visible);
     let lines: Vec<Line<'_>> = pr_list
         .visible_rows()
         .map(|(row, selected)| match row {
             DisplayRow::Header(label) => header_line(label, width),
             DisplayRow::Pr(index) => {
                 let pr = &prs[*index];
-                let reason = model.blockers.get(&pr.number).map(|b| b.reason.as_str());
+                let reason = model.blockers.get(&pr.key()).map(|b| b.reason.as_str());
                 row_line(pr, reason, width, pr_num_col, size_col, now, selected)
             }
         })
@@ -58,11 +68,11 @@ const AGE_COL: usize = 6;
 /// Width reserved for the trailing smart-status reason hint.
 const REASON_COL: usize = 24;
 
-/// Width of the `#<number>` column, sized to fit the widest PR number in the
-/// list. Floored at `PR_NUM_COL_MIN` so single-digit-PR repos still get a
+/// Width of the `#<number>` column, sized to fit the widest visible PR number.
+/// Floored at `PR_NUM_COL_MIN` so single-digit-PR repos still get a
 /// readable two-column gap; widens uniformly once PR numbers cross 5 chars
 /// (e.g. `#12345`) so the title column doesn't drift row-by-row.
-fn pr_num_col_width(prs: &[PR]) -> usize {
+fn pr_num_col_width(prs: &[&PR]) -> usize {
     let widest = prs
         .iter()
         .map(|pr| format!("#{}", pr.number).chars().count())
@@ -71,11 +81,11 @@ fn pr_num_col_width(prs: &[PR]) -> usize {
     widest.max(PR_NUM_COL_MIN)
 }
 
-/// Width of the `+A/-D` size column, sized to fit the widest size string in
-/// the list. Floored at `SIZE_COL_MIN` so the minimum `+0/-0` form sits in a
+/// Width of the `+A/-D` size column, sized to fit the widest visible size
+/// string. Floored at `SIZE_COL_MIN` so the minimum `+0/-0` form sits in a
 /// stable column; `format_size` has no upper bound (PRs can touch thousands
 /// of lines) so a fixed width would clip otherwise.
-fn size_col_width(prs: &[PR]) -> usize {
+fn size_col_width(prs: &[&PR]) -> usize {
     let widest = prs
         .iter()
         .map(|pr| format_size(pr.additions, pr.deletions).chars().count())

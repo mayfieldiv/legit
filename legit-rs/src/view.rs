@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
@@ -9,6 +9,7 @@ use ratatui::{
 
 use crate::app::grouping::Grouping;
 use crate::app::model::{Model, StatusKind};
+use crate::git_remote::RepoInfo;
 
 pub mod list;
 
@@ -23,18 +24,83 @@ fn grouping_label(model: &Model) -> &'static str {
 
 pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
     let area = frame.area();
-    let [main, status] = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .areas(area);
+    // Fixed four-row layout: tab bar, filter chip, list, status bar. The chip
+    // collapses to zero height while the filter is inactive, giving its row back
+    // to the list — which keeps the row count in step with `Model::chrome_rows`,
+    // the shared definition `sync_viewport` derives the viewport height from.
+    let filter_visible = model.list.filter().is_visible();
+    let [tabs, chip, main, status] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(u16::from(filter_visible)),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .areas(area);
 
+    render_tabs(model, frame, tabs);
+    if filter_visible {
+        render_filter_chip(model, frame, chip);
+    }
     list::render(model, frame, main, now);
     render_status(model, frame, status);
 }
 
+/// The filter chip above the list: `/text` plus a block cursor while editing;
+/// just the accented text once applied, so it reads as a sticky chip.
+fn render_filter_chip(model: &Model, frame: &mut Frame<'_>, area: Rect) {
+    let filter = model.list.filter();
+    let mut spans = vec![
+        Span::styled(
+            "/",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(filter.text().to_owned()),
+    ];
+    if filter.is_editing() {
+        spans.push(Span::styled("█", Style::default().fg(Color::Cyan)));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// The Repo Tab bar: `All` plus one tab per Tracked Repo, the active tab
+/// bracketed and accented (`[All]  acme/web `), matching the TS tab bar.
+fn render_tabs(model: &Model, frame: &mut Frame<'_>, area: Rect) {
+    let repos = model.tracked_repos();
+    // Highlight the active tab, falling back to the All tab (0) when `active_tab`
+    // is out of range — the same All-fallback policy `active_scope` applies to the
+    // list filter, mirrored here from the repos already in hand so the bar never
+    // rebuilds `tracked_repos`. Tab `i >= 1` maps to `repos[i - 1]`, so the
+    // highest in-range index is `repos.len()`.
+    let active = if model.active_tab <= repos.len() {
+        model.active_tab
+    } else {
+        0
+    };
+    let labels = std::iter::once("All".to_owned()).chain(repos.iter().map(RepoInfo::slug));
+    let mut spans = Vec::new();
+    for (i, label) in labels.enumerate() {
+        let (text, style) = if i == active {
+            (
+                format!("[{label}]"),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            (format!(" {label} "), Style::default())
+        };
+        spans.push(Span::styled(text, style));
+        spans.push(Span::raw(" "));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
 fn render_status(model: &Model, frame: &mut Frame<'_>, area: Rect) {
     // Left: a network-activity indicator (only while requests are in flight or
-    // queued) followed by key hints.
+    // queued) followed by key hints — the filter editor's own hints while it
+    // is open, the normal-mode hints otherwise.
     let mut left = Vec::new();
     let stats = model.network_stats;
     if stats.in_flight > 0 || stats.waiting > 0 {
@@ -48,22 +114,29 @@ fn render_status(model: &Model, frame: &mut Frame<'_>, area: Rect) {
         };
         left.push(Span::styled(indicator, Style::default().fg(Color::Cyan)));
     }
-    left.push(Span::styled(
-        "q",
-        Style::default().add_modifier(Modifier::BOLD),
-    ));
-    left.push(Span::raw(" quit  "));
-    left.push(Span::styled(
-        "g",
-        Style::default().add_modifier(Modifier::BOLD),
-    ));
-    left.push(Span::raw(format!(" group: {}", grouping_label(model))));
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    if model.list.filter().is_editing() {
+        left.push(Span::styled("enter", bold));
+        left.push(Span::raw(" apply  "));
+        left.push(Span::styled("esc", bold));
+        left.push(Span::raw(" clear"));
+    } else {
+        left.push(Span::styled("q", bold));
+        left.push(Span::raw(" quit  "));
+        left.push(Span::styled("g", bold));
+        left.push(Span::raw(format!(" group: {}", grouping_label(model))));
+        left.push(Span::raw("  "));
+        left.push(Span::styled("h/l", bold));
+        left.push(Span::raw(" tabs  "));
+        left.push(Span::styled("/", bold));
+        left.push(Span::raw(" filter"));
+    }
     frame.render_widget(Paragraph::new(Line::from(left)), area);
 
-    // Right: a hard list-load failure takes precedence; otherwise the transient
-    // status message (info / success / error). Rendered right-aligned over the
-    // same row so it sits opposite the hints.
-    if let Some(failure) = model.list.failure() {
+    // Right: an app-level fatal (a malformed config) wins, then a hard list-load
+    // failure, then the transient status message (info / success / error).
+    // Rendered right-aligned over the same row so it sits opposite the hints.
+    if let Some(failure) = model.fatal.as_deref().or_else(|| model.list.failure()) {
         let line = Line::from(vec![
             Span::styled("error: ", Style::default().fg(Color::Red)),
             Span::styled(failure.to_owned(), Style::default().fg(Color::Yellow)),

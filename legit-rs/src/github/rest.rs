@@ -30,6 +30,11 @@ pub enum PRState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PR {
     pub number: u64,
+    /// `owner/repo` slug of the Tracked Repo this PR belongs to. Supplied by
+    /// the caller from the repo it was fetched for (not parsed from the wire)
+    /// — PR numbers are only unique within a repo, so every cross-repo keyed
+    /// structure pairs this with `number` (see `PrKey`).
+    pub repo_slug: String,
     pub title: String,
     pub author: String,
     pub created_at: DateTime<Utc>,
@@ -48,6 +53,25 @@ pub struct PR {
     pub base_ref: String,
     pub head_repository_owner: String,
     pub state: PRState,
+}
+
+/// Globally-unique PR identity across Tracked Repos: PR numbers alone collide
+/// between repos, so every cross-repo keyed structure (enrichment maps, cached
+/// blockers) keys on slug + number.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PrKey {
+    pub repo_slug: String,
+    pub number: u64,
+}
+
+impl PR {
+    /// The cross-repo identity key for this PR.
+    pub fn key(&self) -> PrKey {
+        PrKey {
+            repo_slug: self.repo_slug.clone(),
+            number: self.number,
+        }
+    }
 }
 
 // ── Raw deserialization shape ───────────────────────────────────────────────
@@ -116,8 +140,10 @@ struct RawRepo {
     owner: Option<RawUser>,
 }
 
-/// Parse a raw REST pull request into the domain `PR`. Pure; tested directly.
-fn parse_pr(raw: RawRestPR) -> PR {
+/// Parse a raw REST pull request into the domain `PR`. The wire shape doesn't
+/// carry the slug of the repo the listing was made against, so the caller
+/// supplies it. Pure; tested directly.
+fn parse_pr(raw: RawRestPR, repo_slug: &str) -> PR {
     // GitHub reports merged PRs as state="closed" with merged_at set. Split
     // them into a distinct MERGED state so the UI can distinguish them from
     // PRs closed without being merged. The list endpoint omits `state`
@@ -143,6 +169,7 @@ fn parse_pr(raw: RawRestPR) -> PR {
 
     PR {
         number: raw.number,
+        repo_slug: repo_slug.to_owned(),
         title: raw.title,
         author: raw
             .user
@@ -210,11 +237,12 @@ impl OctocrabRest {
             .await
             .with_context(|| format!("listing open PRs for {owner}/{repo}"))?;
 
+        let repo_slug = format!("{owner}/{repo}");
         loop {
             let items = page.take_items();
             let count = items.len();
             for raw in items {
-                let pr = parse_pr(raw);
+                let pr = parse_pr(raw, &repo_slug);
                 if out.send(pr).is_err() {
                     tracing::debug!("pr receiver dropped; stopping pagination");
                     return Ok(());
@@ -473,11 +501,12 @@ mod tests {
                 "base": { "ref": "main" }
             }"#,
         );
-        let pr = parse_pr(raw);
+        let pr = parse_pr(raw, "mayfieldiv/legit");
         assert_eq!(
             pr,
             PR {
                 number: 42,
+                repo_slug: "mayfieldiv/legit".to_owned(),
                 title: "Add streaming PR list".to_owned(),
                 author: "octocat".to_owned(),
                 created_at: chrono::Utc.with_ymd_and_hms(2026, 5, 1, 10, 0, 0).unwrap(),
@@ -513,7 +542,7 @@ mod tests {
                 "base": { "ref": "main" }
             }"#,
         );
-        let pr = parse_pr(raw);
+        let pr = parse_pr(raw, "mayfieldiv/legit");
         assert_eq!(pr.author, "ghost");
     }
 
@@ -532,7 +561,7 @@ mod tests {
                 "base": { "ref": "main" }
             }"#,
         );
-        assert_eq!(parse_pr(raw).state, PRState::Closed);
+        assert_eq!(parse_pr(raw, "mayfieldiv/legit").state, PRState::Closed);
     }
 
     #[test]
@@ -550,7 +579,7 @@ mod tests {
                 "base": { "ref": "main" }
             }"#,
         );
-        assert_eq!(parse_pr(raw).state, PRState::Merged);
+        assert_eq!(parse_pr(raw, "mayfieldiv/legit").state, PRState::Merged);
     }
 
     #[test]
@@ -566,7 +595,7 @@ mod tests {
                 "base": { "ref": "main" }
             }"#,
         );
-        assert_eq!(parse_pr(raw).head_repository_owner, "");
+        assert_eq!(parse_pr(raw, "mayfieldiv/legit").head_repository_owner, "");
     }
 
     #[test]
@@ -582,7 +611,7 @@ mod tests {
                 "base": { "ref": "main" }
             }"#,
         );
-        let pr = parse_pr(raw);
+        let pr = parse_pr(raw, "mayfieldiv/legit");
         assert_eq!(pr.additions, 0);
         assert_eq!(pr.deletions, 0);
         assert_eq!(pr.mergeable, "UNKNOWN");

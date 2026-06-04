@@ -4,19 +4,34 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use crate::{
     app::{
         cmd::Cmd,
-        model::{Model, StatusKind},
+        model::{Model, RepoDetection, StatusKind},
         msg::Msg,
         pr_list::Phase,
         update::update,
     },
     git_remote::RepoInfo,
-    github::rest::{PR, PRState},
+    github::rest::{PR, PRState, PrKey},
     secret::Secret,
 };
 
-fn sample_pr(number: u64, title: &str) -> PR {
+mod enrichment;
+mod filter;
+mod multi_repo;
+mod tabs;
+
+/// The `PrKey` of `sample_pr(number, ..)` — every sample PR is stamped with
+/// the same Tracked Repo slug.
+pub(super) fn key(number: u64) -> PrKey {
+    PrKey {
+        repo_slug: "mayfieldiv/legit".to_owned(),
+        number,
+    }
+}
+
+pub(super) fn sample_pr(number: u64, title: &str) -> PR {
     PR {
         number,
+        repo_slug: "mayfieldiv/legit".to_owned(),
         title: title.to_owned(),
         author: "octocat".to_owned(),
         created_at: chrono::Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap(),
@@ -38,11 +53,76 @@ fn sample_pr(number: u64, title: &str) -> PR {
     }
 }
 
-fn key_event(code: KeyCode) -> Msg {
+pub(super) fn key_event(code: KeyCode) -> Msg {
     Msg::TerminalEvent(ratatui::crossterm::event::Event::Key(KeyEvent::new(
         code,
         ratatui::crossterm::event::KeyModifiers::NONE,
     )))
+}
+
+/// A `sample_pr` stamped with a specific Tracked Repo slug.
+pub(super) fn sample_pr_in(repo_slug: &str, number: u64, title: &str) -> PR {
+    PR {
+        repo_slug: repo_slug.to_owned(),
+        ..sample_pr(number, title)
+    }
+}
+
+/// A config tracking `slugs` (bare-slug entries), for fan-out tests.
+pub(super) fn config_with_repos(slugs: &[&str]) -> crate::config::LegitConfig {
+    crate::config::LegitConfig {
+        repos: slugs
+            .iter()
+            .map(|slug| crate::config::RepoConfig {
+                slug: (*slug).to_owned(),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    }
+}
+
+/// The repo slugs of every `FetchOpenPRs` in `cmds`, in dispatch order.
+pub(super) fn fetched_slugs(cmds: &[Cmd]) -> Vec<String> {
+    cmds.iter()
+        .map(|c| match c {
+            Cmd::FetchOpenPRs { repo, .. } => repo.slug(),
+            other => panic!("expected only FetchOpenPRs, got {other:?}"),
+        })
+        .collect()
+}
+
+/// A model with two Tracked Repos — acme/web (config) + mayfieldiv/legit
+/// (CWD) — and one PR streamed in from each. Tabs: 0 All, 1 acme/web,
+/// 2 mayfieldiv/legit.
+pub(super) fn tabbed_model() -> Model {
+    let (mut model, _) = Model::new();
+    model.config = config_with_repos(&["acme/web"]);
+    model.repo = RepoDetection::Detected(RepoInfo {
+        owner: "mayfieldiv".to_owned(),
+        repo: "legit".to_owned(),
+    });
+    update(
+        &mut model,
+        Msg::PrArrived(sample_pr_in("acme/web", 10, "web pr")),
+    );
+    update(&mut model, Msg::PrArrived(sample_pr(1, "legit pr")));
+    model
+}
+
+/// A model with auth + repo resolved and `numbers` streamed into the list.
+pub(super) fn enriched_model(numbers: &[u64]) -> Model {
+    let (mut model, _) = Model::new();
+    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.repo = RepoDetection::Detected(RepoInfo {
+        owner: "mayfieldiv".to_owned(),
+        repo: "legit".to_owned(),
+    });
+    model.list.begin_fetch("mayfieldiv/legit");
+    for n in numbers {
+        model.list.push(sample_pr(*n, "p"));
+    }
+    model
 }
 
 #[test]
@@ -154,23 +234,23 @@ fn dispatching_fetch_marks_list_as_loading() {
 
     let cmds = update(
         &mut model,
-        Msg::RepoDetected(RepoInfo {
+        Msg::RepoDetected(Some(RepoInfo {
             owner: "mayfieldiv".to_owned(),
             repo: "legit".to_owned(),
-        }),
+        })),
     );
 
     assert_eq!(cmds.len(), 1);
     assert!(
-        matches!(model.list.phase(), Phase::Loading),
-        "list should enter Loading phase on fetch dispatch",
+        model.list.is_loading(Some("mayfieldiv/legit")),
+        "the repo should enter Loading phase on fetch dispatch",
     );
 }
 
 #[test]
 fn pr_arrived_clears_loading_phase() {
     let (mut model, _) = Model::new();
-    model.list.begin_fetch();
+    model.list.begin_fetch("mayfieldiv/legit");
 
     update(&mut model, Msg::PrArrived(sample_pr(1, "a")));
 
@@ -180,23 +260,32 @@ fn pr_arrived_clears_loading_phase() {
 }
 
 #[test]
-fn pr_list_loaded_transitions_to_loaded() {
+fn pr_list_loaded_transitions_that_repo_to_loaded() {
     let (mut model, _) = Model::new();
-    model.list.begin_fetch();
+    model.list.begin_fetch("mayfieldiv/legit");
 
-    update(&mut model, Msg::PrListLoaded);
+    update(
+        &mut model,
+        Msg::PrListLoaded {
+            repo_slug: "mayfieldiv/legit".to_owned(),
+        },
+    );
 
-    assert!(matches!(model.list.phase(), Phase::Loaded));
+    assert_eq!(
+        model.list.phase_of("mayfieldiv/legit"),
+        Some(&Phase::Loaded)
+    );
 }
 
 #[test]
-fn pr_list_failed_transitions_to_failed_with_message() {
+fn pr_list_failed_transitions_that_repo_to_failed_with_message() {
     let (mut model, _) = Model::new();
-    model.list.begin_fetch();
+    model.list.begin_fetch("mayfieldiv/legit");
 
     update(
         &mut model,
         Msg::PrListFailed {
+            repo_slug: "mayfieldiv/legit".to_owned(),
             context: "list open PRs",
             error: "boom".to_owned(),
         },
@@ -207,6 +296,7 @@ fn pr_list_failed_transitions_to_failed_with_message() {
         .failure()
         .expect("phase should be Failed after PrListFailed");
     assert!(failure.contains("list open PRs"));
+    assert!(failure.contains("mayfieldiv/legit"), "names the repo");
     assert!(failure.contains("boom"));
 }
 
@@ -227,13 +317,13 @@ fn repo_detected_without_token_stores_repo_but_does_not_fetch() {
 
     let cmds = update(
         &mut model,
-        Msg::RepoDetected(RepoInfo {
+        Msg::RepoDetected(Some(RepoInfo {
             owner: "mayfieldiv".to_owned(),
             repo: "legit".to_owned(),
-        }),
+        })),
     );
 
-    let repo = model.repo.as_ref().expect("repo info stored");
+    let repo = model.repo.repo().expect("repo info stored");
     assert_eq!(repo.owner, "mayfieldiv");
     assert_eq!(repo.repo, "legit");
     assert!(
@@ -250,10 +340,10 @@ fn repo_detected_after_token_dispatches_fetch_open_prs() {
 
     let cmds = update(
         &mut model,
-        Msg::RepoDetected(RepoInfo {
+        Msg::RepoDetected(Some(RepoInfo {
             owner: "mayfieldiv".to_owned(),
             repo: "legit".to_owned(),
-        }),
+        })),
     );
 
     assert_eq!(cmds.len(), 1);
@@ -274,10 +364,10 @@ fn fetch_waits_for_config_even_with_auth_and_repo() {
 
     let cmds = update(
         &mut model,
-        Msg::RepoDetected(RepoInfo {
+        Msg::RepoDetected(Some(RepoInfo {
             owner: "mayfieldiv".to_owned(),
             repo: "legit".to_owned(),
-        }),
+        })),
     );
 
     assert!(
@@ -285,7 +375,7 @@ fn fetch_waits_for_config_even_with_auth_and_repo() {
         "fetch must wait for config so blockers aren't derived without the user"
     );
     assert!(
-        !matches!(model.list.phase(), Phase::Loading),
+        !model.list.is_loading(None),
         "the list must not enter Loading until the fetch actually dispatches"
     );
 }
@@ -294,7 +384,7 @@ fn fetch_waits_for_config_even_with_auth_and_repo() {
 fn config_loaded_releases_the_fetch_when_auth_and_repo_already_landed() {
     let (mut model, _) = Model::new();
     model.auth_token = Some(Secret::new("ghp_test".to_owned()));
-    model.repo = Some(RepoInfo {
+    model.repo = RepoDetection::Detected(RepoInfo {
         owner: "mayfieldiv".to_owned(),
         repo: "legit".to_owned(),
     });
@@ -311,10 +401,10 @@ fn config_loaded_releases_the_fetch_when_auth_and_repo_already_landed() {
 }
 
 #[test]
-fn config_load_failed_halts_the_list_and_does_not_fetch() {
+fn config_load_failed_records_a_fatal_and_does_not_fetch() {
     let (mut model, _) = Model::new();
     model.auth_token = Some(Secret::new("ghp_test".to_owned()));
-    model.repo = Some(RepoInfo {
+    model.repo = RepoDetection::Detected(RepoInfo {
         owner: "mayfieldiv".to_owned(),
         repo: "legit".to_owned(),
     });
@@ -328,18 +418,72 @@ fn config_load_failed_halts_the_list_and_does_not_fetch() {
 
     assert!(
         cmds.is_empty(),
-        "a malformed config halts: no fetch, and no scheduled clear (the failure is persistent)"
+        "a malformed config is fatal: no fetch, and no scheduled clear (the failure is persistent)"
     );
     assert!(
         !model.config_loaded,
         "a failed load must not release the fetch gate"
     );
-    let failure = model
-        .list
-        .failure()
-        .expect("list should be in the Failed phase after ConfigLoadFailed");
-    assert!(failure.contains("config error"));
-    assert!(failure.contains("invalid bot_logins entry"));
+    let fatal = model
+        .fatal
+        .as_deref()
+        .expect("a malformed config must record an app-level fatal error");
+    assert!(fatal.contains("config error"));
+    assert!(fatal.contains("invalid bot_logins entry"));
+}
+
+#[test]
+fn detection_failure_with_config_repos_still_fetches_them() {
+    // Outside a git repo (or no GitHub remote), `Cmd::DetectRepo` fails and
+    // `update` sees `Msg::RepoDetected(None)`. That must settle the gate so the
+    // configured Tracked Repos still fetch — not wedge the app at an empty list.
+    let (mut model, _) = Model::new();
+    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.config = config_with_repos(&["acme/web", "acme/api"]);
+    model.config_loaded = true;
+
+    let cmds = update(&mut model, Msg::RepoDetected(None));
+
+    assert!(matches!(model.repo, RepoDetection::Failed));
+    // No CWD repo to append; only the configured repos fetch.
+    assert_eq!(fetched_slugs(&cmds), ["acme/web", "acme/api"]);
+}
+
+#[test]
+fn detection_failure_without_config_repos_does_not_fetch_but_surfaces_error() {
+    // Detection fails AND there are no configured repos: nothing to fetch, but
+    // the failure must still reach the user. `Cmd::DetectRepo` emits a
+    // `CommandFailed` (a transient error status) alongside `RepoDetected(None)`;
+    // assert that status surface and that the settled gate yields no fetch.
+    let (mut model, _) = Model::new();
+    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.config_loaded = true;
+
+    let status_cmds = update(
+        &mut model,
+        Msg::CommandFailed {
+            context: "detect repo",
+            error: "not a git repository".to_owned(),
+        },
+    );
+    let fetch_cmds = update(&mut model, Msg::RepoDetected(None));
+
+    assert!(matches!(model.repo, RepoDetection::Failed));
+    assert!(
+        fetch_cmds.is_empty(),
+        "no Tracked Repos at all, so nothing fetches"
+    );
+    // The user can see the detection error in the status bar.
+    let status = model.status.as_ref().expect("error status set");
+    assert_eq!(status.kind, StatusKind::Error);
+    assert!(status.text.contains("detect repo"));
+    assert!(status.text.contains("not a git repository"));
+    // And that error scheduled its own auto-clear.
+    assert!(
+        status_cmds
+            .iter()
+            .any(|c| matches!(c, Cmd::ScheduleStatusClear { .. })),
+    );
 }
 
 #[test]
@@ -393,9 +537,9 @@ fn terminal_resize_updates_viewport_and_keeps_selection_visible() {
     }
     update(
         &mut model,
-        Msg::TerminalEvent(ratatui::crossterm::event::Event::Resize(80, 21)),
+        Msg::TerminalEvent(ratatui::crossterm::event::Event::Resize(80, 22)),
     );
-    // Viewport_height = terminal_height - 1 (status bar).
+    // Viewport_height = terminal_height - 2 (tab bar + status bar).
     assert_eq!(model.list.viewport_height(), 20);
 
     // Drive the selection deep into the list.
@@ -410,7 +554,7 @@ fn terminal_resize_updates_viewport_and_keeps_selection_visible() {
     // Shrink: selection must remain on-screen after re-clamp.
     update(
         &mut model,
-        Msg::TerminalEvent(ratatui::crossterm::event::Event::Resize(80, 6)),
+        Msg::TerminalEvent(ratatui::crossterm::event::Event::Resize(80, 7)),
     );
     assert_eq!(model.list.viewport_height(), 5);
     assert!(
@@ -483,7 +627,7 @@ fn j_skips_group_headers_when_smart_status_grouping_has_tiers() {
     update(&mut model, Msg::PrArrived(sample_pr(2, "waiting")));
     // Seed two tiers so the layout has two headers between the PR rows.
     model.blockers.insert(
-        1,
+        key(1),
         BlockerResult {
             blocker: "me".to_owned(),
             tier: Tier::MeBlocking,
@@ -491,7 +635,7 @@ fn j_skips_group_headers_when_smart_status_grouping_has_tiers() {
         },
     );
     model.blockers.insert(
-        2,
+        key(2),
         BlockerResult {
             blocker: "charlie".to_owned(),
             tier: Tier::WaitingOnAuthor,
@@ -517,6 +661,7 @@ fn pr_list_failed_keeps_already_arrived_prs() {
     let cmds = update(
         &mut model,
         Msg::PrListFailed {
+            repo_slug: "mayfieldiv/legit".to_owned(),
             context: "list open PRs",
             error: "network down".to_owned(),
         },
@@ -531,289 +676,4 @@ fn pr_list_failed_keeps_already_arrived_prs() {
     assert!(failure.contains("list open PRs"));
     assert!(failure.contains("network down"));
     assert!(cmds.is_empty());
-}
-
-// ── enrichment ──────────────────────────────────────────────────────────
-
-use crate::github::types::ReviewStatus;
-
-/// A model with auth + repo resolved and `numbers` streamed into the list.
-fn enriched_model(numbers: &[u64]) -> Model {
-    let (mut model, _) = Model::new();
-    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
-    model.repo = Some(RepoInfo {
-        owner: "mayfieldiv".to_owned(),
-        repo: "legit".to_owned(),
-    });
-    model.list.begin_fetch();
-    for n in numbers {
-        model.list.push(sample_pr(*n, "p"));
-    }
-    model
-}
-
-fn review_status(head_sha: Option<&str>) -> ReviewStatus {
-    ReviewStatus {
-        additions: 12,
-        deletions: 4,
-        review_decision: "APPROVED".to_owned(),
-        mergeable: "MERGEABLE".to_owned(),
-        last_commit_date: None,
-        head_commit_sha: head_sha.map(str::to_owned),
-    }
-}
-
-#[test]
-fn pr_list_loaded_fans_out_enrichment_per_pr() {
-    let mut model = enriched_model(&[1, 2]);
-
-    let cmds = update(&mut model, Msg::PrListLoaded);
-
-    // 1 batched review-status + (threads + reviews + issue-comments) per PR.
-    assert_eq!(cmds.len(), 1 + 2 * 3);
-    match &cmds[0] {
-        Cmd::FetchReviewStatus { pr_numbers, .. } => assert_eq!(pr_numbers, &[1, 2]),
-        other => panic!("first cmd should batch review status, got {other:?}"),
-    }
-    let threads = cmds
-        .iter()
-        .filter(|c| matches!(c, Cmd::FetchThreads { .. }))
-        .count();
-    let reviews = cmds
-        .iter()
-        .filter(|c| matches!(c, Cmd::FetchReviews { .. }))
-        .count();
-    let comments = cmds
-        .iter()
-        .filter(|c| matches!(c, Cmd::FetchIssueComments { .. }))
-        .count();
-    assert_eq!((threads, reviews, comments), (2, 2, 2));
-    // Checks are NOT fanned out yet — they wait on review-status SHAs.
-    assert!(!cmds.iter().any(|c| matches!(c, Cmd::FetchChecks { .. })));
-}
-
-#[test]
-fn pr_list_loaded_with_empty_list_fans_out_nothing() {
-    let mut model = enriched_model(&[]);
-
-    let cmds = update(&mut model, Msg::PrListLoaded);
-
-    assert!(cmds.is_empty());
-}
-
-#[test]
-fn pr_list_loaded_without_auth_fans_out_nothing() {
-    let (mut model, _) = Model::new();
-    model.repo = Some(RepoInfo {
-        owner: "mayfieldiv".to_owned(),
-        repo: "legit".to_owned(),
-    });
-    model.list.begin_fetch();
-    model.list.push(sample_pr(1, "p"));
-
-    let cmds = update(&mut model, Msg::PrListLoaded);
-
-    assert!(
-        cmds.is_empty(),
-        "no enrichment until the auth token resolves"
-    );
-}
-
-#[test]
-fn review_status_arrived_overwrites_pr_fields_and_fetches_checks() {
-    let mut model = enriched_model(&[1]);
-
-    let cmds = update(
-        &mut model,
-        Msg::ReviewStatusArrived {
-            pr_number: 1,
-            status: review_status(Some("abc123")),
-        },
-    );
-
-    let pr = &model.list.prs()[0];
-    assert_eq!(pr.additions, 12);
-    assert_eq!(pr.deletions, 4);
-    assert_eq!(pr.review_decision, "APPROVED");
-    assert_eq!(pr.mergeable, "MERGEABLE");
-    assert_eq!(pr.head_commit_sha.as_deref(), Some("abc123"));
-
-    assert_eq!(cmds.len(), 1);
-    match &cmds[0] {
-        Cmd::FetchChecks { head_sha, .. } => assert_eq!(head_sha, "abc123"),
-        other => panic!("expected FetchChecks for the new head SHA, got {other:?}"),
-    }
-}
-
-#[test]
-fn review_status_arrived_without_sha_skips_checks() {
-    let mut model = enriched_model(&[1]);
-
-    let cmds = update(
-        &mut model,
-        Msg::ReviewStatusArrived {
-            pr_number: 1,
-            status: review_status(None),
-        },
-    );
-
-    assert_eq!(model.list.prs()[0].mergeable, "MERGEABLE");
-    assert!(cmds.is_empty(), "no SHA means no checks fetch");
-}
-
-#[test]
-fn review_status_arrived_for_unknown_pr_is_a_noop() {
-    let mut model = enriched_model(&[1]);
-
-    let cmds = update(
-        &mut model,
-        Msg::ReviewStatusArrived {
-            pr_number: 999,
-            status: review_status(Some("abc123")),
-        },
-    );
-
-    // The known PR is untouched and no checks are fetched for the stray SHA.
-    assert_eq!(model.list.prs()[0].mergeable, "UNKNOWN");
-    assert!(cmds.is_empty());
-}
-
-#[test]
-fn review_status_arrived_skips_checks_already_fetched_for_sha() {
-    let mut model = enriched_model(&[1]);
-    model
-        .enrichment
-        .checks
-        .insert("abc123".to_owned(), Vec::new());
-
-    let cmds = update(
-        &mut model,
-        Msg::ReviewStatusArrived {
-            pr_number: 1,
-            status: review_status(Some("abc123")),
-        },
-    );
-
-    assert!(
-        cmds.is_empty(),
-        "checks already present for this SHA; don't refetch"
-    );
-}
-
-#[test]
-fn threads_arrived_stores_threads_by_pr_number() {
-    let mut model = enriched_model(&[1]);
-    let thread = crate::github::types::FullReviewThread {
-        id: "T1".to_owned(),
-        is_resolved: false,
-        path: "src/x".to_owned(),
-        line: Some(3),
-        comments: Vec::new(),
-    };
-
-    let cmds = update(
-        &mut model,
-        Msg::ThreadsArrived {
-            pr_number: 1,
-            threads: vec![thread.clone()],
-        },
-    );
-
-    assert_eq!(model.enrichment.review_threads.get(&1), Some(&vec![thread]));
-    assert!(cmds.is_empty());
-}
-
-#[test]
-fn reviews_arrived_stores_reviews_by_pr_number() {
-    let mut model = enriched_model(&[1]);
-    let review = crate::github::types::Review {
-        user: "alice".to_owned(),
-        state: "APPROVED".to_owned(),
-    };
-
-    update(
-        &mut model,
-        Msg::ReviewsArrived {
-            pr_number: 1,
-            reviews: vec![review.clone()],
-        },
-    );
-
-    assert_eq!(model.enrichment.reviews.get(&1), Some(&vec![review]));
-}
-
-#[test]
-fn checks_arrived_stores_checks_by_head_sha() {
-    let mut model = enriched_model(&[1]);
-    let check = crate::github::types::CheckRun {
-        name: "build".to_owned(),
-        status: "completed".to_owned(),
-        conclusion: Some("success".to_owned()),
-    };
-
-    update(
-        &mut model,
-        Msg::ChecksArrived {
-            head_sha: "abc123".to_owned(),
-            checks: vec![check.clone()],
-        },
-    );
-
-    assert_eq!(model.enrichment.checks.get("abc123"), Some(&vec![check]));
-}
-
-#[test]
-fn issue_comments_arrived_stores_comments_by_pr_number() {
-    let mut model = enriched_model(&[1]);
-    let comment = crate::github::types::IssueComment {
-        id: 7,
-        author: "bob".to_owned(),
-        body: "lgtm".to_owned(),
-        created_at: chrono::Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap(),
-        url: "u".to_owned(),
-        is_bot: false,
-    };
-
-    update(
-        &mut model,
-        Msg::IssueCommentsArrived {
-            pr_number: 1,
-            comments: vec![comment.clone()],
-        },
-    );
-
-    assert_eq!(
-        model.enrichment.issue_comments.get(&1),
-        Some(&vec![comment])
-    );
-}
-
-#[test]
-fn enrichment_failure_records_error_and_keeps_data() {
-    let mut model = enriched_model(&[1]);
-    model.enrichment.reviews.insert(
-        1,
-        vec![crate::github::types::Review {
-            user: "alice".to_owned(),
-            state: "APPROVED".to_owned(),
-        }],
-    );
-
-    let cmds = update(
-        &mut model,
-        Msg::CommandFailed {
-            context: "fetch check runs",
-            error: "500 Server Error".to_owned(),
-        },
-    );
-
-    let status = model.status.as_ref().expect("error status recorded");
-    assert_eq!(status.kind, StatusKind::Error);
-    assert!(status.text.contains("fetch check runs"));
-    assert!(status.text.contains("500 Server Error"));
-    // Best-effort: nothing already loaded is dropped on a failure.
-    assert_eq!(model.list.prs().len(), 1);
-    assert!(model.enrichment.reviews.contains_key(&1));
-    // The error message is scheduled to auto-clear.
-    assert!(matches!(cmds.as_slice(), [Cmd::ScheduleStatusClear { .. }]));
 }
