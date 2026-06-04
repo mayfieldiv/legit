@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::{
     blocker::{BlockerOptions, BlockerResult, compute_blocker},
     config::LegitConfig,
+    file_category::FileCategorization,
     git_remote::RepoInfo,
     github::limiter::NetworkStats,
     github::rest::PrKey,
@@ -25,6 +26,11 @@ pub struct Enrichment {
     pub reviews: HashMap<PrKey, Vec<Review>>,
     pub issue_comments: HashMap<PrKey, Vec<IssueComment>>,
     pub checks: HashMap<(String, String), Vec<CheckRun>>,
+    /// Categorised file changes per PR, fetched on selection change and
+    /// categorised in `update` against the config `file_rules`. Keyed by
+    /// `PrKey`; absent until `Msg::FilesArrived` lands for that PR. Consumed by
+    /// the summary panel's File Category breakdown.
+    pub files: HashMap<PrKey, FileCategorization>,
 }
 
 /// Severity of a transient status-bar message. Drives both styling and how long

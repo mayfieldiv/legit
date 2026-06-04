@@ -6,9 +6,10 @@
 //! `blocker` and `format` modules.
 //!
 //! The whole public surface (`categorize` + its result types) is consumed by
-//! the summary panel wiring in part 2 (issue #49); until that lands nothing in
-//! the binary calls it, so the module opts out of `dead_code` wholesale rather
-//! than scattering `#[allow]` over every type.
+//! the summary panel wiring in part 2 (issue #49); the `Cmd::FetchFiles` ->
+//! `Msg::FilesArrived` path that calls `categorize` from `update` lands in the
+//! same change set, so the module keeps opting out of `dead_code` wholesale
+//! until that wiring is in place.
 #![allow(dead_code)]
 
 use std::sync::LazyLock;
@@ -50,6 +51,18 @@ impl FileCategory {
             "docs" => Some(FileCategory::Docs),
             "config" => Some(FileCategory::Config),
             _ => None,
+        }
+    }
+
+    /// The category's lowercase label, as the config `fileRules` strings and the
+    /// summary panel's breakdown rows spell it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FileCategory::Code => "code",
+            FileCategory::Test => "test",
+            FileCategory::Generated => "generated",
+            FileCategory::Docs => "docs",
+            FileCategory::Config => "config",
         }
     }
 }
@@ -122,6 +135,20 @@ pub fn categorize(files: &[FileChange], user_rules: &[FileRule]) -> FileCategori
 }
 
 impl Breakdown {
+    /// The five per-category rows in display order, paired with their category.
+    /// The summary panel iterates this rather than reaching into the named
+    /// fields, so the render and the struct can't drift out of order. The
+    /// `total` row is read separately.
+    pub fn category_rows(&self) -> [(FileCategory, CategoryStats); 5] {
+        [
+            (FileCategory::Code, self.code),
+            (FileCategory::Test, self.test),
+            (FileCategory::Generated, self.generated),
+            (FileCategory::Docs, self.docs),
+            (FileCategory::Config, self.config),
+        ]
+    }
+
     /// Mutable reference to the per-category row for `category`.
     fn row(&mut self, category: FileCategory) -> &mut CategoryStats {
         match category {

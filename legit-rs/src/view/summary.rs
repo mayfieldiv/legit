@@ -76,6 +76,7 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect) {
     lines.extend(reviews_lines(model, pr));
     lines.push(threads_line(model, pr));
     lines.extend(checks_lines(model, pr));
+    lines.extend(files_lines(model, pr));
 
     frame.render_widget(Paragraph::new(lines), area);
 }
@@ -324,6 +325,49 @@ fn check_icon(check: &CheckRun) -> (&'static str, Color) {
         Some("stale") => ("⟳", Color::Yellow),
         _ => ("?", Color::Gray),
     }
+}
+
+/// The File Category breakdown section: a `files` header, then one indented row
+/// per non-empty category (`code: +14/-3 (2)`), plus a `total` row. `Loading…`
+/// until the files fetch arrives and is categorised in `update`.
+fn files_lines(model: &Model, pr: &crate::github::rest::PR) -> Vec<Line<'static>> {
+    let Some(categorization) = model.enrichment.files.get(&pr.key()) else {
+        return vec![header_with_loading("files")];
+    };
+    let breakdown = &categorization.breakdown;
+
+    let mut lines = vec![Line::from(section_header("files"))];
+    for (category, stats) in breakdown.category_rows() {
+        if stats.files == 0 {
+            continue;
+        }
+        lines.push(category_row(
+            category.as_str(),
+            stats.additions,
+            stats.deletions,
+            stats.files,
+        ));
+    }
+    // The total row sums every category (or reads 0/0 (0) for an empty diff).
+    let total = breakdown.total;
+    lines.push(category_row(
+        "total",
+        total.additions,
+        total.deletions,
+        total.files,
+    ));
+    lines
+}
+
+/// One indented breakdown row: `  <label>: +A/-D (N)`.
+fn category_row(label: &str, additions: u64, deletions: u64, files: u64) -> Line<'static> {
+    Line::from(vec![
+        Span::raw(format!("  {label}: ")),
+        Span::raw(format!(
+            "{} ({files})",
+            crate::format::format_size(additions, deletions)
+        )),
+    ])
 }
 
 /// A muted section-header span (e.g. `reviews`, `checks`).

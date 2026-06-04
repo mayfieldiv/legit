@@ -128,6 +128,22 @@ fn check(name: &str, status: &str, conclusion: Option<&str>) -> crate::github::t
     }
 }
 
+/// Seed categorised files for the selected PR, running `categorize` with no
+/// user rules (the built-in heuristics decide categories).
+fn with_files(model: &mut Model, paths: &[(&str, u64, u64)]) {
+    let key = model.list.selected_pr().expect("a PR is selected").key();
+    let changes: Vec<crate::file_category::FileChange> = paths
+        .iter()
+        .map(|(path, add, del)| crate::file_category::FileChange {
+            path: (*path).to_owned(),
+            additions: *add,
+            deletions: *del,
+        })
+        .collect();
+    let categorization = crate::file_category::categorize(&changes, &[]);
+    model.enrichment.files.insert(key, categorization);
+}
+
 /// Render the whole frame at `width`x`height` and return the panel's columns
 /// (everything right of the list/summary split), excluding the tab bar and
 /// status bar rows. The panel width matches `panel_width(width)`.
@@ -338,6 +354,41 @@ fn checks_show_loading_until_arrived() {
     assert!(
         rows.iter().any(|r| r.to_lowercase().contains("check")),
         "checks section present: {rows:?}"
+    );
+}
+
+#[test]
+fn renders_file_category_breakdown_per_category() {
+    let mut model = model_with_selected(sample_pr(42, "Add the thing"));
+    with_files(
+        &mut model,
+        &[
+            ("src/app.rs", 10, 2),     // code
+            ("README.md", 3, 0),       // docs
+            ("src/app_test.rs", 4, 1), // still code (no test heuristic match)
+        ],
+    );
+
+    let rows = panel_rows(&model, 140, 34);
+    let joined = rows.join("\n");
+
+    // A code row with its combined size and a docs row.
+    assert!(joined.contains("code"), "code category row: {rows:?}");
+    assert!(joined.contains("docs"), "docs category row: {rows:?}");
+    // Code adds 10+4 = 14, deletes 2+1 = 3.
+    assert!(joined.contains("+14/-3"), "code size: {rows:?}");
+    assert!(joined.contains("+3/-0"), "docs size: {rows:?}");
+}
+
+#[test]
+fn files_show_loading_until_arrived() {
+    let model = model_with_selected(sample_pr(42, "Add the thing"));
+
+    let rows = panel_rows(&model, 140, 34);
+
+    assert!(
+        rows.iter().any(|r| r.to_lowercase().contains("files")),
+        "files section present: {rows:?}"
     );
 }
 
