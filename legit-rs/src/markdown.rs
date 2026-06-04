@@ -75,10 +75,6 @@ fn heading_style(depth: u8) -> Style {
 struct InlineStyle {
     bold: bool,
     italic: bool,
-    /// Inside an image tag — text children become the alt text. Alt text is
-    /// accumulated into `RenderCtx::image_alt` (not the shared line buffer)
-    /// so that preceding inline content on the same line is not swallowed.
-    image: bool,
     /// Destination URL for the innermost Link tag, set on Start(Link) and
     /// consumed (taken) on End(Link) to emit " (url)".
     link_url: Option<String>,
@@ -239,13 +235,13 @@ impl RenderCtx {
                 self.inline.link_url = Some(dest_url.into_string());
             }
             Event::Start(Tag::Image { dest_url, .. }) => {
-                self.inline.image = true;
                 // Stash the image URL separately so we can fall back to it
                 // when alt is empty, without clobbering any enclosing link's
                 // URL that may already be in `link_url`.
                 self.inline.image_url = Some(dest_url.into_string());
                 // Open a dedicated alt buffer; text children will append here
-                // instead of the shared line buffer.
+                // instead of the shared line buffer. image_alt being Some is
+                // the authoritative signal that we are inside an image tag.
                 self.image_alt = Some(String::new());
             }
             // ── Inline closes ────────────────────────────────────────────────
@@ -391,7 +387,6 @@ impl RenderCtx {
             format!("[image: {label}]"),
             Style::default().fg(MUTED),
         ));
-        self.inline.image = false;
     }
 
     // ── Text ──────────────────────────────────────────────────────────────────
@@ -408,7 +403,7 @@ impl RenderCtx {
             }
             return;
         }
-        if self.inline.image {
+        if self.image_alt.is_some() {
             // Accumulate alt text into the dedicated buffer; consumed by
             // end_image. Writing to `image_alt` (not the shared `current`)
             // ensures preceding inline content on the same line is never
