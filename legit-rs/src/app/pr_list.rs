@@ -81,9 +81,6 @@ pub struct PrList {
     /// Per-Tracked-Repo fetch lifecycle, keyed by slug. BTreeMap so `failure`
     /// reports deterministically (alphabetical) when several repos fail.
     phases: BTreeMap<String, Phase>,
-    /// A failure that halts the whole list regardless of per-repo phases
-    /// (today: a malformed config, which blocks every fetch).
-    halt: Option<String>,
     /// The substring filter narrowing the visible set (with the active tab).
     filter: Filter,
     grouping: Grouping,
@@ -128,12 +125,6 @@ impl PrList {
     pub fn fail_fetch(&mut self, repo_slug: &str, message: String) {
         self.phases
             .insert(repo_slug.to_owned(), Phase::Failed(message));
-    }
-
-    /// Record a failure that halts the whole list (no per-repo fetch will
-    /// recover it). Takes precedence over per-repo failures in `failure`.
-    pub fn halt(&mut self, message: String) {
-        self.halt = Some(message);
     }
 
     pub fn push(&mut self, pr: PR) {
@@ -389,9 +380,9 @@ impl PrList {
     }
 
     /// Fetch phase for one Tracked Repo, or `None` when no fetch has been
-    /// dispatched for it yet. Exposed for tests/inspection; the view asks the
-    /// scope-aware `is_loading` instead.
-    #[allow(dead_code)]
+    /// dispatched for it yet. Test-only; the view asks the scope-aware
+    /// `is_loading` instead.
+    #[cfg(test)]
     pub fn phase_of(&self, repo_slug: &str) -> Option<&Phase> {
         self.phases.get(repo_slug)
     }
@@ -405,12 +396,10 @@ impl PrList {
         }
     }
 
-    /// The failure the status bar surfaces: a halting failure first, then the
-    /// first per-repo failure in slug order. `None` when everything is healthy.
+    /// The per-repo failure the status bar surfaces: the first `Failed` phase in
+    /// slug order. `None` when no listing has failed. App-level fatals (a
+    /// malformed config) live on `Model::fatal` and take precedence in the view.
     pub fn failure(&self) -> Option<&str> {
-        if let Some(message) = &self.halt {
-            return Some(message);
-        }
         self.phases.values().find_map(|phase| match phase {
             Phase::Failed(message) => Some(message.as_str()),
             _ => None,
@@ -722,14 +711,5 @@ mod tests {
             Some("acme down"),
             "BTreeMap order makes the report deterministic"
         );
-    }
-
-    #[test]
-    fn halt_takes_precedence_over_per_repo_failures() {
-        let mut list = PrList::new();
-        list.fail_fetch("acme/web", "network down".to_owned());
-        list.halt("config error: bad json".to_owned());
-
-        assert_eq!(list.failure(), Some("config error: bad json"));
     }
 }

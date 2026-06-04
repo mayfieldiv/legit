@@ -68,7 +68,7 @@ fn render_filter_chip(model: &Model, frame: &mut Frame<'_>, area: Rect) {
 /// bracketed and accented (`[All]  acme/web `), matching the TS tab bar.
 fn render_tabs(model: &Model, frame: &mut Frame<'_>, area: Rect) {
     let repos = model.tracked_repos();
-    let active = model.active_tab.min(repos.len());
+    let active = model.active_tab_index();
     let labels = std::iter::once("All".to_owned()).chain(repos.iter().map(RepoInfo::slug));
     let mut spans = Vec::new();
     for (i, label) in labels.enumerate() {
@@ -124,10 +124,10 @@ fn render_status(model: &Model, frame: &mut Frame<'_>, area: Rect) {
     }
     frame.render_widget(Paragraph::new(Line::from(left)), area);
 
-    // Right: a hard list-load failure takes precedence; otherwise the transient
-    // status message (info / success / error). Rendered right-aligned over the
-    // same row so it sits opposite the hints.
-    if let Some(failure) = model.list.failure() {
+    // Right: an app-level fatal (a malformed config) wins, then a hard list-load
+    // failure, then the transient status message (info / success / error).
+    // Rendered right-aligned over the same row so it sits opposite the hints.
+    if let Some(failure) = model.fatal.as_deref().or_else(|| model.list.failure()) {
         let line = Line::from(vec![
             Span::styled("error: ", Style::default().fg(Color::Red)),
             Span::styled(failure.to_owned(), Style::default().fg(Color::Yellow)),

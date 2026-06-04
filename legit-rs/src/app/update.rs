@@ -335,10 +335,10 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
         }
         Msg::ConfigLoadFailed { error } => {
             // Config is a hard prerequisite (current user + bot logins drive
-            // smart-status), so a malformed config halts the list with a
-            // persistent failure instead of fetching with wrong defaults.
+            // smart-status), so a malformed config is an app-level fatal that
+            // blocks every fetch instead of fetching with wrong defaults.
             // `config_loaded` stays false, so `maybe_fetch_open_prs` never fires.
-            model.list.halt(format!("config error: {error}"));
+            model.fatal = Some(format!("config error: {error}"));
             Vec::new()
         }
         Msg::CommandFailed { context, error } => {

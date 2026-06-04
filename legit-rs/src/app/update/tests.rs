@@ -331,7 +331,7 @@ fn config_loaded_releases_the_fetch_when_auth_and_repo_already_landed() {
 }
 
 #[test]
-fn config_load_failed_halts_the_list_and_does_not_fetch() {
+fn config_load_failed_records_a_fatal_and_does_not_fetch() {
     let (mut model, _) = Model::new();
     model.auth_token = Some(Secret::new("ghp_test".to_owned()));
     model.repo = RepoDetection::Detected(RepoInfo {
@@ -348,18 +348,18 @@ fn config_load_failed_halts_the_list_and_does_not_fetch() {
 
     assert!(
         cmds.is_empty(),
-        "a malformed config halts: no fetch, and no scheduled clear (the failure is persistent)"
+        "a malformed config is fatal: no fetch, and no scheduled clear (the failure is persistent)"
     );
     assert!(
         !model.config_loaded,
         "a failed load must not release the fetch gate"
     );
-    let failure = model
-        .list
-        .failure()
-        .expect("list should be in the Failed phase after ConfigLoadFailed");
-    assert!(failure.contains("config error"));
-    assert!(failure.contains("invalid bot_logins entry"));
+    let fatal = model
+        .fatal
+        .as_deref()
+        .expect("a malformed config must record an app-level fatal error");
+    assert!(fatal.contains("config error"));
+    assert!(fatal.contains("invalid bot_logins entry"));
 }
 
 #[test]

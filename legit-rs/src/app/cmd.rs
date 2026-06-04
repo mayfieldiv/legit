@@ -20,14 +20,6 @@ pub struct RequestContext {
     pub bot_logins: Vec<String>,
 }
 
-impl RequestContext {
-    /// `owner/repo` slug of the repo this context targets — the `PrKey` slug
-    /// for every PR it enriches.
-    fn slug(&self) -> String {
-        self.repo.slug()
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Cmd {
     LoadConfig,
@@ -131,7 +123,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             run_fetch_open_prs(repo, token, tx, limiter).await;
         }
         Cmd::FetchReviewStatus { ctx, pr_numbers } => {
-            let repo_slug = ctx.slug();
+            let repo_slug = ctx.repo.slug();
             request(
                 &tx,
                 &limiter,
@@ -158,7 +150,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
         }
         Cmd::FetchThreads { ctx, number } => {
             let pr = PrKey {
-                repo_slug: ctx.slug(),
+                repo_slug: ctx.repo.slug(),
                 number,
             };
             request(
@@ -181,7 +173,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
         }
         Cmd::FetchReviews { ctx, number } => {
             let pr = PrKey {
-                repo_slug: ctx.slug(),
+                repo_slug: ctx.repo.slug(),
                 number,
             };
             request(
@@ -199,7 +191,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
         }
         Cmd::FetchIssueComments { ctx, number } => {
             let pr = PrKey {
-                repo_slug: ctx.slug(),
+                repo_slug: ctx.repo.slug(),
                 number,
             };
             request(

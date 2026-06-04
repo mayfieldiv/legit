@@ -451,6 +451,28 @@ fn pr_list_error_appears_in_the_status_bar() {
 }
 
 #[test]
+fn fatal_error_appears_in_the_status_bar_ahead_of_a_list_failure() {
+    let (mut model, _) = Model::new();
+    // A per-repo listing failed too; the fatal must win the status bar.
+    model.list.begin_fetch("acme/web");
+    model
+        .list
+        .fail_fetch("acme/web", "list open PRs: network down".to_owned());
+    model.fatal = Some("config error: invalid bot_logins entry".to_owned());
+
+    let status = status_row(&render_snapshot(&model, 80, 3));
+
+    assert!(
+        status.contains("config error: invalid bot_logins entry"),
+        "the app-level fatal takes precedence over the list failure: {status:?}"
+    );
+    assert!(
+        !status.contains("network down"),
+        "the list failure must be masked by the fatal: {status:?}"
+    );
+}
+
+#[test]
 fn long_titles_truncate_with_ellipsis_to_fit_column() {
     let model = model_with(
         vec![pr(

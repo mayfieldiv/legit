@@ -94,8 +94,13 @@ pub struct Model {
     /// `Msg::ConfigLoaded`). The PR fetch waits on this so blockers are never
     /// derived with a default `user`/`bot_logins` that lost the startup race
     /// against enrichment. A malformed config never sets it (`ConfigLoadFailed`
-    /// halts the list instead).
+    /// records a `fatal` error instead).
     pub config_loaded: bool,
+    /// An app-level fatal error that blocks every fetch — today only a malformed
+    /// config (`Msg::ConfigLoadFailed`). Distinct from a `PrList` per-repo
+    /// failure: it is the whole app's prerequisite that failed, not one repo's
+    /// listing. The status bar surfaces it ahead of any list failure.
+    pub fatal: Option<String>,
     pub auth_token: Option<Secret<String>>,
     /// CWD repo detection state. The PR-fetch gate waits for this to settle
     /// (`Detected` or `Failed`), not for `Detected` specifically, so a failed
@@ -132,6 +137,7 @@ impl Model {
                 should_quit: false,
                 config: LegitConfig::default(),
                 config_loaded: false,
+                fatal: None,
                 auth_token: None,
                 repo: RepoDetection::Pending,
                 list: PrList::new(),
@@ -165,7 +171,8 @@ impl Model {
     /// it is where the validated-at-load invariant is leaned on: a config slug
     /// that `RepoInfo::from_slug` can't parse is silently dropped, which only
     /// happens if a malformed slug slipped past `config::validate_repo_slug` —
-    /// `ConfigLoadFailed` halts the list before that, so it is unreachable.
+    /// `ConfigLoadFailed` records a `fatal` error and blocks the fetch before
+    /// that, so it is unreachable.
     pub fn tracked_repos(&self) -> Vec<RepoInfo> {
         let mut repos: Vec<RepoInfo> = Vec::new();
         let push_unique = |repo: RepoInfo, repos: &mut Vec<RepoInfo>| {
@@ -205,6 +212,19 @@ impl Model {
             .into_iter()
             .nth(self.active_tab - 1)
             .map(|repo| repo.slug())
+    }
+
+    /// The tab index the bar should highlight: `active_tab` when it points to a
+    /// real tab, falling back to 0 (the All tab) when it is out of range. Shares
+    /// the All-fallback policy with `active_scope` — an out-of-range `active_tab`
+    /// resolves to no scope there and to the All tab here — so the rendered
+    /// highlight always matches the scope the list is filtered by.
+    pub fn active_tab_index(&self) -> usize {
+        if self.active_scope().is_none() {
+            0
+        } else {
+            self.active_tab
+        }
     }
 
     /// Number of non-list "chrome" rows around the list: the always-present tab
