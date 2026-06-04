@@ -139,12 +139,9 @@ fn checks_section_lines(model: &Model, pr: &crate::github::rest::PR) -> Vec<Line
 
     let summary = checks_summary(checks);
     let mut header_spans: Vec<Span<'static>> = vec![
-        Span::styled(
-            "## CI Checks",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
+        // Use the canonical markdown heading helper so the accent colour and
+        // bold rule stay in one place (markdown::heading_style).
+        markdown::heading_span(2, "CI Checks"),
         Span::styled(
             format!(" {}/{} passed", summary.passed, summary.total),
             Style::default().fg(Color::DarkGray),

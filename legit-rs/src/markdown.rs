@@ -40,6 +40,19 @@ pub fn render(source: &str) -> Vec<Line<'static>> {
     ctx.lines
 }
 
+/// Return a `Span` that renders `text` as a heading at `depth`, prepending the
+/// appropriate `# ` prefix (e.g. `"## "` for depth 2). Applies `heading_style`
+/// so the accent colour and bold rule live in one place. The returned span is
+/// `'static` (text is converted to an owned `String`).
+///
+/// Use this when constructing heading spans outside the markdown renderer (e.g.
+/// synthesised section headers in other views) so that any future change to
+/// heading styling only needs to be made here.
+pub fn heading_span(depth: u8, text: impl Into<String>) -> Span<'static> {
+    let prefix = "#".repeat(depth as usize);
+    Span::styled(format!("{prefix} {}", text.into()), heading_style(depth))
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Return the ratatui style for a heading at the given depth: accent always;
