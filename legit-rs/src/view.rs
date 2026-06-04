@@ -9,6 +9,7 @@ use ratatui::{
 
 use crate::app::grouping::Grouping;
 use crate::app::model::{Model, StatusKind};
+use crate::git_remote::RepoInfo;
 
 pub mod list;
 
@@ -72,7 +73,7 @@ fn render_filter_chip(model: &Model, frame: &mut Frame<'_>, area: Rect) {
 fn render_tabs(model: &Model, frame: &mut Frame<'_>, area: Rect) {
     let repos = model.tracked_repos();
     let active = model.active_tab.min(repos.len());
-    let labels = std::iter::once("All".to_owned()).chain(repos);
+    let labels = std::iter::once("All".to_owned()).chain(repos.iter().map(RepoInfo::slug));
     let mut spans = Vec::new();
     for (i, label) in labels.enumerate() {
         let (text, style) = if i == active {

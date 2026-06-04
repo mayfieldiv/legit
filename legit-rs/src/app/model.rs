@@ -115,25 +115,45 @@ impl Model {
         &self.config.user
     }
 
-    /// Every Tracked Repo slug: the configured repos in config order, then the
+    /// Every Tracked Repo: the configured repos in config order, then the
     /// CWD-detected repo appended when it isn't already configured. Deduped
-    /// case-insensitively (GitHub slugs are case-insensitive); the first
-    /// occurrence's casing wins, so fetches, `PR::repo_slug` stamps, and tab
-    /// labels all share one canonical string per repo.
-    pub fn tracked_repos(&self) -> Vec<String> {
-        let mut slugs: Vec<String> = Vec::new();
-        let push_unique = |slug: String, slugs: &mut Vec<String>| {
-            if !slugs.iter().any(|s| s.eq_ignore_ascii_case(&slug)) {
-                slugs.push(slug);
+    /// case-insensitively comparing `.slug()` (GitHub slugs are
+    /// case-insensitive); the first occurrence's casing wins, so fetches,
+    /// `PR::repo_slug` stamps, and tab labels all share one canonical string per
+    /// repo.
+    ///
+    /// This is the ONE site that turns config `repos` slugs into `RepoInfo`, so
+    /// it is where the validated-at-load invariant is leaned on: a config slug
+    /// that `RepoInfo::from_slug` can't parse is silently dropped, which only
+    /// happens if a malformed slug slipped past `config::validate_repo_slug` —
+    /// `ConfigLoadFailed` halts the list before that, so it is unreachable.
+    pub fn tracked_repos(&self) -> Vec<RepoInfo> {
+        let mut repos: Vec<RepoInfo> = Vec::new();
+        let push_unique = |repo: RepoInfo, repos: &mut Vec<RepoInfo>| {
+            let slug = repo.slug();
+            if !repos.iter().any(|r| r.slug().eq_ignore_ascii_case(&slug)) {
+                repos.push(repo);
             }
         };
         for repo in &self.config.repos {
-            push_unique(repo.slug.clone(), &mut slugs);
+            if let Some(info) = RepoInfo::from_slug(&repo.slug) {
+                push_unique(info, &mut repos);
+            }
         }
         if let Some(repo) = &self.repo {
-            push_unique(repo.slug(), &mut slugs);
+            push_unique(repo.clone(), &mut repos);
         }
-        slugs
+        repos
+    }
+
+    /// The `RepoInfo` for a Tracked Repo slug, or `None` when no tracked repo
+    /// matches (e.g. a PR whose `repo_slug` is no longer configured). The single
+    /// place enrichment/check fan-out resolves a slug back to a `RepoInfo`, so
+    /// the validated-at-load invariant is leaned on only in `tracked_repos`.
+    pub fn tracked_repo(&self, slug: &str) -> Option<RepoInfo> {
+        self.tracked_repos()
+            .into_iter()
+            .find(|repo| repo.slug() == slug)
     }
 
     /// The repo slug the active tab narrows the list to, or `None` for the All
@@ -142,7 +162,10 @@ impl Model {
         if self.active_tab == 0 {
             return None;
         }
-        self.tracked_repos().into_iter().nth(self.active_tab - 1)
+        self.tracked_repos()
+            .into_iter()
+            .nth(self.active_tab - 1)
+            .map(|repo| repo.slug())
     }
 
     /// Re-derive the list viewport from the terminal height minus the chrome

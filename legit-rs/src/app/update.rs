@@ -49,18 +49,15 @@ fn maybe_fetch_open_prs(model: &mut Model) -> Vec<Cmd> {
         return Vec::new();
     }
     let token = token.clone();
-    model
-        .tracked_repos()
-        .into_iter()
-        .filter_map(|slug| {
-            let repo = RepoInfo::from_slug(&slug)?;
-            model.list.begin_fetch(&slug);
-            Some(Cmd::FetchOpenPRs {
-                repo,
-                token: token.clone(),
-            })
-        })
-        .collect()
+    let mut cmds = Vec::new();
+    for repo in model.tracked_repos() {
+        model.list.begin_fetch(&repo.slug());
+        cmds.push(Cmd::FetchOpenPRs {
+            repo,
+            token: token.clone(),
+        });
+    }
+    cmds
 }
 
 /// Fan out per-PR enrichment for one Tracked Repo after its REST list
@@ -72,7 +69,7 @@ fn enrichment_cmds(model: &Model, repo_slug: &str) -> Vec<Cmd> {
     let Some(token) = model.auth_token.as_ref() else {
         return Vec::new();
     };
-    let Some(repo) = RepoInfo::from_slug(repo_slug) else {
+    let Some(repo) = model.tracked_repo(repo_slug) else {
         return Vec::new();
     };
     let numbers: Vec<u64> = model
@@ -132,7 +129,7 @@ fn maybe_fetch_checks(model: &Model, head_sha: Option<String>, repo_slug: &str) 
     if model.enrichment.checks.contains_key(&sha) {
         return Vec::new();
     }
-    let (Some(token), Some(repo)) = (model.auth_token.as_ref(), RepoInfo::from_slug(repo_slug))
+    let (Some(token), Some(repo)) = (model.auth_token.as_ref(), model.tracked_repo(repo_slug))
     else {
         return Vec::new();
     };
