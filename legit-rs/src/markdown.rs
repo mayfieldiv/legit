@@ -214,14 +214,20 @@ impl RenderCtx {
                 if self.list_depth > 0 {
                     self.list_depth -= 1;
                 }
-                // Blank line after the outermost list.
-                if self.list_depth == 0 {
+                // Blank line after the outermost list — unless the last item
+                // was loose and its Paragraph end already emitted one.
+                if self.list_depth == 0 && self.lines.last().is_none_or(|l| !l.spans.is_empty()) {
                     self.blank_line();
                 }
             }
-            Event::End(TagEnd::Item) => {
+            // Only flush when spans are pending: in a loose list the item's
+            // Paragraph child already flushed the line (and emitted the blank
+            // separator), so an unconditional flush would push a spurious
+            // extra blank line.
+            Event::End(TagEnd::Item) if !self.current.is_empty() => {
                 self.flush_line();
             }
+            Event::End(TagEnd::Item) => {}
             Event::End(TagEnd::BlockQuote(_)) => {
                 self.in_blockquote = false;
                 self.blank_line();
@@ -351,6 +357,12 @@ impl RenderCtx {
     // ── List item ─────────────────────────────────────────────────────────────
 
     fn start_item(&mut self) {
+        // A nested list opens mid-item, before the parent item's line has
+        // been flushed (its Item end comes after the whole sublist). Flush
+        // the pending parent line so this item starts on its own line.
+        if !self.current.is_empty() {
+            self.flush_line();
+        }
         let depth = self.list_depth.saturating_sub(1) as usize;
         let indent = "  ".repeat(depth);
         let is_ordered = self.list_stack.last().map(|s| s.is_some()).unwrap_or(false);
@@ -465,6 +477,16 @@ mod tests {
             .iter()
             .flat_map(|l| l.spans.iter())
             .find(|s| s.content.contains(needle))
+    }
+
+    /// Render each line to its concatenated text (one string per `Line`), for
+    /// assertions on line structure: what lands on which line, where the
+    /// blank separators are.
+    fn line_texts(lines: &[Line<'_>]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect()
     }
 
     // ── Headings ─────────────────────────────────────────────────────────────
@@ -687,16 +709,28 @@ mod tests {
     }
 
     #[test]
+    fn loose_list_separates_items_with_single_blank_line() {
+        // A loose list (blank line between items) wraps each item's content
+        // in a Paragraph, which already flushes the line and emits the blank
+        // separator. The Item end must not add a spurious extra blank.
+        let lines = render("- foo\n\n- bar");
+        assert_eq!(
+            line_texts(&lines),
+            vec!["• foo", "", "• bar", ""],
+            "loose list items must be separated by exactly one blank line"
+        );
+    }
+
+    #[test]
     fn nested_list_indents_child_items() {
-        let source = "- outer\n  - inner";
-        let lines = render(source);
-        let text = all_text(&lines);
-        assert!(text.contains("outer"), "missing outer: {text:?}");
-        assert!(text.contains("inner"), "missing inner: {text:?}");
-        // Nested item must have extra indent ("  •").
-        assert!(
-            text.contains("  •"),
-            "nested item must be indented: {text:?}"
+        // Asserts full line structure, not just substrings: the parent item
+        // and the indented child must land on separate lines (a nested list
+        // opens mid-item, before the parent's line has been flushed).
+        let lines = render("- outer\n  - inner");
+        assert_eq!(
+            line_texts(&lines),
+            vec!["• outer", "  • inner", ""],
+            "nested item must be on its own, indented line"
         );
     }
 
