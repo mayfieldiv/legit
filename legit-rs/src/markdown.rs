@@ -68,13 +68,15 @@ fn heading_style(depth: u8) -> Style {
 
 // ── Internal state machine ────────────────────────────────────────────────────
 
-/// Tracks which inline modifiers are currently active. Each modifier is a
-/// simple boolean; they stack correctly because we only need to know whether
-/// *any* ancestor activates bold or italic, not the exact depth.
+/// Tracks which inline modifiers are currently active. Bold and italic are
+/// nesting depths, not booleans: CommonMark nests `Strong`/`Emphasis` tags
+/// (e.g. `**a **b** c**`), so the inner `End` must decrement rather than
+/// clear, leaving the outer style active. A modifier applies whenever its
+/// depth is non-zero.
 #[derive(Default, Clone)]
 struct InlineStyle {
-    bold: bool,
-    italic: bool,
+    bold: u32,
+    italic: u32,
     /// Destination URL for the innermost Link tag, set on Start(Link) and
     /// consumed (taken) on End(Link) to emit " (url)".
     link_url: Option<String>,
@@ -88,10 +90,10 @@ struct InlineStyle {
 impl InlineStyle {
     fn to_ratatui(&self) -> Style {
         let mut s = Style::default();
-        if self.bold {
+        if self.bold > 0 {
             s = s.add_modifier(Modifier::BOLD);
         }
-        if self.italic {
+        if self.italic > 0 {
             s = s.add_modifier(Modifier::ITALIC);
         }
         s
@@ -226,10 +228,10 @@ impl RenderCtx {
             }
             // ── Inline opens ─────────────────────────────────────────────────
             Event::Start(Tag::Strong) => {
-                self.inline.bold = true;
+                self.inline.bold += 1;
             }
             Event::Start(Tag::Emphasis) => {
-                self.inline.italic = true;
+                self.inline.italic += 1;
             }
             Event::Start(Tag::Link { dest_url, .. }) => {
                 self.inline.link_url = Some(dest_url.into_string());
@@ -246,10 +248,10 @@ impl RenderCtx {
             }
             // ── Inline closes ────────────────────────────────────────────────
             Event::End(TagEnd::Strong) => {
-                self.inline.bold = false;
+                self.inline.bold = self.inline.bold.saturating_sub(1);
             }
             Event::End(TagEnd::Emphasis) => {
-                self.inline.italic = false;
+                self.inline.italic = self.inline.italic.saturating_sub(1);
             }
             Event::End(TagEnd::Link) => {
                 self.end_link();
@@ -577,6 +579,18 @@ mod tests {
     }
 
     #[test]
+    fn nested_strong_keeps_outer_bold_after_inner_end() {
+        // CommonMark nests Strong tags for "**a **b** c**": the inner End
+        // must not clear the outer bold, so " c" still renders bold.
+        let lines = render("**a **b** c**");
+        let tail = find_span(&lines, " c").expect("trailing text span not found");
+        assert!(
+            tail.style.add_modifier.contains(Modifier::BOLD),
+            "text after a nested strong must keep the outer bold: {tail:?}"
+        );
+    }
+
+    #[test]
     fn paragraph_italic_span_has_italic_modifier() {
         let lines = render("This is *italic* text.");
         let text = all_text(&lines);
@@ -586,6 +600,18 @@ mod tests {
         assert!(
             italic_span.style.add_modifier.contains(Modifier::ITALIC),
             "italic text must have ITALIC modifier"
+        );
+    }
+
+    #[test]
+    fn nested_emphasis_keeps_outer_italic_after_inner_end() {
+        // Same nesting rule as Strong: "*a *b* c*" nests Emphasis tags, and
+        // the inner End must not clear the outer italic for " c".
+        let lines = render("*a *b* c*");
+        let tail = find_span(&lines, " c").expect("trailing text span not found");
+        assert!(
+            tail.style.add_modifier.contains(Modifier::ITALIC),
+            "text after a nested emphasis must keep the outer italic: {tail:?}"
         );
     }
 
