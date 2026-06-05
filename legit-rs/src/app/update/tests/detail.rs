@@ -64,6 +64,29 @@ fn enter_on_selected_pr_clears_stale_detail() {
 }
 
 #[test]
+fn enter_into_detail_does_not_dispatch_list_files_fetch() {
+    // The keypress starts in List but ends in Detail; the just-in-time files
+    // fetch is a list-mode concern and must not fire for this keypress, even
+    // though the selected PR's files were never requested.
+    let mut model = model_with_one_pr();
+    assert!(
+        !model.enrichment.files.contains_key(&pr_key_42()),
+        "precondition: files must not be requested yet"
+    );
+
+    let cmds = update(&mut model, key_event(KeyCode::Enter));
+
+    assert!(
+        matches!(model.view_mode, ViewMode::Detail(_)),
+        "precondition: Enter must have entered Detail"
+    );
+    assert!(
+        !cmds.iter().any(|c| matches!(c, Cmd::FetchFiles { .. })),
+        "files fetch must not fire for a keypress that ended in Detail: {cmds:?}"
+    );
+}
+
+#[test]
 fn esc_in_detail_returns_to_list() {
     let mut model = model_with_one_pr();
     update(&mut model, key_event(KeyCode::Enter));

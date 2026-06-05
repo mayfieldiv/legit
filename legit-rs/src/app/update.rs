@@ -378,10 +378,14 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
                     return cmds;
                 }
                 // Any key in list mode can move the selection; fetch the
-                // now-selected PR's files just-in-time. Detail mode (including
-                // Esc-to-list transitions) doesn't change the list selection
-                // so no files fetch is needed.
-                if !is_detail {
+                // now-selected PR's files just-in-time. Skipped when the key
+                // was pressed in detail mode (Esc-to-list doesn't change the
+                // selection) and when it *ended* in detail mode (Enter):
+                // today an Enter that transitions always returns a non-empty
+                // FetchPRDetail or fails the same auth/tracked-repo guards as
+                // the files fetch, but checking the post-handler mode keeps
+                // that from being load-bearing.
+                if !is_detail && matches!(model.view_mode, ViewMode::List) {
                     return maybe_fetch_selected_files(model);
                 }
                 return Vec::new();
