@@ -124,10 +124,16 @@ struct RenderCtx {
     /// therefore `list_stack.len() - 1`; the stack being empty means we are
     /// outside any list.
     list_stack: Vec<Option<u64>>,
-    /// Whether we are inside a blockquote. When true, `Start(Paragraph)`
-    /// emits the `│ ` bar once as a leading muted span; subsequent inline
-    /// runs (text, code, links) flow through normally with muted foreground.
-    in_blockquote: bool,
+    /// Blockquote nesting depth (not a bool): CommonMark nests `BlockQuote`
+    /// tags, so the inner `End` must decrement rather than clear, leaving the
+    /// outer quote active for any trailing text (same bug class as bold/italic
+    /// being depths). Muting applies whenever depth > 0. The leading `│ ` bar
+    /// is emitted once per blockquote paragraph regardless of depth — it does
+    /// not repeat per level, matching the simplest reading of the TS reference
+    /// which wraps each paragraph in a single `│ <InlineNodes/>`. The trailing
+    /// blank line is emitted only when depth returns to 0, so a nested quote
+    /// does not double the blank separators.
+    blockquote_depth: u32,
     /// Whether we are inside a code block and collecting its text.
     in_code_block: bool,
     /// Language tag for the current fenced code block (empty = no language).
@@ -176,7 +182,7 @@ impl RenderCtx {
             // all inline runs (text, code, links, images) that follow share
             // the same leading `│ ` — matching the TS reference that wraps
             // the entire paragraph in a single `│ <InlineNodes/>`.
-            Event::Start(Tag::Paragraph) if self.in_blockquote => {
+            Event::Start(Tag::Paragraph) if self.blockquote_depth > 0 => {
                 self.push_span(Span::styled("│ ", Style::default().fg(MUTED)));
             }
             Event::Start(Tag::Paragraph) => {}
@@ -193,7 +199,7 @@ impl RenderCtx {
                 self.start_item();
             }
             Event::Start(Tag::BlockQuote(_)) => {
-                self.in_blockquote = true;
+                self.blockquote_depth += 1;
             }
             // ── Block closes ─────────────────────────────────────────────────
             Event::End(TagEnd::Heading(_)) => {
@@ -227,8 +233,14 @@ impl RenderCtx {
             }
             Event::End(TagEnd::Item) => {}
             Event::End(TagEnd::BlockQuote(_)) => {
-                self.in_blockquote = false;
-                self.blank_line();
+                // Decrement so an inner quote's End leaves the outer quote
+                // active (its trailing paragraph stays barred and muted).
+                self.blockquote_depth = self.blockquote_depth.saturating_sub(1);
+                // Emit the trailing blank separator only when we leave the
+                // outermost quote, so nested quotes don't double the blanks.
+                if self.blockquote_depth == 0 {
+                    self.blank_line();
+                }
             }
             // ── Inline opens ─────────────────────────────────────────────────
             Event::Start(Tag::Strong) => {
@@ -284,7 +296,7 @@ impl RenderCtx {
                 // code colour with no bold/italic.
                 let style = if let Some(depth) = self.in_heading {
                     heading_style(depth)
-                } else if self.in_blockquote {
+                } else if self.blockquote_depth > 0 {
                     Style::default().fg(MUTED)
                 } else {
                     Style::default().fg(CODE)
@@ -434,7 +446,7 @@ impl RenderCtx {
             }
             return;
         }
-        if self.in_blockquote {
+        if self.blockquote_depth > 0 {
             // The `│ ` bar was already emitted once as a leading span when the
             // blockquote paragraph opened (see Start(Paragraph) handler).
             // Here we only apply the muted foreground; bold/italic from the
@@ -794,6 +806,42 @@ mod tests {
             code_span.style.fg,
             Some(MUTED),
             "inline code in blockquote must be muted: {code_span:?}"
+        );
+    }
+
+    #[test]
+    fn text_after_nested_blockquote_stays_barred_and_muted() {
+        // "> outer" / "> > inner" / "> trailing" nests BlockQuote tags. The
+        // inner End(BlockQuote) must only decrement the depth, leaving the
+        // outer quote active so the trailing paragraph keeps its `│ ` bar and
+        // muted text. With the old bool, the inner End cleared the flag and the
+        // trailing paragraph lost its bar/muting; each End also emitted a blank,
+        // so nesting doubled the internal separators.
+        //
+        // The trailing single blank after the whole quote is the same one a
+        // flat quote produces (one from the paragraph End, one from the
+        // outermost blockquote End) — nesting must not add to it. We assert the
+        // nested output equals a flat three-paragraph quote so any future change
+        // to the trailing-blank convention stays consistent across both.
+        let nested = render("> outer\n>\n> > inner\n>\n> trailing");
+        assert_eq!(
+            line_texts(&nested),
+            vec!["│ outer", "", "│ inner", "", "│ trailing", "", ""],
+            "nested quote must bar every line with a single blank between paragraphs"
+        );
+        let flat = render("> outer\n>\n> inner\n>\n> trailing");
+        assert_eq!(
+            line_texts(&nested),
+            line_texts(&flat),
+            "nesting a quote must not change the blank-line structure"
+        );
+
+        // The trailing paragraph's text must remain muted (outer quote active).
+        let trailing = find_span(&nested, "trailing").expect("trailing span");
+        assert_eq!(
+            trailing.style.fg,
+            Some(MUTED),
+            "text after a nested quote must stay muted: {trailing:?}"
         );
     }
 
