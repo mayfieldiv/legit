@@ -270,6 +270,15 @@ impl RenderCtx {
                 self.handle_text(text.into_string());
             }
             Event::Code(text) => {
+                // Inside image alt text, Code events arrive between
+                // Start(Image) and End(Image) just like Text events; capture
+                // them into the alt buffer (mirroring handle_text) so the
+                // code text renders inside the placeholder, not as a stray
+                // span before it.
+                if let Some(buf) = &mut self.image_alt {
+                    buf.push_str(&text);
+                    return;
+                }
                 // Inline code inside a heading keeps the heading style (accent
                 // + bold for h1/h2) for consistency with the TS single-span
                 // behavior. Inside a blockquote, apply muted foreground so the
@@ -883,6 +892,20 @@ mod tests {
         assert!(
             text.contains("[image: https://example.com/img.png]"),
             "image without alt should fall back to url: {text:?}"
+        );
+    }
+
+    #[test]
+    fn image_alt_with_inline_code_stays_inside_placeholder() {
+        // Inline code inside image alt text emits a Code event between
+        // Start(Image) and End(Image); it must be captured into the alt
+        // buffer, not pushed to the line as a stray span outside the
+        // placeholder.
+        let lines = render("![click `code`](http://x.test/i.png)");
+        assert_eq!(
+            line_texts(&lines),
+            vec!["[image: click code]", ""],
+            "code in alt must render inside the placeholder, not before it"
         );
     }
 
