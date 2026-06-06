@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use ratatui::text::Line;
+
 use crate::{
     blocker::{BlockerOptions, BlockerResult, compute_blocker},
     config::LegitConfig,
@@ -37,9 +39,13 @@ pub struct DetailState {
     /// sourced from the enriched `model.list` via this key so mergeable,
     /// head_commit_sha, etc. are always current.
     pub key: PrKey,
-    /// The fetched markdown body. `None` while `Cmd::FetchPRDetail` is in
-    /// flight — the detail view shows a loading placeholder in that state.
-    pub body: Option<String>,
+    /// The fetched PR description, rendered to display lines exactly once on
+    /// arrival (`Msg::PRDetailArrived`) rather than re-parsed every frame.
+    /// `None` while `Cmd::FetchPRDetail` is in flight — the detail view shows a
+    /// loading placeholder in that state. Holds only the description lines; the
+    /// CI checks section is appended per-frame so late-arriving checks still
+    /// show without a re-fetch.
+    pub body: Option<Vec<Line<'static>>>,
     /// Vertical scroll offset for the body (lines scrolled past the top). Starts
     /// at zero on entry; `update` mutates it on `j`/`k`/PageUp/PageDown/arrow
     /// keys and clamps it so it can never sit past the last screenful.

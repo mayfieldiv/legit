@@ -1,5 +1,7 @@
 use ratatui::crossterm::event::KeyCode;
 
+use ratatui::text::Line;
+
 use crate::{
     app::{cmd::Cmd, model::ViewMode, msg::Msg, update::update},
     git_remote::RepoInfo,
@@ -7,13 +9,26 @@ use crate::{
     secret::Secret,
 };
 
-/// The body string of the open detail view, or `None` if not in Detail mode or
-/// the body hasn't arrived. Lets the tests assert on the consolidated
-/// `ViewMode::Detail(DetailState)` shape without repeating the match.
-fn detail_body(model: &crate::app::model::Model) -> Option<&str> {
+/// True when the open detail view has its rendered body cached. `false` if not
+/// in Detail mode or the body hasn't arrived. Lets the tests assert on the
+/// consolidated `ViewMode::Detail(DetailState)` shape without repeating the
+/// match.
+fn detail_has_body(model: &crate::app::model::Model) -> bool {
+    matches!(&model.view_mode, ViewMode::Detail(detail) if detail.body.is_some())
+}
+
+/// The concatenated text of the open detail view's rendered body lines; panics
+/// if not in Detail mode or the body hasn't arrived.
+fn detail_body_text(model: &crate::app::model::Model) -> String {
     match &model.view_mode {
-        ViewMode::Detail(detail) => detail.body.as_deref(),
-        ViewMode::List => None,
+        ViewMode::Detail(detail) => detail
+            .body
+            .as_ref()
+            .expect("body arrived")
+            .iter()
+            .flat_map(|line| line.spans.iter().map(|s| s.content.as_ref()))
+            .collect(),
+        ViewMode::List => panic!("expected Detail mode"),
     }
 }
 
@@ -25,10 +40,12 @@ fn detail_scroll(model: &crate::app::model::Model) -> u16 {
     }
 }
 
-/// Set the open detail view's body; panics if not in Detail mode.
-fn set_detail_body(model: &mut crate::app::model::Model, body: Option<String>) {
+/// Set the open detail view's body to lines rendered from `body`; panics if not
+/// in Detail mode. Mirrors how `Msg::PRDetailArrived` caches the description.
+fn set_detail_body(model: &mut crate::app::model::Model, body: &str) {
+    let lines: Vec<Line<'static>> = crate::view::detail::render_description_lines(body);
     match &mut model.view_mode {
-        ViewMode::Detail(detail) => detail.body = body,
+        ViewMode::Detail(detail) => detail.body = Some(lines),
         ViewMode::List => panic!("expected Detail mode"),
     }
 }
@@ -66,7 +83,7 @@ fn scrollable_detail_model() -> crate::app::model::Model {
     model.terminal_height = 10;
     update(&mut model, key_event(KeyCode::Enter));
     let body: String = (1..=100).map(|n| format!("Line {n}\n\n")).collect();
-    set_detail_body(&mut model, Some(body));
+    set_detail_body(&mut model, &body);
     model
 }
 
@@ -101,7 +118,7 @@ fn enter_constructs_a_fresh_detail_state_with_no_body() {
     update(&mut model, key_event(KeyCode::Enter));
 
     assert!(
-        detail_body(&model).is_none(),
+        !detail_has_body(&model),
         "a freshly-entered detail view must have no body yet"
     );
 }
@@ -145,7 +162,7 @@ fn esc_in_detail_returns_to_list() {
 fn esc_in_detail_drops_the_detail_state() {
     let mut model = model_with_one_pr();
     update(&mut model, key_event(KeyCode::Enter));
-    set_detail_body(&mut model, Some("Some body".to_owned()));
+    set_detail_body(&mut model, "Some body");
 
     update(&mut model, key_event(KeyCode::Esc));
 
@@ -160,21 +177,21 @@ fn esc_in_detail_drops_the_detail_state() {
 fn pr_detail_arrived_stores_detail_when_still_in_detail_view() {
     let mut model = model_with_one_pr();
     update(&mut model, key_event(KeyCode::Enter));
-    assert!(detail_body(&model).is_none(), "detail not yet arrived");
+    assert!(!detail_has_body(&model), "detail not yet arrived");
 
-    let body = "The body".to_owned();
     update(
         &mut model,
         Msg::PRDetailArrived {
             key: pr_key_42(),
-            body: body.clone(),
+            body: "The body".to_owned(),
         },
     );
 
-    assert_eq!(
-        detail_body(&model),
-        Some(body.as_str()),
-        "arrived body must be stored"
+    assert!(detail_has_body(&model), "arrived body must be stored");
+    assert!(
+        detail_body_text(&model).contains("The body"),
+        "stored body lines must render the arrived text: {:?}",
+        detail_body_text(&model)
     );
 }
 
@@ -205,13 +222,13 @@ fn pr_detail_arrived_discarded_after_navigating_back() {
 fn r_in_detail_dispatches_refetch_and_clears_detail() {
     let mut model = model_with_one_pr();
     update(&mut model, key_event(KeyCode::Enter));
-    set_detail_body(&mut model, Some("current body".to_owned()));
+    set_detail_body(&mut model, "current body");
 
     let cmds = update(&mut model, key_event(KeyCode::Char('r')));
 
     // Detail cleared to show loading state again
     assert!(
-        detail_body(&model).is_none(),
+        !detail_has_body(&model),
         "r must clear the detail to show the loading placeholder during refresh"
     );
     // Refetch dispatched
@@ -344,4 +361,43 @@ fn esc_in_detail_drops_scroll_with_the_detail_state() {
     // Esc drops the whole DetailState, so the next open structurally starts at
     // the top — there is no scroll field to leak across opens.
     assert_eq!(model.view_mode, ViewMode::List, "Esc returns to List");
+}
+
+#[test]
+fn over_scrolling_clamps_to_the_last_screenful_and_k_stays_live() {
+    // Regression for the unbounded-drift bug: holding `j` far past the end must
+    // pin the offset at the last screenful, not let it accumulate — otherwise
+    // the next `k` presses are visually dead until the inflated offset works
+    // back down into view.
+    let mut model = model_with_one_pr();
+    model.terminal_height = 12; // body viewport = 12 - 6 chrome rows = 6
+    update(&mut model, key_event(KeyCode::Enter));
+    let body: String = (1..=20).map(|n| format!("Line {n}\n\n")).collect();
+    set_detail_body(&mut model, &body);
+
+    // The true max scroll: description lines (no checks here) minus the
+    // viewport, computed via the same content the view assembles.
+    let content_lines = crate::view::detail::render_description_lines(&body).len() as u16;
+    let viewport_rows = model.terminal_height - 6;
+    let max_scroll = content_lines - viewport_rows;
+    assert!(max_scroll > 1, "test body must be taller than the viewport");
+
+    // Hold `j` far past the end.
+    for _ in 0..(content_lines + 50) {
+        update(&mut model, key_event(KeyCode::Char('j')));
+    }
+    assert_eq!(
+        detail_scroll(&model),
+        max_scroll,
+        "over-scroll must clamp to the last screenful, not drift past it"
+    );
+
+    // A single `k` must visibly move — it can't be eaten unwinding phantom
+    // offset, because there is none.
+    update(&mut model, key_event(KeyCode::Char('k')));
+    assert_eq!(
+        detail_scroll(&model),
+        max_scroll - 1,
+        "one k after over-scroll must decrement by exactly one"
+    );
 }

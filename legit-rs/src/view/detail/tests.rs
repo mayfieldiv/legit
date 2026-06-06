@@ -76,13 +76,14 @@ fn model_with_pr_in_list(pr: PR) -> Model {
 
 /// Build a model in Detail mode for `pr`, with the body already arrived.
 /// The PR is held in the list (enriched source of truth); the `DetailState`
-/// carries only the body string.
+/// carries the description pre-rendered to lines, matching how
+/// `Msg::PRDetailArrived` caches it.
 fn model_in_detail(pr: PR, body: &str) -> Model {
     let key = pr.key();
     let mut model = model_with_pr_in_list(pr);
     model.view_mode = ViewMode::Detail(DetailState {
         key,
-        body: Some(body.to_owned()),
+        body: Some(super::render_description_lines(body)),
         scroll: 0,
     });
     model
@@ -103,7 +104,7 @@ fn model_in_detail_with_checks(pr: PR, body: &str, checks: Vec<CheckRun>) -> Mod
     let mut model = model_with_pr_in_list(pr);
     model.view_mode = ViewMode::Detail(DetailState {
         key,
-        body: Some(body.to_owned()),
+        body: Some(super::render_description_lines(body)),
         scroll: 0,
     });
     model.enrichment.checks.insert((repo_slug, sha), checks);

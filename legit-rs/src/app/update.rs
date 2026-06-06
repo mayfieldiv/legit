@@ -305,6 +305,40 @@ const DETAIL_SCROLL_STEP: u16 = 1;
 /// Lines scrolled per PageUp/PageDown in the detail body.
 const DETAIL_SCROLL_PAGE: u16 = 10;
 
+/// Fixed chrome rows the detail view lays out around the scrollable body: the
+/// 5-row pinned header plus the 1-row status bar. The body viewport is the
+/// terminal height minus these, so the scroll clamp below derives the same
+/// viewport `view::detail` lays out.
+const DETAIL_CHROME_ROWS: u16 = 6;
+
+/// Clamp the open detail view's scroll offset so it can never sit more than one
+/// screenful above the last content line. The content is the cached
+/// description body **plus** the per-frame CI checks section — under-clamping
+/// to the description alone would stop the user reaching the bottom of the
+/// checks. A no-op outside Detail mode or while the body hasn't arrived (there
+/// is nothing to scroll yet). Mirrors the render-time backstop in
+/// `view::detail::render_body`, but here `scroll` is the stored source of
+/// intent: clamping in `update` keeps a held `j` from drifting unboundedly and
+/// leaving the subsequent `k` presses visually dead.
+fn clamp_detail_scroll(model: &mut Model) {
+    let ViewMode::Detail(detail) = &model.view_mode else {
+        return;
+    };
+    let Some(description) = &detail.body else {
+        return;
+    };
+    let Some(pr) = model.list.pr(&detail.key) else {
+        return;
+    };
+    let content_lines =
+        (description.len() + crate::view::detail::checks_section_lines(model, pr).len()) as u16;
+    let viewport_rows = model.terminal_height.saturating_sub(DETAIL_CHROME_ROWS);
+    let max_scroll = content_lines.saturating_sub(viewport_rows);
+    if let ViewMode::Detail(detail) = &mut model.view_mode {
+        detail.scroll = detail.scroll.min(max_scroll);
+    }
+}
+
 /// Handle one keypress while the detail view is open. The caller guarantees
 /// `model.view_mode` is `ViewMode::Detail`, so the scroll/refresh arms match
 /// the inner `DetailState` directly.
@@ -337,11 +371,14 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
                 return cmds;
             }
         }
-        // Scroll down: j, Down arrow
+        // Scroll down: j, Down arrow. Clamp to the last screenful so a held key
+        // can't drift the offset past the content (which would make the next
+        // `k` presses appear dead until the offset works back down).
         KeyCode::Char('j') | KeyCode::Down => {
             if let ViewMode::Detail(detail) = &mut model.view_mode {
                 detail.scroll = detail.scroll.saturating_add(DETAIL_SCROLL_STEP);
             }
+            clamp_detail_scroll(model);
         }
         // Scroll up: k, Up arrow
         KeyCode::Char('k') | KeyCode::Up => {
@@ -354,6 +391,7 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
             if let ViewMode::Detail(detail) = &mut model.view_mode {
                 detail.scroll = detail.scroll.saturating_add(DETAIL_SCROLL_PAGE);
             }
+            clamp_detail_scroll(model);
         }
         // Page up
         KeyCode::PageUp => {
@@ -552,13 +590,15 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             Vec::new()
         }
         Msg::PRDetailArrived { key, body } => {
-            // Store the fetched body only when the view is still open for
-            // this PR; discard it if the user already navigated back to the
-            // list or entered a different PR's detail.
+            // Render the markdown description to display lines exactly once,
+            // here on arrival, and cache the result — the view then reuses it
+            // every frame instead of re-parsing. Store it only when the view is
+            // still open for this PR; discard it if the user already navigated
+            // back to the list or entered a different PR's detail.
             if let ViewMode::Detail(detail) = &mut model.view_mode
                 && detail.key == key
             {
-                detail.body = Some(body);
+                detail.body = Some(crate::view::detail::render_description_lines(&body));
             }
             Vec::new()
         }

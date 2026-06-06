@@ -137,11 +137,35 @@ fn render_header(pr: &PR, frame: &mut Frame<'_>, area: Rect, now: DateTime<Utc>)
 
 // ── Body (scrollable description + checks) ───────────────────────────────────
 
+/// Render the PR description to display lines: the markdown body, or a muted
+/// "No description." placeholder when the body is blank. Pure (no model/area):
+/// called once on `Msg::PRDetailArrived` so the markdown is parsed a single
+/// time and the result cached in `DetailState::body`, not re-parsed per frame.
+pub(crate) fn render_description_lines(body: &str) -> Vec<Line<'static>> {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        vec![Line::from(Span::styled(
+            "No description.",
+            Style::default().fg(Color::DarkGray),
+        ))]
+    } else {
+        markdown::render(trimmed)
+    }
+}
+
 /// Build the CI checks section lines: blank separator + bold header with
 /// pass/fail/pending counts + one row per check (sorted failing-first, then
 /// pending, then passed). Returns an empty `Vec` when checks haven't arrived
 /// for this PR's commit or the check list is empty. Mirrors `summary::checks_lines`.
-fn checks_section_lines(model: &Model, pr: &crate::github::rest::PR) -> Vec<Line<'static>> {
+///
+/// `pub(crate)` so the `update` scroll-clamp can measure these lines too: the
+/// checks section is appended to the description per-frame (so late-arriving
+/// checks show without a re-fetch), so the true content height — and thus the
+/// max scroll offset — includes it.
+pub(crate) fn checks_section_lines(
+    model: &Model,
+    pr: &crate::github::rest::PR,
+) -> Vec<Line<'static>> {
     let Some(checks) = model.enrichment.checks_for(pr) else {
         return Vec::new();
     };
@@ -190,31 +214,23 @@ fn checks_section_lines(model: &Model, pr: &crate::github::rest::PR) -> Vec<Line
     lines
 }
 
-/// Render the scrollable body: markdown description + CI checks, offset by
-/// `scroll` rows from the top, clamped so the scroll offset never exceeds
-/// `content_lines - viewport_rows` (the last screenful).
-fn render_body(model: &Model, pr: &PR, body: &str, scroll: u16, frame: &mut Frame<'_>, area: Rect) {
-    // Build the lines for the scrollable body: description + checks section.
-    let mut lines: Vec<Line<'static>> = Vec::new();
-
-    // Description (markdown-rendered body, or placeholder when empty)
-    let trimmed = body.trim();
-    if trimmed.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "No description.",
-            Style::default().fg(Color::DarkGray),
-        )));
-    } else {
-        lines.extend(markdown::render(trimmed));
-    }
-
+/// Render the scrollable body: the pre-rendered `description` lines (cached in
+/// `DetailState::body`) followed by the CI checks section, offset by `scroll`
+/// rows from the top. `update` already clamps `scroll` to the true content
+/// height; this render keeps a backstop clamp so a stale offset (e.g. a resize
+/// between the keypress and this frame) can never show blank space past the
+/// end.
+fn render_body(
+    model: &Model,
+    pr: &PR,
+    description: &[Line<'static>],
+    scroll: u16,
+    frame: &mut Frame<'_>,
+    area: Rect,
+) {
+    let mut lines: Vec<Line<'static>> = description.to_vec();
     lines.extend(checks_section_lines(model, pr));
 
-    // Clamp the scroll so the user can't scroll past the last line of content.
-    // The model holds the raw offset (the update layer cannot know the rendered
-    // line count), so we clamp here at render time before passing it to the
-    // Paragraph widget. This keeps detail_scroll as the source of intent and
-    // prevents blank space beyond the end of the body.
     let content_lines = lines.len() as u16;
     let viewport_rows = area.height;
     let max_scroll = content_lines.saturating_sub(viewport_rows);
