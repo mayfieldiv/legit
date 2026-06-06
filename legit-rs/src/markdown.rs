@@ -109,7 +109,9 @@ struct RenderCtx {
     lines: Vec<Line<'static>>,
     /// Spans accumulating for the current line.
     current: Vec<Span<'static>>,
-    /// Active inline style stack (simple boolean flags, not a true stack).
+    /// Active inline styling: bold/italic as nesting depths (not booleans, so
+    /// nested emphasis is handled correctly — see `InlineStyle`), plus the
+    /// pending link/image URLs.
     inline: InlineStyle,
     /// Heading depth currently being rendered (`1`–`6`), or `None` outside a
     /// heading block. Set in `start_heading`, cleared in `End(TagEnd::Heading)`.
