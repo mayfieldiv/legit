@@ -407,40 +407,34 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
 pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
     match msg {
         Msg::TerminalEvent(Event::Key(key)) => {
-            if key.kind == KeyEventKind::Press {
-                // Capture whether we are in detail *before* the handler runs
-                // — Esc in detail transitions to List, and we must not then
-                // run the files-fetch path as if the key was pressed in List
-                // mode. A cheap discriminant check avoids cloning ViewMode
-                // (which allocates the inner PrKey String) on every keypress.
-                let is_detail = matches!(model.view_mode, ViewMode::Detail(_));
-                let cmds = if is_detail {
-                    handle_detail_key(model, key.code)
-                } else {
-                    // Modal precedence: an open filter editor sees every
-                    // key first.
-                    if model.list.filter().is_editing() {
-                        handle_filter_editing_key(model, key.code);
-                        Vec::new()
-                    } else {
-                        handle_list_key(model, key.code)
-                    }
-                };
+            if key.kind != KeyEventKind::Press {
+                return Vec::new();
+            }
+            // Detail mode owns the keypress entirely: its keys never touch the
+            // list selection, so the list-mode files-fetch path below must not
+            // run for them (e.g. Esc-to-list must not act as if the key was a
+            // list keypress). Returning here keeps that out of the list path.
+            if matches!(model.view_mode, ViewMode::Detail(_)) {
+                return handle_detail_key(model, key.code);
+            }
+            // List-mode keys. The filter editor (modal precedence) sees every
+            // key first and produces no command; a normal list key may (Enter
+            // -> FetchPRDetail), in which case dispatch it and stop.
+            if model.list.filter().is_editing() {
+                handle_filter_editing_key(model, key.code);
+            } else {
+                let cmds = handle_list_key(model, key.code);
                 if !cmds.is_empty() {
                     return cmds;
                 }
-                // Any key in list mode can move the selection; fetch the
-                // now-selected PR's files just-in-time. Skipped when the key
-                // was pressed in detail mode (Esc-to-list doesn't change the
-                // selection) and when it *ended* in detail mode (Enter):
-                // today an Enter that transitions always returns a non-empty
-                // FetchPRDetail or fails the same auth/tracked-repo guards as
-                // the files fetch, but checking the post-handler mode keeps
-                // that from being load-bearing.
-                if !is_detail && matches!(model.view_mode, ViewMode::List) {
-                    return maybe_fetch_selected_files(model);
-                }
-                return Vec::new();
+            }
+            // Any key that left us in list mode can have moved the selection;
+            // fetch the now-selected PR's files just-in-time. The guard skips a
+            // keypress that *entered* detail (Enter): it normally returns a
+            // FetchPRDetail above, but when that fetch is suppressed (auth not
+            // ready / repo untracked) it would otherwise fall through to here.
+            if matches!(model.view_mode, ViewMode::List) {
+                return maybe_fetch_selected_files(model);
             }
             Vec::new()
         }
