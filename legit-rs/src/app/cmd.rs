@@ -70,8 +70,8 @@ pub enum Cmd {
     /// `Msg::PRDetailArrived`. Also dispatched on `r` to refresh the current
     /// PR's detail without going through the refresh-queue (#11). The PR
     /// number is extracted from `key`; `key` is also echoed back in
-    /// `PRDetailArrived` so `update` can check whether the view is still open
-    /// for this PR before storing the body.
+    /// `PRDetailArrived`'s `pr` field so `update` can check whether the view is
+    /// still open for this PR before storing the body.
     FetchPRDetail {
         ctx: Arc<RequestContext>,
         key: PrKey,
@@ -293,7 +293,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                         .fetch_pr_detail(&ctx.repo.owner, &ctx.repo.repo, number)
                         .await
                 },
-                move |body| vec![Msg::PRDetailArrived { key, body }],
+                move |body| vec![Msg::PRDetailArrived { pr: key, body }],
             )
             .await;
         }

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind};
 
-use crate::{git_remote::RepoInfo, secret::Secret};
+use crate::{git_remote::RepoInfo, github::rest::PrKey, secret::Secret};
 
 use super::{
     cmd::{Cmd, RequestContext},
@@ -182,7 +182,7 @@ fn maybe_fetch_selected_files(model: &mut Model) -> Vec<Cmd> {
 /// token and the tracked repo the PR belongs to. Yields nothing when auth
 /// isn't ready or the PR's repo isn't tracked (the caller is already guarded,
 /// but this is defensive).
-fn fetch_pr_detail_cmd(model: &Model, key: &crate::github::rest::PrKey) -> Vec<Cmd> {
+fn fetch_pr_detail_cmd(model: &Model, key: &PrKey) -> Vec<Cmd> {
     let Some(token) = model.auth_token.as_ref() else {
         return Vec::new();
     };
@@ -583,14 +583,14 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             }
             Vec::new()
         }
-        Msg::PRDetailArrived { key, body } => {
+        Msg::PRDetailArrived { pr, body } => {
             // Render the markdown description to display lines exactly once,
             // here on arrival, and cache the result — the view then reuses it
             // every frame instead of re-parsing. Store it only when the view is
             // still open for this PR; discard it if the user already navigated
             // back to the list or entered a different PR's detail.
             if let ViewMode::Detail(detail) = &mut model.view_mode
-                && detail.key == key
+                && detail.key == pr
             {
                 detail.body = Some(crate::view::detail::render_description_lines(&body));
             }

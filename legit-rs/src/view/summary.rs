@@ -21,8 +21,8 @@ use ratatui::{
 use crate::app::model::{FilesState, Model};
 use crate::blocker::Tier;
 use crate::format::{
-    CheckOutcome, check_icon, checks_summary, comment_counts, format_mergeable,
-    format_review_state, format_size, outcome, review_icon, reviews_summary, sort_check_runs,
+    CheckOutcome, check_row, checks_summary, comment_counts, format_mergeable, format_review_state,
+    format_size, outcome, review_icon, reviews_summary, sort_check_runs,
 };
 use crate::github::rest::PR;
 use crate::github::types::CheckRun;
@@ -203,12 +203,7 @@ fn checks_lines(model: &Model, pr: &PR) -> Vec<Line<'static>> {
     sort_check_runs(&mut non_passing);
 
     for check in non_passing.iter().take(MAX_VISIBLE_CHECKS) {
-        let (icon, color) = check_icon(check);
-        lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(icon, Style::default().fg(color)),
-            Span::raw(format!(" {}", check.name)),
-        ]));
+        lines.push(check_row(check));
     }
     let overflow = non_passing.len().saturating_sub(MAX_VISIBLE_CHECKS);
     if overflow > 0 {

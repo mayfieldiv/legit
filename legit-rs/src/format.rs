@@ -5,11 +5,14 @@
 //! the check/review icon, colour, label, sort, and summary helpers live here so
 //! both the summary panel and the detail view (issue #51) consume them rather
 //! than re-deriving them per panel. The icon/colour helpers return a data-only
-//! `(&'static str, Color)` tuple — mirroring TS's plain `{ icon, fg }` shape —
-//! so this module depends on ratatui's `Color`, not on any widget types.
+//! `(&'static str, Color)` tuple — mirroring TS's plain `{ icon, fg }` shape.
+//! `check_row` goes one step further and assembles a ready-to-render
+//! `Line<'static>` so the two panels share a byte-identical check row, which is
+//! why this module also pulls in ratatui's `Line`/`Span` text types.
 
 use chrono::{DateTime, Utc};
-use ratatui::style::Color;
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::github::types::{CheckRun, FullReviewThread, Review};
@@ -179,6 +182,19 @@ pub fn check_icon(check: &CheckRun) -> (&'static str, Color) {
     }
 }
 
+/// One indented check row — two spaces, the coloured status icon from
+/// `check_icon`, then the check name: `  ✓ build`. The single source of truth
+/// for a check row, shared by the summary panel and the detail view so the
+/// indent, icon colouring, and name spacing stay identical.
+pub fn check_row(check: &CheckRun) -> Line<'static> {
+    let (icon, color) = check_icon(check);
+    Line::from(vec![
+        Span::raw("  "),
+        Span::styled(icon, Style::default().fg(color)),
+        Span::raw(format!(" {}", check.name)),
+    ])
+}
+
 /// The three-way classification of a check run's outcome. The single source of
 /// truth for "what counts as passing/pending/failed": `checks_summary` (the
 /// header counts), the summary view's per-row filter, and `check_sort_group`
@@ -319,9 +335,10 @@ mod tests {
     use unicode_width::UnicodeWidthStr;
 
     use super::{
-        CheckOutcome, ChecksSummary, CommentCounts, ReviewsSummary, check_icon, check_sort_group,
-        checks_summary, comment_counts, format_age, format_review_state, format_size, outcome,
-        pad_to_width, review_icon, reviews_summary, sort_check_runs, truncate,
+        CheckOutcome, ChecksSummary, CommentCounts, ReviewsSummary, check_icon, check_row,
+        check_sort_group, checks_summary, comment_counts, format_age, format_review_state,
+        format_size, outcome, pad_to_width, review_icon, reviews_summary, sort_check_runs,
+        truncate,
     };
     use crate::github::types::{CheckRun, FullReviewThread, Review, ReviewComment};
 
@@ -510,6 +527,18 @@ mod tests {
             check_icon(&check("a", "completed", None)),
             ("?", Color::Gray)
         );
+    }
+
+    #[test]
+    fn check_row_indents_icon_and_name() {
+        let row = check_row(&check("build", "completed", Some("success")));
+        // Two-space indent, the icon span, then the space-prefixed name. Carry
+        // the icon's colour through so the row matches `check_icon`.
+        let text: String = row.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "  ✓ build");
+        let icon_span = &row.spans[1];
+        assert_eq!(icon_span.content.as_ref(), "✓");
+        assert_eq!(icon_span.style.fg, Some(Color::Green));
     }
 
     #[test]

@@ -182,7 +182,7 @@ fn pr_detail_arrived_stores_detail_when_still_in_detail_view() {
     update(
         &mut model,
         Msg::PRDetailArrived {
-            key: pr_key_42(),
+            pr: pr_key_42(),
             body: "The body".to_owned(),
         },
     );
@@ -206,7 +206,7 @@ fn pr_detail_arrived_discarded_after_navigating_back() {
     update(
         &mut model,
         Msg::PRDetailArrived {
-            key: pr_key_42(),
+            pr: pr_key_42(),
             body: "The body".to_owned(),
         },
     );

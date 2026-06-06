@@ -21,9 +21,10 @@ use ratatui::{
 use crate::{
     app::model::{DetailState, Model},
     format::{
-        check_icon, checks_summary, format_age, format_mergeable, format_size, sort_check_runs,
+        check_row, checks_summary, format_age, format_mergeable, format_size, sort_check_runs,
     },
     github::rest::PR,
+    github::types::CheckRun,
     markdown,
 };
 
@@ -162,10 +163,7 @@ pub(crate) fn render_description_lines(body: &str) -> Vec<Line<'static>> {
 /// checks section is appended to the description per-frame (so late-arriving
 /// checks show without a re-fetch), so the true content height — and thus the
 /// max scroll offset — includes it.
-pub(crate) fn checks_section_lines(
-    model: &Model,
-    pr: &crate::github::rest::PR,
-) -> Vec<Line<'static>> {
+pub(crate) fn checks_section_lines(model: &Model, pr: &PR) -> Vec<Line<'static>> {
     let Some(checks) = model.enrichment.checks_for(pr) else {
         return Vec::new();
     };
@@ -201,16 +199,9 @@ pub(crate) fn checks_section_lines(
     lines.push(Line::from(header_spans));
 
     // All check rows, sorted (failing first, then pending, then passed).
-    let mut sorted: Vec<&crate::github::types::CheckRun> = checks.iter().collect();
+    let mut sorted: Vec<&CheckRun> = checks.iter().collect();
     sort_check_runs(&mut sorted);
-    for check in sorted {
-        let (icon, color) = check_icon(check);
-        lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(icon, Style::default().fg(color)),
-            Span::raw(format!(" {}", check.name)),
-        ]));
-    }
+    lines.extend(sorted.into_iter().map(check_row));
     lines
 }
 
