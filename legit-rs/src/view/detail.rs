@@ -51,29 +51,29 @@ pub fn render(
 
     // The detail area is split into: header, body (fills remaining), status bar.
     let [header_area, body_area, status_area] = Layout::vertical([
-        Constraint::Length(header_height(detail)),
+        Constraint::Length(HEADER_HEIGHT),
         Constraint::Min(1),
         Constraint::Length(1),
     ])
     .areas(area);
 
+    // The header is built entirely from the list PR, which is always available
+    // here, so draw it immediately — matching the TS reference, which shows the
+    // header at once and only the body waits on the fetch. The loading
+    // placeholder occupies just the body area until the body arrives.
+    render_header(pr, frame, header_area, now);
     render_status_bar(frame, status_area);
 
     match &detail.body {
         None => render_loading(frame, body_area),
-        Some(body) => {
-            render_header(pr, frame, header_area, now);
-            render_body(model, pr, body, detail.scroll, frame, body_area);
-        }
+        Some(body) => render_body(model, pr, body, detail.scroll, frame, body_area),
     }
 }
 
-/// Number of rows in the pinned header: 5 once the body has arrived
-/// (title, meta, URL, branch+mergeable, divider), or 0 while the fetch is
-/// in flight — the loading placeholder then fills the whole body area.
-fn header_height(detail: &DetailState) -> u16 {
-    if detail.body.is_some() { 5 } else { 0 }
-}
+/// Number of rows in the pinned header: title, meta, URL, branch+mergeable,
+/// divider. Constant — the header draws from the list PR, which is always
+/// available, so it shows even while the body fetch is in flight.
+const HEADER_HEIGHT: u16 = 5;
 
 /// Render the "Loading PR detail…" placeholder while the fetch is in flight.
 fn render_loading(frame: &mut Frame<'_>, area: Rect) {

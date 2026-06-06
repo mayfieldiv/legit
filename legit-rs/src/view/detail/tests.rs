@@ -122,7 +122,7 @@ fn check(name: &str, status: &str, conclusion: Option<&str>) -> CheckRun {
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[test]
-fn detail_loading_state_shows_loading_placeholder() {
+fn detail_loading_state_shows_header_and_loading_placeholder() {
     let pr = sample_pr();
     let key = pr.key();
     let mut model = model_with_pr_in_list(pr);
@@ -133,12 +133,20 @@ fn detail_loading_state_shows_loading_placeholder() {
         scroll: 0,
     });
 
-    let terminal = render_snapshot(&model, 60, 5);
+    // Tall enough for the 5-row header plus a body row for the placeholder.
+    let terminal = render_snapshot(&model, 60, 10);
     let rows = buffer_text(&terminal);
 
+    // The header is built from the list PR alone, so it shows immediately —
+    // before the body fetch returns — alongside the body-area placeholder.
+    assert!(
+        rows[0].contains("#42") && rows[0].contains("Add streaming PR list"),
+        "header must show while the body is still loading: {:?}",
+        rows[0]
+    );
     assert!(
         rows.iter().any(|r| r.contains("Loading PR detail")),
-        "loading placeholder must appear: {rows:?}"
+        "loading placeholder must appear in the body area: {rows:?}"
     );
 }
 
