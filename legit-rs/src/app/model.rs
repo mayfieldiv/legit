@@ -14,18 +14,36 @@ use crate::{
 use super::{cmd::Cmd, pr_list::PrList};
 
 /// Which top-level view is active. `List` is the default PR list; `Detail`
-/// shows the full detail page for a specific PR.
-///
-/// Keyed by `PrKey` (repo_slug + number) so the identity survives list
-/// refreshes without holding a `PR` clone here. The `Model::detail` field
-/// carries the fetched markdown body once it arrives.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// carries the whole detail-view state in one variant so illegal combinations
+/// (a body or scroll offset with no open detail; a scroll offset that outlives
+/// its PR) are unrepresentable — mirroring the TS `detail-state.ts` union.
+#[derive(Clone, Debug, PartialEq)]
 pub enum ViewMode {
     /// The open PR list with the summary panel.
     List,
-    /// The PR detail view for the identified PR. The detail content lives in
-    /// `Model::detail`; while it's `None` the view shows a loading placeholder.
-    Detail(PrKey),
+    /// The PR detail view, holding the open PR's key, fetched body, and scroll
+    /// offset together. Entering `Detail` constructs a fresh `DetailState`;
+    /// leaving it is a single assignment back to `List`, so there is no
+    /// hand-synchronised side state to clear.
+    Detail(DetailState),
+}
+
+/// The complete state of an open detail view. Bundled into `ViewMode::Detail`
+/// so the body and scroll offset can only exist while a detail view is open and
+/// always belong to `key`'s PR.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DetailState {
+    /// Identity of the PR being shown (`repo_slug` + number). The `PR` itself is
+    /// sourced from the enriched `model.list` via this key so mergeable,
+    /// head_commit_sha, etc. are always current.
+    pub key: PrKey,
+    /// The fetched markdown body. `None` while `Cmd::FetchPRDetail` is in
+    /// flight — the detail view shows a loading placeholder in that state.
+    pub body: Option<String>,
+    /// Vertical scroll offset for the body (lines scrolled past the top). Starts
+    /// at zero on entry; `update` mutates it on `j`/`k`/PageUp/PageDown/arrow
+    /// keys and clamps it so it can never sit past the last screenful.
+    pub scroll: u16,
 }
 
 /// Per-PR enrichment landed by the GraphQL/REST fan-out. Keyed by `PrKey`
@@ -189,21 +207,10 @@ pub struct Model {
     /// hasn't been derived yet (it groups under "Loading details…").
     pub blockers: HashMap<PrKey, BlockerResult>,
     /// Which top-level view is active. Starts at `List`; transitions to
-    /// `Detail(key)` when Enter is pressed on a PR. `Esc` in the detail view
-    /// returns to `List`.
+    /// `Detail(DetailState)` when Enter is pressed on a PR (the body and scroll
+    /// offset live inside that variant). `Esc` in the detail view returns to
+    /// `List`.
     pub view_mode: ViewMode,
-    /// The fetched markdown body for the currently open detail view. `None`
-    /// while `Cmd::FetchPRDetail` is in flight (the detail view shows a
-    /// loading placeholder in that state). The PR itself is sourced from the
-    /// enriched `model.list` via `ViewMode::Detail(key)` so mergeable,
-    /// head_commit_sha, etc. are always current. Cleared when the view returns
-    /// to `List` so stale content can't bleed into the next open.
-    pub detail: Option<String>,
-    /// Vertical scroll offset for the detail-view body (lines scrolled past the
-    /// top). Reset to zero on every `Detail` entry and on `Esc`-to-list. Stored
-    /// in the `Model` per the Elm architecture — the view reads it, `update`
-    /// mutates it in response to `j`/`k`/PageUp/PageDown/arrow keys.
-    pub detail_scroll: u16,
 }
 
 impl Model {
@@ -225,8 +232,6 @@ impl Model {
                 enrichment: Enrichment::default(),
                 blockers: HashMap::new(),
                 view_mode: ViewMode::List,
-                detail: None,
-                detail_scroll: 0,
             },
             vec![Cmd::LoadConfig, Cmd::ResolveAuthToken, Cmd::DetectRepo],
         )

@@ -6,7 +6,7 @@ use crate::{git_remote::RepoInfo, secret::Secret};
 
 use super::{
     cmd::{Cmd, RequestContext},
-    model::{FilesState, Model, RepoDetection, StatusKind, StatusMessage, ViewMode},
+    model::{DetailState, FilesState, Model, RepoDetection, StatusKind, StatusMessage, ViewMode},
     msg::Msg,
 };
 
@@ -277,18 +277,21 @@ fn handle_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
             jump_to_tab(model, (c as u8 - b'0') as usize);
         }
         KeyCode::Enter => {
-            // Enter on the selected PR enters the Detail view. If auth is
-            // ready and the PR's repo is tracked the fetch fires immediately;
-            // otherwise the detail view shows "Loading PR detail…" and the
-            // fetch fires once auth/config land (rare startup-race case, not
-            // guarded further — the user must re-press Enter if it fires
-            // before auth lands, which doesn't happen in practice).
+            // Enter on the selected PR enters the Detail view with a fresh
+            // `DetailState` (no body, scroll at the top). If auth is ready and
+            // the PR's repo is tracked the fetch fires immediately; otherwise
+            // the detail view shows "Loading PR detail…" with no fetch in
+            // flight. Nothing re-fires the fetch when auth/config later land, so
+            // in that rare startup-race case the user must re-press Enter — it
+            // doesn't happen in practice (auth resolves before any keypress).
             if let Some(pr) = model.list.selected_pr() {
                 let key = pr.key();
                 let cmds = fetch_pr_detail_cmd(model, &key);
-                model.view_mode = ViewMode::Detail(key);
-                model.detail = None; // clear any stale detail from a prior open
-                model.detail_scroll = 0; // always start at the top
+                model.view_mode = ViewMode::Detail(DetailState {
+                    key,
+                    body: None,
+                    scroll: 0,
+                });
                 return cmds;
             }
         }
@@ -302,15 +305,16 @@ const DETAIL_SCROLL_STEP: u16 = 1;
 /// Lines scrolled per PageUp/PageDown in the detail body.
 const DETAIL_SCROLL_PAGE: u16 = 10;
 
-/// Handle one keypress while the detail view is open.
+/// Handle one keypress while the detail view is open. The caller guarantees
+/// `model.view_mode` is `ViewMode::Detail`, so the scroll/refresh arms match
+/// the inner `DetailState` directly.
 fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
     match code {
         KeyCode::Esc => {
-            // Return to the list view, clearing the fetched detail and the
-            // scroll position so the next Enter starts at the top.
+            // Return to the list view. A single assignment drops the whole
+            // `DetailState` (body + scroll), so there is no side state to clear
+            // by hand — the next Enter builds a fresh one starting at the top.
             model.view_mode = ViewMode::List;
-            model.detail = None;
-            model.detail_scroll = 0;
         }
         KeyCode::Char('r') => {
             // Refresh the current PR detail: refetch the body. Clears the
@@ -319,33 +323,43 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
             // Preserves the scroll position so the user stays at the same
             // place after a quick re-fetch.
             //
-            // Clone the key so the borrow of model.view_mode ends before
-            // model.detail is reassigned below (which needs a unique borrow
-            // of the model).
-            if let ViewMode::Detail(key) = &model.view_mode {
-                let key = key.clone();
+            // Clone the key so the borrow of model.view_mode ends before the
+            // body is reassigned below (which needs a unique borrow of the
+            // model via `fetch_pr_detail_cmd`).
+            if let ViewMode::Detail(detail) = &model.view_mode {
+                let key = detail.key.clone();
                 let cmds = fetch_pr_detail_cmd(model, &key);
-                if !cmds.is_empty() {
-                    model.detail = None;
+                if !cmds.is_empty()
+                    && let ViewMode::Detail(detail) = &mut model.view_mode
+                {
+                    detail.body = None;
                 }
                 return cmds;
             }
         }
         // Scroll down: j, Down arrow
         KeyCode::Char('j') | KeyCode::Down => {
-            model.detail_scroll = model.detail_scroll.saturating_add(DETAIL_SCROLL_STEP);
+            if let ViewMode::Detail(detail) = &mut model.view_mode {
+                detail.scroll = detail.scroll.saturating_add(DETAIL_SCROLL_STEP);
+            }
         }
         // Scroll up: k, Up arrow
         KeyCode::Char('k') | KeyCode::Up => {
-            model.detail_scroll = model.detail_scroll.saturating_sub(DETAIL_SCROLL_STEP);
+            if let ViewMode::Detail(detail) = &mut model.view_mode {
+                detail.scroll = detail.scroll.saturating_sub(DETAIL_SCROLL_STEP);
+            }
         }
         // Page down
         KeyCode::PageDown => {
-            model.detail_scroll = model.detail_scroll.saturating_add(DETAIL_SCROLL_PAGE);
+            if let ViewMode::Detail(detail) = &mut model.view_mode {
+                detail.scroll = detail.scroll.saturating_add(DETAIL_SCROLL_PAGE);
+            }
         }
         // Page up
         KeyCode::PageUp => {
-            model.detail_scroll = model.detail_scroll.saturating_sub(DETAIL_SCROLL_PAGE);
+            if let ViewMode::Detail(detail) = &mut model.view_mode {
+                detail.scroll = detail.scroll.saturating_sub(DETAIL_SCROLL_PAGE);
+            }
         }
         _ => {}
     }
@@ -541,8 +555,10 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             // Store the fetched body only when the view is still open for
             // this PR; discard it if the user already navigated back to the
             // list or entered a different PR's detail.
-            if model.view_mode == ViewMode::Detail(key) {
-                model.detail = Some(body);
+            if let ViewMode::Detail(detail) = &mut model.view_mode
+                && detail.key == key
+            {
+                detail.body = Some(body);
             }
             Vec::new()
         }

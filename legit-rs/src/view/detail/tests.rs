@@ -2,7 +2,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use ratatui::{Terminal, backend::TestBackend};
 
 use crate::{
-    app::model::{Model, RepoDetection, ViewMode},
+    app::model::{DetailState, Model, RepoDetection, ViewMode},
     git_remote::RepoInfo,
     github::rest::{PR, PRState},
     github::types::CheckRun,
@@ -75,13 +75,16 @@ fn model_with_pr_in_list(pr: PR) -> Model {
 }
 
 /// Build a model in Detail mode for `pr`, with the body already arrived.
-/// The PR is held in the list (enriched source of truth); `model.detail`
+/// The PR is held in the list (enriched source of truth); the `DetailState`
 /// carries only the body string.
 fn model_in_detail(pr: PR, body: &str) -> Model {
     let key = pr.key();
     let mut model = model_with_pr_in_list(pr);
-    model.view_mode = ViewMode::Detail(key);
-    model.detail = Some(body.to_owned());
+    model.view_mode = ViewMode::Detail(DetailState {
+        key,
+        body: Some(body.to_owned()),
+        scroll: 0,
+    });
     model
 }
 
@@ -98,8 +101,11 @@ fn model_in_detail_with_checks(pr: PR, body: &str, checks: Vec<CheckRun>) -> Mod
     let key = pr.key();
     let repo_slug = pr.repo_slug.clone();
     let mut model = model_with_pr_in_list(pr);
-    model.view_mode = ViewMode::Detail(key);
-    model.detail = Some(body.to_owned());
+    model.view_mode = ViewMode::Detail(DetailState {
+        key,
+        body: Some(body.to_owned()),
+        scroll: 0,
+    });
     model.enrichment.checks.insert((repo_slug, sha), checks);
     model
 }
@@ -119,9 +125,12 @@ fn detail_loading_state_shows_loading_placeholder() {
     let pr = sample_pr();
     let key = pr.key();
     let mut model = model_with_pr_in_list(pr);
-    // Enter detail mode but don't set model.detail (simulates in-flight fetch)
-    model.view_mode = ViewMode::Detail(key);
-    model.detail = None;
+    // Enter detail mode with no body yet (simulates in-flight fetch).
+    model.view_mode = ViewMode::Detail(DetailState {
+        key,
+        body: None,
+        scroll: 0,
+    });
 
     let terminal = render_snapshot(&model, 60, 5);
     let rows = buffer_text(&terminal);
@@ -314,7 +323,9 @@ fn detail_body_scrolls_when_detail_scroll_is_nonzero() {
 
     // With scroll offset 2 (skipping the first two rendered lines), "Line 1"
     // should no longer be visible in the body area.
-    model.detail_scroll = 2;
+    if let ViewMode::Detail(detail) = &mut model.view_mode {
+        detail.scroll = 2;
+    }
     let terminal = render_snapshot(&model, 80, 14);
     let rows = buffer_text(&terminal);
     assert!(

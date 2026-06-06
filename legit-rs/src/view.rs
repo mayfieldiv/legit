@@ -28,8 +28,8 @@ pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
     let area = frame.area();
 
     // Detail view takes the whole frame and manages its own chrome (header + status bar).
-    if matches!(model.view_mode, ViewMode::Detail(_)) {
-        detail::render(model, frame, area, now);
+    if let ViewMode::Detail(detail) = &model.view_mode {
+        detail::render(model, detail, frame, area, now);
         return;
     }
 
