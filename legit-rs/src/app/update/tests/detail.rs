@@ -369,8 +369,12 @@ fn over_scrolling_clamps_to_the_last_screenful_and_k_stays_live() {
     // pin the offset at the last screenful, not let it accumulate — otherwise
     // the next `k` presses are visually dead until the inflated offset works
     // back down into view.
+    // Reference the canonical chrome-row count so a future layout change keeps
+    // this regression test in sync with the clamp it guards (rather than a
+    // hardcoded literal that would silently desync).
+    let chrome_rows = crate::view::detail::CHROME_ROWS;
     let mut model = model_with_one_pr();
-    model.terminal_height = 12; // body viewport = 12 - 6 chrome rows = 6
+    model.terminal_height = chrome_rows + 6; // body viewport = 6 rows
     update(&mut model, key_event(KeyCode::Enter));
     let body: String = (1..=20).map(|n| format!("Line {n}\n\n")).collect();
     set_detail_body(&mut model, &body);
@@ -378,7 +382,7 @@ fn over_scrolling_clamps_to_the_last_screenful_and_k_stays_live() {
     // The true max scroll: description lines (no checks here) minus the
     // viewport, computed via the same content the view assembles.
     let content_lines = crate::view::detail::render_description_lines(&body).len() as u16;
-    let viewport_rows = model.terminal_height - 6;
+    let viewport_rows = model.terminal_height - chrome_rows;
     let max_scroll = content_lines - viewport_rows;
     assert!(max_scroll > 1, "test body must be taller than the viewport");
 

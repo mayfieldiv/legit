@@ -305,12 +305,6 @@ const DETAIL_SCROLL_STEP: u16 = 1;
 /// Lines scrolled per PageUp/PageDown in the detail body.
 const DETAIL_SCROLL_PAGE: u16 = 10;
 
-/// Fixed chrome rows the detail view lays out around the scrollable body: the
-/// 5-row pinned header plus the 1-row status bar. The body viewport is the
-/// terminal height minus these, so the scroll clamp below derives the same
-/// viewport `view::detail` lays out.
-const DETAIL_CHROME_ROWS: u16 = 6;
-
 /// Clamp the open detail view's scroll offset so it can never sit more than one
 /// screenful above the last content line. The content is the cached
 /// description body **plus** the per-frame CI checks section — under-clamping
@@ -332,7 +326,9 @@ fn clamp_detail_scroll(model: &mut Model) {
     };
     let content_lines =
         (description.len() + crate::view::detail::checks_section_lines(model, pr).len()) as u16;
-    let viewport_rows = model.terminal_height.saturating_sub(DETAIL_CHROME_ROWS);
+    let viewport_rows = model
+        .terminal_height
+        .saturating_sub(crate::view::detail::CHROME_ROWS);
     let max_scroll = content_lines.saturating_sub(viewport_rows);
     if let ViewMode::Detail(detail) = &mut model.view_mode {
         detail.scroll = detail.scroll.min(max_scroll);

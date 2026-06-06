@@ -76,6 +76,14 @@ pub fn render(
 /// available, so it shows even while the body fetch is in flight.
 const HEADER_HEIGHT: u16 = 5;
 
+/// Fixed chrome rows the detail layout reserves around the scrollable body: the
+/// pinned `HEADER_HEIGHT` plus the 1-row status bar (the `Constraint::Length(1)`
+/// in `render`'s `Layout::vertical`). The single source of truth shared by this
+/// module's layout and `update::clamp_detail_scroll`, which subtracts it from
+/// the terminal height to derive the same body viewport. Mirrors how
+/// `Model::chrome_rows` is shared between `sync_viewport` and `view::view`.
+pub(crate) const CHROME_ROWS: u16 = HEADER_HEIGHT + 1;
+
 /// Render the "Loading PR detail…" placeholder while the fetch is in flight.
 fn render_loading(frame: &mut Frame<'_>, area: Rect) {
     let line = Line::from(Span::styled(
