@@ -65,6 +65,17 @@ pub enum Cmd {
         token: u64,
         delay_ms: u64,
     },
+    /// Fetch a single PR's body (markdown). Dispatched when the user enters
+    /// the detail view (`Enter` on the list); result comes back as
+    /// `Msg::PRDetailArrived`. Also dispatched on `r` to refresh the current
+    /// PR's detail without going through the refresh-queue (#11). The PR
+    /// number is extracted from `key`; `key` is also echoed back in
+    /// `PRDetailArrived`'s `pr` field so `update` can check whether the view is
+    /// still open for this PR before storing the body.
+    FetchPRDetail {
+        ctx: Arc<RequestContext>,
+        key: PrKey,
+    },
 }
 
 #[tracing::instrument(name = "command", skip(tx, limiter))]
@@ -270,6 +281,21 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
         Cmd::ScheduleStatusClear { token, delay_ms } => {
             tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
             let _ = tx.send(Msg::StatusCleared { token });
+        }
+        Cmd::FetchPRDetail { ctx, key } => {
+            let number = key.number;
+            request(
+                &tx,
+                &limiter,
+                "fetch PR detail",
+                async move {
+                    OctocrabRest::new(&ctx.token)?
+                        .fetch_pr_detail(&ctx.repo.owner, &ctx.repo.repo, number)
+                        .await
+                },
+                move |body| vec![Msg::PRDetailArrived { pr: key, body }],
+            )
+            .await;
         }
     }
 }

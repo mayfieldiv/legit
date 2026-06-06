@@ -8,9 +8,10 @@ use ratatui::{
 };
 
 use crate::app::grouping::Grouping;
-use crate::app::model::{Model, StatusKind};
+use crate::app::model::{Model, StatusKind, ViewMode};
 use crate::git_remote::RepoInfo;
 
+pub mod detail;
 pub mod list;
 pub mod summary;
 
@@ -25,6 +26,14 @@ fn grouping_label(model: &Model) -> &'static str {
 
 pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
     let area = frame.area();
+
+    // Detail view takes the whole frame and manages its own chrome (header + status bar).
+    if let ViewMode::Detail(detail) = &model.view_mode {
+        detail::render(model, detail, frame, area, now);
+        return;
+    }
+
+    // ── List view ────────────────────────────────────────────────────────────
     // Fixed four-row layout: tab bar, filter chip, list, status bar. The chip
     // collapses to zero height while the filter is inactive, giving its row back
     // to the list — which keeps the row count in step with `Model::chrome_rows`,

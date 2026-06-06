@@ -21,8 +21,8 @@ use ratatui::{
 use crate::app::model::{FilesState, Model};
 use crate::blocker::Tier;
 use crate::format::{
-    CheckOutcome, check_icon, checks_summary, comment_counts, format_review_state, format_size,
-    outcome, review_icon, reviews_summary, sort_check_runs,
+    CheckOutcome, check_row, checks_summary, comment_counts, format_mergeable, format_review_state,
+    format_size, outcome, review_icon, reviews_summary, sort_check_runs,
 };
 use crate::github::rest::PR;
 use crate::github::types::CheckRun;
@@ -97,15 +97,10 @@ fn smart_status_line(model: &Model, pr: &PR) -> Line<'static> {
     }
 }
 
-/// The mergeable-state line. Mirrors the TS `formatMergeable`: `CONFLICTING` ->
-/// "! conflict" (red), `MERGEABLE` -> "✓ mergeable" (green), anything else
-/// (including `UNKNOWN`) -> "? merge unknown" (gray).
+/// The mergeable-state line. Delegates to `format::format_mergeable` — the
+/// canonical display helper shared with the detail view.
 fn mergeable_line(pr: &PR) -> Line<'static> {
-    let (text, color) = match pr.mergeable.as_str() {
-        "CONFLICTING" => ("! conflict", Color::Red),
-        "MERGEABLE" => ("✓ mergeable", Color::Green),
-        _ => ("? merge unknown", Color::Gray),
-    };
+    let (text, color) = format_mergeable(&pr.mergeable);
     Line::from(Span::styled(text, Style::default().fg(color)))
 }
 
@@ -208,12 +203,7 @@ fn checks_lines(model: &Model, pr: &PR) -> Vec<Line<'static>> {
     sort_check_runs(&mut non_passing);
 
     for check in non_passing.iter().take(MAX_VISIBLE_CHECKS) {
-        let (icon, color) = check_icon(check);
-        lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(icon, Style::default().fg(color)),
-            Span::raw(format!(" {}", check.name)),
-        ]));
+        lines.push(check_row(check));
     }
     let overflow = non_passing.len().saturating_sub(MAX_VISIBLE_CHECKS);
     if overflow > 0 {

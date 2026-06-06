@@ -6,6 +6,7 @@ mod file_category;
 mod format;
 mod git_remote;
 mod github;
+mod markdown;
 mod runtime;
 mod secret;
 mod tracing_setup;

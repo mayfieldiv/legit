@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use ratatui::text::Line;
+
 use crate::{
     blocker::{BlockerOptions, BlockerResult, compute_blocker},
     config::LegitConfig,
@@ -12,6 +14,43 @@ use crate::{
 };
 
 use super::{cmd::Cmd, pr_list::PrList};
+
+/// Which top-level view is active. `List` is the default PR list; `Detail`
+/// carries the whole detail-view state in one variant so illegal combinations
+/// (a body or scroll offset with no open detail; a scroll offset that outlives
+/// its PR) are unrepresentable — mirroring the TS `detail-state.ts` union.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ViewMode {
+    /// The open PR list with the summary panel.
+    List,
+    /// The PR detail view, holding the open PR's key, fetched body, and scroll
+    /// offset together. Entering `Detail` constructs a fresh `DetailState`;
+    /// leaving it is a single assignment back to `List`, so there is no
+    /// hand-synchronised side state to clear.
+    Detail(DetailState),
+}
+
+/// The complete state of an open detail view. Bundled into `ViewMode::Detail`
+/// so the body and scroll offset can only exist while a detail view is open and
+/// always belong to `key`'s PR.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DetailState {
+    /// Identity of the PR being shown (`repo_slug` + number). The `PR` itself is
+    /// sourced from the enriched `model.list` via this key so mergeable,
+    /// head_commit_sha, etc. are always current.
+    pub key: PrKey,
+    /// The fetched PR description, rendered to display lines exactly once on
+    /// arrival (`Msg::PRDetailArrived`) rather than re-parsed every frame.
+    /// `None` while `Cmd::FetchPRDetail` is in flight — the detail view shows a
+    /// loading placeholder in that state. Holds only the description lines; the
+    /// CI checks section is appended per-frame so late-arriving checks still
+    /// show without a re-fetch.
+    pub body: Option<Vec<Line<'static>>>,
+    /// Vertical scroll offset for the body (lines scrolled past the top). Starts
+    /// at zero on entry; `update` mutates it on `j`/`k`/PageUp/PageDown/arrow
+    /// keys and clamps it so it can never sit past the last screenful.
+    pub scroll: u16,
+}
 
 /// Per-PR enrichment landed by the GraphQL/REST fan-out. Keyed by `PrKey`
 /// (slug + number — numbers collide across repos), except `checks` which is
@@ -173,6 +212,11 @@ pub struct Model {
     /// whenever a PR arrives or its enrichment lands. A PR absent from the map
     /// hasn't been derived yet (it groups under "Loading details…").
     pub blockers: HashMap<PrKey, BlockerResult>,
+    /// Which top-level view is active. Starts at `List`; transitions to
+    /// `Detail(DetailState)` when Enter is pressed on a PR (the body and scroll
+    /// offset live inside that variant). `Esc` in the detail view returns to
+    /// `List`.
+    pub view_mode: ViewMode,
 }
 
 impl Model {
@@ -193,6 +237,7 @@ impl Model {
                 network_stats: NetworkStats::default(),
                 enrichment: Enrichment::default(),
                 blockers: HashMap::new(),
+                view_mode: ViewMode::List,
             },
             vec![Cmd::LoadConfig, Cmd::ResolveAuthToken, Cmd::DetectRepo],
         )

@@ -327,6 +327,21 @@ impl OctocrabRest {
         Ok(all)
     }
 
+    /// Fetch a single PR's body (markdown). The single-PR endpoint at
+    /// `/repos/{owner}/{repo}/pulls/{number}` is used because the list
+    /// endpoint omits `body`; all other PR fields are sourced from the
+    /// enriched list PR rather than this response.
+    #[tracing::instrument(name = "fetch_pr_detail", skip(self))]
+    pub async fn fetch_pr_detail(&self, owner: &str, repo: &str, number: u64) -> Result<String> {
+        let route = format!("/repos/{owner}/{repo}/pulls/{number}");
+        let raw: RawRestPRDetail = self
+            .client
+            .get(&route, None::<&()>)
+            .await
+            .with_context(|| format!("fetching PR detail for {owner}/{repo}#{number}"))?;
+        Ok(raw.body.unwrap_or_default())
+    }
+
     /// Fetch the changed files for a PR (path + additions/deletions per file).
     /// Drives the summary panel's File Category breakdown; mirrors the TS
     /// `fetchCategorizedFiles` minus the categorisation, which `update` does
@@ -430,6 +445,16 @@ struct RawCommentUser {
     login: String,
     #[serde(rename = "type", default)]
     user_type: Option<String>,
+}
+
+/// Wire shape for the single-PR detail endpoint (`GET /repos/:owner/:repo/pulls/:number`).
+/// We only need the `body` field here; all other PR fields are sourced from
+/// the enriched list PR rather than re-parsed from this response.
+#[derive(Debug, Clone, Deserialize)]
+struct RawRestPRDetail {
+    /// The PR's markdown body, or `null` / absent when the author left it empty.
+    #[serde(default)]
+    body: Option<String>,
 }
 
 /// One entry from the PR `files` endpoint. Only the fields the breakdown needs;

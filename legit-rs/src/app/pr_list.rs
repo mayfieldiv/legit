@@ -362,6 +362,14 @@ impl PrList {
             .then(|| &self.prs[self.selected])
     }
 
+    /// Immutable access to a PR by key. Used by the detail view to look up the
+    /// current PR for `r` (refresh). `None` if no PR with that key is in the list.
+    pub fn pr(&self, key: &PrKey) -> Option<&PR> {
+        self.prs
+            .iter()
+            .find(|pr| pr.repo_slug == key.repo_slug && pr.number == key.number)
+    }
+
     /// Mutable access to a streamed PR by key, for enrichment that overwrites
     /// list fields in place (mergeable, review decision, size, head SHA). `None`
     /// if no PR with that key is in the list.

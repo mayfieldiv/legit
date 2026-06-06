@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind};
 
-use crate::{git_remote::RepoInfo, secret::Secret};
+use crate::{git_remote::RepoInfo, github::rest::PrKey, secret::Secret};
 
 use super::{
     cmd::{Cmd, RequestContext},
-    model::{FilesState, Model, RepoDetection, StatusKind, StatusMessage},
+    model::{DetailState, FilesState, Model, RepoDetection, StatusKind, StatusMessage, ViewMode},
     msg::Msg,
 };
 
@@ -178,6 +178,24 @@ fn maybe_fetch_selected_files(model: &mut Model) -> Vec<Cmd> {
     vec![Cmd::FetchFiles { ctx, number }]
 }
 
+/// Dispatch `Cmd::FetchPRDetail` for `key`, using the model's current auth
+/// token and the tracked repo the PR belongs to. Yields nothing when auth
+/// isn't ready or the PR's repo isn't tracked (the caller is already guarded,
+/// but this is defensive).
+fn fetch_pr_detail_cmd(model: &Model, key: &PrKey) -> Vec<Cmd> {
+    let Some(token) = model.auth_token.as_ref() else {
+        return Vec::new();
+    };
+    let Some(repo) = model.tracked_repo(&key.repo_slug) else {
+        return Vec::new();
+    };
+    let ctx = request_context(&repo, token, &model.config.bot_logins);
+    vec![Cmd::FetchPRDetail {
+        ctx,
+        key: key.clone(),
+    }]
+}
+
 /// Switch to the Repo Tab at `index` (0 = All): re-derive the visible list
 /// under the new scope and reset the selection to its top. A no-op for the
 /// already-active tab so re-pressing its digit doesn't lose the selection.
@@ -229,8 +247,8 @@ fn handle_filter_editing_key(model: &mut Model, code: KeyCode) {
     model.relayout();
 }
 
-/// Handle one keypress in normal mode (no filter editor open).
-fn handle_normal_key(model: &mut Model, code: KeyCode) {
+/// Handle one keypress in normal list mode (no filter editor open).
+fn handle_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
     match code {
         KeyCode::Char('q') => model.should_quit = true,
         KeyCode::Char('j') => model.list.move_down(),
@@ -258,24 +276,160 @@ fn handle_normal_key(model: &mut Model, code: KeyCode) {
         KeyCode::Char(c) if c.is_ascii_digit() => {
             jump_to_tab(model, (c as u8 - b'0') as usize);
         }
+        KeyCode::Enter => {
+            // Enter on the selected PR enters the Detail view with a fresh
+            // `DetailState` (no body, scroll at the top). If auth is ready and
+            // the PR's repo is tracked the fetch fires immediately; otherwise
+            // the detail view shows "Loading PR detail…" with no fetch in
+            // flight. Nothing re-fires the fetch when auth/config later land, so
+            // in that rare startup-race case the user must re-press Enter — it
+            // doesn't happen in practice (auth resolves before any keypress).
+            if let Some(pr) = model.list.selected_pr() {
+                let key = pr.key();
+                let cmds = fetch_pr_detail_cmd(model, &key);
+                model.view_mode = ViewMode::Detail(DetailState {
+                    key,
+                    body: None,
+                    scroll: 0,
+                });
+                return cmds;
+            }
+        }
         _ => {}
     }
+    Vec::new()
+}
+
+/// Lines scrolled per `j`/`k`/arrow press in the detail body.
+const DETAIL_SCROLL_STEP: u16 = 1;
+/// Lines scrolled per PageUp/PageDown in the detail body.
+const DETAIL_SCROLL_PAGE: u16 = 10;
+
+/// Clamp the open detail view's scroll offset so it can never sit more than one
+/// screenful above the last content line. The content is the cached
+/// description body **plus** the per-frame CI checks section — under-clamping
+/// to the description alone would stop the user reaching the bottom of the
+/// checks. A no-op outside Detail mode or while the body hasn't arrived (there
+/// is nothing to scroll yet). Mirrors the render-time backstop in
+/// `view::detail::render_body`, but here `scroll` is the stored source of
+/// intent: clamping in `update` keeps a held `j` from drifting unboundedly and
+/// leaving the subsequent `k` presses visually dead.
+fn clamp_detail_scroll(model: &mut Model) {
+    let ViewMode::Detail(detail) = &model.view_mode else {
+        return;
+    };
+    let Some(description) = &detail.body else {
+        return;
+    };
+    let Some(pr) = model.list.pr(&detail.key) else {
+        return;
+    };
+    let content_lines =
+        (description.len() + crate::view::detail::checks_section_lines(model, pr).len()) as u16;
+    let viewport_rows = model
+        .terminal_height
+        .saturating_sub(crate::view::detail::CHROME_ROWS);
+    let max_scroll = content_lines.saturating_sub(viewport_rows);
+    if let ViewMode::Detail(detail) = &mut model.view_mode {
+        detail.scroll = detail.scroll.min(max_scroll);
+    }
+}
+
+/// Handle one keypress while the detail view is open. The caller guarantees
+/// `model.view_mode` is `ViewMode::Detail`, so the scroll/refresh arms match
+/// the inner `DetailState` directly.
+fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
+    match code {
+        KeyCode::Esc => {
+            // Return to the list view. A single assignment drops the whole
+            // `DetailState` (body + scroll), so there is no side state to clear
+            // by hand — the next Enter builds a fresh one starting at the top.
+            model.view_mode = ViewMode::List;
+        }
+        KeyCode::Char('r') => {
+            // Refresh the current PR detail: refetch the body. Clears the
+            // cached body first so the view briefly shows the loading
+            // placeholder, consistent with the initial enter-and-fetch flow.
+            // Preserves the scroll position so the user stays at the same
+            // place after a quick re-fetch.
+            //
+            // Clone the key so the borrow of model.view_mode ends before the
+            // body is reassigned below (which needs a unique borrow of the
+            // model via `fetch_pr_detail_cmd`).
+            if let ViewMode::Detail(detail) = &model.view_mode {
+                let key = detail.key.clone();
+                let cmds = fetch_pr_detail_cmd(model, &key);
+                if !cmds.is_empty()
+                    && let ViewMode::Detail(detail) = &mut model.view_mode
+                {
+                    detail.body = None;
+                }
+                return cmds;
+            }
+        }
+        // Scroll down: j, Down arrow. Clamp to the last screenful so a held key
+        // can't drift the offset past the content (which would make the next
+        // `k` presses appear dead until the offset works back down).
+        KeyCode::Char('j') | KeyCode::Down => {
+            if let ViewMode::Detail(detail) = &mut model.view_mode {
+                detail.scroll = detail.scroll.saturating_add(DETAIL_SCROLL_STEP);
+            }
+            clamp_detail_scroll(model);
+        }
+        // Scroll up: k, Up arrow
+        KeyCode::Char('k') | KeyCode::Up => {
+            if let ViewMode::Detail(detail) = &mut model.view_mode {
+                detail.scroll = detail.scroll.saturating_sub(DETAIL_SCROLL_STEP);
+            }
+        }
+        // Page down
+        KeyCode::PageDown => {
+            if let ViewMode::Detail(detail) = &mut model.view_mode {
+                detail.scroll = detail.scroll.saturating_add(DETAIL_SCROLL_PAGE);
+            }
+            clamp_detail_scroll(model);
+        }
+        // Page up
+        KeyCode::PageUp => {
+            if let ViewMode::Detail(detail) = &mut model.view_mode {
+                detail.scroll = detail.scroll.saturating_sub(DETAIL_SCROLL_PAGE);
+            }
+        }
+        _ => {}
+    }
+    Vec::new()
 }
 
 pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
     match msg {
         Msg::TerminalEvent(Event::Key(key)) => {
-            if key.kind == KeyEventKind::Press {
-                // Modal precedence: an open filter editor sees every key first.
-                if model.list.filter().is_editing() {
-                    handle_filter_editing_key(model, key.code);
-                } else {
-                    handle_normal_key(model, key.code);
+            if key.kind != KeyEventKind::Press {
+                return Vec::new();
+            }
+            // Detail mode owns the keypress entirely: its keys never touch the
+            // list selection, so the list-mode files-fetch path below must not
+            // run for them (e.g. Esc-to-list must not act as if the key was a
+            // list keypress). Returning here keeps that out of the list path.
+            if matches!(model.view_mode, ViewMode::Detail(_)) {
+                return handle_detail_key(model, key.code);
+            }
+            // List-mode keys. The filter editor (modal precedence) sees every
+            // key first and produces no command; a normal list key may (Enter
+            // -> FetchPRDetail), in which case dispatch it and stop.
+            if model.list.filter().is_editing() {
+                handle_filter_editing_key(model, key.code);
+            } else {
+                let cmds = handle_list_key(model, key.code);
+                if !cmds.is_empty() {
+                    return cmds;
                 }
-                // Any key can move the selection (j/k, tab switch, filter
-                // narrowing, grouping cycle); fetch the now-selected PR's files
-                // just-in-time. The fetch is deduped per PR, so this is a no-op
-                // when the selection didn't change to a new, unfetched PR.
+            }
+            // Any key that left us in list mode can have moved the selection;
+            // fetch the now-selected PR's files just-in-time. The guard skips a
+            // keypress that *entered* detail (Enter): it normally returns a
+            // FetchPRDetail above, but when that fetch is suppressed (auth not
+            // ready / repo untracked) it would otherwise fall through to here.
+            if matches!(model.view_mode, ViewMode::List) {
                 return maybe_fetch_selected_files(model);
             }
             Vec::new()
@@ -422,6 +576,19 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             // Ignore a stale timer — a newer message has since taken the slot.
             if model.status_gen == token {
                 model.status = None;
+            }
+            Vec::new()
+        }
+        Msg::PRDetailArrived { pr, body } => {
+            // Render the markdown description to display lines exactly once,
+            // here on arrival, and cache the result — the view then reuses it
+            // every frame instead of re-parsing. Store it only when the view is
+            // still open for this PR; discard it if the user already navigated
+            // back to the list or entered a different PR's detail.
+            if let ViewMode::Detail(detail) = &mut model.view_mode
+                && detail.key == pr
+            {
+                detail.body = Some(crate::view::detail::render_description_lines(&body));
             }
             Vec::new()
         }

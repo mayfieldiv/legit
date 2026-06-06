@@ -14,6 +14,7 @@ use crate::{
     secret::Secret,
 };
 
+mod detail;
 mod enrichment;
 mod files;
 mod filter;
