@@ -117,14 +117,13 @@ struct RenderCtx {
     /// so it never leaks into subsequent paragraphs or lists, and replaces the
     /// former approach of overloading `inline.bold` to carry heading weight.
     in_heading: Option<u8>,
-    /// Nesting depth for lists; 0 = top-level.
-    list_depth: u32,
-    /// Bullet/counter for the current list nesting level. `None` = unordered,
-    /// `Some(n)` = ordered starting at n.
+    /// One entry per open list, innermost last — a single stack that encodes
+    /// both nesting and per-level numbering. Each entry holds the NEXT counter
+    /// to emit for that level: `Some(n)` = ordered (the next item renders `n.`
+    /// then increments), `None` = unordered (renders `•`). Nesting depth is
+    /// therefore `list_stack.len() - 1`; the stack being empty means we are
+    /// outside any list.
     list_stack: Vec<Option<u64>>,
-    /// Counter for the current ordered list item (1-based, incremented on
-    /// each `Start(Item)`).
-    item_counters: Vec<u64>,
     /// Whether we are inside a blockquote. When true, `Start(Paragraph)`
     /// emits the `│ ` bar once as a leading muted span; subsequent inline
     /// runs (text, code, links) flow through normally with muted foreground.
@@ -185,9 +184,10 @@ impl RenderCtx {
                 self.start_code_block(kind);
             }
             Event::Start(Tag::List(start)) => {
+                // `start` is the parser's first ordinal for an ordered list, or
+                // `None` for an unordered one — exactly the per-level "next
+                // counter" we want to push.
                 self.list_stack.push(start);
-                self.item_counters.push(start.unwrap_or(0));
-                self.list_depth += 1;
             }
             Event::Start(Tag::Item) => {
                 self.start_item();
@@ -210,13 +210,11 @@ impl RenderCtx {
             }
             Event::End(TagEnd::List(_)) => {
                 self.list_stack.pop();
-                self.item_counters.pop();
-                if self.list_depth > 0 {
-                    self.list_depth -= 1;
-                }
                 // Blank line after the outermost list — unless the last item
                 // was loose and its Paragraph end already emitted one.
-                if self.list_depth == 0 && self.lines.last().is_none_or(|l| !l.spans.is_empty()) {
+                if self.list_stack.is_empty()
+                    && self.lines.last().is_none_or(|l| !l.spans.is_empty())
+                {
                     self.blank_line();
                 }
             }
@@ -372,17 +370,17 @@ impl RenderCtx {
         if !self.current.is_empty() {
             self.flush_line();
         }
-        let depth = self.list_depth.saturating_sub(1) as usize;
+        let depth = self.list_stack.len().saturating_sub(1);
         let indent = "  ".repeat(depth);
-        let is_ordered = self.list_stack.last().map(|s| s.is_some()).unwrap_or(false);
-        let bullet = if is_ordered {
-            // Increment the counter for this depth.
-            let counter = self.item_counters.last_mut().unwrap();
-            let n = *counter;
-            *counter += 1;
-            format!("{n}. ")
-        } else {
-            "• ".to_owned()
+        // The innermost open list's entry decides the bullet and, for ordered
+        // lists, carries the next counter to emit and increment in place.
+        let bullet = match self.list_stack.last_mut() {
+            Some(Some(counter)) => {
+                let n = *counter;
+                *counter += 1;
+                format!("{n}. ")
+            }
+            _ => "• ".to_owned(),
         };
         self.push_span(Span::raw(format!("{indent}{bullet}")));
     }
