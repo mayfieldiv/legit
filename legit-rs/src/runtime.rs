@@ -21,9 +21,19 @@ use crate::{
     view,
 };
 
-/// Cap on simultaneously in-flight GitHub HTTP requests across the whole
-/// transport. Keeps us well under GitHub's abuse thresholds (the PRD sets 8).
-const MAX_CONCURRENT_REQUESTS: usize = 8;
+/// Hard ceiling on simultaneously in-flight GitHub HTTP requests across the
+/// whole transport (all lanes). GitHub's documented secondary-rate-limit
+/// ceiling is ~100 concurrent requests shared across REST + GraphQL, so 16
+/// leaves ample headroom. See ADR 0003.
+const MAX_CONCURRENT_REQUESTS: usize = 16;
+
+/// Sub-cap on the `Background` lane (the open-PR listing and the enrichment
+/// fan-out). Guarantees `MAX_CONCURRENT_REQUESTS - MAX_BACKGROUND_REQUESTS`
+/// slots are always free for the interactive lane (the detail body and the
+/// selected PR's files), so a user-driven fetch never queues behind the
+/// list-wide backlog. Interactive borrows background's idle slots up to the
+/// total cap; background can never exceed this.
+const MAX_BACKGROUND_REQUESTS: usize = 8;
 
 #[tracing::instrument(name = "tui_runtime", skip_all)]
 pub async fn run() -> Result<()> {
@@ -35,7 +45,7 @@ pub async fn run() -> Result<()> {
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
     spawn_event_reader(event_tx);
 
-    let limiter = NetworkLimiter::new(MAX_CONCURRENT_REQUESTS);
+    let limiter = NetworkLimiter::new(MAX_CONCURRENT_REQUESTS, MAX_BACKGROUND_REQUESTS);
     spawn_network_stats_forwarder(&limiter, &msg_tx);
 
     let (mut model, initial_cmds) = Model::new();

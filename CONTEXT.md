@@ -80,6 +80,12 @@ Re-fetching one PR (`r`) or every visible PR (`R`). A refresh updates the PR lis
 **Priority Queue**:
 The queue background refreshes flow through. Items are dequeued highest-priority-first; smart-status tier determines priority so `me-blocking` PRs refresh ahead of `waiting-on-author` ones.
 
+**Fetch Priority**:
+Which lane a network request takes through the shared concurrency limiter. Orthogonal to the Priority Queue's smart-status ordering. Two values:
+
+- `Interactive` — a fetch the user is actively waiting on: the detail body on drill-in or `r`, and the selected PR's files. Takes precedence so it doesn't queue behind a list-wide enrichment backlog.
+- `Background` — speculative, list-wide work: the open-PR listing, the enrichment fan-out, and `R` (refresh-all, same volume as the initial load).
+
 ### File categorisation
 
 **File Category**:
