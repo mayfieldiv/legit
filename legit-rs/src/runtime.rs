@@ -27,12 +27,9 @@ use crate::{
 /// leaves ample headroom. See ADR 0003.
 const MAX_CONCURRENT_REQUESTS: usize = 16;
 
-/// Sub-cap on the `Background` lane (the open-PR listing and the enrichment
-/// fan-out). Guarantees `MAX_CONCURRENT_REQUESTS - MAX_BACKGROUND_REQUESTS`
-/// slots are always free for the interactive lane (the detail body and the
-/// selected PR's files), so a user-driven fetch never queues behind the
-/// list-wide backlog. Interactive borrows background's idle slots up to the
-/// total cap; background can never exceed this.
+/// Sub-cap on background-effective requests (the open-PR listing and the
+/// enrichment fan-out); the remaining slots stay free for the focused PR's
+/// fetches. Lane derivation and borrow semantics live in `github::limiter`.
 const MAX_BACKGROUND_REQUESTS: usize = 8;
 
 #[tracing::instrument(name = "tui_runtime", skip_all)]

@@ -45,9 +45,8 @@ pub struct NetworkStats {
 /// A request parked in the queue until the pump grants it. `tx` delivers the
 /// `Permit` once a slot is committed to it.
 struct Waiter {
-    /// Monotonic insertion id. `push_back` keeps the queue ordered by it, so the
-    /// pump scans in FIFO order without re-reading it; the id is used only by
-    /// `AcquireGuard::drop` to locate and remove a cancelled waiter.
+    /// Identifies this waiter so a cancelled `acquire` can find and remove it
+    /// (`AcquireGuard::drop`).
     id: u64,
     /// The PR this request serves — interactive-effective while it is focused —
     /// or `None` for repo-wide work (the listing, the batched review-status
