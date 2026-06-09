@@ -78,7 +78,7 @@ The local branch name `gh pr checkout` would produce for a PR. Same-repo PRs kee
 Re-fetching one PR (`r`) or every visible PR (`R`). A refresh updates the PR list entry plus all enrichment queries (threads, checks, reviews, files).
 
 **Priority Queue**:
-The queue background refreshes flow through. Items are dequeued highest-priority-first; smart-status tier determines priority so `me-blocking` PRs refresh ahead of `waiting-on-author` ones.
+The shared network limiter's queue of pending fetches. Requests are granted highest-priority-first: interactive-effective ones (see [[Fetch Priority]]) ahead of background ones, FIFO within a lane. Smart-status tier does not influence the order today; tier-ordering among background requests (so `me-blocking` PRs refresh ahead of `waiting-on-author` ones) is a possible future tiebreaker (ADR 0003).
 
 **Fetch Priority**:
 Which lane a network request takes through the shared concurrency limiter. Two values:
@@ -92,7 +92,7 @@ A request's priority is not fixed when it's dispatched: a `Background` enrichmen
 The single PR whose pending work the limiter prioritises: the open **PR Detail**, or — in the list view — the selected PR. Changing the selection or drilling in/out moves the focus.
 
 **Focus Promotion**:
-Re-ranking the limiter's queue when the **Focused PR** changes, so the focused PR's still-pending **Background** enrichment (its threads, reviews, checks) jumps ahead of the rest of the fan-out. Only pending requests promote; one already in flight keeps running. This is the smart-status **Priority Queue** ported and re-keyed on user focus rather than tier.
+Re-ranking the **Priority Queue** when the **Focused PR** changes, so the focused PR's still-pending **Background** enrichment (its threads, reviews, checks) jumps ahead of the rest of the fan-out. Only pending requests promote; one already in flight keeps running.
 
 ### File categorisation
 
@@ -105,7 +105,7 @@ One of `code`, `test`, `generated`, `docs`, `config`. Assigned per file by patte
 - Every **PR** has exactly one **Smart-status** computed from its current state.
 - A **Worktree** belongs to one **PR** and one **Source Clone**.
 - The **Blocker** of a `waiting-on-author` PR is the **Effective Author**; the **Blocker** of a `me-blocking` PR is the current user.
-- A **Refresh** enqueues one or more **PR**s into the **Priority Queue** for re-fetching.
+- A **Refresh** sends each of its fetches through the **Priority Queue**, each with a **Fetch Priority**.
 
 ## Example dialogue
 
