@@ -110,23 +110,32 @@ impl Inner {
         }
     }
 
-    /// Index of the next waiter to grant. The queue is FIFO by insertion id
-    /// (`push_back` of a monotonic id; removals keep order), so the first
-    /// interactive-effective waiter is already the oldest one and nothing later
-    /// can beat it. Absent any interactive waiter, the first background-effective
-    /// waiter wins, and only while the background sub-cap has room. `None` when
-    /// nothing can be granted now.
-    fn pick_next(&self) -> Option<usize> {
-        let mut background = None;
+    /// Remove and return the next waiter to grant, plus whether it counts
+    /// against the background sub-cap — decided here, in the same scan that
+    /// picked it. The queue is FIFO by insertion id (`push_back` of a monotonic
+    /// id; removals keep order), so the first interactive-effective waiter is
+    /// already the oldest one and nothing later can beat it. Absent any
+    /// interactive waiter, the first background-effective waiter wins, and only
+    /// while the background sub-cap has room. `None` when nothing can be
+    /// granted now.
+    fn take_next(&mut self) -> Option<(Waiter, bool)> {
+        let background_has_room = self.background_in_flight < self.background_max;
+        let mut next = None;
         for (index, waiter) in self.queue.iter().enumerate() {
             if self.is_interactive(waiter) {
-                return Some(index);
+                next = Some((index, false));
+                break;
             }
-            if background.is_none() && self.background_in_flight < self.background_max {
-                background = Some(index);
+            if background_has_room && next.is_none() {
+                next = Some((index, true));
             }
         }
-        background
+        let (index, background) = next?;
+        let waiter = self
+            .queue
+            .remove(index)
+            .expect("the scan above produced a valid queue index");
+        Some((waiter, background))
     }
 }
 
@@ -285,14 +294,9 @@ impl NetworkLimiter {
     fn drain_grants(self: &Arc<Self>, inner: &mut Inner) -> Vec<(oneshot::Sender<Permit>, Permit)> {
         let mut grants = Vec::new();
         while inner.total_in_flight < inner.total_max {
-            let Some(index) = inner.pick_next() else {
+            let Some((waiter, background)) = inner.take_next() else {
                 break;
             };
-            let waiter = inner
-                .queue
-                .remove(index)
-                .expect("pick_next returned a valid queue index");
-            let background = !inner.is_interactive(&waiter);
             inner.total_in_flight += 1;
             if background {
                 inner.background_in_flight += 1;
