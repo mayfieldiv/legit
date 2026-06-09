@@ -127,24 +127,26 @@ fn request_context(
 /// Repo it belongs to, unless checks for that (repo, SHA) already arrived —
 /// the same SHA in another repo (a fork) has its own check runs, so it never
 /// suppresses this repo's fetch. A `None` SHA (a PR with no commits yet)
-/// yields nothing.
-fn maybe_fetch_checks(model: &Model, head_sha: Option<String>, repo_slug: &str) -> Vec<Cmd> {
+/// yields nothing. `pr` is the PR the SHA came from, carried so the fetch can
+/// be focus-promoted in the limiter.
+fn maybe_fetch_checks(model: &Model, head_sha: Option<String>, pr: &PrKey) -> Vec<Cmd> {
     let Some(sha) = head_sha else {
         return Vec::new();
     };
     if model
         .enrichment
         .checks
-        .contains_key(&(repo_slug.to_owned(), sha.clone()))
+        .contains_key(&(pr.repo_slug.clone(), sha.clone()))
     {
         return Vec::new();
     }
-    let (Some(token), Some(repo)) = (model.auth_token.as_ref(), model.tracked_repo(repo_slug))
+    let (Some(token), Some(repo)) = (model.auth_token.as_ref(), model.tracked_repo(&pr.repo_slug))
     else {
         return Vec::new();
     };
     vec![Cmd::FetchChecks {
         ctx: request_context(&repo, token, &model.config.bot_logins),
+        pr: pr.clone(),
         head_sha: sha,
     }]
 }
@@ -500,7 +502,7 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             }
             // review_decision/mergeable feed the blocker rules, so re-derive.
             model.refresh_blockers();
-            maybe_fetch_checks(model, head_sha, &pr.repo_slug)
+            maybe_fetch_checks(model, head_sha, &pr)
         }
         Msg::ThreadsArrived { pr, threads } => {
             model.enrichment.review_threads.insert(pr, threads);

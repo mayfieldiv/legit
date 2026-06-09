@@ -21,9 +21,16 @@ use crate::{
     view,
 };
 
-/// Cap on simultaneously in-flight GitHub HTTP requests across the whole
-/// transport. Keeps us well under GitHub's abuse thresholds (the PRD sets 8).
-const MAX_CONCURRENT_REQUESTS: usize = 8;
+/// Hard ceiling on simultaneously in-flight GitHub HTTP requests across the
+/// whole transport (all lanes). GitHub's documented secondary-rate-limit
+/// ceiling is ~100 concurrent requests shared across REST + GraphQL, so 16
+/// leaves ample headroom. See ADR 0003.
+const MAX_CONCURRENT_REQUESTS: usize = 16;
+
+/// Sub-cap on background-effective requests (the open-PR listing and the
+/// enrichment fan-out); the remaining slots stay free for the focused PR's
+/// fetches. Lane derivation and borrow semantics live in `github::limiter`.
+const MAX_BACKGROUND_REQUESTS: usize = 8;
 
 #[tracing::instrument(name = "tui_runtime", skip_all)]
 pub async fn run() -> Result<()> {
@@ -35,7 +42,7 @@ pub async fn run() -> Result<()> {
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
     spawn_event_reader(event_tx);
 
-    let limiter = NetworkLimiter::new(MAX_CONCURRENT_REQUESTS);
+    let limiter = NetworkLimiter::new(MAX_CONCURRENT_REQUESTS, MAX_BACKGROUND_REQUESTS);
     spawn_network_stats_forwarder(&limiter, &msg_tx);
 
     let (mut model, initial_cmds) = Model::new();
@@ -90,6 +97,11 @@ fn process_msg(
     if !cmds.is_empty() {
         tracing::debug!(commands = cmds.len(), "update returned commands");
     }
+    // Push the (possibly moved) focus to the limiter before the commands this
+    // message produced can acquire, so a fetch for the newly-focused PR ranks
+    // interactive from its first scheduling decision — and the previous PR's
+    // pending fetches demote. A no-op when focus is unchanged.
+    limiter.set_focus(model.focused_pr_key());
     spawn_cmds(cmds, msg_tx, limiter);
 }
 
