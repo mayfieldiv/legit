@@ -165,9 +165,9 @@ impl Drop for AcquireGuard<'_> {
         // the (now-dropped) receiver releases its own slot via `Permit::drop`.
         if let Some(pos) = inner.queue.iter().position(|w| w.id == self.id) {
             inner.queue.remove(pos);
-            let stats = inner.snapshot();
-            drop(inner);
-            self.limiter.publish(stats);
+            // Published under the lock, same as `pump_and_publish`, so it can't
+            // race an interleaved publish and land out of order.
+            self.limiter.publish(inner.snapshot());
         }
     }
 }
@@ -248,20 +248,24 @@ impl NetworkLimiter {
         self.stats_tx.subscribe()
     }
 
-    /// Grant as many waiters as capacity allows, then publish the snapshot. The
-    /// grants are *delivered after the lock is released* so a send to a cancelled
-    /// receiver (which drops the permit and re-enters the limiter to free its
-    /// slot) can't deadlock against the lock we hold here.
+    /// Grant as many waiters as capacity allows, publish the snapshot, then
+    /// deliver the grants. The snapshot is published *while the lock is held* so
+    /// publishes are totally ordered by state version — a corrective publish
+    /// (e.g. from `Permit::drop` after a failed grant send below) can never be
+    /// overwritten by an older snapshot. The grants are *delivered after the
+    /// lock is released* so a send to a cancelled receiver (which drops the
+    /// permit and re-enters the limiter to free its slot) can't deadlock against
+    /// the lock we hold here; the stats send re-enters nothing, so it is safe
+    /// under the lock.
     fn pump_and_publish(self: &Arc<Self>, mut inner: MutexGuard<'_, Inner>) {
         let grants = self.drain_grants(&mut inner);
-        let stats = inner.snapshot();
+        self.publish(inner.snapshot());
         drop(inner);
         for (tx, permit) in grants {
             // `Err` means the receiver was cancelled; dropping the returned permit
             // here frees its slot via `Permit::drop` (no lock is held now).
             let _ = tx.send(permit);
         }
-        self.publish(stats);
     }
 
     /// Pull grantable waiters out of the queue, committing a slot to each. Caller
