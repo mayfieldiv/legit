@@ -66,7 +66,9 @@ pub struct NetworkStats {
 /// A request parked in the queue until the pump grants it. `tx` delivers the
 /// `Permit` once a slot is committed to it.
 struct Waiter {
-    /// Monotonic insertion id — the FIFO tiebreaker within an effective lane.
+    /// Monotonic insertion id. `push_back` keeps the queue ordered by it, so the
+    /// pump scans in FIFO order without re-reading it; the id is used only by
+    /// `AcquireGuard::drop` to locate and remove a cancelled waiter.
     id: u64,
     /// The PR this request belongs to, if any. `None` for repo-wide work (the
     /// listing, the batched review-status query) which can never be focused.
@@ -106,29 +108,23 @@ impl Inner {
                 .is_some_and(|key| self.focused.as_ref() == Some(key))
     }
 
-    /// Index of the next waiter to grant: interactive-effective lane first, then
-    /// FIFO by insertion id. A background-effective waiter is eligible only while
-    /// the background sub-cap has room. `None` when nothing can be granted now.
+    /// Index of the next waiter to grant. The queue is FIFO by insertion id
+    /// (`push_back` of a monotonic id; removals keep order), so the first
+    /// interactive-effective waiter is already the oldest one and nothing later
+    /// can beat it. Absent any interactive waiter, the first background-effective
+    /// waiter wins, and only while the background sub-cap has room. `None` when
+    /// nothing can be granted now.
     fn pick_next(&self) -> Option<usize> {
-        let mut best: Option<(usize, bool, u64)> = None;
+        let mut background = None;
         for (index, waiter) in self.queue.iter().enumerate() {
-            let interactive = self.is_interactive(waiter);
-            if !interactive && self.background_in_flight >= self.background_max {
-                continue;
+            if self.is_interactive(waiter) {
+                return Some(index);
             }
-            // Interactive beats background; within a lane, the older (lower) id wins.
-            let better = match best {
-                None => true,
-                Some((_, true, best_id)) if interactive => waiter.id < best_id,
-                Some((_, false, _)) if interactive => true,
-                Some((_, false, best_id)) => waiter.id < best_id,
-                Some((_, true, _)) => false,
-            };
-            if better {
-                best = Some((index, interactive, waiter.id));
+            if background.is_none() && self.background_in_flight < self.background_max {
+                background = Some(index);
             }
         }
-        best.map(|(index, _, _)| index)
+        background
     }
 }
 
