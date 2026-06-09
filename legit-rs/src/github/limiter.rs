@@ -176,7 +176,7 @@ impl NetworkLimiter {
     /// `total_max` is the hard ceiling on all in-flight requests; `background_max`
     /// is the sub-cap for background-effective requests (must not exceed `total_max`).
     pub fn new(total_max: usize, background_max: usize) -> Arc<Self> {
-        debug_assert!(
+        assert!(
             background_max <= total_max,
             "background sub-cap ({background_max}) cannot exceed the total cap ({total_max})"
         );
