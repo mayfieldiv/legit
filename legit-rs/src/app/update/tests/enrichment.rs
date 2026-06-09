@@ -190,9 +190,12 @@ fn same_sha_in_another_repo_still_fetches_checks() {
     );
 
     match cmds.as_slice() {
-        [Cmd::FetchChecks { ctx, head_sha }] => {
+        [Cmd::FetchChecks { ctx, pr, head_sha }] => {
             assert_eq!(ctx.repo.slug(), "acme/web");
             assert_eq!(head_sha, "abc123");
+            // Carries the PR the SHA came from, so the limiter can focus-promote it.
+            assert_eq!(pr.repo_slug, "acme/web");
+            assert_eq!(pr.number, 7);
         }
         other => panic!("expected a FetchChecks for the other repo, got {other:?}"),
     }

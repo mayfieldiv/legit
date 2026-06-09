@@ -3,92 +3,197 @@
 //! (in-flight + waiting) plus a change-subscription so the runtime can turn
 //! ticks into `Msg::NetworkStatsChanged`.
 //!
-//! Requests run in one of two lanes (see ADR 0003). A `total` semaphore is the
-//! hard ceiling on all in-flight requests; a smaller `background` sub-cap
-//! bounds speculative, list-wide work (the open-PR listing and the enrichment
-//! fan-out). `Interactive` requests — the ones the user is actively waiting on,
-//! the detail body and the selected PR's files — draw only against `total`.
-//! Because `Background` can never hold more than its sub-cap, at least
-//! `total - background` slots are always free for the interactive lane, so it
-//! is guaranteed that many immediately and borrows up to the full `total` when
+//! Unlike a plain semaphore, the limiter holds pending requests as **data** in
+//! an explicit queue and a pump grants slots from it (see ADR 0003). That lets a
+//! request be re-ranked while it is still waiting — the whole point of focus
+//! promotion below.
+//!
+//! Two lanes share one hard ceiling. A `total` cap bounds all in-flight
+//! requests; a smaller `background` sub-cap bounds speculative, list-wide work
+//! (the open-PR listing and the enrichment fan-out). A request's **effective
+//! lane** is computed by the pump, not baked in at dispatch:
+//!
+//! - `Interactive` if its `base` lane is `Interactive` (the detail body, the
+//!   selected PR's files) **or** its PR is the one the user is currently focused
+//!   on (the detail PR, else the selected list PR).
+//! - `Background` otherwise.
+//!
+//! The pump grants interactive-effective waiters up to `total`, and
+//! background-effective waiters only while the sub-cap has room. Because
+//! background in-flight can never exceed its sub-cap, at least
+//! `total - background` slots are always free for interactive work, so it is
+//! guaranteed that many immediately and borrows up to the full `total` when
 //! background is idle. Borrowing is asymmetric: interactive reaches into
-//! background's idle slots, but background stays hard-capped and cannot use
-//! interactive's headroom.
+//! background's idle slots, background never the reverse.
+//!
+//! **Focus promotion.** `set_focus` re-ranks the queue: a pending request for
+//! the newly-focused PR becomes interactive-effective, so one the background
+//! sub-cap was holding back is granted at once (using a borrowed slot). Moving
+//! focus away re-ranks it back with no extra bookkeeping. Only *pending*
+//! requests promote — an in-flight one already holds its slot.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex, MutexGuard},
 };
 
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
+use tokio::sync::{oneshot, watch};
 
-/// Which lane a request takes through the limiter.
+use crate::github::rest::PrKey;
+
+/// The lane a request asks for at dispatch. The pump may upgrade a `Background`
+/// request to interactive-effective when its PR is focused; it never downgrades
+/// an `Interactive` one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lane {
-    /// A fetch the user is actively waiting on (detail body, selected files).
-    /// Draws straight from the `total` pool, so it never queues behind the
-    /// background sub-cap.
+    /// A fetch the user is actively waiting on regardless of focus (detail body,
+    /// selected files). Always interactive-effective.
     Interactive,
-    /// Speculative, list-wide work (open-PR listing, enrichment fan-out). Holds
-    /// a `background` sub-cap permit in addition to a `total` slot.
+    /// Speculative, list-wide work (open-PR listing, enrichment fan-out).
+    /// Interactive-effective only while its PR is focused.
     Background,
 }
 
 /// Live view of the transport's HTTP concurrency.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NetworkStats {
-    /// Requests currently executing (a permit is held).
+    /// Requests currently executing (a slot is committed).
     pub in_flight: usize,
-    /// Requests blocked on the semaphore (awaiting a permit).
+    /// Requests queued but not yet granted a slot.
     pub waiting: usize,
 }
 
-/// A `Semaphore`-backed limiter. Every HTTP request acquires a `Permit` first;
-/// the permit reports as `in_flight` until dropped. Requests that can't get a
-/// slot immediately count as `waiting`. See the module docs for the two-lane
-/// (`total` + `background` sub-cap) design.
+/// A request parked in the queue until the pump grants it. `tx` delivers the
+/// `Permit` once a slot is committed to it.
+struct Waiter {
+    /// Monotonic insertion id — the FIFO tiebreaker within an effective lane.
+    id: u64,
+    /// The PR this request belongs to, if any. `None` for repo-wide work (the
+    /// listing, the batched review-status query) which can never be focused.
+    key: Option<PrKey>,
+    base: Lane,
+    tx: oneshot::Sender<Permit>,
+}
+
+/// All mutable limiter state, behind one mutex. Critical sections are short and
+/// fully synchronous — no `.await` is ever held across the lock.
+struct Inner {
+    total_max: usize,
+    background_max: usize,
+    total_in_flight: usize,
+    background_in_flight: usize,
+    /// The PR the user is focused on, whose pending requests rank as interactive.
+    focused: Option<PrKey>,
+    next_id: u64,
+    queue: VecDeque<Waiter>,
+}
+
+impl Inner {
+    fn snapshot(&self) -> NetworkStats {
+        NetworkStats {
+            in_flight: self.total_in_flight,
+            waiting: self.queue.len(),
+        }
+    }
+
+    /// A waiter is interactive-effective when it asked for the interactive lane
+    /// outright, or when its PR is the focused one.
+    fn is_interactive(&self, waiter: &Waiter) -> bool {
+        waiter.base == Lane::Interactive
+            || waiter
+                .key
+                .as_ref()
+                .is_some_and(|key| self.focused.as_ref() == Some(key))
+    }
+
+    /// Index of the next waiter to grant: interactive-effective lane first, then
+    /// FIFO by insertion id. A background-effective waiter is eligible only while
+    /// the background sub-cap has room. `None` when nothing can be granted now.
+    fn pick_next(&self) -> Option<usize> {
+        let mut best: Option<(usize, bool, u64)> = None;
+        for (index, waiter) in self.queue.iter().enumerate() {
+            let interactive = self.is_interactive(waiter);
+            if !interactive && self.background_in_flight >= self.background_max {
+                continue;
+            }
+            // Interactive beats background; within a lane, the older (lower) id wins.
+            let better = match best {
+                None => true,
+                Some((_, true, best_id)) if interactive => waiter.id < best_id,
+                Some((_, false, _)) if interactive => true,
+                Some((_, false, best_id)) => waiter.id < best_id,
+                Some((_, true, _)) => false,
+            };
+            if better {
+                best = Some((index, interactive, waiter.id));
+            }
+        }
+        best.map(|(index, _, _)| index)
+    }
+}
+
+/// A `priority-queue`-backed limiter. Every HTTP request `acquire`s a `Permit`
+/// first; the permit reports as `in_flight` until dropped. See the module docs
+/// for the two-lane + focus-promotion design.
 pub struct NetworkLimiter {
-    total: Arc<Semaphore>,
-    background: Arc<Semaphore>,
-    in_flight: AtomicUsize,
-    waiting: AtomicUsize,
+    inner: Mutex<Inner>,
     stats_tx: watch::Sender<NetworkStats>,
 }
 
-/// RAII guard for one in-flight slot. Holds the `total` permit — and, for a
-/// `Background` request, the `background` sub-cap permit too — and on drop
-/// decrements the in-flight count and republishes the snapshot.
+/// RAII guard for one committed slot. On drop it frees the slot, pumps the queue
+/// (a freed slot may unblock a waiter), and republishes the snapshot.
 pub struct Permit {
-    _total: OwnedSemaphorePermit,
-    _background: Option<OwnedSemaphorePermit>,
     limiter: Arc<NetworkLimiter>,
+    /// Whether this permit counts against the background sub-cap.
+    background: bool,
 }
 
 impl Drop for Permit {
     fn drop(&mut self) {
-        self.limiter.in_flight.fetch_sub(1, Ordering::SeqCst);
-        self.limiter.publish();
+        let mut inner = self.limiter.inner.lock().unwrap();
+        inner.total_in_flight -= 1;
+        if self.background {
+            inner.background_in_flight -= 1;
+        }
+        self.limiter.pump_and_publish(inner);
     }
 }
 
-/// Decrements `waiting` (and republishes) on drop. Guards the gap between
-/// registering as `waiting` and obtaining the semaphore permit so a cancelled
-/// `acquire` future — dropped while parked on the `.await` — can't leak the
-/// count and leave `NetworkStats.waiting` stuck above zero.
-struct WaitingGuard<'a> {
+/// Removes a still-queued waiter if the `acquire` future is dropped before its
+/// grant arrives, so a cancelled acquire neither leaks a `waiting` count nor is
+/// later handed a slot nobody holds. Disarmed once the permit is in hand.
+struct AcquireGuard<'a> {
     limiter: &'a Arc<NetworkLimiter>,
+    id: u64,
+    armed: bool,
 }
 
-impl Drop for WaitingGuard<'_> {
+impl AcquireGuard<'_> {
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for AcquireGuard<'_> {
     fn drop(&mut self) {
-        self.limiter.waiting.fetch_sub(1, Ordering::SeqCst);
-        self.limiter.publish();
+        if !self.armed {
+            return;
+        }
+        let mut inner = self.limiter.inner.lock().unwrap();
+        // If the waiter is gone it was already granted; the buffered permit in
+        // the (now-dropped) receiver releases its own slot via `Permit::drop`.
+        if let Some(pos) = inner.queue.iter().position(|w| w.id == self.id) {
+            inner.queue.remove(pos);
+            let stats = inner.snapshot();
+            drop(inner);
+            self.limiter.publish(stats);
+        }
     }
 }
 
 impl NetworkLimiter {
     /// `total_max` is the hard ceiling on all in-flight requests; `background_max`
-    /// is the sub-cap for the `Background` lane (which must not exceed `total_max`).
+    /// is the sub-cap for background-effective requests (must not exceed `total_max`).
     pub fn new(total_max: usize, background_max: usize) -> Arc<Self> {
         debug_assert!(
             background_max <= total_max,
@@ -96,62 +201,70 @@ impl NetworkLimiter {
         );
         let (stats_tx, _) = watch::channel(NetworkStats::default());
         Arc::new(Self {
-            total: Arc::new(Semaphore::new(total_max)),
-            background: Arc::new(Semaphore::new(background_max)),
-            in_flight: AtomicUsize::new(0),
-            waiting: AtomicUsize::new(0),
+            inner: Mutex::new(Inner {
+                total_max,
+                background_max,
+                total_in_flight: 0,
+                background_in_flight: 0,
+                focused: None,
+                next_id: 0,
+                queue: VecDeque::new(),
+            }),
             stats_tx,
         })
     }
 
-    /// Acquire one slot in `lane`, blocking when at capacity. The caller is
-    /// counted as `waiting` while blocked and `in_flight` once the returned
-    /// `Permit` is held; dropping the permit frees the slot(s).
-    pub async fn acquire(self: &Arc<Self>, lane: Lane) -> Permit {
-        self.waiting.fetch_add(1, Ordering::SeqCst);
-        self.publish();
-        let (total, background) = {
-            // Hold the decrement in a drop guard so cancelling this future while
-            // parked on either semaphore still releases the `waiting` count. The
-            // guard drops at the end of this block — once the permits are in hand.
-            let _waiting = WaitingGuard { limiter: self };
-            // Background takes its sub-cap permit FIRST, so it never occupies one
-            // of the shared `total` slots while still waiting to run — that
-            // headroom stays reserved for the interactive lane. Interactive skips
-            // the sub-cap and draws straight from `total`. The two semaphores are
-            // always acquired in this order (sub-cap then total), so there is no
-            // circular wait and no deadlock.
-            let background = match lane {
-                Lane::Background => Some(
-                    Arc::clone(&self.background)
-                        .acquire_owned()
-                        .await
-                        .expect("background sub-cap semaphore is never closed"),
-                ),
-                Lane::Interactive => None,
-            };
-            let total = Arc::clone(&self.total)
-                .acquire_owned()
-                .await
-                .expect("network limiter semaphore is never closed");
-            // Past the awaits, so no more cancellation points. Bump in_flight
-            // before the guard drops so its republish reflects the final
-            // {in_flight, waiting} state in a single tick.
-            self.in_flight.fetch_add(1, Ordering::SeqCst);
-            (total, background)
+    /// Queue a request in `lane` for the PR identified by `key` (or `None` for
+    /// repo-wide work), blocking until the pump grants it a slot. The caller is
+    /// counted as `waiting` until then and `in_flight` once the returned `Permit`
+    /// is held; dropping the permit frees the slot.
+    pub async fn acquire(self: &Arc<Self>, key: Option<PrKey>, lane: Lane) -> Permit {
+        let (tx, rx) = oneshot::channel();
+        let id = {
+            let mut inner = self.inner.lock().unwrap();
+            let id = inner.next_id;
+            inner.next_id += 1;
+            inner.queue.push_back(Waiter {
+                id,
+                key,
+                base: lane,
+                tx,
+            });
+            // The pump may grant this very waiter immediately; the permit is
+            // buffered in `rx` and picked up by the await below.
+            self.pump_and_publish(inner);
+            id
         };
-        Permit {
-            _total: total,
-            _background: background,
-            limiter: Arc::clone(self),
-        }
+        let guard = AcquireGuard {
+            limiter: self,
+            id,
+            armed: true,
+        };
+        let permit = rx
+            .await
+            .expect("limiter never drops a queued waiter without granting it a permit");
+        guard.disarm();
+        permit
     }
 
-    pub fn snapshot(&self) -> NetworkStats {
-        NetworkStats {
-            in_flight: self.in_flight.load(Ordering::SeqCst),
-            waiting: self.waiting.load(Ordering::SeqCst),
+    /// Set the PR the user is focused on (the open detail PR, else the selected
+    /// list PR). Pending requests for it are re-ranked into the interactive lane;
+    /// any the background sub-cap was holding back are granted at once. A no-op
+    /// when focus is unchanged.
+    pub fn set_focus(self: &Arc<Self>, focused: Option<PrKey>) {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.focused == focused {
+            return;
         }
+        inner.focused = focused;
+        self.pump_and_publish(inner);
+    }
+
+    /// A point-in-time snapshot of the counts. Production code observes changes
+    /// through `subscribe`; this direct read exists for tests asserting state.
+    #[cfg(test)]
+    pub fn snapshot(&self) -> NetworkStats {
+        self.inner.lock().unwrap().snapshot()
     }
 
     /// Receiver that yields a fresh `NetworkStats` every time the counts change.
@@ -159,17 +272,69 @@ impl NetworkLimiter {
         self.stats_tx.subscribe()
     }
 
-    fn publish(&self) {
+    /// Grant as many waiters as capacity allows, then publish the snapshot. The
+    /// grants are *delivered after the lock is released* so a send to a cancelled
+    /// receiver (which drops the permit and re-enters the limiter to free its
+    /// slot) can't deadlock against the lock we hold here.
+    fn pump_and_publish(self: &Arc<Self>, mut inner: MutexGuard<'_, Inner>) {
+        let grants = self.drain_grants(&mut inner);
+        let stats = inner.snapshot();
+        drop(inner);
+        for (tx, permit) in grants {
+            // `Err` means the receiver was cancelled; dropping the returned permit
+            // here frees its slot via `Permit::drop` (no lock is held now).
+            let _ = tx.send(permit);
+        }
+        self.publish(stats);
+    }
+
+    /// Pull grantable waiters out of the queue, committing a slot to each. Caller
+    /// delivers the returned permits after unlocking.
+    fn drain_grants(self: &Arc<Self>, inner: &mut Inner) -> Vec<(oneshot::Sender<Permit>, Permit)> {
+        let mut grants = Vec::new();
+        while inner.total_in_flight < inner.total_max {
+            let Some(index) = inner.pick_next() else {
+                break;
+            };
+            let waiter = inner
+                .queue
+                .remove(index)
+                .expect("pick_next returned a valid queue index");
+            let background = !inner.is_interactive(&waiter);
+            inner.total_in_flight += 1;
+            if background {
+                inner.background_in_flight += 1;
+            }
+            grants.push((
+                waiter.tx,
+                Permit {
+                    limiter: Arc::clone(self),
+                    background,
+                },
+            ));
+        }
+        grants
+    }
+
+    fn publish(&self, stats: NetworkStats) {
         // A closed receiver set is not an error — the runtime may not have a
         // subscriber yet (or ever, in tests).
-        let _ = self.stats_tx.send(self.snapshot());
+        let _ = self.stats_tx.send(stats);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{Lane, NetworkLimiter, NetworkStats};
+    use crate::github::rest::PrKey;
     use std::sync::Arc;
+
+    fn key(number: u64) -> PrKey {
+        PrKey {
+            repo_slug: "owner/repo".to_owned(),
+            number,
+        }
+    }
 
     /// Spin the single-threaded runtime until `cond` holds. `#[tokio::test]` is
     /// single-threaded, so yielding hands a spawned task the runtime far enough
@@ -196,7 +361,7 @@ mod tests {
     async fn acquiring_a_permit_marks_one_in_flight_until_dropped() {
         let limiter = NetworkLimiter::new(16, 8);
 
-        let permit = limiter.acquire(Lane::Background).await;
+        let permit = limiter.acquire(None, Lane::Background).await;
         assert_eq!(
             limiter.snapshot(),
             NetworkStats {
@@ -218,12 +383,11 @@ mod tests {
     #[tokio::test]
     async fn second_acquire_at_capacity_counts_as_waiting() {
         let limiter = NetworkLimiter::new(1, 1);
-        let held = limiter.acquire(Lane::Background).await;
+        let held = limiter.acquire(None, Lane::Background).await;
 
-        // A second acquire can't get a slot; it parks on the semaphore and must
-        // register as `waiting`.
+        // A second acquire can't get a slot; it parks in the queue as `waiting`.
         let blocked = Arc::clone(&limiter);
-        let pending = tokio::spawn(async move { blocked.acquire(Lane::Background).await });
+        let pending = tokio::spawn(async move { blocked.acquire(None, Lane::Background).await });
 
         spin_until(&limiter, |s| s.waiting == 1).await;
         assert_eq!(
@@ -234,7 +398,7 @@ mod tests {
             }
         );
 
-        // Free the slot; the parked acquire now proceeds and flips waiting→in-flight.
+        // Free the slot; the parked acquire is granted and flips waiting→in-flight.
         drop(held);
         let resumed = pending.await.expect("pending acquire task");
         assert_eq!(
@@ -250,16 +414,16 @@ mod tests {
     #[tokio::test]
     async fn cancelled_acquire_does_not_leak_waiting() {
         let limiter = NetworkLimiter::new(1, 1);
-        // Fill the only slot so the next acquire must park as `waiting`.
-        let held = limiter.acquire(Lane::Background).await;
+        // Fill the only slot so the next acquire must queue as `waiting`.
+        let held = limiter.acquire(None, Lane::Background).await;
 
         let blocked = Arc::clone(&limiter);
-        let pending = tokio::spawn(async move { blocked.acquire(Lane::Background).await });
+        let pending = tokio::spawn(async move { blocked.acquire(None, Lane::Background).await });
         spin_until(&limiter, |s| s.waiting == 1).await;
 
-        // Cancel the parked acquire: its future is dropped mid-await. Without a
-        // drop guard the `waiting` increment would leak forever (this loop would
-        // never terminate); with it, the count returns to zero.
+        // Cancel the queued acquire: its future is dropped before the grant. The
+        // guard must drop the dead waiter so `waiting` returns to zero (otherwise
+        // this loop never terminates).
         pending.abort();
         let _ = pending.await;
         spin_until(&limiter, |s| s.waiting == 0).await;
@@ -276,17 +440,18 @@ mod tests {
     #[tokio::test]
     async fn interactive_borrows_idle_background_slots() {
         // Background sub-cap is 2, but with no background work the interactive
-        // lane can fill all 4 total slots — it draws only against `total`.
+        // lane can fill all 4 total slots — it draws against `total` alone.
         let limiter = NetworkLimiter::new(4, 2);
         let mut held = Vec::new();
-        for _ in 0..4 {
-            held.push(limiter.acquire(Lane::Interactive).await);
+        for n in 0..4 {
+            held.push(limiter.acquire(Some(key(n)), Lane::Interactive).await);
         }
         assert_eq!(limiter.snapshot().in_flight, 4);
 
-        // The 5th interactive request hits the total cap and parks as waiting.
+        // The 5th interactive request hits the total cap and queues.
         let blocked = Arc::clone(&limiter);
-        let pending = tokio::spawn(async move { blocked.acquire(Lane::Interactive).await });
+        let pending =
+            tokio::spawn(async move { blocked.acquire(Some(key(99)), Lane::Interactive).await });
         spin_until(&limiter, |s| s.waiting == 1).await;
         assert_eq!(
             limiter.snapshot(),
@@ -296,7 +461,7 @@ mod tests {
             }
         );
 
-        // Freeing one interactive slot lets the parked request through.
+        // Freeing one slot lets the queued request through.
         held.pop();
         let resumed = pending.await.expect("pending acquire task");
         assert_eq!(limiter.snapshot().in_flight, 4);
@@ -309,15 +474,16 @@ mod tests {
         // total 4, background sub-cap 2.
         let limiter = NetworkLimiter::new(4, 2);
         let bg = vec![
-            limiter.acquire(Lane::Background).await,
-            limiter.acquire(Lane::Background).await,
+            limiter.acquire(Some(key(1)), Lane::Background).await,
+            limiter.acquire(Some(key(2)), Lane::Background).await,
         ];
         assert_eq!(limiter.snapshot().in_flight, 2);
 
-        // A 3rd background request parks on the sub-cap even though 2 total slots
-        // are free — background can never exceed its sub-cap.
+        // A 3rd background request queues even though 2 total slots are free —
+        // background can never exceed its sub-cap.
         let blocked = Arc::clone(&limiter);
-        let pending = tokio::spawn(async move { blocked.acquire(Lane::Background).await });
+        let pending =
+            tokio::spawn(async move { blocked.acquire(Some(key(3)), Lane::Background).await });
         spin_until(&limiter, |s| s.waiting == 1).await;
         assert_eq!(
             limiter.snapshot(),
@@ -327,17 +493,53 @@ mod tests {
             }
         );
 
-        // The interactive lane can still take both remaining total slots
-        // immediately — it isn't blocked by the saturated background sub-cap.
-        let i1 = limiter.acquire(Lane::Interactive).await;
-        let i2 = limiter.acquire(Lane::Interactive).await;
+        // The interactive lane still takes both remaining total slots at once —
+        // it isn't blocked by the saturated background sub-cap.
+        let i1 = limiter.acquire(Some(key(10)), Lane::Interactive).await;
+        let i2 = limiter.acquire(Some(key(11)), Lane::Interactive).await;
         assert_eq!(limiter.snapshot().in_flight, 4);
 
-        // Releasing a background slot lets the parked 3rd background through.
+        // Releasing a background slot lets the queued 3rd background through.
         drop(bg);
         let resumed = pending.await.expect("pending acquire task");
         drop(resumed);
         drop(i1);
         drop(i2);
+    }
+
+    #[tokio::test]
+    async fn focus_promotes_a_pending_background_request() {
+        // total 2, background sub-cap 1: one slot is reserved for interactive work.
+        let limiter = NetworkLimiter::new(2, 1);
+        // Fill the sole background slot.
+        let held = limiter.acquire(Some(key(1)), Lane::Background).await;
+
+        // A second background request for PR #2 can't run: the sub-cap is full,
+        // so it queues even though one total slot is free.
+        let blocked = Arc::clone(&limiter);
+        let pending =
+            tokio::spawn(async move { blocked.acquire(Some(key(2)), Lane::Background).await });
+        spin_until(&limiter, |s| s.waiting == 1).await;
+        assert_eq!(
+            limiter.snapshot(),
+            NetworkStats {
+                in_flight: 1,
+                waiting: 1
+            }
+        );
+
+        // Focus PR #2: its queued request is promoted to interactive-effective,
+        // which ignores the background sub-cap and grabs the free total slot.
+        limiter.set_focus(Some(key(2)));
+        let resumed = pending.await.expect("pending acquire task");
+        assert_eq!(
+            limiter.snapshot(),
+            NetworkStats {
+                in_flight: 2,
+                waiting: 0
+            }
+        );
+        drop(resumed);
+        drop(held);
     }
 }

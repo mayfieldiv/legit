@@ -81,10 +81,18 @@ Re-fetching one PR (`r`) or every visible PR (`R`). A refresh updates the PR lis
 The queue background refreshes flow through. Items are dequeued highest-priority-first; smart-status tier determines priority so `me-blocking` PRs refresh ahead of `waiting-on-author` ones.
 
 **Fetch Priority**:
-Which lane a network request takes through the shared concurrency limiter. Orthogonal to the Priority Queue's smart-status ordering. Two values:
+Which lane a network request takes through the shared concurrency limiter. Two values:
 
 - `Interactive` — a fetch the user is actively waiting on: the detail body on drill-in or `r`, and the selected PR's files. Takes precedence so it doesn't queue behind a list-wide enrichment backlog.
 - `Background` — speculative, list-wide work: the open-PR listing, the enrichment fan-out, and `R` (refresh-all, same volume as the initial load).
+
+A request's priority is not fixed when it's dispatched: a `Background` enrichment fetch for the **Focused PR** is promoted to `Interactive` while that PR stays focused (see [[Focus Promotion]]).
+
+**Focused PR**:
+The single PR whose pending work the limiter prioritises: the open **PR Detail**, or — in the list view — the selected PR. Changing the selection or drilling in/out moves the focus.
+
+**Focus Promotion**:
+Re-ranking the limiter's queue when the **Focused PR** changes, so the focused PR's still-pending **Background** enrichment (its threads, reviews, checks) jumps ahead of the rest of the fan-out. Only pending requests promote; one already in flight keeps running. This is the smart-status **Priority Queue** ported and re-keyed on user focus rather than tier.
 
 ### File categorisation
 

@@ -82,6 +82,11 @@ pub async fn run() -> Result<()> {
             process_msg(msg, &mut model, &msg_tx, &limiter);
         }
 
+        // Tell the limiter which PR the user is now focused on, so its pending
+        // background enrichment is promoted ahead of the rest of the fan-out.
+        // A no-op when focus is unchanged, so it's cheap to call every loop.
+        limiter.set_focus(model.focused_pr_key());
+
         terminal.draw(|frame| view::view(&model, frame, chrono::Utc::now()))?;
         tracing::debug!(should_quit = model.should_quit, "frame rendered");
     }
