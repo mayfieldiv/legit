@@ -543,4 +543,78 @@ mod tests {
         drop(resumed);
         drop(held);
     }
+
+    #[tokio::test]
+    async fn queued_interactive_waiter_outranks_an_older_background_one() {
+        let limiter = NetworkLimiter::new(1, 1);
+        let held = limiter.acquire(Lane::Background { pr: None }).await;
+
+        // Queue a background request first, then an interactive one.
+        let blocked = Arc::clone(&limiter);
+        let queued_background =
+            tokio::spawn(
+                async move { blocked.acquire(Lane::Background { pr: Some(key(1)) }).await },
+            );
+        spin_until(&limiter, |s| s.waiting == 1).await;
+        let blocked = Arc::clone(&limiter);
+        let queued_interactive =
+            tokio::spawn(async move { blocked.acquire(Lane::Interactive).await });
+        spin_until(&limiter, |s| s.waiting == 2).await;
+
+        // Freeing the slot grants the younger interactive waiter, not the older
+        // background one — lane beats FIFO across lanes.
+        drop(held);
+        let interactive_permit = queued_interactive.await.expect("interactive acquire task");
+        assert!(
+            !queued_background.is_finished(),
+            "the older background waiter must not get the slot first"
+        );
+        assert_eq!(
+            limiter.snapshot(),
+            NetworkStats {
+                in_flight: 1,
+                waiting: 1
+            }
+        );
+
+        drop(interactive_permit);
+        let background_permit = queued_background.await.expect("background acquire task");
+        drop(background_permit);
+    }
+
+    #[tokio::test]
+    async fn moving_focus_away_demotes_a_pending_request_back_to_background() {
+        // total 2, background sub-cap 1. Fill both slots so the focused PR's
+        // request has to queue.
+        let limiter = NetworkLimiter::new(2, 1);
+        let background_held = limiter.acquire(Lane::Background { pr: Some(key(1)) }).await;
+        let interactive_held = limiter.acquire(Lane::Interactive).await;
+
+        limiter.set_focus(Some(key(2)));
+        let blocked = Arc::clone(&limiter);
+        let pending =
+            tokio::spawn(
+                async move { blocked.acquire(Lane::Background { pr: Some(key(2)) }).await },
+            );
+        spin_until(&limiter, |s| s.waiting == 1).await;
+
+        // Focus moves elsewhere: the pending request ranks background again, so
+        // the freed interactive slot can't grant it — the sub-cap is still full.
+        // (Were it still interactive-effective, the drop would grant it at once:
+        // grants commit synchronously inside the permit's drop.)
+        limiter.set_focus(Some(key(3)));
+        drop(interactive_held);
+        assert_eq!(
+            limiter.snapshot(),
+            NetworkStats {
+                in_flight: 1,
+                waiting: 1
+            }
+        );
+
+        // Only a background slot freeing up lets it through.
+        drop(background_held);
+        let resumed = pending.await.expect("pending acquire task");
+        drop(resumed);
+    }
 }
