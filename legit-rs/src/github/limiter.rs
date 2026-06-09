@@ -13,9 +13,9 @@
 //! (the open-PR listing and the enrichment fan-out). A request's **effective
 //! lane** is computed by the pump, not baked in at dispatch:
 //!
-//! - `Interactive` if its `base` lane is `Interactive` (the detail body, the
-//!   selected PR's files) **or** its PR is the one the user is currently focused
-//!   on (the detail PR, else the selected list PR).
+//! - `Interactive` if it asked for the interactive lane outright (the detail
+//!   body, the selected PR's files) **or** it is background work for the PR the
+//!   user is currently focused on (the detail PR, else the selected list PR).
 //! - `Background` otherwise.
 //!
 //! The pump grants interactive-effective waiters up to `total`, and
@@ -41,17 +41,21 @@ use tokio::sync::{oneshot, watch};
 
 use crate::github::rest::PrKey;
 
-/// The lane a request asks for at dispatch. The pump may upgrade a `Background`
-/// request to interactive-effective when its PR is focused; it never downgrades
-/// an `Interactive` one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The lane a request asks for at dispatch. The pump may treat a `Background`
+/// request as interactive-effective while its PR is focused; it never
+/// downgrades an `Interactive` one. Only `Background` carries a PR key — that
+/// makes "only background work is promotable" structural rather than a rule the
+/// pump has to remember.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Lane {
     /// A fetch the user is actively waiting on regardless of focus (detail body,
     /// selected files). Always interactive-effective.
     Interactive,
     /// Speculative, list-wide work (open-PR listing, enrichment fan-out).
-    /// Interactive-effective only while its PR is focused.
-    Background,
+    /// `pr` is the PR it belongs to — interactive-effective while that PR is
+    /// focused — or `None` for repo-wide work (the listing, the batched
+    /// review-status query), which can never be focused.
+    Background { pr: Option<PrKey> },
 }
 
 /// Live view of the transport's HTTP concurrency.
@@ -70,10 +74,7 @@ struct Waiter {
     /// pump scans in FIFO order without re-reading it; the id is used only by
     /// `AcquireGuard::drop` to locate and remove a cancelled waiter.
     id: u64,
-    /// The PR this request belongs to, if any. `None` for repo-wide work (the
-    /// listing, the batched review-status query) which can never be focused.
-    key: Option<PrKey>,
-    base: Lane,
+    lane: Lane,
     tx: oneshot::Sender<Permit>,
 }
 
@@ -101,11 +102,12 @@ impl Inner {
     /// A waiter is interactive-effective when it asked for the interactive lane
     /// outright, or when its PR is the focused one.
     fn is_interactive(&self, waiter: &Waiter) -> bool {
-        waiter.base == Lane::Interactive
-            || waiter
-                .key
+        match &waiter.lane {
+            Lane::Interactive => true,
+            Lane::Background { pr } => pr
                 .as_ref()
-                .is_some_and(|key| self.focused.as_ref() == Some(key))
+                .is_some_and(|pr| self.focused.as_ref() == Some(pr)),
+        }
     }
 
     /// Index of the next waiter to grant. The queue is FIFO by insertion id
@@ -210,22 +212,16 @@ impl NetworkLimiter {
         })
     }
 
-    /// Queue a request in `lane` for the PR identified by `key` (or `None` for
-    /// repo-wide work), blocking until the pump grants it a slot. The caller is
-    /// counted as `waiting` until then and `in_flight` once the returned `Permit`
-    /// is held; dropping the permit frees the slot.
-    pub async fn acquire(self: &Arc<Self>, key: Option<PrKey>, lane: Lane) -> Permit {
+    /// Queue a request in `lane`, blocking until the pump grants it a slot. The
+    /// caller is counted as `waiting` until then and `in_flight` once the
+    /// returned `Permit` is held; dropping the permit frees the slot.
+    pub async fn acquire(self: &Arc<Self>, lane: Lane) -> Permit {
         let (tx, rx) = oneshot::channel();
         let id = {
             let mut inner = self.inner.lock().unwrap();
             let id = inner.next_id;
             inner.next_id += 1;
-            inner.queue.push_back(Waiter {
-                id,
-                key,
-                base: lane,
-                tx,
-            });
+            inner.queue.push_back(Waiter { id, lane, tx });
             // The pump may grant this very waiter immediately; the permit is
             // buffered in `rx` and picked up by the await below.
             self.pump_and_publish(inner);
@@ -357,7 +353,7 @@ mod tests {
     async fn acquiring_a_permit_marks_one_in_flight_until_dropped() {
         let limiter = NetworkLimiter::new(16, 8);
 
-        let permit = limiter.acquire(None, Lane::Background).await;
+        let permit = limiter.acquire(Lane::Background { pr: None }).await;
         assert_eq!(
             limiter.snapshot(),
             NetworkStats {
@@ -379,11 +375,12 @@ mod tests {
     #[tokio::test]
     async fn second_acquire_at_capacity_counts_as_waiting() {
         let limiter = NetworkLimiter::new(1, 1);
-        let held = limiter.acquire(None, Lane::Background).await;
+        let held = limiter.acquire(Lane::Background { pr: None }).await;
 
         // A second acquire can't get a slot; it parks in the queue as `waiting`.
         let blocked = Arc::clone(&limiter);
-        let pending = tokio::spawn(async move { blocked.acquire(None, Lane::Background).await });
+        let pending =
+            tokio::spawn(async move { blocked.acquire(Lane::Background { pr: None }).await });
 
         spin_until(&limiter, |s| s.waiting == 1).await;
         assert_eq!(
@@ -411,10 +408,11 @@ mod tests {
     async fn cancelled_acquire_does_not_leak_waiting() {
         let limiter = NetworkLimiter::new(1, 1);
         // Fill the only slot so the next acquire must queue as `waiting`.
-        let held = limiter.acquire(None, Lane::Background).await;
+        let held = limiter.acquire(Lane::Background { pr: None }).await;
 
         let blocked = Arc::clone(&limiter);
-        let pending = tokio::spawn(async move { blocked.acquire(None, Lane::Background).await });
+        let pending =
+            tokio::spawn(async move { blocked.acquire(Lane::Background { pr: None }).await });
         spin_until(&limiter, |s| s.waiting == 1).await;
 
         // Cancel the queued acquire: its future is dropped before the grant. The
@@ -439,15 +437,14 @@ mod tests {
         // lane can fill all 4 total slots — it draws against `total` alone.
         let limiter = NetworkLimiter::new(4, 2);
         let mut held = Vec::new();
-        for n in 0..4 {
-            held.push(limiter.acquire(Some(key(n)), Lane::Interactive).await);
+        for _ in 0..4 {
+            held.push(limiter.acquire(Lane::Interactive).await);
         }
         assert_eq!(limiter.snapshot().in_flight, 4);
 
         // The 5th interactive request hits the total cap and queues.
         let blocked = Arc::clone(&limiter);
-        let pending =
-            tokio::spawn(async move { blocked.acquire(Some(key(99)), Lane::Interactive).await });
+        let pending = tokio::spawn(async move { blocked.acquire(Lane::Interactive).await });
         spin_until(&limiter, |s| s.waiting == 1).await;
         assert_eq!(
             limiter.snapshot(),
@@ -470,8 +467,8 @@ mod tests {
         // total 4, background sub-cap 2.
         let limiter = NetworkLimiter::new(4, 2);
         let bg = vec![
-            limiter.acquire(Some(key(1)), Lane::Background).await,
-            limiter.acquire(Some(key(2)), Lane::Background).await,
+            limiter.acquire(Lane::Background { pr: Some(key(1)) }).await,
+            limiter.acquire(Lane::Background { pr: Some(key(2)) }).await,
         ];
         assert_eq!(limiter.snapshot().in_flight, 2);
 
@@ -479,7 +476,9 @@ mod tests {
         // background can never exceed its sub-cap.
         let blocked = Arc::clone(&limiter);
         let pending =
-            tokio::spawn(async move { blocked.acquire(Some(key(3)), Lane::Background).await });
+            tokio::spawn(
+                async move { blocked.acquire(Lane::Background { pr: Some(key(3)) }).await },
+            );
         spin_until(&limiter, |s| s.waiting == 1).await;
         assert_eq!(
             limiter.snapshot(),
@@ -491,8 +490,8 @@ mod tests {
 
         // The interactive lane still takes both remaining total slots at once —
         // it isn't blocked by the saturated background sub-cap.
-        let i1 = limiter.acquire(Some(key(10)), Lane::Interactive).await;
-        let i2 = limiter.acquire(Some(key(11)), Lane::Interactive).await;
+        let i1 = limiter.acquire(Lane::Interactive).await;
+        let i2 = limiter.acquire(Lane::Interactive).await;
         assert_eq!(limiter.snapshot().in_flight, 4);
 
         // Releasing a background slot lets the queued 3rd background through.
@@ -508,13 +507,15 @@ mod tests {
         // total 2, background sub-cap 1: one slot is reserved for interactive work.
         let limiter = NetworkLimiter::new(2, 1);
         // Fill the sole background slot.
-        let held = limiter.acquire(Some(key(1)), Lane::Background).await;
+        let held = limiter.acquire(Lane::Background { pr: Some(key(1)) }).await;
 
         // A second background request for PR #2 can't run: the sub-cap is full,
         // so it queues even though one total slot is free.
         let blocked = Arc::clone(&limiter);
         let pending =
-            tokio::spawn(async move { blocked.acquire(Some(key(2)), Lane::Background).await });
+            tokio::spawn(
+                async move { blocked.acquire(Lane::Background { pr: Some(key(2)) }).await },
+            );
         spin_until(&limiter, |s| s.waiting == 1).await;
         assert_eq!(
             limiter.snapshot(),

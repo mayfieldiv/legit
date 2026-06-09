@@ -154,8 +154,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             request(
                 &tx,
                 &limiter,
-                None,
-                Lane::Background,
+                Lane::Background { pr: None },
                 "fetch review status",
                 async move {
                     GraphQlClient::new(&ctx.token)?
@@ -185,8 +184,9 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             request(
                 &tx,
                 &limiter,
-                Some(pr.clone()),
-                Lane::Background,
+                Lane::Background {
+                    pr: Some(pr.clone()),
+                },
                 "fetch review threads",
                 async move {
                     GraphQlClient::new(&ctx.token)?
@@ -210,8 +210,9 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             request(
                 &tx,
                 &limiter,
-                Some(pr.clone()),
-                Lane::Background,
+                Lane::Background {
+                    pr: Some(pr.clone()),
+                },
                 "fetch reviews",
                 async move {
                     OctocrabRest::new(&ctx.token)?
@@ -230,8 +231,9 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             request(
                 &tx,
                 &limiter,
-                Some(pr.clone()),
-                Lane::Background,
+                Lane::Background {
+                    pr: Some(pr.clone()),
+                },
                 "fetch issue comments",
                 async move {
                     OctocrabRest::new(&ctx.token)?
@@ -252,8 +254,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             request(
                 &tx,
                 &limiter,
-                Some(pr),
-                Lane::Background,
+                Lane::Background { pr: Some(pr) },
                 "fetch check runs",
                 async move {
                     let checks = OctocrabRest::new(&ctx.token)?
@@ -284,7 +285,6 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             let ok = request(
                 &tx,
                 &limiter,
-                Some(pr.clone()),
                 Lane::Interactive,
                 "fetch files",
                 async move {
@@ -308,7 +308,6 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             request(
                 &tx,
                 &limiter,
-                Some(key.clone()),
                 Lane::Interactive,
                 "fetch PR detail",
                 async move {
@@ -352,7 +351,7 @@ async fn run_fetch_open_prs(
     // listing so the network indicator reflects it and the listing stays within
     // the background sub-cap (leaving the interactive lane free for drill-ins).
     // Repo-wide work, so it carries no PR key and is never focus-promoted.
-    let _permit = limiter.acquire(None, Lane::Background).await;
+    let _permit = limiter.acquire(Lane::Background { pr: None }).await;
     let result = client.list_open_prs(&repo.owner, &repo.repo, pr_tx).await;
     let _ = forwarder.await;
 
@@ -371,13 +370,12 @@ async fn run_fetch_open_prs(
 /// messages it produces — or, on error, one `CommandFailed` (covering the
 /// client build inside the request too). Captures the build-permit-dispatch
 /// shape every per-PR enrichment command shares; `context` names the operation
-/// so the failure reads e.g. "fetch reviews: ...". `key` is the PR the request
-/// belongs to (so the limiter can promote it to interactive when that PR is
-/// focused) or `None` for repo-wide work; `lane` is the lane it asks for —
-/// `Interactive` for fetches the user is always waiting on (detail body,
-/// selected files), `Background` for the speculative fan-out. `op` is a lazy
-/// future, so the permit is held only across the actual await, not while it's
-/// constructed.
+/// so the failure reads e.g. "fetch reviews: ...". `lane` is the lane it asks
+/// for — `Interactive` for fetches the user is always waiting on (detail body,
+/// selected files), `Background` for the speculative fan-out, carrying the PR
+/// it belongs to (so the limiter can promote it to interactive when that PR is
+/// focused) or `None` for repo-wide work. `op` is a lazy future, so the permit
+/// is held only across the actual await, not while it's constructed.
 ///
 /// Returns whether the request succeeded so a caller that recorded in-flight
 /// state in the model can send its own rollback message after the
@@ -386,13 +384,12 @@ async fn run_fetch_open_prs(
 async fn request<T>(
     tx: &mpsc::UnboundedSender<Msg>,
     limiter: &Arc<NetworkLimiter>,
-    key: Option<PrKey>,
     lane: Lane,
     context: &'static str,
     op: impl Future<Output = anyhow::Result<T>>,
     to_msgs: impl FnOnce(T) -> Vec<Msg>,
 ) -> bool {
-    let _permit = limiter.acquire(key, lane).await;
+    let _permit = limiter.acquire(lane).await;
     match op.await {
         Ok(value) => {
             for msg in to_msgs(value) {
