@@ -294,8 +294,8 @@ impl Model {
 
     /// The PR the user is focused on for fetch prioritisation: the open detail
     /// PR, else the selected list PR. The runtime pushes this to the network
-    /// limiter so the focused PR's pending background enrichment is promoted to
-    /// the interactive lane.
+    /// limiter so the focused PR's pending fetches are granted ahead of the
+    /// background fan-out.
     pub fn focused_pr_key(&self) -> Option<PrKey> {
         match &self.view_mode {
             ViewMode::Detail(detail) => Some(detail.key.clone()),

@@ -81,18 +81,18 @@ Re-fetching one PR (`r`) or every visible PR (`R`). A refresh updates the PR lis
 The shared network limiter's queue of pending fetches. Requests are granted highest-priority-first: interactive-effective ones (see [[Fetch Priority]]) ahead of background ones, FIFO within a lane. Smart-status tier does not influence the order today; tier-ordering among background requests (so `me-blocking` PRs refresh ahead of `waiting-on-author` ones) is a possible future tiebreaker (ADR 0003).
 
 **Fetch Priority**:
-Which lane a network request takes through the shared concurrency limiter. Two values:
+Which lane a network request takes through the shared concurrency limiter — fully derived from focus, never declared at dispatch. A request carries the PR it serves (or none, for repo-wide work like the open-PR listing) and is:
 
-- `Interactive` — a fetch the user is actively waiting on: the detail body on drill-in or `r`, and the selected PR's files. Takes precedence so it doesn't queue behind a list-wide enrichment backlog.
-- `Background` — speculative, list-wide work: the open-PR listing, the enrichment fan-out, and `R` (refresh-all, same volume as the initial load).
+- `Interactive` while that PR is the **Focused PR** — so the fetches the user is actively waiting on (the detail body on drill-in or `r`, the selected PR's files and enrichment) take precedence over the list-wide backlog.
+- `Background` otherwise: speculative, list-wide work (the open-PR listing, the enrichment fan-out, `R` refresh-all) and any fetch for a PR the user has moved away from.
 
-A request's priority is not fixed when it's dispatched: a `Background` enrichment fetch for the **Focused PR** is promoted to `Interactive` while that PR stays focused (see [[Focus Promotion]]).
+Because priority is derived, it shifts while a request is still queued (see [[Focus Promotion]]).
 
 **Focused PR**:
 The single PR whose pending work the limiter prioritises: the open **PR Detail**, or — in the list view — the selected PR. Changing the selection or drilling in/out moves the focus.
 
 **Focus Promotion**:
-Re-ranking the **Priority Queue** when the **Focused PR** changes, so the focused PR's still-pending **Background** enrichment (its threads, reviews, checks) jumps ahead of the rest of the fan-out. Only pending requests promote; one already in flight keeps running.
+Re-ranking the **Priority Queue** when the **Focused PR** changes, so the focused PR's still-pending fetches (its threads, reviews, checks, files, detail body) jump ahead of the rest of the fan-out — and the previously-focused PR's pending fetches demote back to `Background`. Only pending requests re-rank; one already in flight keeps running.
 
 ### File categorisation
 
