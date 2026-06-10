@@ -560,6 +560,103 @@ fn detail_arrived_but_empty_threads_and_comments_show_no_sections() {
     );
 }
 
+// ── Focus borders ───────────────────────────────────────────────────────────
+
+/// Set the open detail view's focused item index.
+fn set_focus(model: &mut Model, index: usize) {
+    match &mut model.view_mode {
+        ViewMode::Detail(detail) => detail.focused_index = index,
+        ViewMode::List => panic!("expected Detail mode"),
+    }
+}
+
+/// A detail model with one two-comment thread and one issue comment: the focus
+/// sequence is body(0), thread root(1), reply(2), comment(3).
+fn focusable_model() -> Model {
+    let mut model = model_in_detail(sample_pr(), "The description.");
+    seed_threads(
+        &mut model,
+        vec![thread(
+            "t1",
+            "src/lib.rs",
+            Some(12),
+            false,
+            vec![
+                review_comment("c1", "alice", "Please rename this."),
+                review_comment("c2", "octocat", "Done, renamed."),
+            ],
+        )],
+    );
+    seed_comments(
+        &mut model,
+        vec![issue_comment(10, "carol", "Looks good overall.", false)],
+    );
+    model
+}
+
+/// The 0-based row index of the first row containing `needle`.
+fn row_of(rows: &[String], needle: &str) -> usize {
+    rows.iter()
+        .position(|r| r.contains(needle))
+        .unwrap_or_else(|| panic!("{needle:?} not found in {rows:?}"))
+}
+
+#[test]
+fn detail_focus_on_body_renders_no_card_borders() {
+    // The body (focus 0) is unstyled — matching the TS DetailView, where only
+    // thread/reply/comment cards carry a border.
+    let model = focusable_model();
+
+    let terminal = render_snapshot(&model, 80, 30);
+    let rows = buffer_text(&terminal);
+
+    assert!(
+        !rows.iter().any(|r| r.contains('╭') || r.contains('│')),
+        "no visible card border while the body is focused: {rows:?}"
+    );
+}
+
+#[test]
+fn detail_focused_reply_gets_a_border_without_shifting_the_layout() {
+    let mut model = focusable_model();
+    let unfocused_rows = buffer_text(&render_snapshot(&model, 80, 30));
+
+    set_focus(&mut model, 2); // the reply card
+    let focused_rows = buffer_text(&render_snapshot(&model, 80, 30));
+
+    // Same layout footprint: every content row stays on the same line.
+    assert_eq!(
+        row_of(&unfocused_rows, "Done, renamed."),
+        row_of(&focused_rows, "Done, renamed."),
+        "focusing a card must not shift the layout"
+    );
+
+    // The focused reply row carries the left border; the rows above/below it
+    // carry the top/bottom border.
+    let reply_row = row_of(&focused_rows, "Done, renamed.");
+    assert!(
+        focused_rows[reply_row].contains('│'),
+        "focused card content rows must show the side border: {:?}",
+        focused_rows[reply_row]
+    );
+    assert!(
+        focused_rows[..reply_row].iter().any(|r| r.contains('╭')),
+        "focused card must show a top border above it: {focused_rows:?}"
+    );
+    assert!(
+        focused_rows[reply_row..].iter().any(|r| r.contains('╰')),
+        "focused card must show a bottom border below it: {focused_rows:?}"
+    );
+
+    // The unfocused thread-root card shows no border chars.
+    let root_row = row_of(&focused_rows, "Please rename this.");
+    assert!(
+        !focused_rows[root_row].contains('│'),
+        "unfocused cards must not render border chars: {:?}",
+        focused_rows[root_row]
+    );
+}
+
 #[test]
 fn detail_status_bar_shows_jk_scroll_hint() {
     let model = model_in_detail(sample_pr(), "");

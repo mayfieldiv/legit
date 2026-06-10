@@ -204,6 +204,10 @@ pub struct Model {
     /// list viewport when chrome rows (tab bar, filter chip) appear or vanish
     /// without a resize event.
     pub terminal_height: u16,
+    /// Last reported terminal width, kept so `update` can measure the detail
+    /// body via the same `detail_content` layout the view renders (the runtime
+    /// seeds both dimensions with a synthetic initial Resize).
+    pub terminal_width: u16,
     /// Transient status message + a generation counter. A scheduled clear only
     /// fires if its token still matches `status_gen`, so a newer message is
     /// never wiped by an older message's timer.
@@ -244,6 +248,7 @@ impl Model {
                 list: PrList::new(),
                 active_tab: 0,
                 terminal_height: 0,
+                terminal_width: 0,
                 status: None,
                 status_gen: 0,
                 network_stats: NetworkStats::default(),

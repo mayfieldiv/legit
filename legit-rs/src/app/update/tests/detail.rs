@@ -466,6 +466,106 @@ fn page_up_in_detail_scrolls_by_ten_and_clamps_at_zero() {
     );
 }
 
+// ── Scroll follows focus ────────────────────────────────────────────────────
+
+/// The line range the focused item occupies, via the same layout the view
+/// renders (the canonical `view::detail::detail_content`).
+fn focused_item_range(model: &crate::app::model::Model) -> std::ops::Range<usize> {
+    let ViewMode::Detail(detail) = &model.view_mode else {
+        panic!("expected Detail mode");
+    };
+    let pr = model.list.pr(&detail.key).expect("pr in list");
+    let content = crate::view::detail::detail_content(
+        model,
+        pr,
+        detail.body.as_ref().expect("body arrived"),
+        detail.focused_index,
+        model.terminal_width,
+        chrono::DateTime::UNIX_EPOCH,
+    );
+    content.item_ranges[detail.focused_index].clone()
+}
+
+/// A focusable detail model with a body tall enough that the thread and
+/// comment cards start below the fold of its small viewport.
+fn tall_focusable_detail_model() -> crate::app::model::Model {
+    let mut model = model_with_one_pr();
+    model.terminal_height = crate::view::detail::CHROME_ROWS + 8;
+    model.terminal_width = 80;
+    update(&mut model, key_event(KeyCode::Enter));
+    let body: String = (1..=30).map(|n| format!("Line {n}\n\n")).collect();
+    set_detail_body(&mut model, &body);
+    seed_detail_enrichment(&mut model);
+    model
+}
+
+#[test]
+fn focusing_an_offscreen_card_scrolls_it_into_view() {
+    let mut model = tall_focusable_detail_model();
+    assert_eq!(detail_scroll(&model), 0);
+
+    // Focus the thread root, which sits far below the 8-row viewport.
+    update(&mut model, key_event(KeyCode::Char('j')));
+
+    let range = focused_item_range(&model);
+    let viewport = (model.terminal_height - crate::view::detail::CHROME_ROWS) as usize;
+    let scroll = detail_scroll(&model) as usize;
+    assert!(
+        scroll <= range.start && range.end <= scroll + viewport,
+        "the focused card (lines {range:?}) must be fully inside the viewport \
+         (scroll {scroll}, {viewport} rows)"
+    );
+}
+
+#[test]
+fn focusing_back_to_the_body_scrolls_to_its_top() {
+    let mut model = tall_focusable_detail_model();
+    update(&mut model, key_event(KeyCode::Char('j')));
+    assert!(detail_scroll(&model) > 0, "precondition: scrolled down");
+
+    update(&mut model, key_event(KeyCode::Char('k')));
+
+    assert_eq!(
+        detail_scroll(&model),
+        0,
+        "re-focusing the body (which starts at line 0) must scroll back to the top"
+    );
+}
+
+#[test]
+fn scroll_clamp_covers_the_thread_and_conversation_sections() {
+    // PageDown far past the end: the clamp must allow reaching the bottom of
+    // the conversation section, not stop at the description+checks height the
+    // M7 clamp measured.
+    let mut model = tall_focusable_detail_model();
+    let ViewMode::Detail(detail) = &model.view_mode else {
+        panic!("expected Detail mode");
+    };
+    let pr = model.list.pr(&detail.key).expect("pr in list");
+    let content_lines = crate::view::detail::detail_content(
+        &model,
+        pr,
+        detail.body.as_ref().expect("body arrived"),
+        detail.focused_index,
+        model.terminal_width,
+        chrono::DateTime::UNIX_EPOCH,
+    )
+    .lines
+    .len() as u16;
+    let viewport = model.terminal_height - crate::view::detail::CHROME_ROWS;
+    let max_scroll = content_lines - viewport;
+
+    for _ in 0..50 {
+        update(&mut model, key_event(KeyCode::PageDown));
+    }
+
+    assert_eq!(
+        detail_scroll(&model),
+        max_scroll,
+        "PageDown must clamp at the bottom of the FULL content (threads + conversation included)"
+    );
+}
+
 #[test]
 fn esc_in_detail_drops_scroll_with_the_detail_state() {
     let mut model = scrollable_detail_model();
@@ -495,9 +595,23 @@ fn over_scrolling_clamps_to_the_last_screenful_and_page_up_stays_live() {
     let body: String = (1..=20).map(|n| format!("Line {n}\n\n")).collect();
     set_detail_body(&mut model, &body);
 
-    // The true max scroll: description lines (no checks here) minus the
-    // viewport, computed via the same content the view assembles.
-    let content_lines = crate::view::detail::render_description_lines(&body).len() as u16;
+    // The true max scroll: the full body content (description plus the
+    // threads/comments loading placeholders here) minus the viewport, measured
+    // via the same layout the view renders.
+    let ViewMode::Detail(detail) = &model.view_mode else {
+        panic!("expected Detail mode");
+    };
+    let pr = model.list.pr(&detail.key).expect("pr in list");
+    let content_lines = crate::view::detail::detail_content(
+        &model,
+        pr,
+        detail.body.as_ref().expect("body arrived"),
+        detail.focused_index,
+        model.terminal_width,
+        chrono::DateTime::UNIX_EPOCH,
+    )
+    .lines
+    .len() as u16;
     let viewport_rows = model.terminal_height - chrome_rows;
     let max_scroll = content_lines - viewport_rows;
     assert!(max_scroll > 1, "test body must be taller than the viewport");

@@ -348,34 +348,80 @@ fn clamp_detail_focus(model: &mut Model) {
     }
 }
 
-/// Clamp the open detail view's scroll offset so it can never sit more than one
-/// screenful above the last content line. The content is the cached
-/// description body **plus** the per-frame CI checks section — under-clamping
-/// to the description alone would stop the user reaching the bottom of the
-/// checks. A no-op outside Detail mode or while the body hasn't arrived (there
-/// is nothing to scroll yet). Mirrors the render-time backstop in
-/// `view::detail::render_body`, but here `scroll` is the stored source of
-/// intent: clamping in `update` keeps a held `j` from drifting unboundedly and
-/// leaving the subsequent `k` presses visually dead.
-fn clamp_detail_scroll(model: &mut Model) {
+/// Measure the open detail view's body via the same `detail_content` layout
+/// the view renders, so scroll math and rendering can't disagree. `None`
+/// outside Detail mode, while the body hasn't arrived, or if the PR left the
+/// list. Measured at a fixed epoch: the layout's line ranges are
+/// age-independent (a byline is one line whatever its age string says), and
+/// `update` stays a pure `(Model, Msg)` reducer with no clock.
+fn detail_layout(model: &Model) -> Option<crate::view::detail::DetailContent> {
     let ViewMode::Detail(detail) = &model.view_mode else {
-        return;
+        return None;
     };
-    let Some(description) = &detail.body else {
-        return;
-    };
-    let Some(pr) = model.list.pr(&detail.key) else {
-        return;
-    };
-    let content_lines =
-        (description.len() + crate::view::detail::checks_section_lines(model, pr).len()) as u16;
-    let viewport_rows = model
+    let description = detail.body.as_ref()?;
+    let pr = model.list.pr(&detail.key)?;
+    Some(crate::view::detail::detail_content(
+        model,
+        pr,
+        description,
+        detail.focused_index,
+        model.terminal_width,
+        chrono::DateTime::UNIX_EPOCH,
+    ))
+}
+
+/// The detail body's viewport height: the terminal minus the pinned header and
+/// status bar.
+fn detail_viewport_rows(model: &Model) -> u16 {
+    model
         .terminal_height
-        .saturating_sub(crate::view::detail::CHROME_ROWS);
-    let max_scroll = content_lines.saturating_sub(viewport_rows);
+        .saturating_sub(crate::view::detail::CHROME_ROWS)
+}
+
+/// Clamp the open detail view's scroll offset so it can never sit more than
+/// one screenful above the last content line. The content is the full
+/// `detail_layout` — description, checks, thread and conversation cards —
+/// under-clamping to a subset would stop the user reaching the bottom. A no-op
+/// outside Detail mode or while the body hasn't arrived (there is nothing to
+/// scroll yet). Mirrors the render-time backstop in
+/// `view::detail::render_body`, but here `scroll` is the stored source of
+/// intent: clamping in `update` keeps a held PageDown from drifting
+/// unboundedly and leaving the subsequent PageUp presses visually dead.
+fn clamp_detail_scroll(model: &mut Model) {
+    let Some(content) = detail_layout(model) else {
+        return;
+    };
+    let max_scroll = (content.lines.len() as u16).saturating_sub(detail_viewport_rows(model));
     if let ViewMode::Detail(detail) = &mut model.view_mode {
         detail.scroll = detail.scroll.min(max_scroll);
     }
+}
+
+/// Adjust the detail scroll so the focused card is fully visible: scroll up to
+/// its first line when it starts above the viewport, down to its last line
+/// when it ends below — and never past its first line, so a card taller than
+/// the viewport shows its top. Mirrors the TS `scrollChildIntoView` on focus
+/// change.
+fn scroll_detail_focus_into_view(model: &mut Model) {
+    let Some(content) = detail_layout(model) else {
+        return;
+    };
+    let viewport = detail_viewport_rows(model) as usize;
+    let ViewMode::Detail(detail) = &mut model.view_mode else {
+        return;
+    };
+    let Some(range) = content.item_ranges.get(detail.focused_index) else {
+        return;
+    };
+    let scroll = detail.scroll as usize;
+    let new_scroll = if range.start < scroll {
+        range.start
+    } else if range.end > scroll + viewport {
+        (range.end - viewport).min(range.start)
+    } else {
+        scroll
+    };
+    detail.scroll = new_scroll as u16;
 }
 
 /// Handle one keypress while the detail view is open. The caller guarantees
@@ -412,9 +458,16 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
         }
         // Focus forward/back: j/k (and arrows) cycle the focusable items —
         // body, thread roots, replies, issue comments — not the raw scroll
-        // offset (PageUp/PageDown still scroll).
-        KeyCode::Char('j') | KeyCode::Down => move_detail_focus(model, 1),
-        KeyCode::Char('k') | KeyCode::Up => move_detail_focus(model, -1),
+        // offset (PageUp/PageDown still scroll). The scroll follows the focus
+        // so the newly-focused card is always on screen.
+        KeyCode::Char('j') | KeyCode::Down => {
+            move_detail_focus(model, 1);
+            scroll_detail_focus_into_view(model);
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            move_detail_focus(model, -1);
+            scroll_detail_focus_into_view(model);
+        }
         // Page down
         KeyCode::PageDown => {
             if let ViewMode::Detail(detail) = &mut model.view_mode {
@@ -467,7 +520,8 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             }
             Vec::new()
         }
-        Msg::TerminalEvent(Event::Resize(_, height)) => {
+        Msg::TerminalEvent(Event::Resize(width, height)) => {
+            model.terminal_width = width;
             model.terminal_height = height;
             model.sync_viewport();
             Vec::new()

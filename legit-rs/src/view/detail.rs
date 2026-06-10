@@ -3,11 +3,14 @@
 //!
 //! - Pinned header (number + title, author + repo + created/updated/size +
 //!   draft marker, full GitHub URL, head→base branch + mergeable, divider)
-//! - Scrollable body: markdown-rendered PR description (via `markdown::render`)
-//!   and CI checks, offset by `DetailState::scroll` (lines from the top).
-//!   Scroll keys: `j`/`k`/arrows (1 line), PageDown/PageUp (10 lines).
-//! - CI checks section: summary line + per-check rows (icon from `check_icon`)
-//! - Status bar: "esc back  j/k scroll  r refresh" hints
+//! - Scrollable body (offset by `DetailState::scroll`): markdown-rendered PR
+//!   description, the CI checks section, then the Review Threads and
+//!   Conversation sections as focusable cards (`detail_content`). `j`/`k`/
+//!   arrows move the focus card-to-card (the scroll follows); PageDown/PageUp
+//!   scroll raw (10 lines).
+//! - The focused card draws a rounded border; unfocused cards reserve the same
+//!   rows/columns with blanks so focus changes never shift the layout.
+//! - Status bar: key hints
 
 use chrono::{DateTime, Utc};
 use ratatui::{
@@ -19,6 +22,7 @@ use ratatui::{
 };
 
 use crate::{
+    app::detail_items,
     app::model::{DetailState, Model},
     blocker::{ThreadKind, classify_thread},
     format::{
@@ -68,7 +72,7 @@ pub fn render(
 
     match &detail.body {
         None => render_loading(frame, body_area),
-        Some(body) => render_body(model, pr, body, detail.scroll, frame, body_area, now),
+        Some(body) => render_body(model, pr, body, detail, frame, body_area, now),
     }
 }
 
@@ -254,90 +258,6 @@ fn comment_byline(
     Line::from(spans)
 }
 
-/// Build the Review Threads section lines: blank separator + bold header + one
-/// card per thread (file:line + status badge, then the root comment's byline
-/// and markdown body). Returns an empty `Vec` while threads haven't arrived
-/// for this PR. Mirrors the TS `DetailView` threads section.
-fn threads_section_lines(model: &Model, pr: &PR, now: DateTime<Utc>) -> Vec<Line<'static>> {
-    // Absent key = the threads fetch hasn't landed yet (loading); an arrived
-    // empty list renders no section at all.
-    let Some(threads) = model.enrichment.review_threads.get(&pr.key()) else {
-        return loading_placeholder("Loading threads…");
-    };
-    if threads.is_empty() {
-        return Vec::new();
-    }
-
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![markdown::heading_span(
-        2,
-        "Review Threads",
-    )]));
-
-    for thread in threads {
-        let location = match thread.line {
-            Some(line) => format!("{}:{line}", thread.path),
-            None => thread.path.clone(),
-        };
-        lines.push(Line::from(vec![
-            Span::styled(location, Style::default().fg(Color::Cyan)),
-            thread_badge(thread),
-        ]));
-        if let Some(root) = thread.comments.first() {
-            lines.push(comment_byline(
-                &root.author,
-                root.is_bot,
-                root.created_at,
-                now,
-            ));
-            lines.extend(markdown::render(&root.body));
-        }
-        // Replies: every comment after the root, indented with an ↳ byline
-        // (mirrors the TS `ReplyRow`).
-        for reply in thread.comments.iter().skip(1) {
-            let mut byline = comment_byline(&reply.author, reply.is_bot, reply.created_at, now);
-            byline.spans.insert(
-                0,
-                Span::styled("  ↳ ", Style::default().fg(Color::DarkGray)),
-            );
-            lines.push(byline);
-            lines.extend(indent_lines(markdown::render(&reply.body), 4));
-        }
-    }
-    lines
-}
-
-/// Build the Conversation section lines: blank separator + bold header + one
-/// card per top-level issue comment (byline with bot styling + markdown body).
-/// Returns an empty `Vec` while comments haven't arrived for this PR. Mirrors
-/// the TS `DetailView` conversation section.
-fn conversation_section_lines(model: &Model, pr: &PR, now: DateTime<Utc>) -> Vec<Line<'static>> {
-    // Absent key = the comments fetch hasn't landed yet (loading); an arrived
-    // empty list renders no section at all.
-    let Some(comments) = model.enrichment.issue_comments.get(&pr.key()) else {
-        return loading_placeholder("Loading comments…");
-    };
-    if comments.is_empty() {
-        return Vec::new();
-    }
-
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![markdown::heading_span(2, "Conversation")]));
-
-    for comment in comments {
-        lines.push(comment_byline(
-            &comment.author,
-            comment.is_bot,
-            comment.created_at,
-            now,
-        ));
-        lines.extend(markdown::render(&comment.body));
-    }
-    lines
-}
-
 /// A muted in-flight placeholder for a section whose fetch hasn't landed,
 /// separated from the previous section by a blank line.
 fn loading_placeholder(text: &'static str) -> Vec<Line<'static>> {
@@ -347,44 +267,220 @@ fn loading_placeholder(text: &'static str) -> Vec<Line<'static>> {
     ]
 }
 
-/// Prefix every line with `pad` spaces (replies sit deeper than their thread
-/// root, mirroring the TS reply-card indent).
-fn indent_lines(lines: Vec<Line<'static>>, pad: usize) -> Vec<Line<'static>> {
-    lines
-        .into_iter()
-        .map(|mut line| {
-            line.spans.insert(0, Span::raw(" ".repeat(pad)));
-            line
-        })
-        .collect()
+/// The detail body's complete content: every display line plus, for each
+/// focusable item (index-aligned with `detail_items::focusable_items`), the
+/// line range its card occupies. One builder shared by the view (rendering,
+/// focused border) and `update` (scroll clamp, scroll-into-view on focus
+/// moves), so what's focusable, where it sits, and what's drawn can't drift.
+pub(crate) struct DetailContent {
+    pub lines: Vec<Line<'static>>,
+    pub item_ranges: Vec<std::ops::Range<usize>>,
 }
 
-/// Render the scrollable body: the pre-rendered `description` lines (cached in
-/// `DetailState::body`) followed by the CI checks section, offset by `scroll`
-/// rows from the top. `update` already clamps `scroll` to the true content
-/// height; this render keeps a backstop clamp so a stale offset (e.g. a resize
-/// between the keypress and this frame) can never show blank space past the
-/// end.
+impl DetailContent {
+    /// Append one focusable card, recording its line range. The card occupies
+    /// the same rows focused or not (a top and bottom border row plus a 2-char
+    /// left gutter per content row) — focused cards draw the border characters,
+    /// unfocused cards draw spaces, so focus changes never shift the layout.
+    /// Mirrors the TS `FocusableCard`'s invisible-border trick.
+    fn push_card(&mut self, card: Vec<Line<'static>>, focused: bool, indent: usize, width: u16) {
+        let start = self.lines.len();
+        let pad = " ".repeat(indent);
+        let border = Style::default().fg(Color::DarkGray);
+        // Horizontal rule spanning the row minus the indent and two corners.
+        let rule = "─".repeat((width as usize).saturating_sub(indent + 2));
+        let (top, bottom) = if focused {
+            (
+                Line::from(Span::styled(format!("{pad}╭{rule}╮"), border)),
+                Line::from(Span::styled(format!("{pad}╰{rule}╯"), border)),
+            )
+        } else {
+            (Line::from(""), Line::from(""))
+        };
+        self.lines.push(top);
+        for mut line in card {
+            let gutter = if focused {
+                Span::styled(format!("{pad}│ "), border)
+            } else {
+                Span::raw(format!("{pad}  "))
+            };
+            line.spans.insert(0, gutter);
+            self.lines.push(line);
+        }
+        self.lines.push(bottom);
+        self.item_ranges.push(start..self.lines.len());
+    }
+}
+
+/// Build the full detail body content: the cached description (item 0), the CI
+/// checks section, then the Review Threads and Conversation sections as
+/// focusable cards filtered by `Model::detail_filters`. Sections whose fetch
+/// hasn't landed render a loading placeholder; arrived-empty sections render
+/// nothing.
+pub(crate) fn detail_content(
+    model: &Model,
+    pr: &PR,
+    description: &[Line<'static>],
+    focused_index: usize,
+    width: u16,
+    now: DateTime<Utc>,
+) -> DetailContent {
+    let key = pr.key();
+    let filters = model.detail_filters();
+    let mut content = DetailContent {
+        lines: Vec::new(),
+        item_ranges: Vec::new(),
+    };
+
+    // Item 0: the body. Unstyled — no border even focused, matching the TS
+    // DetailView where only thread/reply/comment cards are framed.
+    content.item_ranges.push(0..description.len());
+    content.lines.extend_from_slice(description);
+
+    content.lines.extend(checks_section_lines(model, pr));
+
+    // ── Review Threads ──
+    match model.enrichment.review_threads.get(&key) {
+        None => content
+            .lines
+            .extend(loading_placeholder("Loading threads…")),
+        Some(threads) if threads.is_empty() => {}
+        Some(threads) => {
+            let visible = detail_items::visible_threads(threads, filters);
+            content.lines.push(Line::from(""));
+            content
+                .lines
+                .push(threads_header(threads.len(), visible.len()));
+            if visible.is_empty() {
+                content.lines.push(Line::from(Span::styled(
+                    "All threads resolved or hidden.",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+            for thread in visible {
+                let mut thread_comments =
+                    detail_items::visible_thread_comments(thread, filters).into_iter();
+                if let Some(root) = thread_comments.next() {
+                    let location = match thread.line {
+                        Some(line) => format!("{}:{line}", thread.path),
+                        None => thread.path.clone(),
+                    };
+                    let mut card = vec![
+                        Line::from(vec![
+                            Span::styled(location, Style::default().fg(Color::Cyan)),
+                            thread_badge(thread),
+                        ]),
+                        comment_byline(&root.author, root.is_bot, root.created_at, now),
+                    ];
+                    card.extend(markdown::render(&root.body));
+                    let focused = content.item_ranges.len() == focused_index;
+                    content.push_card(card, focused, 0, width);
+                }
+                // Replies: each visible comment after the root is its own
+                // indented card with an ↳ byline (mirrors the TS `ReplyRow`).
+                for reply in thread_comments {
+                    let mut byline =
+                        comment_byline(&reply.author, reply.is_bot, reply.created_at, now);
+                    byline
+                        .spans
+                        .insert(0, Span::styled("↳ ", Style::default().fg(Color::DarkGray)));
+                    let mut card = vec![byline];
+                    card.extend(markdown::render(&reply.body));
+                    let focused = content.item_ranges.len() == focused_index;
+                    content.push_card(card, focused, 2, width);
+                }
+            }
+        }
+    }
+
+    // ── Conversation ──
+    match model.enrichment.issue_comments.get(&key) {
+        None => content
+            .lines
+            .extend(loading_placeholder("Loading comments…")),
+        Some(comments) if comments.is_empty() => {}
+        Some(comments) => {
+            let visible = detail_items::visible_comments(comments, filters);
+            content.lines.push(Line::from(""));
+            content.lines.push(conversation_header(visible.len()));
+            for comment in visible {
+                let mut card = vec![comment_byline(
+                    &comment.author,
+                    comment.is_bot,
+                    comment.created_at,
+                    now,
+                )];
+                card.extend(markdown::render(&comment.body));
+                let focused = content.item_ranges.len() == focused_index;
+                content.push_card(card, focused, 0, width);
+            }
+        }
+    }
+
+    content
+}
+
+/// The Review Threads section header: visible count plus a hidden count when
+/// the resolved/bot filters are concealing threads.
+fn threads_header(total: usize, visible: usize) -> Line<'static> {
+    let mut spans = vec![
+        markdown::heading_span(2, "Review Threads"),
+        Span::styled(
+            format!(" {visible} shown"),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ];
+    let hidden = total - visible;
+    if hidden > 0 {
+        spans.push(Span::styled(
+            format!(" · {hidden} hidden"),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+    Line::from(spans)
+}
+
+/// The Conversation section header with its visible-comment count.
+fn conversation_header(visible: usize) -> Line<'static> {
+    let plural = if visible == 1 { "" } else { "s" };
+    Line::from(vec![
+        markdown::heading_span(2, "Conversation"),
+        Span::styled(
+            format!(" {visible} comment{plural}"),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ])
+}
+
+/// Render the scrollable body: the full `detail_content` (description, checks,
+/// thread and conversation cards), offset by `scroll` rows from the top.
+/// `update` already clamps `scroll` to the true content height; this render
+/// keeps a backstop clamp so a stale offset (e.g. a resize between the
+/// keypress and this frame) can never show blank space past the end.
 fn render_body(
     model: &Model,
     pr: &PR,
     description: &[Line<'static>],
-    scroll: u16,
+    detail: &DetailState,
     frame: &mut Frame<'_>,
     area: Rect,
     now: DateTime<Utc>,
 ) {
-    let mut lines: Vec<Line<'static>> = description.to_vec();
-    lines.extend(checks_section_lines(model, pr));
-    lines.extend(threads_section_lines(model, pr, now));
-    lines.extend(conversation_section_lines(model, pr, now));
+    let content = detail_content(
+        model,
+        pr,
+        description,
+        detail.focused_index,
+        area.width,
+        now,
+    );
 
-    let content_lines = lines.len() as u16;
+    let content_lines = content.lines.len() as u16;
     let viewport_rows = area.height;
     let max_scroll = content_lines.saturating_sub(viewport_rows);
-    let scroll = scroll.min(max_scroll);
+    let scroll = detail.scroll.min(max_scroll);
 
-    frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), area);
+    frame.render_widget(Paragraph::new(content.lines).scroll((scroll, 0)), area);
 }
 
 // ── Status bar ────────────────────────────────────────────────────────────────
