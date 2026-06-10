@@ -83,7 +83,7 @@ fn model_in_detail(pr: PR, body: &str) -> Model {
     let mut model = model_with_pr_in_list(pr);
     model.view_mode = ViewMode::Detail(DetailState {
         key,
-        body: Some(super::render_description_lines(body)),
+        body: Some(crate::app::detail_layout::render_description_lines(body)),
         scroll: 0,
         focused_index: 0,
         expanded: std::collections::HashSet::new(),
@@ -106,7 +106,7 @@ fn model_in_detail_with_checks(pr: PR, body: &str, checks: Vec<CheckRun>) -> Mod
     let mut model = model_with_pr_in_list(pr);
     model.view_mode = ViewMode::Detail(DetailState {
         key,
-        body: Some(super::render_description_lines(body)),
+        body: Some(crate::app::detail_layout::render_description_lines(body)),
         scroll: 0,
         focused_index: 0,
         expanded: std::collections::HashSet::new(),

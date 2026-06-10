@@ -53,7 +53,7 @@ fn detail_scroll(model: &crate::app::model::Model) -> u16 {
 /// Set the open detail view's body to lines rendered from `body`; panics if not
 /// in Detail mode. Mirrors how `Msg::PRDetailArrived` caches the description.
 fn set_detail_body(model: &mut crate::app::model::Model, body: &str) {
-    let lines: Vec<Line<'static>> = crate::view::detail::render_description_lines(body);
+    let lines: Vec<Line<'static>> = crate::app::detail_layout::render_description_lines(body);
     match &mut model.view_mode {
         ViewMode::Detail(detail) => detail.body = Some(lines),
         ViewMode::List => panic!("expected Detail mode"),
@@ -650,13 +650,13 @@ fn enter_on_the_body_does_not_touch_expansion_state() {
 // ── Scroll follows focus ────────────────────────────────────────────────────
 
 /// The line range the focused item occupies, via the same layout the view
-/// renders (the canonical `view::detail::detail_content`).
+/// renders (the canonical `detail_layout::detail_content`).
 fn focused_item_range(model: &crate::app::model::Model) -> std::ops::Range<usize> {
     let ViewMode::Detail(detail) = &model.view_mode else {
         panic!("expected Detail mode");
     };
     let pr = model.list.pr(&detail.key).expect("pr in list");
-    let content = crate::view::detail::detail_content(
+    let content = crate::app::detail_layout::detail_content(
         model,
         pr,
         detail.body.as_ref().expect("body arrived"),
@@ -671,7 +671,7 @@ fn focused_item_range(model: &crate::app::model::Model) -> std::ops::Range<usize
 /// comment cards start below the fold of its small viewport.
 fn tall_focusable_detail_model() -> crate::app::model::Model {
     let mut model = model_with_one_pr();
-    model.terminal_height = crate::view::detail::CHROME_ROWS + 8;
+    model.terminal_height = crate::app::detail_layout::CHROME_ROWS + 8;
     model.terminal_width = 80;
     update(&mut model, key_event(KeyCode::Enter));
     let body: String = (1..=30).map(|n| format!("Line {n}\n\n")).collect();
@@ -689,7 +689,7 @@ fn focusing_an_offscreen_card_scrolls_it_into_view() {
     update(&mut model, key_event(KeyCode::Char('j')));
 
     let range = focused_item_range(&model);
-    let viewport = (model.terminal_height - crate::view::detail::CHROME_ROWS) as usize;
+    let viewport = (model.terminal_height - crate::app::detail_layout::CHROME_ROWS) as usize;
     let scroll = detail_scroll(&model) as usize;
     assert!(
         scroll <= range.start && range.end <= scroll + viewport,
@@ -723,7 +723,7 @@ fn scroll_clamp_covers_the_thread_and_conversation_sections() {
         panic!("expected Detail mode");
     };
     let pr = model.list.pr(&detail.key).expect("pr in list");
-    let content_lines = crate::view::detail::detail_content(
+    let content_lines = crate::app::detail_layout::detail_content(
         &model,
         pr,
         detail.body.as_ref().expect("body arrived"),
@@ -733,7 +733,7 @@ fn scroll_clamp_covers_the_thread_and_conversation_sections() {
     )
     .lines
     .len() as u16;
-    let viewport = model.terminal_height - crate::view::detail::CHROME_ROWS;
+    let viewport = model.terminal_height - crate::app::detail_layout::CHROME_ROWS;
     let max_scroll = content_lines - viewport;
 
     for _ in 0..50 {
@@ -769,7 +769,7 @@ fn over_scrolling_clamps_to_the_last_screenful_and_page_up_stays_live() {
     // Reference the canonical chrome-row count so a future layout change keeps
     // this regression test in sync with the clamp it guards (rather than a
     // hardcoded literal that would silently desync).
-    let chrome_rows = crate::view::detail::CHROME_ROWS;
+    let chrome_rows = crate::app::detail_layout::CHROME_ROWS;
     let mut model = model_with_one_pr();
     model.terminal_height = chrome_rows + 6; // body viewport = 6 rows
     update(&mut model, key_event(KeyCode::Enter));
@@ -783,7 +783,7 @@ fn over_scrolling_clamps_to_the_last_screenful_and_page_up_stays_live() {
         panic!("expected Detail mode");
     };
     let pr = model.list.pr(&detail.key).expect("pr in list");
-    let content_lines = crate::view::detail::detail_content(
+    let content_lines = crate::app::detail_layout::detail_content(
         &model,
         pr,
         detail.body.as_ref().expect("body arrived"),

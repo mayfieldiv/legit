@@ -282,7 +282,7 @@ impl Model {
     }
 
     /// The detail view's comment-visibility filters, bundled for the
-    /// `detail_items` derivation shared by `update` and `view::detail`.
+    /// `detail_items` derivation shared by `update` and `detail_layout`.
     pub fn detail_filters(&self) -> DetailFilters {
         DetailFilters {
             show_resolved: self.show_resolved,

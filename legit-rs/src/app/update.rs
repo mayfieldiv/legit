@@ -6,7 +6,7 @@ use crate::{git_remote::RepoInfo, github::rest::PrKey, secret::Secret};
 
 use super::{
     cmd::{Cmd, RequestContext},
-    detail_items,
+    detail_items, detail_layout,
     model::{DetailState, FilesState, Model, RepoDetection, StatusKind, StatusMessage, ViewMode},
     msg::Msg,
 };
@@ -371,13 +371,13 @@ fn detail_focused_url(model: &Model) -> Option<String> {
 /// list. Measured at a fixed epoch: the layout's line ranges are
 /// age-independent (a byline is one line whatever its age string says), and
 /// `update` stays a pure `(Model, Msg)` reducer with no clock.
-fn detail_layout(model: &Model) -> Option<crate::view::detail::DetailContent> {
+fn measured_detail_content(model: &Model) -> Option<detail_layout::DetailContent> {
     let ViewMode::Detail(detail) = &model.view_mode else {
         return None;
     };
     let description = detail.body.as_ref()?;
     let pr = model.list.pr(&detail.key)?;
-    Some(crate::view::detail::detail_content(
+    Some(detail_layout::detail_content(
         model,
         pr,
         description,
@@ -392,7 +392,7 @@ fn detail_layout(model: &Model) -> Option<crate::view::detail::DetailContent> {
 fn detail_viewport_rows(model: &Model) -> u16 {
     model
         .terminal_height
-        .saturating_sub(crate::view::detail::CHROME_ROWS)
+        .saturating_sub(detail_layout::CHROME_ROWS)
 }
 
 /// Clamp the open detail view's scroll offset so it can never sit more than
@@ -405,7 +405,7 @@ fn detail_viewport_rows(model: &Model) -> u16 {
 /// intent: clamping in `update` keeps a held PageDown from drifting
 /// unboundedly and leaving the subsequent PageUp presses visually dead.
 fn clamp_detail_scroll(model: &mut Model) {
-    let Some(content) = detail_layout(model) else {
+    let Some(content) = measured_detail_content(model) else {
         return;
     };
     let max_scroll = (content.lines.len() as u16).saturating_sub(detail_viewport_rows(model));
@@ -420,7 +420,7 @@ fn clamp_detail_scroll(model: &mut Model) {
 /// the viewport shows its top. Mirrors the TS `scrollChildIntoView` on focus
 /// change.
 fn scroll_detail_focus_into_view(model: &mut Model) {
-    let Some(content) = detail_layout(model) else {
+    let Some(content) = measured_detail_content(model) else {
         return;
     };
     let viewport = detail_viewport_rows(model) as usize;
@@ -494,7 +494,7 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
             }
         }
         // Toggle the focused card's long-body expansion (collapsed by
-        // default; see `view::detail::collapse_body`). Keyed by the comment's
+        // default; see `detail_layout::collapse_body`). Keyed by the comment's
         // URL, so the state survives filter toggles moving the indices. The
         // body (no URL) has nothing to toggle. Expansion changes the content
         // height, so the scroll re-clamps and the card stays in view.
@@ -733,7 +733,7 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             if let ViewMode::Detail(detail) = &mut model.view_mode
                 && detail.key == pr
             {
-                detail.body = Some(crate::view::detail::render_description_lines(&body));
+                detail.body = Some(detail_layout::render_description_lines(&body));
             }
             Vec::new()
         }
