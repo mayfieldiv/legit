@@ -151,15 +151,15 @@ fn thread(
 }
 
 /// Seed the enrichment maps for the detail PR: threads and issue comments
-/// arrived, mirroring `Msg::ThreadsArrived` / `Msg::IssueCommentsArrived`.
+/// arrived, through the same `store_*` writers `Msg::ThreadsArrived` /
+/// `Msg::IssueCommentsArrived` use (so the render-once markdown cache is
+/// populated exactly like the real data path).
 fn seed_threads(model: &mut Model, threads: Vec<FullReviewThread>) {
     let ViewMode::Detail(detail) = &model.view_mode else {
         panic!("expected Detail mode");
     };
-    model
-        .enrichment
-        .review_threads
-        .insert(detail.key.clone(), threads);
+    let key = detail.key.clone();
+    model.enrichment.store_threads(key, threads);
 }
 
 fn issue_comment(id: u64, author: &str, body: &str, is_bot: bool) -> IssueComment {
@@ -177,10 +177,8 @@ fn seed_comments(model: &mut Model, comments: Vec<IssueComment>) {
     let ViewMode::Detail(detail) = &model.view_mode else {
         panic!("expected Detail mode");
     };
-    model
-        .enrichment
-        .issue_comments
-        .insert(detail.key.clone(), comments);
+    let key = detail.key.clone();
+    model.enrichment.store_issue_comments(key, comments);
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────

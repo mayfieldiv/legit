@@ -281,7 +281,7 @@ pub(crate) fn detail_content(
             comment_byline(&root.author, root.is_bot, root.created_at, now),
         ];
         card.extend(collapse_body(
-            markdown::render(&root.body),
+            model.enrichment.rendered_body(&root.url, &root.body),
             detail.expanded.contains(&root.url),
         ));
         content.push_card(card, focused_index, 0, width);
@@ -296,7 +296,7 @@ pub(crate) fn detail_content(
                 .insert(0, Span::styled("↳ ", Style::default().fg(Color::DarkGray)));
             let mut card = vec![byline];
             card.extend(collapse_body(
-                markdown::render(&comment.body),
+                model.enrichment.rendered_body(&comment.url, &comment.body),
                 detail.expanded.contains(&comment.url),
             ));
             content.push_card(card, focused_index, 2, width);
@@ -324,7 +324,7 @@ pub(crate) fn detail_content(
             now,
         )];
         card.extend(collapse_body(
-            markdown::render(&comment.body),
+            model.enrichment.rendered_body(&comment.url, &comment.body),
             detail.expanded.contains(&comment.url),
         ));
         content.push_card(card, focused_index, 0, width);

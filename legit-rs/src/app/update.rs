@@ -674,7 +674,7 @@ fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             maybe_fetch_checks(model, head_sha, &pr)
         }
         Msg::ThreadsArrived { pr, threads } => {
-            model.enrichment.review_threads.insert(pr, threads);
+            model.enrichment.store_threads(pr, threads);
             model.refresh_blockers();
             Vec::new()
         }
@@ -696,7 +696,7 @@ fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             Vec::new()
         }
         Msg::IssueCommentsArrived { pr, comments } => {
-            model.enrichment.issue_comments.insert(pr, comments);
+            model.enrichment.store_issue_comments(pr, comments);
             Vec::new()
         }
         Msg::FilesArrived { pr, files } => {
