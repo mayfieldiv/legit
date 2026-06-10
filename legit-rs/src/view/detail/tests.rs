@@ -660,6 +660,105 @@ fn detail_focused_reply_gets_a_border_without_shifting_the_layout() {
     );
 }
 
+// ── Section combinations ────────────────────────────────────────────────────
+
+#[test]
+fn detail_fully_loaded_shows_checks_threads_and_conversation() {
+    let mut model = model_in_detail_with_checks(
+        sample_pr(),
+        "The description.",
+        vec![check("build", "completed", Some("success"))],
+    );
+    seed_threads(
+        &mut model,
+        vec![thread(
+            "t1",
+            "src/lib.rs",
+            Some(12),
+            false,
+            vec![review_comment("c1", "alice", "Please rename this.")],
+        )],
+    );
+    seed_comments(
+        &mut model,
+        vec![issue_comment(10, "carol", "Looks good overall.", false)],
+    );
+
+    let rows = buffer_text(&render_snapshot(&model, 80, 40));
+
+    for section in [
+        "The description.",
+        "CI Checks",
+        "Review Threads",
+        "Conversation",
+    ] {
+        assert!(
+            rows.iter().any(|r| r.contains(section)),
+            "{section:?} must render in the fully loaded view: {rows:?}"
+        );
+    }
+    assert!(
+        !rows.iter().any(|r| r.contains("Loading")),
+        "nothing is loading once everything arrived: {rows:?}"
+    );
+}
+
+#[test]
+fn detail_threads_only_shows_no_conversation_section() {
+    let mut model = model_in_detail(sample_pr(), "The description.");
+    seed_threads(
+        &mut model,
+        vec![thread(
+            "t1",
+            "src/lib.rs",
+            Some(12),
+            false,
+            vec![review_comment("c1", "alice", "Please rename this.")],
+        )],
+    );
+    seed_comments(&mut model, Vec::new());
+
+    let rows = buffer_text(&render_snapshot(&model, 80, 30));
+
+    assert!(
+        rows.iter().any(|r| r.contains("Review Threads")),
+        "threads section must render: {rows:?}"
+    );
+    assert!(
+        !rows.iter().any(|r| r.contains("Conversation")),
+        "no conversation section for an arrived-empty comment list: {rows:?}"
+    );
+    assert!(
+        !rows.iter().any(|r| r.contains("Loading comments")),
+        "no comments placeholder once the empty list arrived: {rows:?}"
+    );
+}
+
+#[test]
+fn detail_conversation_only_shows_no_threads_section() {
+    let mut model = model_in_detail(sample_pr(), "The description.");
+    seed_threads(&mut model, Vec::new());
+    seed_comments(
+        &mut model,
+        vec![issue_comment(10, "carol", "Looks good overall.", false)],
+    );
+
+    let rows = buffer_text(&render_snapshot(&model, 80, 30));
+
+    assert!(
+        rows.iter().any(|r| r.contains("Conversation")),
+        "conversation section must render: {rows:?}"
+    );
+    assert!(
+        !rows.iter().any(|r| r.contains("Review Threads")),
+        "no threads section for an arrived-empty thread list: {rows:?}"
+    );
+    assert!(
+        !rows.iter().any(|r| r.contains("Loading threads")),
+        "no threads placeholder once the empty list arrived: {rows:?}"
+    );
+}
+
 // ── Long-body collapse (enter expands) ──────────────────────────────────────
 
 #[test]
