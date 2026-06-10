@@ -420,23 +420,28 @@ fn clamp_detail_scroll(model: &mut Model) {
     }
 }
 
-/// Adjust the detail scroll so the focused card is fully visible: scroll up to
-/// its first line when it starts above the viewport, down to its last line
-/// when it ends below — and never past its first line, so a card taller than
-/// the viewport shows its top. Mirrors the TS `scrollChildIntoView` on focus
-/// change.
-fn scroll_detail_focus_into_view(model: &mut Model) {
+/// Bring the focused card fully into view: scroll up to its first line when
+/// it starts above the viewport, down to its last line when it ends below —
+/// and never past its first line, so a card taller than the viewport shows
+/// its top. Clamps the focus and scroll first (against the same single layout
+/// build), since the keys this serves can also shrink or shift the sequence.
+/// Used by every key that moves the focus or changes what's under it (j/k,
+/// Enter expansion, t/b filters); raw scrolling (PageUp/PageDown) deliberately
+/// doesn't follow. Mirrors the TS `scrollChildIntoView` on focus change.
+fn follow_detail_focus(model: &mut Model) {
+    clamp_detail_focus(model);
     let Some(content) = measured_detail_content(model) else {
         return;
     };
     let viewport = detail_viewport_rows(model) as usize;
+    let max_scroll = content.lines.len().saturating_sub(viewport);
     let ViewMode::Detail(detail) = &mut model.view_mode else {
         return;
     };
     let Some(range) = content.item_ranges.get(detail.focused_index) else {
         return;
     };
-    let scroll = detail.scroll as usize;
+    let scroll = (detail.scroll as usize).min(max_scroll);
     let new_scroll = if range.start < scroll {
         range.start
     } else if range.end > scroll + viewport {
@@ -479,14 +484,17 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
                 return cmds;
             }
         }
-        // Toggle resolved-thread visibility (hidden by default). The sequence
-        // can shrink; `normalize_detail` re-clamps the focus and scroll.
+        // Toggle resolved-thread visibility (hidden by default). The toggle
+        // can shift or shrink the sequence under the focus index, so the
+        // (possibly new) focused card follows into view.
         KeyCode::Char('t') => {
             model.show_resolved = !model.show_resolved;
+            follow_detail_focus(model);
         }
-        // Toggle bot-comment visibility (shown by default).
+        // Toggle bot-comment visibility (shown by default). Same follow.
         KeyCode::Char('b') => {
             model.show_bot_comments = !model.show_bot_comments;
+            follow_detail_focus(model);
         }
         // Open the focused item in the browser: a thread/reply/comment opens
         // its deep link; the body opens the PR itself.
@@ -499,7 +507,7 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
         // default; see `detail_layout::collapse_body`). Keyed by the comment's
         // URL, so the state survives filter toggles moving the indices. The
         // body (no URL) has nothing to toggle. Expansion changes the content
-        // height, so the scroll re-clamps and the card stays in view.
+        // height, so the follow re-clamps and keeps the card in view.
         KeyCode::Enter => {
             if let Some(url) = detail_focused_item_url(model)
                 && let ViewMode::Detail(detail) = &mut model.view_mode
@@ -507,8 +515,7 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
                 if !detail.expanded.remove(&url) {
                     detail.expanded.insert(url);
                 }
-                clamp_detail_scroll(model);
-                scroll_detail_focus_into_view(model);
+                follow_detail_focus(model);
             }
         }
         // Focus forward/back: j/k (and arrows) cycle the focusable items —
@@ -517,11 +524,11 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
         // so the newly-focused card is always on screen.
         KeyCode::Char('j') | KeyCode::Down => {
             move_detail_focus(model, 1);
-            scroll_detail_focus_into_view(model);
+            follow_detail_focus(model);
         }
         KeyCode::Char('k') | KeyCode::Up => {
             move_detail_focus(model, -1);
-            scroll_detail_focus_into_view(model);
+            follow_detail_focus(model);
         }
         // Page down. `normalize_detail` clamps the offset to the last
         // screenful, so a held PageDown can't drift past the end.

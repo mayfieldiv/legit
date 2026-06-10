@@ -812,6 +812,63 @@ fn refreshing_to_a_shorter_body_reclamps_scroll_so_page_up_stays_live() {
 }
 
 #[test]
+fn showing_resolved_threads_keeps_the_focused_card_in_view() {
+    // Focus the issue comment at the bottom (the scroll followed it). Toggling
+    // `t` reveals a resolved thread ABOVE it, pushing the focused card's lines
+    // below the viewport — the toggle must scroll the card back into view,
+    // exactly like a j/k focus move would.
+    let mut model = tall_focusable_detail_model();
+    let resolved_body: String = (1..=6).map(|n| format!("Resolved para {n}\n\n")).collect();
+    update(
+        &mut model,
+        Msg::ThreadsArrived {
+            pr: pr_key_42(),
+            threads: vec![
+                FullReviewThread {
+                    id: "done".to_owned(),
+                    is_resolved: true,
+                    path: "src/old.rs".to_owned(),
+                    line: Some(1),
+                    comments: vec![ReviewComment {
+                        body: resolved_body,
+                        ..review_comment("c9", "bob")
+                    }],
+                },
+                FullReviewThread {
+                    id: "t1".to_owned(),
+                    is_resolved: false,
+                    path: "src/lib.rs".to_owned(),
+                    line: Some(12),
+                    comments: vec![review_comment("c1", "alice")],
+                },
+            ],
+        },
+    );
+    // Walk the focus to the last item (the issue comment); the scroll follows.
+    for _ in 0..5 {
+        update(&mut model, key_event(KeyCode::Char('j')));
+    }
+    let focused_before = detail_focus(&model);
+
+    update(&mut model, key_event(KeyCode::Char('t')));
+
+    assert_eq!(
+        detail_focus(&model),
+        focused_before,
+        "the focus index is positional: revealing threads changes what sits \
+         under it, not the index itself"
+    );
+    let range = focused_item_range(&model);
+    let viewport = (model.terminal_height - crate::app::detail_layout::CHROME_ROWS) as usize;
+    let scroll = detail_scroll(&model) as usize;
+    assert!(
+        scroll <= range.start && range.end <= scroll + viewport,
+        "the focused card (lines {range:?}) must stay fully inside the viewport \
+         after a filter toggle (scroll {scroll}, {viewport} rows)"
+    );
+}
+
+#[test]
 fn threads_arrival_that_shrinks_the_content_reclamps_scroll() {
     // Scrolled to the bottom of a view whose threads section is long; a fresh
     // (empty) thread list shortens the content, so the offset must follow it
