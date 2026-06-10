@@ -1,4 +1,5 @@
 pub mod cmd;
+pub mod detail_items;
 pub mod grouping;
 pub mod model;
 pub mod msg;

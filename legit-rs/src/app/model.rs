@@ -13,7 +13,7 @@ use crate::{
     secret::Secret,
 };
 
-use super::{cmd::Cmd, pr_list::PrList};
+use super::{cmd::Cmd, detail_items::DetailFilters, pr_list::PrList};
 
 /// Which top-level view is active. `List` is the default PR list; `Detail`
 /// carries the whole detail-view state in one variant so illegal combinations
@@ -217,6 +217,13 @@ pub struct Model {
     /// offset live inside that variant). `Esc` in the detail view returns to
     /// `List`.
     pub view_mode: ViewMode,
+    /// Detail-view filter: show resolved threads (`t` toggles; default false).
+    /// Lives on the `Model`, not `DetailState`, so the preference survives
+    /// closing and reopening detail views (mirrors the TS app-level ui-state).
+    pub show_resolved: bool,
+    /// Detail-view filter: show bot comments (`b` toggles; default true).
+    /// Model-level for the same reason as `show_resolved`.
+    pub show_bot_comments: bool,
 }
 
 impl Model {
@@ -238,9 +245,20 @@ impl Model {
                 enrichment: Enrichment::default(),
                 blockers: HashMap::new(),
                 view_mode: ViewMode::List,
+                show_resolved: false,
+                show_bot_comments: true,
             },
             vec![Cmd::LoadConfig, Cmd::ResolveAuthToken, Cmd::DetectRepo],
         )
+    }
+
+    /// The detail view's comment-visibility filters, bundled for the
+    /// `detail_items` derivation shared by `update` and `view::detail`.
+    pub fn detail_filters(&self) -> DetailFilters {
+        DetailFilters {
+            show_resolved: self.show_resolved,
+            show_bot_comments: self.show_bot_comments,
+        }
     }
 
     /// The current user's login, from config (`~/.legit/config.json` `user`).
