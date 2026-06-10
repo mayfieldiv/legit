@@ -361,16 +361,6 @@ fn detail_focused_item_url(model: &Model) -> Option<String> {
     .map(str::to_owned)
 }
 
-/// The URL `o` opens for the detail view's focused item: the focused
-/// thread/reply/comment's deep link, or the PR's own URL from the body
-/// (mirrors the TS fallback to `openInBrowser(pr)`). `None` outside Detail.
-fn detail_focused_url(model: &Model) -> Option<String> {
-    let ViewMode::Detail(detail) = &model.view_mode else {
-        return None;
-    };
-    Some(detail_focused_item_url(model).unwrap_or_else(|| detail.key.html_url()))
-}
-
 /// Measure the open detail view's body via the same `detail_content` layout
 /// the view renders, so scroll math and rendering can't disagree. `None`
 /// outside Detail mode, while the body hasn't arrived, or if the PR left the
@@ -497,9 +487,11 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
             follow_detail_focus(model);
         }
         // Open the focused item in the browser: a thread/reply/comment opens
-        // its deep link; the body opens the PR itself.
+        // its deep link; the body falls back to the PR itself (mirrors the TS
+        // fallback to `openInBrowser(pr)`).
         KeyCode::Char('o') => {
-            if let Some(url) = detail_focused_url(model) {
+            if let ViewMode::Detail(detail) = &model.view_mode {
+                let url = detail_focused_item_url(model).unwrap_or_else(|| detail.key.html_url());
                 return vec![Cmd::OpenUrl { url }];
             }
         }

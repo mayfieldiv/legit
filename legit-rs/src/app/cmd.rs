@@ -434,19 +434,16 @@ fn pr_list_failed(repo_slug: String, context: &'static str, error: anyhow::Error
 /// exit immediately after handing the URL to the browser, so nothing waits on
 /// the child; only the spawn can fail meaningfully (opener missing).
 fn open_url(url: &str) -> anyhow::Result<()> {
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        let mut c = std::process::Command::new("open");
-        c.arg(url);
-        c
+    // `open` on macOS, freedesktop's `xdg-open` everywhere else. Windows isn't
+    // targeted today; there the missing opener surfaces as the same transient
+    // CommandFailed status as any other spawn failure.
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
     };
-    #[cfg(not(target_os = "macos"))]
-    let mut command = {
-        let mut c = std::process::Command::new("xdg-open");
-        c.arg(url);
-        c
-    };
-    command
+    std::process::Command::new(opener)
+        .arg(url)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
