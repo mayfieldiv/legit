@@ -20,11 +20,12 @@ use ratatui::{
 
 use crate::{
     app::model::{DetailState, Model},
+    blocker::{ThreadKind, classify_thread},
     format::{
         check_row, checks_summary, format_age, format_mergeable, format_size, sort_check_runs,
     },
     github::rest::PR,
-    github::types::CheckRun,
+    github::types::{CheckRun, FullReviewThread},
     markdown,
 };
 
@@ -67,7 +68,7 @@ pub fn render(
 
     match &detail.body {
         None => render_loading(frame, body_area),
-        Some(body) => render_body(model, pr, body, detail.scroll, frame, body_area),
+        Some(body) => render_body(model, pr, body, detail.scroll, frame, body_area, now),
     }
 }
 
@@ -213,6 +214,151 @@ pub(crate) fn checks_section_lines(model: &Model, pr: &PR) -> Vec<Line<'static>>
     lines
 }
 
+// ── Review threads section ───────────────────────────────────────────────────
+
+/// The coloured status badge for one thread (mirrors the TS `ThreadCard` badge).
+fn thread_badge(thread: &FullReviewThread) -> Span<'static> {
+    match classify_thread(thread) {
+        ThreadKind::Resolved => Span::styled(" ✓ resolved", Style::default().fg(Color::Green)),
+        ThreadKind::AwaitingReviewer => {
+            Span::styled(" ◐ awaiting reviewer", Style::default().fg(Color::Cyan))
+        }
+        ThreadKind::Unreplied => Span::styled(" ● unreplied", Style::default().fg(Color::Yellow)),
+    }
+}
+
+/// The `author · age` byline above a comment body. Bot authors are muted and
+/// tagged `[bot]` (mirrors the TS `CommentRow` styling).
+fn comment_byline(
+    author: &str,
+    is_bot: bool,
+    created_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Line<'static> {
+    let author_color = if is_bot {
+        Color::DarkGray
+    } else {
+        Color::Green
+    };
+    let mut spans = vec![Span::styled(
+        author.to_owned(),
+        Style::default().fg(author_color),
+    )];
+    if is_bot {
+        spans.push(Span::styled(" [bot]", Style::default().fg(Color::DarkGray)));
+    }
+    spans.push(Span::styled(
+        format!(" · {}", format_age(created_at, now)),
+        Style::default().fg(Color::DarkGray),
+    ));
+    Line::from(spans)
+}
+
+/// Build the Review Threads section lines: blank separator + bold header + one
+/// card per thread (file:line + status badge, then the root comment's byline
+/// and markdown body). Returns an empty `Vec` while threads haven't arrived
+/// for this PR. Mirrors the TS `DetailView` threads section.
+fn threads_section_lines(model: &Model, pr: &PR, now: DateTime<Utc>) -> Vec<Line<'static>> {
+    // Absent key = the threads fetch hasn't landed yet (loading); an arrived
+    // empty list renders no section at all.
+    let Some(threads) = model.enrichment.review_threads.get(&pr.key()) else {
+        return loading_placeholder("Loading threads…");
+    };
+    if threads.is_empty() {
+        return Vec::new();
+    }
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![markdown::heading_span(
+        2,
+        "Review Threads",
+    )]));
+
+    for thread in threads {
+        let location = match thread.line {
+            Some(line) => format!("{}:{line}", thread.path),
+            None => thread.path.clone(),
+        };
+        lines.push(Line::from(vec![
+            Span::styled(location, Style::default().fg(Color::Cyan)),
+            thread_badge(thread),
+        ]));
+        if let Some(root) = thread.comments.first() {
+            lines.push(comment_byline(
+                &root.author,
+                root.is_bot,
+                root.created_at,
+                now,
+            ));
+            lines.extend(markdown::render(&root.body));
+        }
+        // Replies: every comment after the root, indented with an ↳ byline
+        // (mirrors the TS `ReplyRow`).
+        for reply in thread.comments.iter().skip(1) {
+            let mut byline = comment_byline(&reply.author, reply.is_bot, reply.created_at, now);
+            byline.spans.insert(
+                0,
+                Span::styled("  ↳ ", Style::default().fg(Color::DarkGray)),
+            );
+            lines.push(byline);
+            lines.extend(indent_lines(markdown::render(&reply.body), 4));
+        }
+    }
+    lines
+}
+
+/// Build the Conversation section lines: blank separator + bold header + one
+/// card per top-level issue comment (byline with bot styling + markdown body).
+/// Returns an empty `Vec` while comments haven't arrived for this PR. Mirrors
+/// the TS `DetailView` conversation section.
+fn conversation_section_lines(model: &Model, pr: &PR, now: DateTime<Utc>) -> Vec<Line<'static>> {
+    // Absent key = the comments fetch hasn't landed yet (loading); an arrived
+    // empty list renders no section at all.
+    let Some(comments) = model.enrichment.issue_comments.get(&pr.key()) else {
+        return loading_placeholder("Loading comments…");
+    };
+    if comments.is_empty() {
+        return Vec::new();
+    }
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![markdown::heading_span(2, "Conversation")]));
+
+    for comment in comments {
+        lines.push(comment_byline(
+            &comment.author,
+            comment.is_bot,
+            comment.created_at,
+            now,
+        ));
+        lines.extend(markdown::render(&comment.body));
+    }
+    lines
+}
+
+/// A muted in-flight placeholder for a section whose fetch hasn't landed,
+/// separated from the previous section by a blank line.
+fn loading_placeholder(text: &'static str) -> Vec<Line<'static>> {
+    vec![
+        Line::from(""),
+        Line::from(Span::styled(text, Style::default().fg(Color::Yellow))),
+    ]
+}
+
+/// Prefix every line with `pad` spaces (replies sit deeper than their thread
+/// root, mirroring the TS reply-card indent).
+fn indent_lines(lines: Vec<Line<'static>>, pad: usize) -> Vec<Line<'static>> {
+    lines
+        .into_iter()
+        .map(|mut line| {
+            line.spans.insert(0, Span::raw(" ".repeat(pad)));
+            line
+        })
+        .collect()
+}
+
 /// Render the scrollable body: the pre-rendered `description` lines (cached in
 /// `DetailState::body`) followed by the CI checks section, offset by `scroll`
 /// rows from the top. `update` already clamps `scroll` to the true content
@@ -226,9 +372,12 @@ fn render_body(
     scroll: u16,
     frame: &mut Frame<'_>,
     area: Rect,
+    now: DateTime<Utc>,
 ) {
     let mut lines: Vec<Line<'static>> = description.to_vec();
     lines.extend(checks_section_lines(model, pr));
+    lines.extend(threads_section_lines(model, pr, now));
+    lines.extend(conversation_section_lines(model, pr, now));
 
     let content_lines = lines.len() as u16;
     let viewport_rows = area.height;

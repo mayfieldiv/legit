@@ -5,7 +5,7 @@ use crate::{
     app::model::{DetailState, Model, RepoDetection, ViewMode},
     git_remote::RepoInfo,
     github::rest::{PR, PRState},
-    github::types::CheckRun,
+    github::types::{CheckRun, FullReviewThread, IssueComment, ReviewComment},
     view,
 };
 
@@ -117,6 +117,66 @@ fn check(name: &str, status: &str, conclusion: Option<&str>) -> CheckRun {
         status: status.to_owned(),
         conclusion: conclusion.map(str::to_owned),
     }
+}
+
+fn review_comment(id: &str, author: &str, body: &str) -> ReviewComment {
+    ReviewComment {
+        id: id.to_owned(),
+        author: author.to_owned(),
+        body: body.to_owned(),
+        created_at: fixed_now() - chrono::Duration::hours(3),
+        url: format!("https://github.com/acme/web/pull/42#discussion_r{id}"),
+        is_bot: false,
+    }
+}
+
+fn thread(
+    id: &str,
+    path: &str,
+    line: Option<u64>,
+    is_resolved: bool,
+    comments: Vec<ReviewComment>,
+) -> FullReviewThread {
+    FullReviewThread {
+        id: id.to_owned(),
+        is_resolved,
+        path: path.to_owned(),
+        line,
+        comments,
+    }
+}
+
+/// Seed the enrichment maps for the detail PR: threads and issue comments
+/// arrived, mirroring `Msg::ThreadsArrived` / `Msg::IssueCommentsArrived`.
+fn seed_threads(model: &mut Model, threads: Vec<FullReviewThread>) {
+    let ViewMode::Detail(detail) = &model.view_mode else {
+        panic!("expected Detail mode");
+    };
+    model
+        .enrichment
+        .review_threads
+        .insert(detail.key.clone(), threads);
+}
+
+fn issue_comment(id: u64, author: &str, body: &str, is_bot: bool) -> IssueComment {
+    IssueComment {
+        id,
+        author: author.to_owned(),
+        body: body.to_owned(),
+        created_at: fixed_now() - chrono::Duration::hours(1),
+        url: format!("https://github.com/acme/web/pull/42#issuecomment-{id}"),
+        is_bot,
+    }
+}
+
+fn seed_comments(model: &mut Model, comments: Vec<IssueComment>) {
+    let ViewMode::Detail(detail) = &model.view_mode else {
+        panic!("expected Detail mode");
+    };
+    model
+        .enrichment
+        .issue_comments
+        .insert(detail.key.clone(), comments);
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -344,6 +404,156 @@ fn detail_body_scrolls_when_detail_scroll_is_nonzero() {
     assert!(
         rows.iter().any(|r| r.contains("Line 2")),
         "Line 2 must still be visible at detail_scroll=2: {rows:?}"
+    );
+}
+
+// ── Review threads section ─────────────────────────────────────────────────
+
+#[test]
+fn detail_threads_section_shows_thread_card() {
+    let mut model = model_in_detail(sample_pr(), "The description.");
+    seed_threads(
+        &mut model,
+        vec![thread(
+            "t1",
+            "src/lib.rs",
+            Some(12),
+            false,
+            vec![review_comment("c1", "alice", "Please rename this.")],
+        )],
+    );
+
+    let terminal = render_snapshot(&model, 80, 24);
+    let rows = buffer_text(&terminal);
+
+    assert!(
+        rows.iter().any(|r| r.contains("Review Threads")),
+        "threads section header must appear: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|r| r.contains("src/lib.rs:12")),
+        "thread card must show file:line: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|r| r.contains("● unreplied")),
+        "unreplied status badge must appear: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|r| r.contains("alice")),
+        "root comment author must appear: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|r| r.contains("Please rename this.")),
+        "root comment body must render: {rows:?}"
+    );
+}
+
+#[test]
+fn detail_thread_replies_render_indented_with_arrow_prefix() {
+    let mut model = model_in_detail(sample_pr(), "The description.");
+    seed_threads(
+        &mut model,
+        vec![thread(
+            "t1",
+            "src/lib.rs",
+            Some(12),
+            false,
+            vec![
+                review_comment("c1", "alice", "Please rename this."),
+                review_comment("c2", "octocat", "Done, renamed."),
+            ],
+        )],
+    );
+
+    let terminal = render_snapshot(&model, 80, 24);
+    let rows = buffer_text(&terminal);
+
+    let reply_row = rows
+        .iter()
+        .find(|r| r.contains("↳"))
+        .unwrap_or_else(|| panic!("a reply row with ↳ prefix must render: {rows:?}"));
+    assert!(
+        reply_row.contains("octocat"),
+        "reply row must name the reply author: {reply_row:?}"
+    );
+    assert!(
+        rows.iter().any(|r| r.contains("Done, renamed.")),
+        "reply body must render: {rows:?}"
+    );
+}
+
+// ── Conversation section ───────────────────────────────────────────────────
+
+#[test]
+fn detail_conversation_section_shows_comment_cards_with_bot_styling() {
+    let mut model = model_in_detail(sample_pr(), "The description.");
+    seed_comments(
+        &mut model,
+        vec![
+            issue_comment(1, "carol", "Looks good overall.", false),
+            issue_comment(2, "ci-reporter", "Coverage: 98%", true),
+        ],
+    );
+
+    let terminal = render_snapshot(&model, 80, 24);
+    let rows = buffer_text(&terminal);
+
+    assert!(
+        rows.iter().any(|r| r.contains("Conversation")),
+        "conversation section header must appear: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|r| r.contains("carol")),
+        "human comment author must appear: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|r| r.contains("Looks good overall.")),
+        "comment body must render: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|r| r.contains("ci-reporter [bot]")),
+        "bot comment must carry the [bot] tag: {rows:?}"
+    );
+}
+
+#[test]
+fn detail_shows_loading_placeholders_until_threads_and_comments_arrive() {
+    // Body arrived, but neither threads nor issue comments have landed yet.
+    let model = model_in_detail(sample_pr(), "The description.");
+
+    let terminal = render_snapshot(&model, 80, 24);
+    let rows = buffer_text(&terminal);
+
+    assert!(
+        rows.iter().any(|r| r.contains("Loading threads")),
+        "threads loading placeholder must appear before ThreadsArrived: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|r| r.contains("Loading comments")),
+        "comments loading placeholder must appear before IssueCommentsArrived: {rows:?}"
+    );
+}
+
+#[test]
+fn detail_arrived_but_empty_threads_and_comments_show_no_sections() {
+    let mut model = model_in_detail(sample_pr(), "The description.");
+    seed_threads(&mut model, Vec::new());
+    seed_comments(&mut model, Vec::new());
+
+    let terminal = render_snapshot(&model, 80, 24);
+    let rows = buffer_text(&terminal);
+
+    assert!(
+        !rows.iter().any(|r| r.contains("Loading threads")),
+        "no threads placeholder once an empty thread list arrived: {rows:?}"
+    );
+    assert!(
+        !rows.iter().any(|r| r.contains("Review Threads")),
+        "no threads section for an empty thread list: {rows:?}"
+    );
+    assert!(
+        !rows.iter().any(|r| r.contains("Conversation")),
+        "no conversation section for an empty comment list: {rows:?}"
     );
 }
 
