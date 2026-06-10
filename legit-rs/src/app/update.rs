@@ -348,6 +348,31 @@ fn clamp_detail_focus(model: &mut Model) {
     }
 }
 
+/// The URL `o` opens for the detail view's focused item: the focused
+/// thread/reply/comment's deep link, or the PR's own URL from the body
+/// (mirrors the TS fallback to `openInBrowser(pr)`). `None` outside Detail.
+fn detail_focused_url(model: &Model) -> Option<String> {
+    let ViewMode::Detail(detail) = &model.view_mode else {
+        return None;
+    };
+    let threads = model
+        .enrichment
+        .review_threads
+        .get(&detail.key)
+        .map_or(&[][..], Vec::as_slice);
+    let comments = model
+        .enrichment
+        .issue_comments
+        .get(&detail.key)
+        .map_or(&[][..], Vec::as_slice);
+    let items = detail_items::focusable_items(threads, comments, model.detail_filters());
+    let url = items
+        .get(detail.focused_index)
+        .and_then(detail_items::FocusableItem::url)
+        .map_or_else(|| detail.key.html_url(), str::to_owned);
+    Some(url)
+}
+
 /// Measure the open detail view's body via the same `detail_content` layout
 /// the view renders, so scroll math and rendering can't disagree. `None`
 /// outside Detail mode, while the body hasn't arrived, or if the PR left the
@@ -454,6 +479,13 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
                     detail.body = None;
                 }
                 return cmds;
+            }
+        }
+        // Open the focused item in the browser: a thread/reply/comment opens
+        // its deep link; the body opens the PR itself.
+        KeyCode::Char('o') => {
+            if let Some(url) = detail_focused_url(model) {
+                return vec![Cmd::OpenUrl { url }];
             }
         }
         // Focus forward/back: j/k (and arrows) cycle the focusable items —

@@ -466,6 +466,71 @@ fn page_up_in_detail_scrolls_by_ten_and_clamps_at_zero() {
     );
 }
 
+// ── o opens the focused item's URL ──────────────────────────────────────────
+
+/// The URL of the single `Cmd::OpenUrl` in `cmds`; panics otherwise.
+fn open_url(cmds: &[Cmd]) -> &str {
+    match cmds {
+        [Cmd::OpenUrl { url }] => url,
+        other => panic!("expected exactly one OpenUrl, got {other:?}"),
+    }
+}
+
+#[test]
+fn o_on_a_focused_thread_root_opens_its_deep_link() {
+    let mut model = focusable_detail_model();
+    update(&mut model, key_event(KeyCode::Char('j'))); // thread root
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('o')));
+
+    assert_eq!(
+        open_url(&cmds),
+        "https://example.test/r/c1",
+        "o must deep-link to the thread's root comment"
+    );
+}
+
+#[test]
+fn o_on_a_focused_reply_opens_the_reply_deep_link() {
+    let mut model = focusable_detail_model();
+    update(&mut model, key_event(KeyCode::Char('j')));
+    update(&mut model, key_event(KeyCode::Char('j'))); // the reply
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('o')));
+
+    assert_eq!(
+        open_url(&cmds),
+        "https://example.test/r/c2",
+        "o must deep-link to the specific reply"
+    );
+}
+
+#[test]
+fn o_on_a_focused_issue_comment_opens_its_url() {
+    let mut model = focusable_detail_model();
+    for _ in 0..3 {
+        update(&mut model, key_event(KeyCode::Char('j'))); // the issue comment
+    }
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('o')));
+
+    assert_eq!(open_url(&cmds), "https://example.test/c/10");
+}
+
+#[test]
+fn o_on_the_body_falls_back_to_the_pr_url() {
+    let mut model = focusable_detail_model();
+    assert_eq!(detail_focus(&model), 0);
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('o')));
+
+    assert_eq!(
+        open_url(&cmds),
+        "https://github.com/mayfieldiv/legit/pull/42",
+        "o on the body (focus 0) must open the PR itself"
+    );
+}
+
 // ── Scroll follows focus ────────────────────────────────────────────────────
 
 /// The line range the focused item occupies, via the same layout the view

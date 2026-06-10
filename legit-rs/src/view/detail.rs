@@ -126,8 +126,10 @@ fn render_header(pr: &PR, frame: &mut Frame<'_>, area: Rect, now: DateTime<Utc>)
     let meta_line = Line::from(meta_spans);
 
     // Row 2: full GitHub URL
-    let url = format!("https://github.com/{}/pull/{}", pr.repo_slug, pr.number);
-    let url_line = Line::from(Span::styled(url, Style::default().fg(Color::Cyan)));
+    let url_line = Line::from(Span::styled(
+        pr.key().html_url(),
+        Style::default().fg(Color::Cyan),
+    ));
 
     // Row 3: head → base  ·  mergeable state
     let (merge_text, merge_color) = format_mergeable(&pr.mergeable);

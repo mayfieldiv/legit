@@ -1,5 +1,6 @@
 use std::{future::Future, sync::Arc};
 
+use anyhow::Context;
 use tokio::sync::mpsc;
 
 use crate::{
@@ -79,6 +80,14 @@ pub enum Cmd {
     FetchPRDetail {
         ctx: Arc<RequestContext>,
         key: PrKey,
+    },
+    /// Open `url` in the user's browser (detail-view `o`: the focused
+    /// thread/reply/comment's deep link, or the PR URL from the body). Spawns
+    /// the platform opener detached — the TUI owns the terminal, so nothing is
+    /// waited on beyond the spawn itself; a spawn failure surfaces as a
+    /// transient `CommandFailed`.
+    OpenUrl {
+        url: String,
     },
 }
 
@@ -292,6 +301,11 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
             let _ = tx.send(Msg::StatusCleared { token });
         }
+        Cmd::OpenUrl { url } => {
+            if let Err(error) = open_url(&url) {
+                let _ = tx.send(command_failed("open url", error));
+            }
+        }
         Cmd::FetchPRDetail { ctx, key } => {
             let number = key.number;
             request(
@@ -414,6 +428,30 @@ fn pr_list_failed(repo_slug: String, context: &'static str, error: anyhow::Error
         context,
         error,
     }
+}
+
+/// Spawn the platform's URL opener, detached. The opener processes themselves
+/// exit immediately after handing the URL to the browser, so nothing waits on
+/// the child; only the spawn can fail meaningfully (opener missing).
+fn open_url(url: &str) -> anyhow::Result<()> {
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut c = std::process::Command::new("open");
+        c.arg(url);
+        c
+    };
+    #[cfg(not(target_os = "macos"))]
+    let mut command = {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(url);
+        c
+    };
+    command
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(drop)
+        .context("spawn browser opener")
 }
 
 /// Run `f` on the blocking pool and fold the `JoinError` into the same
