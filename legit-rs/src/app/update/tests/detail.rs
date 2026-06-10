@@ -747,6 +747,129 @@ fn scroll_clamp_covers_the_thread_and_conversation_sections() {
     );
 }
 
+/// The open detail view's true max scroll: full measured content minus the
+/// body viewport, via the same layout the view renders.
+fn max_detail_scroll(model: &crate::app::model::Model) -> u16 {
+    let ViewMode::Detail(detail) = &model.view_mode else {
+        panic!("expected Detail mode");
+    };
+    let pr = model.list.pr(&detail.key).expect("pr in list");
+    let content_lines = crate::app::detail_layout::detail_content(
+        model,
+        pr,
+        detail.body.as_ref().expect("body arrived"),
+        detail,
+        model.terminal_width,
+        chrono::DateTime::UNIX_EPOCH,
+    )
+    .lines
+    .len() as u16;
+    let viewport = model.terminal_height - crate::app::detail_layout::CHROME_ROWS;
+    content_lines.saturating_sub(viewport)
+}
+
+#[test]
+fn refreshing_to_a_shorter_body_reclamps_scroll_so_page_up_stays_live() {
+    // `r` deliberately preserves the scroll offset across a refresh. When the
+    // refetched body comes back shorter, the preserved offset can sit past the
+    // new content's last screenful — it must re-clamp when the body arrives,
+    // or the user's next PageUp presses are visually dead unwinding phantom
+    // offset (the same drift bug the over-scroll test guards against on the
+    // PageDown path).
+    let mut model = model_with_one_pr();
+    model.terminal_height = crate::app::detail_layout::CHROME_ROWS + 6;
+    update(&mut model, key_event(KeyCode::Enter));
+    let tall: String = (1..=40).map(|n| format!("Line {n}\n\n")).collect();
+    update(
+        &mut model,
+        Msg::PRDetailArrived {
+            pr: pr_key_42(),
+            body: tall,
+        },
+    );
+    for _ in 0..50 {
+        update(&mut model, key_event(KeyCode::PageDown));
+    }
+    assert!(
+        detail_scroll(&model) > 20,
+        "precondition: scrolled deep into the tall body"
+    );
+
+    update(&mut model, key_event(KeyCode::Char('r')));
+    update(
+        &mut model,
+        Msg::PRDetailArrived {
+            pr: pr_key_42(),
+            body: "Short.".to_owned(),
+        },
+    );
+
+    assert_eq!(
+        detail_scroll(&model),
+        max_detail_scroll(&model),
+        "the preserved offset must re-clamp to the shorter refreshed content"
+    );
+}
+
+#[test]
+fn threads_arrival_that_shrinks_the_content_reclamps_scroll() {
+    // Scrolled to the bottom of a view whose threads section is long; a fresh
+    // (empty) thread list shortens the content, so the offset must follow it
+    // down — not strand past the new end.
+    let mut model = tall_focusable_detail_model();
+    for _ in 0..50 {
+        update(&mut model, key_event(KeyCode::PageDown));
+    }
+    let deep_scroll = detail_scroll(&model);
+
+    update(
+        &mut model,
+        Msg::ThreadsArrived {
+            pr: pr_key_42(),
+            threads: Vec::new(),
+        },
+    );
+
+    let max_scroll = max_detail_scroll(&model);
+    assert!(
+        max_scroll < deep_scroll,
+        "precondition: dropping the thread cards must shorten the content"
+    );
+    assert_eq!(
+        detail_scroll(&model),
+        max_scroll,
+        "the scroll must re-clamp when arriving threads shrink the content"
+    );
+}
+
+#[test]
+fn growing_the_terminal_reclamps_the_detail_scroll() {
+    // A taller terminal shrinks the max scroll (more content fits per
+    // screenful); the stored offset must follow it down so the next PageUp
+    // visibly moves.
+    let mut model = tall_focusable_detail_model();
+    for _ in 0..50 {
+        update(&mut model, key_event(KeyCode::PageDown));
+    }
+    let small_viewport_scroll = detail_scroll(&model);
+
+    update(
+        &mut model,
+        Msg::TerminalEvent(ratatui::crossterm::event::Event::Resize(80, 40)),
+    );
+
+    let max_scroll = max_detail_scroll(&model);
+    assert!(
+        max_scroll < small_viewport_scroll,
+        "precondition: the taller viewport must lower the max scroll"
+    );
+    assert_eq!(
+        detail_scroll(&model),
+        max_scroll,
+        "a resize must re-clamp the detail scroll to the new viewport"
+    );
+}
+
 #[test]
 fn esc_in_detail_drops_scroll_with_the_detail_state() {
     let mut model = scrollable_detail_model();

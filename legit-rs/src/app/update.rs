@@ -480,17 +480,13 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
             }
         }
         // Toggle resolved-thread visibility (hidden by default). The sequence
-        // can shrink, so the focus re-clamps and the scroll re-clamps with it.
+        // can shrink; `normalize_detail` re-clamps the focus and scroll.
         KeyCode::Char('t') => {
             model.show_resolved = !model.show_resolved;
-            clamp_detail_focus(model);
-            clamp_detail_scroll(model);
         }
-        // Toggle bot-comment visibility (shown by default). Same re-clamps.
+        // Toggle bot-comment visibility (shown by default).
         KeyCode::Char('b') => {
             model.show_bot_comments = !model.show_bot_comments;
-            clamp_detail_focus(model);
-            clamp_detail_scroll(model);
         }
         // Open the focused item in the browser: a thread/reply/comment opens
         // its deep link; the body opens the PR itself.
@@ -527,12 +523,12 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
             move_detail_focus(model, -1);
             scroll_detail_focus_into_view(model);
         }
-        // Page down
+        // Page down. `normalize_detail` clamps the offset to the last
+        // screenful, so a held PageDown can't drift past the end.
         KeyCode::PageDown => {
             if let ViewMode::Detail(detail) = &mut model.view_mode {
                 detail.scroll = detail.scroll.saturating_add(DETAIL_SCROLL_PAGE);
             }
-            clamp_detail_scroll(model);
         }
         // Page up
         KeyCode::PageUp => {
@@ -545,7 +541,29 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
     Vec::new()
 }
 
+/// Re-establish the open detail view's invariants after a state change: the
+/// focused index stays inside the focus sequence (threads/comments arriving or
+/// filters hiding items can shrink it), and the scroll offset never sits more
+/// than one screenful above the last content line (a refresh returning a
+/// shorter body, a shrinking sequence, or a taller terminal can all strand
+/// it — and PageUp deliberately doesn't clamp, so a stranded offset reads as
+/// dead keypresses). Runs once at the end of every `update` rather than at
+/// each mutation site, so no message path can forget it. A no-op outside
+/// Detail mode, and cheap while the body hasn't arrived.
+fn normalize_detail(model: &mut Model) {
+    clamp_detail_focus(model);
+    clamp_detail_scroll(model);
+}
+
 pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
+    let cmds = apply(model, msg);
+    normalize_detail(model);
+    cmds
+}
+
+/// The reducer's message dispatch. Detail-view invariant maintenance lives in
+/// `update`'s `normalize_detail` pass, not in the individual arms.
+fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
     match msg {
         Msg::TerminalEvent(Event::Key(key)) => {
             if key.kind != KeyEventKind::Press {
@@ -651,9 +669,6 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
         Msg::ThreadsArrived { pr, threads } => {
             model.enrichment.review_threads.insert(pr, threads);
             model.refresh_blockers();
-            // The detail focus sequence is built from these threads; a shorter
-            // list can strand the focus past the end.
-            clamp_detail_focus(model);
             Vec::new()
         }
         Msg::ReviewsArrived { pr, reviews } => {
@@ -675,8 +690,6 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
         }
         Msg::IssueCommentsArrived { pr, comments } => {
             model.enrichment.issue_comments.insert(pr, comments);
-            // Same focus-clamp rule as ThreadsArrived: the sequence may shrink.
-            clamp_detail_focus(model);
             Vec::new()
         }
         Msg::FilesArrived { pr, files } => {
