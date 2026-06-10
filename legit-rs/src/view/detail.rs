@@ -329,10 +329,20 @@ pub(crate) fn detail_content(
 ) -> DetailContent {
     let key = pr.key();
     let filters = model.detail_filters();
+    let threads = model.enrichment.review_threads.get(&key);
+    let comments = model.enrichment.issue_comments.get(&key);
     let mut content = DetailContent {
         lines: Vec::new(),
         item_ranges: Vec::new(),
     };
+
+    // The cards come straight from the focusable-items sequence, so the
+    // recorded ranges align with the focus indices by construction.
+    let items = detail_items::focusable_items(
+        threads.map_or(&[][..], Vec::as_slice),
+        comments.map_or(&[][..], Vec::as_slice),
+        filters,
+    );
 
     // Item 0: the body. Unstyled — no border even focused, matching the TS
     // DetailView where only thread/reply/comment cards are framed.
@@ -342,83 +352,88 @@ pub(crate) fn detail_content(
     content.lines.extend(checks_section_lines(model, pr));
 
     // ── Review Threads ──
-    match model.enrichment.review_threads.get(&key) {
+    match threads {
         None => content
             .lines
             .extend(loading_placeholder("Loading threads…")),
         Some(threads) if threads.is_empty() => {}
         Some(threads) => {
-            let visible = detail_items::visible_threads(threads, filters);
+            let visible = detail_items::visible_threads(threads, filters).len();
             content.lines.push(Line::from(""));
-            content
-                .lines
-                .push(threads_header(threads.len(), visible.len()));
-            if visible.is_empty() {
+            content.lines.push(threads_header(threads.len(), visible));
+            if visible == 0 {
                 content.lines.push(Line::from(Span::styled(
                     "All threads resolved or hidden.",
                     Style::default().fg(Color::DarkGray),
                 )));
             }
-            for thread in visible {
-                let mut thread_comments =
-                    detail_items::visible_thread_comments(thread, filters).into_iter();
-                if let Some(root) = thread_comments.next() {
-                    let location = match thread.line {
-                        Some(line) => format!("{}:{line}", thread.path),
-                        None => thread.path.clone(),
-                    };
-                    let mut card = vec![
-                        Line::from(vec![
-                            Span::styled(location, Style::default().fg(Color::Cyan)),
-                            thread_badge(thread),
-                        ]),
-                        comment_byline(&root.author, root.is_bot, root.created_at, now),
-                    ];
-                    card.extend(markdown::render(&root.body));
-                    let focused = content.item_ranges.len() == focused_index;
-                    content.push_card(card, focused, 0, width);
-                }
-                // Replies: each visible comment after the root is its own
-                // indented card with an ↳ byline (mirrors the TS `ReplyRow`).
-                for reply in thread_comments {
-                    let mut byline =
-                        comment_byline(&reply.author, reply.is_bot, reply.created_at, now);
-                    byline
-                        .spans
-                        .insert(0, Span::styled("↳ ", Style::default().fg(Color::DarkGray)));
-                    let mut card = vec![byline];
-                    card.extend(markdown::render(&reply.body));
-                    let focused = content.item_ranges.len() == focused_index;
-                    content.push_card(card, focused, 2, width);
-                }
+        }
+    }
+    for (index, item) in items.iter().enumerate() {
+        let focused = index == focused_index;
+        match item {
+            detail_items::FocusableItem::Thread { thread, root } => {
+                let location = match thread.line {
+                    Some(line) => format!("{}:{line}", thread.path),
+                    None => thread.path.clone(),
+                };
+                let mut card = vec![
+                    Line::from(vec![
+                        Span::styled(location, Style::default().fg(Color::Cyan)),
+                        thread_badge(thread),
+                    ]),
+                    comment_byline(&root.author, root.is_bot, root.created_at, now),
+                ];
+                card.extend(markdown::render(&root.body));
+                content.push_card(card, focused, 0, width);
             }
+            // Replies: each visible comment after the root is its own indented
+            // card with an ↳ byline (mirrors the TS `ReplyRow`).
+            detail_items::FocusableItem::Reply { comment } => {
+                let mut byline =
+                    comment_byline(&comment.author, comment.is_bot, comment.created_at, now);
+                byline
+                    .spans
+                    .insert(0, Span::styled("↳ ", Style::default().fg(Color::DarkGray)));
+                let mut card = vec![byline];
+                card.extend(markdown::render(&comment.body));
+                content.push_card(card, focused, 2, width);
+            }
+            detail_items::FocusableItem::Body | detail_items::FocusableItem::Comment { .. } => {}
         }
     }
 
     // ── Conversation ──
-    match model.enrichment.issue_comments.get(&key) {
+    match comments {
         None => content
             .lines
             .extend(loading_placeholder("Loading comments…")),
         Some(comments) if comments.is_empty() => {}
         Some(comments) => {
-            let visible = detail_items::visible_comments(comments, filters);
             content.lines.push(Line::from(""));
-            content.lines.push(conversation_header(visible.len()));
-            for comment in visible {
-                let mut card = vec![comment_byline(
-                    &comment.author,
-                    comment.is_bot,
-                    comment.created_at,
-                    now,
-                )];
-                card.extend(markdown::render(&comment.body));
-                let focused = content.item_ranges.len() == focused_index;
-                content.push_card(card, focused, 0, width);
-            }
+            content.lines.push(conversation_header(
+                detail_items::visible_comments(comments, filters).len(),
+            ));
+        }
+    }
+    for (index, item) in items.iter().enumerate() {
+        if let detail_items::FocusableItem::Comment { comment } = item {
+            let mut card = vec![comment_byline(
+                &comment.author,
+                comment.is_bot,
+                comment.created_at,
+                now,
+            )];
+            card.extend(markdown::render(&comment.body));
+            content.push_card(card, index == focused_index, 0, width);
         }
     }
 
+    debug_assert_eq!(
+        content.item_ranges.len(),
+        items.len(),
+        "every focusable item must have a recorded line range"
+    );
     content
 }
 
