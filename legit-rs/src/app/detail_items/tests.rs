@@ -1,9 +1,19 @@
 use chrono::{TimeZone, Utc};
 
 use crate::{
-    app::detail_items::{DetailFilters, FocusableItem, focusable_items, visible_threads},
+    app::detail_items::{DetailFilters, DetailItems, FocusableItem},
     github::types::{FullReviewThread, IssueComment, ReviewComment},
 };
+
+/// The flattened focus sequence for arrived `threads` + `comments` — the shape
+/// every consumer reads, so the tests assert through it.
+fn focusable_items<'a>(
+    threads: &'a [FullReviewThread],
+    comments: &'a [IssueComment],
+    filters: DetailFilters,
+) -> Vec<FocusableItem<'a>> {
+    DetailItems::derive(Some(threads), Some(comments), filters).focusable()
+}
 
 /// Defaults matching a fresh `Model`: resolved hidden, bots shown.
 const DEFAULTS: DetailFilters = DetailFilters {
@@ -44,13 +54,13 @@ fn issue_comment(id: u64, author: &str, is_bot: bool) -> IssueComment {
 }
 
 /// A compact signature of the sequence for order assertions: B = body,
-/// T:<id> = thread root, R:<id> = reply, C:<id> = issue comment.
+/// T:<root comment id> = thread root, R:<id> = reply, C:<id> = issue comment.
 fn signature(items: &[FocusableItem<'_>]) -> Vec<String> {
     items
         .iter()
         .map(|item| match item {
             FocusableItem::Body => "B".to_owned(),
-            FocusableItem::Thread { thread, .. } => format!("T:{}", thread.id),
+            FocusableItem::Thread { root } => format!("T:{}", root.id),
             FocusableItem::Reply { comment } => format!("R:{}", comment.id),
             FocusableItem::Comment { comment } => format!("C:{}", comment.id),
         })
@@ -74,7 +84,7 @@ fn sequence_is_body_then_thread_roots_with_replies_then_comments() {
 
     let items = focusable_items(&threads, &comments, DEFAULTS);
 
-    assert_eq!(signature(&items), ["B", "T:t1", "R:c2", "T:t2", "C:10"]);
+    assert_eq!(signature(&items), ["B", "T:c1", "R:c2", "T:c3", "C:10"]);
 }
 
 #[test]
@@ -85,7 +95,7 @@ fn resolved_threads_hidden_by_default_and_shown_when_toggled() {
     ];
 
     let hidden = focusable_items(&threads, &[], DEFAULTS);
-    assert_eq!(signature(&hidden), ["B", "T:open"]);
+    assert_eq!(signature(&hidden), ["B", "T:c1"]);
 
     let shown = focusable_items(
         &threads,
@@ -95,7 +105,7 @@ fn resolved_threads_hidden_by_default_and_shown_when_toggled() {
             ..DEFAULTS
         },
     );
-    assert_eq!(signature(&shown), ["B", "T:open", "T:done"]);
+    assert_eq!(signature(&shown), ["B", "T:c1", "T:c2"]);
 }
 
 #[test]
@@ -126,7 +136,7 @@ fn hiding_bots_drops_bot_replies_and_bot_only_threads() {
     let bots_shown = focusable_items(&threads, &comments, DEFAULTS);
     assert_eq!(
         signature(&bots_shown),
-        ["B", "T:mixed", "R:c1", "T:botonly", "C:10", "C:11"]
+        ["B", "T:bot1", "R:c1", "T:bot2", "C:10", "C:11"]
     );
 
     let bots_hidden = focusable_items(
@@ -137,12 +147,9 @@ fn hiding_bots_drops_bot_replies_and_bot_only_threads() {
             ..DEFAULTS
         },
     );
-    assert_eq!(signature(&bots_hidden), ["B", "T:mixed", "C:10"]);
-    // The mixed thread's root is now the first *visible* comment.
-    match &bots_hidden[1] {
-        FocusableItem::Thread { root, .. } => assert_eq!(root.id, "c1"),
-        other => panic!("expected thread root, got {other:?}"),
-    }
+    // The mixed thread's root is now the first *visible* comment (c1, not the
+    // filtered bot root), and the bot-only thread disappears.
+    assert_eq!(signature(&bots_hidden), ["B", "T:c1", "C:10"]);
 }
 
 #[test]
@@ -152,7 +159,8 @@ fn empty_threads_are_never_focusable() {
     let items = focusable_items(&threads, &[], DEFAULTS);
 
     assert_eq!(signature(&items), ["B"]);
-    assert!(visible_threads(&threads, DEFAULTS).is_empty());
+    let derived = DetailItems::derive(Some(&threads), None, DEFAULTS);
+    assert!(derived.threads.expect("threads arrived").groups.is_empty());
 }
 
 #[test]

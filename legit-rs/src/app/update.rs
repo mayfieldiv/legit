@@ -314,9 +314,12 @@ fn detail_focusable_len(model: &Model) -> usize {
     let ViewMode::Detail(detail) = &model.view_mode else {
         return 0;
     };
-    let threads = model.enrichment.threads_for(&detail.key).unwrap_or(&[]);
-    let comments = model.enrichment.comments_for(&detail.key).unwrap_or(&[]);
-    detail_items::focusable_items(threads, comments, model.detail_filters()).len()
+    detail_items::DetailItems::derive(
+        model.enrichment.threads_for(&detail.key),
+        model.enrichment.comments_for(&detail.key),
+        model.detail_filters(),
+    )
+    .focusable_len()
 }
 
 /// Step the detail focus by `delta`, clamped to the focusable sequence
@@ -347,12 +350,15 @@ fn detail_focused_item_url(model: &Model) -> Option<String> {
     let ViewMode::Detail(detail) = &model.view_mode else {
         return None;
     };
-    let threads = model.enrichment.threads_for(&detail.key).unwrap_or(&[]);
-    let comments = model.enrichment.comments_for(&detail.key).unwrap_or(&[]);
-    detail_items::focusable_items(threads, comments, model.detail_filters())
-        .get(detail.focused_index)
-        .and_then(detail_items::FocusableItem::url)
-        .map(str::to_owned)
+    detail_items::DetailItems::derive(
+        model.enrichment.threads_for(&detail.key),
+        model.enrichment.comments_for(&detail.key),
+        model.detail_filters(),
+    )
+    .focusable()
+    .get(detail.focused_index)
+    .and_then(detail_items::FocusableItem::url)
+    .map(str::to_owned)
 }
 
 /// The URL `o` opens for the detail view's focused item: the focused
