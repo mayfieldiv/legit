@@ -314,16 +314,8 @@ fn detail_focusable_len(model: &Model) -> usize {
     let ViewMode::Detail(detail) = &model.view_mode else {
         return 0;
     };
-    let threads = model
-        .enrichment
-        .review_threads
-        .get(&detail.key)
-        .map_or(&[][..], Vec::as_slice);
-    let comments = model
-        .enrichment
-        .issue_comments
-        .get(&detail.key)
-        .map_or(&[][..], Vec::as_slice);
+    let threads = model.enrichment.threads_for(&detail.key).unwrap_or(&[]);
+    let comments = model.enrichment.comments_for(&detail.key).unwrap_or(&[]);
     detail_items::focusable_items(threads, comments, model.detail_filters()).len()
 }
 
@@ -355,16 +347,8 @@ fn detail_focused_item_url(model: &Model) -> Option<String> {
     let ViewMode::Detail(detail) = &model.view_mode else {
         return None;
     };
-    let threads = model
-        .enrichment
-        .review_threads
-        .get(&detail.key)
-        .map_or(&[][..], Vec::as_slice);
-    let comments = model
-        .enrichment
-        .issue_comments
-        .get(&detail.key)
-        .map_or(&[][..], Vec::as_slice);
+    let threads = model.enrichment.threads_for(&detail.key).unwrap_or(&[]);
+    let comments = model.enrichment.comments_for(&detail.key).unwrap_or(&[]);
     detail_items::focusable_items(threads, comments, model.detail_filters())
         .get(detail.focused_index)
         .and_then(detail_items::FocusableItem::url)

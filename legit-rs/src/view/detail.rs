@@ -331,8 +331,8 @@ pub(crate) fn detail_content(
     let focused_index = detail.focused_index;
     let key = pr.key();
     let filters = model.detail_filters();
-    let threads = model.enrichment.review_threads.get(&key);
-    let comments = model.enrichment.issue_comments.get(&key);
+    let threads = model.enrichment.threads_for(&key);
+    let comments = model.enrichment.comments_for(&key);
     let mut content = DetailContent {
         lines: Vec::new(),
         item_ranges: Vec::new(),
@@ -340,11 +340,8 @@ pub(crate) fn detail_content(
 
     // The cards come straight from the focusable-items sequence, so the
     // recorded ranges align with the focus indices by construction.
-    let items = detail_items::focusable_items(
-        threads.map_or(&[][..], Vec::as_slice),
-        comments.map_or(&[][..], Vec::as_slice),
-        filters,
-    );
+    let items =
+        detail_items::focusable_items(threads.unwrap_or(&[]), comments.unwrap_or(&[]), filters);
 
     // Item 0: the body. Unstyled — no border even focused, matching the TS
     // DetailView where only thread/reply/comment cards are framed.

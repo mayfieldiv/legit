@@ -86,6 +86,19 @@ pub struct Enrichment {
 }
 
 impl Enrichment {
+    /// The review threads fetched for `pr`, or `None` until `ThreadsArrived`.
+    /// Callers that don't care about arrival (focus math) `unwrap_or(&[])`;
+    /// the detail view distinguishes `None` (loading placeholder) from empty.
+    pub fn threads_for(&self, pr: &PrKey) -> Option<&[FullReviewThread]> {
+        self.review_threads.get(pr).map(Vec::as_slice)
+    }
+
+    /// The issue comments fetched for `pr`, or `None` until
+    /// `IssueCommentsArrived`. Same `None`-vs-empty contract as `threads_for`.
+    pub fn comments_for(&self, pr: &PrKey) -> Option<&[IssueComment]> {
+        self.issue_comments.get(pr).map(Vec::as_slice)
+    }
+
     /// The check runs fetched for `pr`'s head commit, or `None` until they
     /// arrive. The `checks` map is keyed by (repo slug, head SHA) — not `PrKey`
     /// — because check runs are repo-scoped on GitHub (a fork PR shares its
