@@ -605,6 +605,48 @@ fn filter_toggles_persist_across_detail_views() {
     assert!(!model.show_bot_comments, "b survives re-entering detail");
 }
 
+// ── Enter toggles card expansion ────────────────────────────────────────────
+
+/// The expansion set of the open detail view; panics if not in Detail mode.
+fn detail_expanded(model: &crate::app::model::Model) -> &std::collections::HashSet<String> {
+    match &model.view_mode {
+        ViewMode::Detail(detail) => &detail.expanded,
+        ViewMode::List => panic!("expected Detail mode"),
+    }
+}
+
+#[test]
+fn enter_toggles_the_focused_cards_expansion() {
+    let mut model = focusable_detail_model();
+    update(&mut model, key_event(KeyCode::Char('j'))); // thread root (c1)
+
+    update(&mut model, key_event(KeyCode::Enter));
+    assert!(
+        detail_expanded(&model).contains("https://example.test/r/c1"),
+        "enter must mark the focused card expanded"
+    );
+
+    update(&mut model, key_event(KeyCode::Enter));
+    assert!(
+        detail_expanded(&model).is_empty(),
+        "a second enter must collapse the card again"
+    );
+}
+
+#[test]
+fn enter_on_the_body_does_not_touch_expansion_state() {
+    let mut model = focusable_detail_model();
+    assert_eq!(detail_focus(&model), 0);
+
+    let cmds = update(&mut model, key_event(KeyCode::Enter));
+
+    assert!(cmds.is_empty(), "enter on the body dispatches nothing");
+    assert!(
+        detail_expanded(&model).is_empty(),
+        "the body has no expansion state to toggle"
+    );
+}
+
 // ── Scroll follows focus ────────────────────────────────────────────────────
 
 /// The line range the focused item occupies, via the same layout the view
@@ -618,7 +660,7 @@ fn focused_item_range(model: &crate::app::model::Model) -> std::ops::Range<usize
         model,
         pr,
         detail.body.as_ref().expect("body arrived"),
-        detail.focused_index,
+        detail,
         model.terminal_width,
         chrono::DateTime::UNIX_EPOCH,
     );
@@ -685,7 +727,7 @@ fn scroll_clamp_covers_the_thread_and_conversation_sections() {
         &model,
         pr,
         detail.body.as_ref().expect("body arrived"),
-        detail.focused_index,
+        detail,
         model.terminal_width,
         chrono::DateTime::UNIX_EPOCH,
     )
@@ -745,7 +787,7 @@ fn over_scrolling_clamps_to_the_last_screenful_and_page_up_stays_live() {
         &model,
         pr,
         detail.body.as_ref().expect("body arrived"),
-        detail.focused_index,
+        detail,
         model.terminal_width,
         chrono::DateTime::UNIX_EPOCH,
     )

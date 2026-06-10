@@ -318,15 +318,17 @@ impl DetailContent {
 /// checks section, then the Review Threads and Conversation sections as
 /// focusable cards filtered by `Model::detail_filters`. Sections whose fetch
 /// hasn't landed render a loading placeholder; arrived-empty sections render
-/// nothing.
+/// nothing. Card bodies longer than `COLLAPSED_CARD_BODY_ROWS` collapse unless
+/// their URL is in `detail.expanded` (Enter toggles).
 pub(crate) fn detail_content(
     model: &Model,
     pr: &PR,
     description: &[Line<'static>],
-    focused_index: usize,
+    detail: &DetailState,
     width: u16,
     now: DateTime<Utc>,
 ) -> DetailContent {
+    let focused_index = detail.focused_index;
     let key = pr.key();
     let filters = model.detail_filters();
     let threads = model.enrichment.review_threads.get(&key);
@@ -384,7 +386,10 @@ pub(crate) fn detail_content(
                     ]),
                     comment_byline(&root.author, root.is_bot, root.created_at, now),
                 ];
-                card.extend(markdown::render(&root.body));
+                card.extend(collapse_body(
+                    markdown::render(&root.body),
+                    detail.expanded.contains(&root.url),
+                ));
                 content.push_card(card, focused, 0, width);
             }
             // Replies: each visible comment after the root is its own indented
@@ -396,7 +401,10 @@ pub(crate) fn detail_content(
                     .spans
                     .insert(0, Span::styled("↳ ", Style::default().fg(Color::DarkGray)));
                 let mut card = vec![byline];
-                card.extend(markdown::render(&comment.body));
+                card.extend(collapse_body(
+                    markdown::render(&comment.body),
+                    detail.expanded.contains(&comment.url),
+                ));
                 content.push_card(card, focused, 2, width);
             }
             detail_items::FocusableItem::Body | detail_items::FocusableItem::Comment { .. } => {}
@@ -424,7 +432,10 @@ pub(crate) fn detail_content(
                 comment.created_at,
                 now,
             )];
-            card.extend(markdown::render(&comment.body));
+            card.extend(collapse_body(
+                markdown::render(&comment.body),
+                detail.expanded.contains(&comment.url),
+            ));
             content.push_card(card, index == focused_index, 0, width);
         }
     }
@@ -435,6 +446,27 @@ pub(crate) fn detail_content(
         "every focusable item must have a recorded line range"
     );
     content
+}
+
+/// Rows of a card's markdown body shown while collapsed. Long comment bodies
+/// (bot dumps, pasted logs) would otherwise dominate the page; Enter expands
+/// the focused card (the TUI stand-in for the TS `details-store` toggle).
+const COLLAPSED_CARD_BODY_ROWS: usize = 6;
+
+/// Cap a card's body at `COLLAPSED_CARD_BODY_ROWS` lines unless expanded,
+/// appending a muted marker advertising the hidden tail.
+fn collapse_body(body: Vec<Line<'static>>, expanded: bool) -> Vec<Line<'static>> {
+    if expanded || body.len() <= COLLAPSED_CARD_BODY_ROWS {
+        return body;
+    }
+    let hidden = body.len() - COLLAPSED_CARD_BODY_ROWS;
+    let mut out = body;
+    out.truncate(COLLAPSED_CARD_BODY_ROWS);
+    out.push(Line::from(Span::styled(
+        format!("… +{hidden} more lines — enter expands"),
+        Style::default().fg(Color::DarkGray),
+    )));
+    out
 }
 
 /// The Review Threads section header: visible count plus a hidden count when
@@ -483,14 +515,7 @@ fn render_body(
     area: Rect,
     now: DateTime<Utc>,
 ) {
-    let content = detail_content(
-        model,
-        pr,
-        description,
-        detail.focused_index,
-        area.width,
-        now,
-    );
+    let content = detail_content(model, pr, description, detail, area.width, now);
 
     let content_lines = content.lines.len() as u16;
     let viewport_rows = area.height;

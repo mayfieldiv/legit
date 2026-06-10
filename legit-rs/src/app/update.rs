@@ -295,6 +295,7 @@ fn handle_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
                     body: None,
                     scroll: 0,
                     focused_index: 0,
+                    expanded: std::collections::HashSet::new(),
                 });
                 return cmds;
             }
@@ -348,10 +349,9 @@ fn clamp_detail_focus(model: &mut Model) {
     }
 }
 
-/// The URL `o` opens for the detail view's focused item: the focused
-/// thread/reply/comment's deep link, or the PR's own URL from the body
-/// (mirrors the TS fallback to `openInBrowser(pr)`). `None` outside Detail.
-fn detail_focused_url(model: &Model) -> Option<String> {
+/// The deep-link URL of the detail view's focused thread/reply/comment, or
+/// `None` when the body is focused (or outside Detail mode).
+fn detail_focused_item_url(model: &Model) -> Option<String> {
     let ViewMode::Detail(detail) = &model.view_mode else {
         return None;
     };
@@ -365,12 +365,20 @@ fn detail_focused_url(model: &Model) -> Option<String> {
         .issue_comments
         .get(&detail.key)
         .map_or(&[][..], Vec::as_slice);
-    let items = detail_items::focusable_items(threads, comments, model.detail_filters());
-    let url = items
+    detail_items::focusable_items(threads, comments, model.detail_filters())
         .get(detail.focused_index)
         .and_then(detail_items::FocusableItem::url)
-        .map_or_else(|| detail.key.html_url(), str::to_owned);
-    Some(url)
+        .map(str::to_owned)
+}
+
+/// The URL `o` opens for the detail view's focused item: the focused
+/// thread/reply/comment's deep link, or the PR's own URL from the body
+/// (mirrors the TS fallback to `openInBrowser(pr)`). `None` outside Detail.
+fn detail_focused_url(model: &Model) -> Option<String> {
+    let ViewMode::Detail(detail) = &model.view_mode else {
+        return None;
+    };
+    Some(detail_focused_item_url(model).unwrap_or_else(|| detail.key.html_url()))
 }
 
 /// Measure the open detail view's body via the same `detail_content` layout
@@ -389,7 +397,7 @@ fn detail_layout(model: &Model) -> Option<crate::view::detail::DetailContent> {
         model,
         pr,
         description,
-        detail.focused_index,
+        detail,
         model.terminal_width,
         chrono::DateTime::UNIX_EPOCH,
     ))
@@ -499,6 +507,22 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
         KeyCode::Char('o') => {
             if let Some(url) = detail_focused_url(model) {
                 return vec![Cmd::OpenUrl { url }];
+            }
+        }
+        // Toggle the focused card's long-body expansion (collapsed by
+        // default; see `view::detail::collapse_body`). Keyed by the comment's
+        // URL, so the state survives filter toggles moving the indices. The
+        // body (no URL) has nothing to toggle. Expansion changes the content
+        // height, so the scroll re-clamps and the card stays in view.
+        KeyCode::Enter => {
+            if let Some(url) = detail_focused_item_url(model)
+                && let ViewMode::Detail(detail) = &mut model.view_mode
+            {
+                if !detail.expanded.remove(&url) {
+                    detail.expanded.insert(url);
+                }
+                clamp_detail_scroll(model);
+                scroll_detail_focus_into_view(model);
             }
         }
         // Focus forward/back: j/k (and arrows) cycle the focusable items —

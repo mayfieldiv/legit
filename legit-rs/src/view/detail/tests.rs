@@ -86,6 +86,7 @@ fn model_in_detail(pr: PR, body: &str) -> Model {
         body: Some(super::render_description_lines(body)),
         scroll: 0,
         focused_index: 0,
+        expanded: std::collections::HashSet::new(),
     });
     model
 }
@@ -108,6 +109,7 @@ fn model_in_detail_with_checks(pr: PR, body: &str, checks: Vec<CheckRun>) -> Mod
         body: Some(super::render_description_lines(body)),
         scroll: 0,
         focused_index: 0,
+        expanded: std::collections::HashSet::new(),
     });
     model.enrichment.checks.insert((repo_slug, sha), checks);
     model
@@ -194,6 +196,7 @@ fn detail_loading_state_shows_header_and_loading_placeholder() {
         body: None,
         scroll: 0,
         focused_index: 0,
+        expanded: std::collections::HashSet::new(),
     });
 
     // Tall enough for the 5-row header plus a body row for the placeholder.
@@ -654,6 +657,68 @@ fn detail_focused_reply_gets_a_border_without_shifting_the_layout() {
         !focused_rows[root_row].contains('│'),
         "unfocused cards must not render border chars: {:?}",
         focused_rows[root_row]
+    );
+}
+
+// ── Long-body collapse (enter expands) ──────────────────────────────────────
+
+#[test]
+fn detail_long_card_bodies_collapse_with_a_more_marker_until_expanded() {
+    let long_body: String = (1..=12).map(|n| format!("Para {n}\n\n")).collect();
+    let mut model = model_in_detail(sample_pr(), "The description.");
+    seed_comments(
+        &mut model,
+        vec![issue_comment(10, "carol", &long_body, false)],
+    );
+
+    let rows = buffer_text(&render_snapshot(&model, 80, 40));
+    assert!(
+        rows.iter().any(|r| r.contains("Para 1")),
+        "the collapsed card must show the body's first lines: {rows:?}"
+    );
+    assert!(
+        !rows.iter().any(|r| r.contains("Para 12")),
+        "the collapsed card must hide the body's tail: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|r| r.contains("more line")),
+        "a collapsed card must advertise its hidden lines: {rows:?}"
+    );
+
+    // Expanding (what Enter toggles) reveals the full body.
+    if let ViewMode::Detail(detail) = &mut model.view_mode {
+        detail
+            .expanded
+            .insert("https://github.com/acme/web/pull/42#issuecomment-10".to_owned());
+    }
+    let rows = buffer_text(&render_snapshot(&model, 80, 40));
+    assert!(
+        rows.iter().any(|r| r.contains("Para 12")),
+        "an expanded card must show the full body: {rows:?}"
+    );
+    assert!(
+        !rows.iter().any(|r| r.contains("more line")),
+        "an expanded card needs no truncation marker: {rows:?}"
+    );
+}
+
+#[test]
+fn detail_short_card_bodies_never_show_a_marker() {
+    let mut model = model_in_detail(sample_pr(), "The description.");
+    seed_comments(
+        &mut model,
+        vec![issue_comment(10, "carol", "Short and sweet.", false)],
+    );
+
+    let rows = buffer_text(&render_snapshot(&model, 80, 30));
+
+    assert!(
+        rows.iter().any(|r| r.contains("Short and sweet.")),
+        "short bodies render in full: {rows:?}"
+    );
+    assert!(
+        !rows.iter().any(|r| r.contains("more line")),
+        "short bodies never truncate: {rows:?}"
     );
 }
 

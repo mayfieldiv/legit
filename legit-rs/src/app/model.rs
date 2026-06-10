@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ratatui::text::Line;
 
@@ -55,6 +55,12 @@ pub struct DetailState {
     /// `j`/`k`/arrows move it; it's re-clamped whenever the sequence shrinks
     /// (threads/comments arriving, `t`/`b` filter toggles).
     pub focused_index: usize,
+    /// Cards whose long bodies the user expanded with Enter, keyed by the
+    /// comment's URL (unique per review/issue comment, and stable across
+    /// filter toggles — unlike a focus index). Lives in `DetailState` so
+    /// closing the view structurally resets every card to collapsed, mirroring
+    /// the TS details-store being dropped per PR.
+    pub expanded: HashSet<String>,
 }
 
 /// Per-PR enrichment landed by the GraphQL/REST fan-out. Keyed by `PrKey`
