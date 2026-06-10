@@ -85,6 +85,7 @@ fn model_in_detail(pr: PR, body: &str) -> Model {
         key,
         body: Some(super::render_description_lines(body)),
         scroll: 0,
+        focused_index: 0,
     });
     model
 }
@@ -106,6 +107,7 @@ fn model_in_detail_with_checks(pr: PR, body: &str, checks: Vec<CheckRun>) -> Mod
         key,
         body: Some(super::render_description_lines(body)),
         scroll: 0,
+        focused_index: 0,
     });
     model.enrichment.checks.insert((repo_slug, sha), checks);
     model
@@ -191,6 +193,7 @@ fn detail_loading_state_shows_header_and_loading_placeholder() {
         key,
         body: None,
         scroll: 0,
+        focused_index: 0,
     });
 
     // Tall enough for the 5-row header plus a body row for the placeholder.

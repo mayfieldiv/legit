@@ -6,6 +6,7 @@ use crate::{git_remote::RepoInfo, github::rest::PrKey, secret::Secret};
 
 use super::{
     cmd::{Cmd, RequestContext},
+    detail_items,
     model::{DetailState, FilesState, Model, RepoDetection, StatusKind, StatusMessage, ViewMode},
     msg::Msg,
 };
@@ -293,6 +294,7 @@ fn handle_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
                     key,
                     body: None,
                     scroll: 0,
+                    focused_index: 0,
                 });
                 return cmds;
             }
@@ -302,10 +304,49 @@ fn handle_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
     Vec::new()
 }
 
-/// Lines scrolled per `j`/`k`/arrow press in the detail body.
-const DETAIL_SCROLL_STEP: u16 = 1;
 /// Lines scrolled per PageUp/PageDown in the detail body.
 const DETAIL_SCROLL_PAGE: u16 = 10;
+
+/// How many items the open detail view's focus sequence holds (1 — just the
+/// body — while threads/comments haven't arrived). 0 outside Detail mode.
+fn detail_focusable_len(model: &Model) -> usize {
+    let ViewMode::Detail(detail) = &model.view_mode else {
+        return 0;
+    };
+    let threads = model
+        .enrichment
+        .review_threads
+        .get(&detail.key)
+        .map_or(&[][..], Vec::as_slice);
+    let comments = model
+        .enrichment
+        .issue_comments
+        .get(&detail.key)
+        .map_or(&[][..], Vec::as_slice);
+    detail_items::focusable_items(threads, comments, model.detail_filters()).len()
+}
+
+/// Step the detail focus by `delta`, clamped to the focusable sequence
+/// (`j`/`Down` forward, `k`/`Up` back). A no-op outside Detail mode.
+fn move_detail_focus(model: &mut Model, delta: isize) {
+    let len = detail_focusable_len(model);
+    if let ViewMode::Detail(detail) = &mut model.view_mode {
+        detail.focused_index = detail
+            .focused_index
+            .saturating_add_signed(delta)
+            .min(len.saturating_sub(1));
+    }
+}
+
+/// Re-clamp the detail focus after the focusable sequence may have shrunk
+/// (threads/comments arriving with fewer items, or a filter hiding the focused
+/// card). A no-op outside Detail mode.
+fn clamp_detail_focus(model: &mut Model) {
+    let len = detail_focusable_len(model);
+    if let ViewMode::Detail(detail) = &mut model.view_mode {
+        detail.focused_index = detail.focused_index.min(len.saturating_sub(1));
+    }
+}
 
 /// Clamp the open detail view's scroll offset so it can never sit more than one
 /// screenful above the last content line. The content is the cached
@@ -369,21 +410,11 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
                 return cmds;
             }
         }
-        // Scroll down: j, Down arrow. Clamp to the last screenful so a held key
-        // can't drift the offset past the content (which would make the next
-        // `k` presses appear dead until the offset works back down).
-        KeyCode::Char('j') | KeyCode::Down => {
-            if let ViewMode::Detail(detail) = &mut model.view_mode {
-                detail.scroll = detail.scroll.saturating_add(DETAIL_SCROLL_STEP);
-            }
-            clamp_detail_scroll(model);
-        }
-        // Scroll up: k, Up arrow
-        KeyCode::Char('k') | KeyCode::Up => {
-            if let ViewMode::Detail(detail) = &mut model.view_mode {
-                detail.scroll = detail.scroll.saturating_sub(DETAIL_SCROLL_STEP);
-            }
-        }
+        // Focus forward/back: j/k (and arrows) cycle the focusable items —
+        // body, thread roots, replies, issue comments — not the raw scroll
+        // offset (PageUp/PageDown still scroll).
+        KeyCode::Char('j') | KeyCode::Down => move_detail_focus(model, 1),
+        KeyCode::Char('k') | KeyCode::Up => move_detail_focus(model, -1),
         // Page down
         KeyCode::PageDown => {
             if let ViewMode::Detail(detail) = &mut model.view_mode {
@@ -507,6 +538,9 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
         Msg::ThreadsArrived { pr, threads } => {
             model.enrichment.review_threads.insert(pr, threads);
             model.refresh_blockers();
+            // The detail focus sequence is built from these threads; a shorter
+            // list can strand the focus past the end.
+            clamp_detail_focus(model);
             Vec::new()
         }
         Msg::ReviewsArrived { pr, reviews } => {
@@ -528,6 +562,8 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
         }
         Msg::IssueCommentsArrived { pr, comments } => {
             model.enrichment.issue_comments.insert(pr, comments);
+            // Same focus-clamp rule as ThreadsArrived: the sequence may shrink.
+            clamp_detail_focus(model);
             Vec::new()
         }
         Msg::FilesArrived { pr, files } => {

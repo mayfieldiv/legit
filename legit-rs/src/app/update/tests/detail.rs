@@ -1,3 +1,4 @@
+use chrono::TimeZone;
 use ratatui::crossterm::event::KeyCode;
 
 use ratatui::text::Line;
@@ -6,6 +7,7 @@ use crate::{
     app::{cmd::Cmd, model::ViewMode, msg::Msg, update::update},
     git_remote::RepoInfo,
     github::rest::PrKey,
+    github::types::{FullReviewThread, IssueComment, ReviewComment},
     secret::Secret,
 };
 
@@ -28,6 +30,14 @@ fn detail_body_text(model: &crate::app::model::Model) -> String {
             .iter()
             .flat_map(|line| line.spans.iter().map(|s| s.content.as_ref()))
             .collect(),
+        ViewMode::List => panic!("expected Detail mode"),
+    }
+}
+
+/// The focused item index of the open detail view; panics if not in Detail mode.
+fn detail_focus(model: &crate::app::model::Model) -> usize {
+    match &model.view_mode {
+        ViewMode::Detail(detail) => detail.focused_index,
         ViewMode::List => panic!("expected Detail mode"),
     }
 }
@@ -84,6 +94,63 @@ fn scrollable_detail_model() -> crate::app::model::Model {
     update(&mut model, key_event(KeyCode::Enter));
     let body: String = (1..=100).map(|n| format!("Line {n}\n\n")).collect();
     set_detail_body(&mut model, &body);
+    model
+}
+
+fn review_comment(id: &str, author: &str) -> ReviewComment {
+    ReviewComment {
+        id: id.to_owned(),
+        author: author.to_owned(),
+        body: format!("body of {id}"),
+        created_at: chrono::Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap(),
+        url: format!("https://example.test/r/{id}"),
+        is_bot: false,
+    }
+}
+
+/// Deliver one thread (root + one reply) and one issue comment to the open
+/// detail PR via the real enrichment messages, yielding the focus sequence
+/// body → thread root → reply → comment (4 items).
+fn seed_detail_enrichment(model: &mut crate::app::model::Model) {
+    let threads = vec![FullReviewThread {
+        id: "t1".to_owned(),
+        is_resolved: false,
+        path: "src/lib.rs".to_owned(),
+        line: Some(12),
+        comments: vec![review_comment("c1", "alice"), review_comment("c2", "bob")],
+    }];
+    let comments = vec![IssueComment {
+        id: 10,
+        author: "carol".to_owned(),
+        body: "Looks good.".to_owned(),
+        created_at: chrono::Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap(),
+        url: "https://example.test/c/10".to_owned(),
+        is_bot: false,
+    }];
+    update(
+        model,
+        Msg::ThreadsArrived {
+            pr: pr_key_42(),
+            threads,
+        },
+    );
+    update(
+        model,
+        Msg::IssueCommentsArrived {
+            pr: pr_key_42(),
+            comments,
+        },
+    );
+}
+
+/// A model in Detail with body arrived and the 4-item focus sequence seeded
+/// (body, thread root, reply, issue comment).
+fn focusable_detail_model() -> crate::app::model::Model {
+    let mut model = model_with_one_pr();
+    model.terminal_height = 30;
+    update(&mut model, key_event(KeyCode::Enter));
+    set_detail_body(&mut model, "The description.");
+    seed_detail_enrichment(&mut model);
     model
 }
 
@@ -271,34 +338,105 @@ fn entering_detail_starts_scroll_at_zero() {
     );
 }
 
+// ── Focus selection (j/k cycles the focusable items) ────────────────────────
+
 #[test]
-fn j_in_detail_increments_scroll() {
-    let mut model = scrollable_detail_model();
-    assert_eq!(detail_scroll(&model), 0);
+fn entering_detail_starts_focus_on_the_body() {
+    let mut model = model_with_one_pr();
 
-    update(&mut model, key_event(KeyCode::Char('j')));
-    assert_eq!(detail_scroll(&model), 1, "j must scroll down by 1");
+    update(&mut model, key_event(KeyCode::Enter));
 
-    update(&mut model, key_event(KeyCode::Char('j')));
-    assert_eq!(detail_scroll(&model), 2, "second j must scroll down again");
+    assert_eq!(
+        detail_focus(&model),
+        0,
+        "a freshly-entered detail view must focus the body (item 0)"
+    );
 }
 
 #[test]
-fn k_in_detail_decrements_scroll_and_clamps_at_zero() {
-    let mut model = scrollable_detail_model();
+fn j_advances_focus_through_items_and_clamps_at_the_last() {
+    // Sequence: body(0) -> thread root(1) -> reply(2) -> issue comment(3).
+    let mut model = focusable_detail_model();
+    assert_eq!(detail_focus(&model), 0);
+
+    update(&mut model, key_event(KeyCode::Char('j')));
+    assert_eq!(detail_focus(&model), 1, "j must focus the thread root");
+
+    update(&mut model, key_event(KeyCode::Char('j')));
+    assert_eq!(detail_focus(&model), 2, "j must focus the reply");
+
+    update(&mut model, key_event(KeyCode::Char('j')));
+    assert_eq!(detail_focus(&model), 3, "j must focus the issue comment");
+
+    update(&mut model, key_event(KeyCode::Char('j')));
+    assert_eq!(detail_focus(&model), 3, "j must clamp at the last item");
+}
+
+#[test]
+fn k_retreats_focus_and_clamps_at_the_body() {
+    let mut model = focusable_detail_model();
     update(&mut model, key_event(KeyCode::Char('j')));
     update(&mut model, key_event(KeyCode::Char('j')));
-    assert_eq!(detail_scroll(&model), 2);
+    assert_eq!(detail_focus(&model), 2);
 
     update(&mut model, key_event(KeyCode::Char('k')));
-    assert_eq!(detail_scroll(&model), 1, "k must scroll up by 1");
+    assert_eq!(detail_focus(&model), 1, "k must move focus back");
 
     update(&mut model, key_event(KeyCode::Char('k')));
     update(&mut model, key_event(KeyCode::Char('k')));
+    assert_eq!(detail_focus(&model), 0, "k must clamp at the body");
+}
+
+#[test]
+fn arrow_keys_move_focus_like_j_and_k() {
+    let mut model = focusable_detail_model();
+
+    update(&mut model, key_event(KeyCode::Down));
+    assert_eq!(detail_focus(&model), 1, "Down must advance focus");
+
+    update(&mut model, key_event(KeyCode::Up));
+    assert_eq!(detail_focus(&model), 0, "Up must retreat focus");
+}
+
+#[test]
+fn j_with_no_threads_or_comments_keeps_focus_on_the_body() {
+    // Only the body is focusable while enrichment hasn't arrived.
+    let mut model = model_with_one_pr();
+    update(&mut model, key_event(KeyCode::Enter));
+    set_detail_body(&mut model, "The description.");
+
+    update(&mut model, key_event(KeyCode::Char('j')));
+
     assert_eq!(
-        detail_scroll(&model),
+        detail_focus(&model),
         0,
-        "k must clamp at zero, not underflow"
+        "with a lone body item, j has nowhere to go"
+    );
+}
+
+#[test]
+fn threads_arrival_clamps_an_out_of_range_focus() {
+    // Focus the last item (the issue comment), then deliver a fresh thread
+    // list that removes the thread (and its reply) — the rebuilt sequence is
+    // body + comment (2 items), so focus must clamp into range.
+    let mut model = focusable_detail_model();
+    for _ in 0..3 {
+        update(&mut model, key_event(KeyCode::Char('j')));
+    }
+    assert_eq!(detail_focus(&model), 3);
+
+    update(
+        &mut model,
+        Msg::ThreadsArrived {
+            pr: pr_key_42(),
+            threads: Vec::new(),
+        },
+    );
+
+    assert_eq!(
+        detail_focus(&model),
+        1,
+        "focus must clamp to the last item of the rebuilt sequence"
     );
 }
 
@@ -329,32 +467,10 @@ fn page_up_in_detail_scrolls_by_ten_and_clamps_at_zero() {
 }
 
 #[test]
-fn down_arrow_in_detail_increments_scroll() {
-    let mut model = scrollable_detail_model();
-
-    update(&mut model, key_event(KeyCode::Down));
-    assert_eq!(detail_scroll(&model), 1, "Down arrow must scroll down by 1");
-}
-
-#[test]
-fn up_arrow_in_detail_decrements_scroll() {
-    let mut model = scrollable_detail_model();
-    update(&mut model, key_event(KeyCode::Down));
-    update(&mut model, key_event(KeyCode::Down));
-    assert_eq!(detail_scroll(&model), 2);
-
-    update(&mut model, key_event(KeyCode::Up));
-    assert_eq!(detail_scroll(&model), 1, "Up arrow must scroll up by 1");
-}
-
-#[test]
 fn esc_in_detail_drops_scroll_with_the_detail_state() {
     let mut model = scrollable_detail_model();
-    // Scroll down a few lines.
-    for _ in 0..5 {
-        update(&mut model, key_event(KeyCode::Char('j')));
-    }
-    assert_eq!(detail_scroll(&model), 5);
+    update(&mut model, key_event(KeyCode::PageDown));
+    assert_eq!(detail_scroll(&model), 10);
 
     update(&mut model, key_event(KeyCode::Esc));
 
@@ -364,11 +480,11 @@ fn esc_in_detail_drops_scroll_with_the_detail_state() {
 }
 
 #[test]
-fn over_scrolling_clamps_to_the_last_screenful_and_k_stays_live() {
-    // Regression for the unbounded-drift bug: holding `j` far past the end must
-    // pin the offset at the last screenful, not let it accumulate — otherwise
-    // the next `k` presses are visually dead until the inflated offset works
-    // back down into view.
+fn over_scrolling_clamps_to_the_last_screenful_and_page_up_stays_live() {
+    // Regression for the unbounded-drift bug: holding PageDown far past the end
+    // must pin the offset at the last screenful, not let it accumulate —
+    // otherwise the next PageUp presses are visually dead until the inflated
+    // offset works back down into view.
     // Reference the canonical chrome-row count so a future layout change keeps
     // this regression test in sync with the clamp it guards (rather than a
     // hardcoded literal that would silently desync).
@@ -386,9 +502,9 @@ fn over_scrolling_clamps_to_the_last_screenful_and_k_stays_live() {
     let max_scroll = content_lines - viewport_rows;
     assert!(max_scroll > 1, "test body must be taller than the viewport");
 
-    // Hold `j` far past the end.
+    // Hold PageDown far past the end.
     for _ in 0..(content_lines + 50) {
-        update(&mut model, key_event(KeyCode::Char('j')));
+        update(&mut model, key_event(KeyCode::PageDown));
     }
     assert_eq!(
         detail_scroll(&model),
@@ -396,12 +512,12 @@ fn over_scrolling_clamps_to_the_last_screenful_and_k_stays_live() {
         "over-scroll must clamp to the last screenful, not drift past it"
     );
 
-    // A single `k` must visibly move — it can't be eaten unwinding phantom
+    // A single PageUp must visibly move — it can't be eaten unwinding phantom
     // offset, because there is none.
-    update(&mut model, key_event(KeyCode::Char('k')));
+    update(&mut model, key_event(KeyCode::PageUp));
     assert_eq!(
         detail_scroll(&model),
-        max_scroll - 1,
-        "one k after over-scroll must decrement by exactly one"
+        max_scroll.saturating_sub(10),
+        "one PageUp after over-scroll must step back by exactly one page"
     );
 }

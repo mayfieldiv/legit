@@ -47,9 +47,14 @@ pub struct DetailState {
     /// show without a re-fetch.
     pub body: Option<Vec<Line<'static>>>,
     /// Vertical scroll offset for the body (lines scrolled past the top). Starts
-    /// at zero on entry; `update` mutates it on `j`/`k`/PageUp/PageDown/arrow
-    /// keys and clamps it so it can never sit past the last screenful.
+    /// at zero on entry; `update` mutates it on PageUp/PageDown (and to keep the
+    /// focused item visible) and clamps it so it can never sit past the last
+    /// screenful.
     pub scroll: u16,
+    /// Index into the `detail_items::focusable_items` sequence (0 = the body).
+    /// `j`/`k`/arrows move it; it's re-clamped whenever the sequence shrinks
+    /// (threads/comments arriving, `t`/`b` filter toggles).
+    pub focused_index: usize,
 }
 
 /// Per-PR enrichment landed by the GraphQL/REST fan-out. Keyed by `PrKey`
