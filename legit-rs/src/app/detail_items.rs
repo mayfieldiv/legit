@@ -55,10 +55,10 @@ impl FocusableItem<'_> {
 
 /// A thread's comments that survive the bot filter, in thread order. The first
 /// one is the card's root; the rest are replies.
-pub fn visible_thread_comments<'a>(
-    thread: &'a FullReviewThread,
+pub fn visible_thread_comments(
+    thread: &FullReviewThread,
     filters: DetailFilters,
-) -> Vec<&'a ReviewComment> {
+) -> Vec<&ReviewComment> {
     thread
         .comments
         .iter()
@@ -70,10 +70,10 @@ pub fn visible_thread_comments<'a>(
 /// resolved threads drop unless `show_resolved`, and a thread whose every
 /// comment is filtered out (bot-only with bots hidden, or empty) drops
 /// entirely.
-pub fn visible_threads<'a>(
-    threads: &'a [FullReviewThread],
+pub fn visible_threads(
+    threads: &[FullReviewThread],
     filters: DetailFilters,
-) -> Vec<&'a FullReviewThread> {
+) -> Vec<&FullReviewThread> {
     threads
         .iter()
         .filter(|t| filters.show_resolved || !t.is_resolved)
@@ -82,10 +82,7 @@ pub fn visible_threads<'a>(
 }
 
 /// The issue comments that render under the current filters, in arrival order.
-pub fn visible_comments<'a>(
-    comments: &'a [IssueComment],
-    filters: DetailFilters,
-) -> Vec<&'a IssueComment> {
+pub fn visible_comments(comments: &[IssueComment], filters: DetailFilters) -> Vec<&IssueComment> {
     comments
         .iter()
         .filter(|c| filters.show_bot_comments || !c.is_bot)
