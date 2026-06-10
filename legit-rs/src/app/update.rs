@@ -481,6 +481,19 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
                 return cmds;
             }
         }
+        // Toggle resolved-thread visibility (hidden by default). The sequence
+        // can shrink, so the focus re-clamps and the scroll re-clamps with it.
+        KeyCode::Char('t') => {
+            model.show_resolved = !model.show_resolved;
+            clamp_detail_focus(model);
+            clamp_detail_scroll(model);
+        }
+        // Toggle bot-comment visibility (shown by default). Same re-clamps.
+        KeyCode::Char('b') => {
+            model.show_bot_comments = !model.show_bot_comments;
+            clamp_detail_focus(model);
+            clamp_detail_scroll(model);
+        }
         // Open the focused item in the browser: a thread/reply/comment opens
         // its deep link; the body opens the PR itself.
         KeyCode::Char('o') => {

@@ -531,6 +531,80 @@ fn o_on_the_body_falls_back_to_the_pr_url() {
     );
 }
 
+// ── t / b filter toggles ────────────────────────────────────────────────────
+
+#[test]
+fn t_toggles_resolved_thread_visibility() {
+    let mut model = focusable_detail_model();
+    assert!(!model.show_resolved, "resolved threads hidden by default");
+
+    update(&mut model, key_event(KeyCode::Char('t')));
+    assert!(model.show_resolved, "t must reveal resolved threads");
+
+    update(&mut model, key_event(KeyCode::Char('t')));
+    assert!(!model.show_resolved, "t must toggle back off");
+}
+
+#[test]
+fn b_toggles_bot_comment_visibility() {
+    let mut model = focusable_detail_model();
+    assert!(model.show_bot_comments, "bot comments shown by default");
+
+    update(&mut model, key_event(KeyCode::Char('b')));
+    assert!(!model.show_bot_comments, "b must hide bot comments");
+
+    update(&mut model, key_event(KeyCode::Char('b')));
+    assert!(model.show_bot_comments, "b must toggle back on");
+}
+
+#[test]
+fn hiding_bots_clamps_a_focus_stranded_past_the_shrunk_sequence() {
+    // Make the trailing issue comment a bot, focus it, then hide bots: the
+    // sequence loses its last item and the focus must clamp back into range.
+    let mut model = focusable_detail_model();
+    update(
+        &mut model,
+        Msg::IssueCommentsArrived {
+            pr: pr_key_42(),
+            comments: vec![IssueComment {
+                id: 11,
+                author: "ci".to_owned(),
+                body: "bot says hi".to_owned(),
+                created_at: chrono::Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap(),
+                url: "https://example.test/c/11".to_owned(),
+                is_bot: true,
+            }],
+        },
+    );
+    for _ in 0..3 {
+        update(&mut model, key_event(KeyCode::Char('j')));
+    }
+    assert_eq!(detail_focus(&model), 3, "focused on the bot comment");
+
+    update(&mut model, key_event(KeyCode::Char('b')));
+
+    assert_eq!(
+        detail_focus(&model),
+        2,
+        "hiding bots must clamp the focus to the shrunk sequence"
+    );
+}
+
+#[test]
+fn filter_toggles_persist_across_detail_views() {
+    // The filters live on the Model, not the DetailState: leaving and
+    // re-entering detail must keep the user's t/b preferences.
+    let mut model = focusable_detail_model();
+    update(&mut model, key_event(KeyCode::Char('t')));
+    update(&mut model, key_event(KeyCode::Char('b')));
+
+    update(&mut model, key_event(KeyCode::Esc));
+    update(&mut model, key_event(KeyCode::Enter));
+
+    assert!(model.show_resolved, "t survives re-entering detail");
+    assert!(!model.show_bot_comments, "b survives re-entering detail");
+}
+
 // ── Scroll follows focus ────────────────────────────────────────────────────
 
 /// The line range the focused item occupies, via the same layout the view

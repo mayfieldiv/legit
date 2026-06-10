@@ -657,8 +657,155 @@ fn detail_focused_reply_gets_a_border_without_shifting_the_layout() {
     );
 }
 
+// ── Resolved / bot filters ──────────────────────────────────────────────────
+
+/// One unresolved + one resolved thread, for the t-toggle tests.
+fn model_with_mixed_resolution_threads() -> Model {
+    let mut model = model_in_detail(sample_pr(), "The description.");
+    seed_threads(
+        &mut model,
+        vec![
+            thread(
+                "open",
+                "src/lib.rs",
+                Some(12),
+                false,
+                vec![review_comment("c1", "alice", "Please rename this.")],
+            ),
+            thread(
+                "done",
+                "src/main.rs",
+                Some(3),
+                true,
+                vec![review_comment("c2", "bob", "Fixed in the next commit.")],
+            ),
+        ],
+    );
+    model
+}
+
 #[test]
-fn detail_status_bar_shows_jk_scroll_hint() {
+fn detail_hides_resolved_threads_by_default_and_counts_them_as_hidden() {
+    let model = model_with_mixed_resolution_threads();
+
+    let rows = buffer_text(&render_snapshot(&model, 80, 30));
+
+    assert!(
+        rows.iter().any(|r| r.contains("1 shown · 1 hidden")),
+        "header must count the hidden resolved thread: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|r| r.contains("src/lib.rs:12")),
+        "the unresolved thread must render: {rows:?}"
+    );
+    assert!(
+        !rows.iter().any(|r| r.contains("src/main.rs:3")),
+        "the resolved thread must be hidden by default: {rows:?}"
+    );
+}
+
+#[test]
+fn detail_shows_resolved_threads_when_toggled_on() {
+    let mut model = model_with_mixed_resolution_threads();
+    model.show_resolved = true;
+
+    let rows = buffer_text(&render_snapshot(&model, 80, 30));
+
+    assert!(
+        rows.iter().any(|r| r.contains("2 shown")),
+        "header must count both threads: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|r| r.contains("src/main.rs:3")),
+        "the resolved thread must render when shown: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|r| r.contains("✓ resolved")),
+        "the resolved badge must render: {rows:?}"
+    );
+}
+
+#[test]
+fn detail_hiding_bots_drops_bot_threads_replies_and_comments() {
+    let mut model = model_in_detail(sample_pr(), "The description.");
+    let bot_comment = |id: &str, body: &str| ReviewComment {
+        is_bot: true,
+        ..review_comment(id, "linter", body)
+    };
+    seed_threads(
+        &mut model,
+        vec![
+            // Human root with a bot reply: the reply disappears.
+            thread(
+                "mixed",
+                "src/lib.rs",
+                Some(12),
+                false,
+                vec![
+                    review_comment("c1", "alice", "Please rename this."),
+                    bot_comment("b1", "Lint: unused variable."),
+                ],
+            ),
+            // Bot-only thread: hidden entirely.
+            thread(
+                "botonly",
+                "src/main.rs",
+                Some(3),
+                false,
+                vec![bot_comment("b2", "Coverage decreased.")],
+            ),
+        ],
+    );
+    seed_comments(
+        &mut model,
+        vec![
+            issue_comment(10, "carol", "Looks good overall.", false),
+            issue_comment(11, "ci-reporter", "Coverage: 98%", true),
+        ],
+    );
+    model.show_bot_comments = false;
+
+    let rows = buffer_text(&render_snapshot(&model, 80, 36));
+
+    assert!(
+        rows.iter().any(|r| r.contains("1 shown · 1 hidden")),
+        "the bot-only thread must count as hidden: {rows:?}"
+    );
+    assert!(
+        !rows.iter().any(|r| r.contains("Lint: unused variable.")),
+        "bot replies must be hidden: {rows:?}"
+    );
+    assert!(
+        !rows.iter().any(|r| r.contains("src/main.rs:3")),
+        "the bot-only thread must be hidden: {rows:?}"
+    );
+    assert!(
+        !rows.iter().any(|r| r.contains("ci-reporter")),
+        "bot issue comments must be hidden: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|r| r.contains("1 comment")),
+        "the conversation header must count only visible comments: {rows:?}"
+    );
+}
+
+#[test]
+fn detail_status_bar_shows_focus_filter_and_open_hints() {
+    let model = model_in_detail(sample_pr(), "");
+
+    let rows = buffer_text(&render_snapshot(&model, 100, 10));
+    let status = rows.last().expect("status row");
+
+    for hint in ["o", "t", "b"] {
+        assert!(
+            status.split_whitespace().any(|word| word == hint),
+            "status bar must mention the {hint} key: {status:?}"
+        );
+    }
+}
+
+#[test]
+fn detail_status_bar_shows_jk_focus_hint() {
     let model = model_in_detail(sample_pr(), "");
 
     let terminal = render_snapshot(&model, 80, 10);

@@ -68,7 +68,7 @@ pub fn render(
     // header at once and only the body waits on the fetch. The loading
     // placeholder occupies just the body area until the body arrives.
     render_header(pr, frame, header_area, now);
-    render_status_bar(frame, status_area);
+    render_status_bar(model, frame, status_area);
 
     match &detail.body {
         None => render_loading(frame, body_area),
@@ -502,13 +502,29 @@ fn render_body(
 
 // ── Status bar ────────────────────────────────────────────────────────────────
 
-fn render_status_bar(frame: &mut Frame<'_>, area: Rect) {
+fn render_status_bar(model: &Model, frame: &mut Frame<'_>, area: Rect) {
     let bold = Style::default().add_modifier(Modifier::BOLD);
+    let resolved_hint = if model.show_resolved {
+        " hide resolved  "
+    } else {
+        " show resolved  "
+    };
+    let bots_hint = if model.show_bot_comments {
+        " hide bots  "
+    } else {
+        " show bots  "
+    };
     let hints = Line::from(vec![
         Span::styled("esc", bold),
         Span::raw(" back  "),
         Span::styled("j/k", bold),
-        Span::raw(" scroll  "),
+        Span::raw(" focus  "),
+        Span::styled("o", bold),
+        Span::raw(" open  "),
+        Span::styled("t", bold),
+        Span::raw(resolved_hint),
+        Span::styled("b", bold),
+        Span::raw(bots_hint),
         Span::styled("r", bold),
         Span::raw(" refresh"),
     ]);
