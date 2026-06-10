@@ -6,6 +6,7 @@ use crate::{
     git_remote::RepoInfo,
     github::rest::{PR, PRState},
     github::types::{CheckRun, FullReviewThread, IssueComment, ReviewComment},
+    test_fixtures::{self, review_comment},
     view,
 };
 
@@ -123,17 +124,8 @@ fn check(name: &str, status: &str, conclusion: Option<&str>) -> CheckRun {
     }
 }
 
-fn review_comment(id: &str, author: &str, body: &str) -> ReviewComment {
-    ReviewComment {
-        id: id.to_owned(),
-        author: author.to_owned(),
-        body: body.to_owned(),
-        created_at: fixed_now() - chrono::Duration::hours(3),
-        url: format!("https://github.com/acme/web/pull/42#discussion_r{id}"),
-        is_bot: false,
-    }
-}
-
+/// The shared fixture thread with this module's explicit location knobs (the
+/// snapshots assert the rendered `path:line`).
 fn thread(
     id: &str,
     path: &str,
@@ -142,11 +134,9 @@ fn thread(
     comments: Vec<ReviewComment>,
 ) -> FullReviewThread {
     FullReviewThread {
-        id: id.to_owned(),
-        is_resolved,
         path: path.to_owned(),
         line,
-        comments,
+        ..test_fixtures::thread(id, is_resolved, comments)
     }
 }
 
@@ -164,12 +154,8 @@ fn seed_threads(model: &mut Model, threads: Vec<FullReviewThread>) {
 
 fn issue_comment(id: u64, author: &str, body: &str, is_bot: bool) -> IssueComment {
     IssueComment {
-        id,
-        author: author.to_owned(),
-        body: body.to_owned(),
-        created_at: fixed_now() - chrono::Duration::hours(1),
-        url: format!("https://github.com/acme/web/pull/42#issuecomment-{id}"),
         is_bot,
+        ..test_fixtures::issue_comment(id, author, body)
     }
 }
 
@@ -786,7 +772,7 @@ fn detail_long_card_bodies_collapse_with_a_more_marker_until_expanded() {
     if let ViewMode::Detail(detail) = &mut model.view_mode {
         detail
             .expanded
-            .insert("https://github.com/acme/web/pull/42#issuecomment-10".to_owned());
+            .insert("https://example.test/c/10".to_owned());
     }
     let rows = buffer_text(&render_snapshot(&model, 80, 40));
     assert!(

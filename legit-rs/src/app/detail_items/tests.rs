@@ -1,8 +1,7 @@
-use chrono::{TimeZone, Utc};
-
 use crate::{
     app::detail_items::{DetailFilters, DetailItems, FocusableItem},
     github::types::{FullReviewThread, IssueComment, ReviewComment},
+    test_fixtures::{self, thread},
 };
 
 /// The flattened focus sequence for arrived `threads` + `comments` — the shape
@@ -21,35 +20,19 @@ const DEFAULTS: DetailFilters = DetailFilters {
     show_bot_comments: true,
 };
 
+/// The shared fixture comment with this module's extra `is_bot` knob (the
+/// filter tests toggle it constantly).
 fn review_comment(id: &str, author: &str, is_bot: bool) -> ReviewComment {
     ReviewComment {
-        id: id.to_owned(),
-        author: author.to_owned(),
-        body: format!("body of {id}"),
-        created_at: Utc.with_ymd_and_hms(2026, 5, 20, 12, 0, 0).unwrap(),
-        url: format!("https://example.test/r/{id}"),
         is_bot,
-    }
-}
-
-fn thread(id: &str, is_resolved: bool, comments: Vec<ReviewComment>) -> FullReviewThread {
-    FullReviewThread {
-        id: id.to_owned(),
-        is_resolved,
-        path: "src/lib.rs".to_owned(),
-        line: Some(1),
-        comments,
+        ..test_fixtures::review_comment(id, author, &format!("body of {id}"))
     }
 }
 
 fn issue_comment(id: u64, author: &str, is_bot: bool) -> IssueComment {
     IssueComment {
-        id,
-        author: author.to_owned(),
-        body: format!("comment {id}"),
-        created_at: Utc.with_ymd_and_hms(2026, 5, 20, 12, 0, 0).unwrap(),
-        url: format!("https://example.test/c/{id}"),
         is_bot,
+        ..test_fixtures::issue_comment(id, author, &format!("comment {id}"))
     }
 }
 

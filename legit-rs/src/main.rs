@@ -9,6 +9,8 @@ mod github;
 mod markdown;
 mod runtime;
 mod secret;
+#[cfg(test)]
+mod test_fixtures;
 mod tracing_setup;
 mod view;
 

@@ -1,4 +1,3 @@
-use chrono::TimeZone;
 use ratatui::crossterm::event::KeyCode;
 
 use ratatui::text::Line;
@@ -7,8 +6,9 @@ use crate::{
     app::{cmd::Cmd, model::ViewMode, msg::Msg, update::update},
     git_remote::RepoInfo,
     github::rest::PrKey,
-    github::types::{FullReviewThread, IssueComment, ReviewComment},
+    github::types::{IssueComment, ReviewComment},
     secret::Secret,
+    test_fixtures::{self, issue_comment, thread},
 };
 
 /// True when the open detail view has its rendered body cached. `false` if not
@@ -98,35 +98,19 @@ fn scrollable_detail_model() -> crate::app::model::Model {
 }
 
 fn review_comment(id: &str, author: &str) -> ReviewComment {
-    ReviewComment {
-        id: id.to_owned(),
-        author: author.to_owned(),
-        body: format!("body of {id}"),
-        created_at: chrono::Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap(),
-        url: format!("https://example.test/r/{id}"),
-        is_bot: false,
-    }
+    test_fixtures::review_comment(id, author, &format!("body of {id}"))
 }
 
 /// Deliver one thread (root + one reply) and one issue comment to the open
 /// detail PR via the real enrichment messages, yielding the focus sequence
 /// body → thread root → reply → comment (4 items).
 fn seed_detail_enrichment(model: &mut crate::app::model::Model) {
-    let threads = vec![FullReviewThread {
-        id: "t1".to_owned(),
-        is_resolved: false,
-        path: "src/lib.rs".to_owned(),
-        line: Some(12),
-        comments: vec![review_comment("c1", "alice"), review_comment("c2", "bob")],
-    }];
-    let comments = vec![IssueComment {
-        id: 10,
-        author: "carol".to_owned(),
-        body: "Looks good.".to_owned(),
-        created_at: chrono::Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap(),
-        url: "https://example.test/c/10".to_owned(),
-        is_bot: false,
-    }];
+    let threads = vec![thread(
+        "t1",
+        false,
+        vec![review_comment("c1", "alice"), review_comment("c2", "bob")],
+    )];
+    let comments = vec![issue_comment(10, "carol", "Looks good.")];
     update(
         model,
         Msg::ThreadsArrived {
@@ -567,12 +551,8 @@ fn hiding_bots_clamps_a_focus_stranded_past_the_shrunk_sequence() {
         Msg::IssueCommentsArrived {
             pr: pr_key_42(),
             comments: vec![IssueComment {
-                id: 11,
-                author: "ci".to_owned(),
-                body: "bot says hi".to_owned(),
-                created_at: chrono::Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap(),
-                url: "https://example.test/c/11".to_owned(),
                 is_bot: true,
+                ..issue_comment(11, "ci", "bot says hi")
             }],
         },
     );
@@ -649,22 +629,31 @@ fn enter_on_the_body_does_not_touch_expansion_state() {
 
 // ── Scroll follows focus ────────────────────────────────────────────────────
 
-/// The line range the focused item occupies, via the same layout the view
-/// renders (the canonical `detail_layout::detail_content`).
-fn focused_item_range(model: &crate::app::model::Model) -> std::ops::Range<usize> {
+/// The open detail view's measured layout, via the same canonical
+/// `detail_layout::detail_content` the view renders (at the same fixed epoch
+/// `update`'s own measurements use). Panics if not in Detail mode with an
+/// arrived body.
+fn measured_content(model: &crate::app::model::Model) -> crate::app::detail_layout::DetailContent {
     let ViewMode::Detail(detail) = &model.view_mode else {
         panic!("expected Detail mode");
     };
     let pr = model.list.pr(&detail.key).expect("pr in list");
-    let content = crate::app::detail_layout::detail_content(
+    crate::app::detail_layout::detail_content(
         model,
         pr,
         detail.body.as_ref().expect("body arrived"),
         detail,
         model.terminal_width,
         chrono::DateTime::UNIX_EPOCH,
-    );
-    content.item_ranges[detail.focused_index].clone()
+    )
+}
+
+/// The line range the focused item occupies in the measured layout.
+fn focused_item_range(model: &crate::app::model::Model) -> std::ops::Range<usize> {
+    let ViewMode::Detail(detail) = &model.view_mode else {
+        panic!("expected Detail mode");
+    };
+    measured_content(model).item_ranges[detail.focused_index].clone()
 }
 
 /// A focusable detail model with a body tall enough that the thread and
@@ -719,22 +708,7 @@ fn scroll_clamp_covers_the_thread_and_conversation_sections() {
     // the conversation section, not stop at the description+checks height the
     // M7 clamp measured.
     let mut model = tall_focusable_detail_model();
-    let ViewMode::Detail(detail) = &model.view_mode else {
-        panic!("expected Detail mode");
-    };
-    let pr = model.list.pr(&detail.key).expect("pr in list");
-    let content_lines = crate::app::detail_layout::detail_content(
-        &model,
-        pr,
-        detail.body.as_ref().expect("body arrived"),
-        detail,
-        model.terminal_width,
-        chrono::DateTime::UNIX_EPOCH,
-    )
-    .lines
-    .len() as u16;
-    let viewport = model.terminal_height - crate::app::detail_layout::CHROME_ROWS;
-    let max_scroll = content_lines - viewport;
+    let max_scroll = max_detail_scroll(&model);
 
     for _ in 0..50 {
         update(&mut model, key_event(KeyCode::PageDown));
@@ -748,22 +722,9 @@ fn scroll_clamp_covers_the_thread_and_conversation_sections() {
 }
 
 /// The open detail view's true max scroll: full measured content minus the
-/// body viewport, via the same layout the view renders.
+/// body viewport.
 fn max_detail_scroll(model: &crate::app::model::Model) -> u16 {
-    let ViewMode::Detail(detail) = &model.view_mode else {
-        panic!("expected Detail mode");
-    };
-    let pr = model.list.pr(&detail.key).expect("pr in list");
-    let content_lines = crate::app::detail_layout::detail_content(
-        model,
-        pr,
-        detail.body.as_ref().expect("body arrived"),
-        detail,
-        model.terminal_width,
-        chrono::DateTime::UNIX_EPOCH,
-    )
-    .lines
-    .len() as u16;
+    let content_lines = measured_content(model).lines.len() as u16;
     let viewport = model.terminal_height - crate::app::detail_layout::CHROME_ROWS;
     content_lines.saturating_sub(viewport)
 }
@@ -824,23 +785,15 @@ fn showing_resolved_threads_keeps_the_focused_card_in_view() {
         Msg::ThreadsArrived {
             pr: pr_key_42(),
             threads: vec![
-                FullReviewThread {
-                    id: "done".to_owned(),
-                    is_resolved: true,
-                    path: "src/old.rs".to_owned(),
-                    line: Some(1),
-                    comments: vec![ReviewComment {
+                thread(
+                    "done",
+                    true,
+                    vec![ReviewComment {
                         body: resolved_body,
                         ..review_comment("c9", "bob")
                     }],
-                },
-                FullReviewThread {
-                    id: "t1".to_owned(),
-                    is_resolved: false,
-                    path: "src/lib.rs".to_owned(),
-                    line: Some(12),
-                    comments: vec![review_comment("c1", "alice")],
-                },
+                ),
+                thread("t1", false, vec![review_comment("c1", "alice")]),
             ],
         },
     );
@@ -959,26 +912,11 @@ fn over_scrolling_clamps_to_the_last_screenful_and_page_up_stays_live() {
     // The true max scroll: the full body content (description plus the
     // threads/comments loading placeholders here) minus the viewport, measured
     // via the same layout the view renders.
-    let ViewMode::Detail(detail) = &model.view_mode else {
-        panic!("expected Detail mode");
-    };
-    let pr = model.list.pr(&detail.key).expect("pr in list");
-    let content_lines = crate::app::detail_layout::detail_content(
-        &model,
-        pr,
-        detail.body.as_ref().expect("body arrived"),
-        detail,
-        model.terminal_width,
-        chrono::DateTime::UNIX_EPOCH,
-    )
-    .lines
-    .len() as u16;
-    let viewport_rows = model.terminal_height - chrome_rows;
-    let max_scroll = content_lines - viewport_rows;
+    let max_scroll = max_detail_scroll(&model);
     assert!(max_scroll > 1, "test body must be taller than the viewport");
 
     // Hold PageDown far past the end.
-    for _ in 0..(content_lines + 50) {
+    for _ in 0..(max_scroll + 50) {
         update(&mut model, key_event(KeyCode::PageDown));
     }
     assert_eq!(
