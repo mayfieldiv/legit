@@ -315,6 +315,15 @@ fn all_tab_shows_repo_column_whenever_multiple_repos_are_tracked() {
         rows[0].contains("web"),
         "the repo column shows even while only one tracked repo has PRs: {rows:?}"
     );
+
+    // Buffer row 1 is the first list row (row 0 is the tab bar), and the list
+    // starts at column 0, so the slice index doubles as the buffer x.
+    let repo_x = rows[0].find("web").expect("repo cell rendered") as u16;
+    assert_eq!(
+        terminal.backend().buffer()[(repo_x, 1)].fg,
+        Color::Magenta,
+        "repo cells use the self-highlight colour (TS selfHighlight)"
+    );
 }
 
 #[test]
@@ -384,6 +393,13 @@ fn list_cells_use_distinct_ts_parity_colours() {
         buffer[(author_x, 2)].fg,
         Color::Green,
         "author names should use the success colour"
+    );
+
+    let age_x = row.find("2h").expect("age rendered") as u16;
+    assert_eq!(
+        buffer[(age_x, 2)].fg,
+        Color::Reset,
+        "age should use the default foreground like the TS list"
     );
 }
 

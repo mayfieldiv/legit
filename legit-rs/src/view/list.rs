@@ -170,7 +170,9 @@ fn row_line<'a>(
     )];
     push_gap(&mut spans);
     if show_repo {
-        spans.push(cell(&repo, REPO_COL, Style::default().fg(Color::Cyan)));
+        // Magenta is this port's mapping for the TS selfHighlight colour the
+        // repo cell uses (the same mapping as the me-blocking tier).
+        spans.push(cell(&repo, REPO_COL, Style::default().fg(Color::Magenta)));
         push_gap(&mut spans);
     }
     spans.push(cell(&title, title_col, Style::default()));
@@ -179,7 +181,7 @@ fn row_line<'a>(
     push_gap(&mut spans);
     spans.push(cell(&size, size_col, Style::default()));
     push_gap(&mut spans);
-    spans.push(cell(&age, AGE_COL, Style::default().fg(Color::Gray)));
+    spans.push(cell(&age, AGE_COL, Style::default()));
     push_gap(&mut spans);
     spans.push(cell(
         &reason,
