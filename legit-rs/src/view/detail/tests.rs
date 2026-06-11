@@ -931,9 +931,38 @@ fn detail_hiding_bots_drops_bot_threads_replies_and_comments() {
         !rows.iter().any(|r| r.contains("ci-reporter")),
         "bot issue comments must be hidden: {rows:?}"
     );
+    let conversation = &rows[row_of(&rows, "Conversation")];
     assert!(
-        rows.iter().any(|r| r.contains("1 comment")),
-        "the conversation header must count only visible comments: {rows:?}"
+        conversation.contains("1 shown · 1 hidden"),
+        "the conversation header must count visible and hidden comments: {conversation:?}"
+    );
+}
+
+#[test]
+fn detail_all_bot_conversation_hidden_shows_counts_and_placeholder() {
+    // Comments arrived but every one is bot-filtered: the header must still
+    // count them as hidden (not render a dangling zero) and say why the
+    // section is empty.
+    let mut model = model_in_detail(sample_pr(), "The description.");
+    seed_comments(
+        &mut model,
+        vec![
+            issue_comment(10, "ci-reporter", "Coverage: 98%", true),
+            issue_comment(11, "release-bot", "Preview deployed.", true),
+        ],
+    );
+    model.show_bot_comments = false;
+
+    let rows = buffer_text(&render_snapshot(&model, 80, 30));
+
+    let conversation = &rows[row_of(&rows, "Conversation")];
+    assert!(
+        conversation.contains("0 shown · 2 hidden"),
+        "the header must tally the bot-hidden comments: {conversation:?}"
+    );
+    assert!(
+        rows.iter().any(|r| r.contains("All comments hidden.")),
+        "an all-hidden conversation must say why it is empty: {rows:?}"
     );
 }
 

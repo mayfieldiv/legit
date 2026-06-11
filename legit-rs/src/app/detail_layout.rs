@@ -148,13 +148,45 @@ fn comment_byline(
     Line::from(spans)
 }
 
-/// A muted in-flight placeholder for a section whose fetch hasn't landed,
-/// separated from the previous section by a blank line.
-fn loading_placeholder(text: &'static str) -> Vec<Line<'static>> {
-    vec![
-        Line::from(""),
-        Line::from(Span::styled(text, Style::default().fg(Color::Yellow))),
-    ]
+/// The intro lines for a card section (Review Threads / Conversation): a
+/// loading placeholder while its fetch hasn't landed (`counts` is `None`),
+/// nothing once it arrived empty, and otherwise a blank separator plus a
+/// header counting shown and filter-hidden items — with an all-hidden note
+/// when the filters conceal every item. One builder for both sections so
+/// their intros can't drift apart (the Conversation header once rendered a
+/// dangling zero count, with no hidden tally, when every comment was
+/// bot-filtered).
+fn section_intro(
+    title: &'static str,
+    counts: Option<(usize, usize)>,
+    loading: &'static str,
+    all_hidden: &'static str,
+) -> Vec<Line<'static>> {
+    let muted = Style::default().fg(Color::DarkGray);
+    let Some((total, visible)) = counts else {
+        return vec![
+            Line::from(""),
+            Line::from(Span::styled(loading, Style::default().fg(Color::Yellow))),
+        ];
+    };
+    if total == 0 {
+        return Vec::new();
+    }
+    let mut spans = vec![
+        markdown::heading_span(2, title),
+        Span::styled(format!(" {visible} shown"), muted),
+    ];
+    if total > visible {
+        spans.push(Span::styled(
+            format!(" · {} hidden", total - visible),
+            muted,
+        ));
+    }
+    let mut lines = vec![Line::from(""), Line::from(spans)];
+    if visible == 0 {
+        lines.push(Line::from(Span::styled(all_hidden, muted)));
+    }
+    lines
 }
 
 /// The detail body's complete content: every display line plus, for each
@@ -249,24 +281,15 @@ pub(crate) fn detail_content(
     content.lines.extend(checks_section_lines(model, pr));
 
     // ── Review Threads ──
-    match &items.threads {
-        None => content
-            .lines
-            .extend(loading_placeholder("Loading threads…")),
-        Some(section) if section.total == 0 => {}
-        Some(section) => {
-            content.lines.push(Line::from(""));
-            content
-                .lines
-                .push(threads_header(section.total, section.groups.len()));
-            if section.groups.is_empty() {
-                content.lines.push(Line::from(Span::styled(
-                    "All threads resolved or hidden.",
-                    Style::default().fg(Color::DarkGray),
-                )));
-            }
-        }
-    }
+    content.lines.extend(section_intro(
+        "Review Threads",
+        items
+            .threads
+            .as_ref()
+            .map(|section| (section.total, section.groups.len())),
+        "Loading threads…",
+        "All threads resolved or hidden.",
+    ));
     for group in items.threads.iter().flat_map(|section| &section.groups) {
         let (thread, root) = (group.thread, group.root);
         let location = match thread.line {
@@ -304,18 +327,15 @@ pub(crate) fn detail_content(
     }
 
     // ── Conversation ──
-    match &items.comments {
-        None => content
-            .lines
-            .extend(loading_placeholder("Loading comments…")),
-        Some(section) if section.total == 0 => {}
-        Some(section) => {
-            content.lines.push(Line::from(""));
-            content
-                .lines
-                .push(conversation_header(section.visible.len()));
-        }
-    }
+    content.lines.extend(section_intro(
+        "Conversation",
+        items
+            .comments
+            .as_ref()
+            .map(|section| (section.total, section.visible.len())),
+        "Loading comments…",
+        "All comments hidden.",
+    ));
     for comment in items.comments.iter().flat_map(|section| &section.visible) {
         let mut card = vec![comment_byline(
             &comment.author,
@@ -357,36 +377,4 @@ fn collapse_body(body: Vec<Line<'static>>, expanded: bool) -> Vec<Line<'static>>
         Style::default().fg(Color::DarkGray),
     )));
     out
-}
-
-/// The Review Threads section header: visible count plus a hidden count when
-/// the resolved/bot filters are concealing threads.
-fn threads_header(total: usize, visible: usize) -> Line<'static> {
-    let mut spans = vec![
-        markdown::heading_span(2, "Review Threads"),
-        Span::styled(
-            format!(" {visible} shown"),
-            Style::default().fg(Color::DarkGray),
-        ),
-    ];
-    let hidden = total - visible;
-    if hidden > 0 {
-        spans.push(Span::styled(
-            format!(" · {hidden} hidden"),
-            Style::default().fg(Color::DarkGray),
-        ));
-    }
-    Line::from(spans)
-}
-
-/// The Conversation section header with its visible-comment count.
-fn conversation_header(visible: usize) -> Line<'static> {
-    let plural = if visible == 1 { "" } else { "s" };
-    Line::from(vec![
-        markdown::heading_span(2, "Conversation"),
-        Span::styled(
-            format!(" {visible} comment{plural}"),
-            Style::default().fg(Color::DarkGray),
-        ),
-    ])
 }
