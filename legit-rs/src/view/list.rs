@@ -45,19 +45,19 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, now: DateTime<Ut
     // Size columns to the visible PRs only, so an off-tab PR's wide number or
     // diff size can't widen this tab's columns.
     let visible: Vec<&PR> = pr_list.visible_pr_indices().map(|i| &prs[i]).collect();
-    let show_repo = should_show_repo_column(model);
-    let pr_num_col = pr_num_col_width(&visible);
-    let size_col = size_col_width(&visible);
+    let layout = RowLayout {
+        width: usize::from(width),
+        pr_num_col: pr_num_col_width(&visible),
+        size_col: size_col_width(&visible),
+        show_repo: should_show_repo_column(model),
+    };
     let lines: Vec<Line<'_>> = pr_list
         .visible_rows()
         .map(|(row, selected)| match row {
             DisplayRow::Header(label) => header_line(label, width),
             DisplayRow::Pr(index) => {
                 let pr = &prs[*index];
-                let blocker = model.blockers.get(&pr.key());
-                row_line(
-                    pr, blocker, width, pr_num_col, size_col, show_repo, now, selected,
-                )
+                row_line(pr, model.blockers.get(&pr.key()), &layout, now, selected)
             }
         })
         .collect();
@@ -120,75 +120,88 @@ fn header_line(label: &str, width: u16) -> Line<'static> {
     ))
 }
 
-fn row_line<'a>(
-    pr: &'a PR,
-    blocker: Option<&BlockerResult>,
-    width: u16,
+/// Per-render layout shared by every PR row: the row width and the column
+/// sizing derived from the visible PRs (widest number/size, repo column on a
+/// multi-repo All tab).
+struct RowLayout {
+    width: usize,
     pr_num_col: usize,
     size_col: usize,
     show_repo: bool,
+}
+
+/// One PR's display row. The fixed-width cells are built as data — (text,
+/// width, style) in display order — so the leftover-title-width math and the
+/// rendered spans derive from the same list and can't drift apart.
+fn row_line(
+    pr: &PR,
+    blocker: Option<&BlockerResult>,
+    layout: &RowLayout,
     now: DateTime<Utc>,
     selected: bool,
-) -> Line<'a> {
-    let width = width as usize;
-    let num = format!("#{}", pr.number);
-    let raw_title = if pr.is_draft {
+) -> Line<'static> {
+    let title = if pr.is_draft {
         format!("[draft] {}", pr.title)
     } else {
         pr.title.clone()
     };
-    let author = pr.author.clone();
-    let repo = format_repo_short(&pr.repo_slug);
-    let size = format_size(pr.additions, pr.deletions);
-    let age = format_age(pr.created_at, now);
-    // The smart-status reason renders as a short trailing hint; "…" while the
-    // PR's enrichment (and thus its blocker) is still being derived.
+    // The smart-status reason renders as a short trailing hint; "…" (in gray)
+    // while the PR's enrichment (and thus its blocker) is still being derived.
     let reason = blocker.map(|b| b.reason.as_str()).unwrap_or("…");
+    let reason_color = blocker.map_or(Color::Gray, |b| super::tier_color(b.tier));
 
-    let column_count = 6 + usize::from(show_repo);
-    let fixed = pr_num_col
-        + usize::from(show_repo) * REPO_COL
-        + AUTHOR_COL
-        + size_col
-        + AGE_COL
-        + REASON_COL
-        + (column_count - 1) * GAP;
-    let title_col = width.saturating_sub(fixed).max(1);
-
-    let title = truncate(&raw_title, title_col);
-    let author = truncate_middle(&author, AUTHOR_COL);
-    let repo = truncate_middle(repo, REPO_COL);
-    let reason = truncate(reason, REASON_COL);
-    let age = truncate(&age, AGE_COL);
-
-    let mut spans = vec![cell(
-        &num,
-        pr_num_col,
+    let mut cells: Vec<(String, usize, Style)> = vec![(
+        format!("#{}", pr.number),
+        layout.pr_num_col,
         Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD),
     )];
-    push_gap(&mut spans);
-    if show_repo {
+    if layout.show_repo {
         // Magenta is this port's mapping for the TS selfHighlight colour the
         // repo cell uses (the same mapping as the me-blocking tier).
-        spans.push(cell(&repo, REPO_COL, Style::default().fg(Color::Magenta)));
-        push_gap(&mut spans);
+        let repo = truncate_middle(format_repo_short(&pr.repo_slug), REPO_COL);
+        cells.push((repo, REPO_COL, Style::default().fg(Color::Magenta)));
     }
-    spans.push(cell(&title, title_col, Style::default()));
-    push_gap(&mut spans);
-    spans.push(cell(&author, AUTHOR_COL, Style::default().fg(Color::Green)));
-    push_gap(&mut spans);
-    spans.push(cell(&size, size_col, Style::default()));
-    push_gap(&mut spans);
-    spans.push(cell(&age, AGE_COL, Style::default()));
-    push_gap(&mut spans);
-    spans.push(cell(
-        &reason,
-        REASON_COL,
-        // Gray while the blocker is still being derived (the "…" placeholder).
-        Style::default().fg(blocker.map_or(Color::Gray, |b| super::tier_color(b.tier))),
+    let title_slot = cells.len();
+    cells.push((
+        truncate_middle(&pr.author, AUTHOR_COL),
+        AUTHOR_COL,
+        Style::default().fg(Color::Green),
     ));
+    cells.push((
+        format_size(pr.additions, pr.deletions),
+        layout.size_col,
+        Style::default(),
+    ));
+    cells.push((
+        truncate(&format_age(pr.created_at, now), AGE_COL),
+        AGE_COL,
+        Style::default(),
+    ));
+    cells.push((
+        truncate(reason, REASON_COL),
+        REASON_COL,
+        Style::default().fg(reason_color),
+    ));
+
+    // The title takes whatever the fixed cells and the inter-cell gaps leave.
+    // With the title joining, every fixed cell borders exactly one gap, so
+    // `cells.len()` (still the fixed count here) is also the gap count.
+    let fixed: usize = cells.iter().map(|(_, w, _)| *w).sum::<usize>() + cells.len() * GAP;
+    let title_col = layout.width.saturating_sub(fixed).max(1);
+    cells.insert(
+        title_slot,
+        (truncate(&title, title_col), title_col, Style::default()),
+    );
+
+    let mut spans = Vec::with_capacity(cells.len() * 2 - 1);
+    for (i, (text, width, style)) in cells.into_iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" ".repeat(GAP)));
+        }
+        spans.push(Span::styled(pad_to_width(&text, width), style));
+    }
 
     let line = Line::from(spans);
     if selected {
@@ -196,12 +209,4 @@ fn row_line<'a>(
     } else {
         line
     }
-}
-
-fn push_gap<'a>(spans: &mut Vec<Span<'a>>) {
-    spans.push(Span::raw(" ".repeat(GAP)));
-}
-
-fn cell<'a>(text: &str, width: usize, style: Style) -> Span<'a> {
-    Span::styled(pad_to_width(text, width), style)
 }

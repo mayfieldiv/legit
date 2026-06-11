@@ -858,18 +858,21 @@ fn status_bar_shows_error_message_on_the_right() {
 }
 
 #[test]
-fn narrow_width_empties_age_rather_than_overflowing_the_row() {
-    // Choose a width where the title clamps to its 1-column floor and the age
-    // column saturates to 0. The age must then render empty, not pass the full
-    // age string through and overflow into the trailing reason cell — a row
-    // must never render wider than its width.
+fn narrow_width_clamps_title_rather_than_overflowing_the_row() {
+    // Choose a width one column past the fixed cells, so the title clamps to
+    // its 1-column floor — a row must never render wider than its width.
     let pr_num_col = 6;
     let size_col = 8;
     let column_count = 6;
     let gaps = column_count - 1;
     let width =
-        (pr_num_col + super::AUTHOR_COL + size_col + super::AGE_COL + super::REASON_COL + gaps + 1)
-            as u16;
+        pr_num_col + super::AUTHOR_COL + size_col + super::AGE_COL + super::REASON_COL + gaps + 1;
+    let layout = super::RowLayout {
+        width,
+        pr_num_col,
+        size_col,
+        show_repo: false,
+    };
 
     let pr = pr(
         1234,
@@ -882,19 +885,10 @@ fn narrow_width_empties_age_rather_than_overflowing_the_row() {
         tier: Tier::NeedsReview,
         reason: "needs review".to_owned(),
     };
-    let line = super::row_line(
-        &pr,
-        Some(&blocker),
-        width,
-        pr_num_col,
-        size_col,
-        false,
-        fixed_now(),
-        false,
-    );
+    let line = super::row_line(&pr, Some(&blocker), &layout, fixed_now(), false);
 
     assert!(
-        line.width() <= width as usize,
+        line.width() <= width,
         "row overflowed its width: {} > {width}",
         line.width(),
     );
