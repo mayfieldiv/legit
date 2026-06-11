@@ -1,5 +1,5 @@
 use chrono::TimeZone;
-use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::{
     app::{
@@ -58,7 +58,13 @@ pub(super) fn sample_pr(number: u64, title: &str) -> PR {
 pub(super) fn key_event(code: KeyCode) -> Msg {
     Msg::TerminalEvent(ratatui::crossterm::event::Event::Key(KeyEvent::new(
         code,
-        ratatui::crossterm::event::KeyModifiers::NONE,
+        KeyModifiers::NONE,
+    )))
+}
+
+pub(super) fn modified_key_event(code: KeyCode, modifiers: KeyModifiers) -> Msg {
+    Msg::TerminalEvent(ratatui::crossterm::event::Event::Key(KeyEvent::new(
+        code, modifiers,
     )))
 }
 
@@ -77,33 +83,76 @@ pub(super) fn wheel_event(down: bool) -> Msg {
     }))
 }
 
+pub(super) fn mouse_down_event(column: u16, row: u16) -> Msg {
+    use ratatui::crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    Msg::TerminalEvent(Event::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    }))
+}
+
 #[test]
-fn wheel_in_list_mode_moves_the_selection() {
-    // The list viewport derives from the selection (no free scroll), so a
-    // wheel tick steps the selection like j/k — including the selection's
-    // just-in-time files fetch.
-    let mut model = enriched_model(&[1, 2]);
+fn wheel_in_list_mode_scrolls_the_viewport_without_moving_selection() {
+    let mut model = enriched_model(&[1, 2, 3, 4, 5, 6]);
     model.list.complete_fetch("mayfieldiv/legit");
+    model.list.resize(3);
     model.relayout();
     assert_eq!(model.list.selected_pr().unwrap().number, 1);
+    assert_eq!(model.list.scroll_offset(), 0);
 
     let cmds = update(&mut model, wheel_event(true));
 
     assert_eq!(
         model.list.selected_pr().unwrap().number,
-        2,
-        "a wheel-down tick must move the selection down"
+        1,
+        "wheel-down must not move the selected PR"
+    );
+    assert_eq!(
+        model.list.scroll_offset(),
+        3,
+        "wheel-down scrolls the visible viewport"
     );
     assert!(
-        cmds.iter().any(|c| matches!(c, Cmd::FetchFiles { .. })),
-        "the moved selection must fetch its files just-in-time: {cmds:?}"
+        cmds.is_empty(),
+        "scroll-only wheel must not fetch files: {cmds:?}"
     );
 
     update(&mut model, wheel_event(false));
     assert_eq!(
         model.list.selected_pr().unwrap().number,
         1,
-        "a wheel-up tick must move the selection back up"
+        "wheel-up must not move the selected PR"
+    );
+    assert_eq!(
+        model.list.scroll_offset(),
+        0,
+        "wheel-up scrolls the visible viewport back toward the top"
+    );
+}
+
+#[test]
+fn left_click_on_a_visible_list_row_selects_that_pr() {
+    let mut model = enriched_model(&[1, 2, 3]);
+    model.list.complete_fetch("mayfieldiv/legit");
+    // Use a flat list so terminal row 2 maps directly to the second PR row:
+    // row 0 tab bar, row 1 first list row, row 2 second list row.
+    model.list.cycle_grouping();
+    model.list.cycle_grouping();
+    model.relayout();
+    update(
+        &mut model,
+        Msg::TerminalEvent(ratatui::crossterm::event::Event::Resize(100, 8)),
+    );
+    assert_eq!(model.list.selected_pr().unwrap().number, 1);
+
+    let cmds = update(&mut model, mouse_down_event(0, 2));
+
+    assert_eq!(model.list.selected_pr().unwrap().number, 2);
+    assert!(
+        cmds.iter().any(|cmd| matches!(cmd, Cmd::FetchFiles { .. })),
+        "clicking a PR row selects it and fetches its files: {cmds:?}"
     );
 }
 
@@ -197,6 +246,93 @@ fn q_key_sets_should_quit() {
     update(&mut model, key_event(KeyCode::Char('q')));
 
     assert!(model.should_quit);
+}
+
+#[test]
+fn left_click_accounts_for_the_filter_chip_row() {
+    let mut model = enriched_model(&[1, 2, 3]);
+    model.list.complete_fetch("mayfieldiv/legit");
+    // Flat list, as in the plain click test: row maps directly to a PR row.
+    model.list.cycle_grouping();
+    model.list.cycle_grouping();
+    model.relayout();
+    update(
+        &mut model,
+        Msg::TerminalEvent(ratatui::crossterm::event::Event::Resize(100, 8)),
+    );
+    // Apply a filter ("p" matches every sample title) so its chip occupies
+    // row 1 and the list starts one row lower, at row 2.
+    update(&mut model, key_event(KeyCode::Char('/')));
+    update(&mut model, key_event(KeyCode::Char('p')));
+    update(&mut model, key_event(KeyCode::Enter));
+    assert_eq!(model.list.selected_pr().unwrap().number, 1);
+
+    update(&mut model, mouse_down_event(0, 3));
+
+    assert_eq!(
+        model.list.selected_pr().unwrap().number,
+        2,
+        "with the filter chip visible, terminal row 3 is the second list row"
+    );
+}
+
+#[test]
+fn left_click_in_the_summary_panel_leaves_the_selection_alone() {
+    let mut model = enriched_model(&[1, 2, 3]);
+    model.list.complete_fetch("mayfieldiv/legit");
+    model.list.cycle_grouping();
+    model.list.cycle_grouping();
+    model.relayout();
+    update(
+        &mut model,
+        Msg::TerminalEvent(ratatui::crossterm::event::Event::Resize(100, 8)),
+    );
+    assert_eq!(model.list.selected_pr().unwrap().number, 1);
+
+    // 100 columns -> 63-col list + 1-col divider + 36-col panel, so column 70
+    // lands inside the summary panel; row 2 would otherwise select PR #2.
+    let cmds = update(&mut model, mouse_down_event(70, 2));
+
+    assert_eq!(
+        model.list.selected_pr().unwrap().number,
+        1,
+        "a click in the summary panel must not move the list selection"
+    );
+    assert!(cmds.is_empty(), "and must trigger no fetches: {cmds:?}");
+}
+
+#[test]
+fn ctrl_c_sets_should_quit_from_list_and_detail_views() {
+    let mut list_model = enriched_model(&[1]);
+
+    update(
+        &mut list_model,
+        modified_key_event(KeyCode::Char('c'), KeyModifiers::CONTROL),
+    );
+
+    assert!(list_model.should_quit, "Ctrl-C quits from the list view");
+
+    let mut detail_model = enriched_model(&[1]);
+    detail_model.list.complete_fetch("mayfieldiv/legit");
+    detail_model.relayout();
+    update(&mut detail_model, key_event(KeyCode::Enter));
+    assert!(
+        matches!(
+            detail_model.view_mode,
+            crate::app::model::ViewMode::Detail(_)
+        ),
+        "precondition: Enter opens detail view"
+    );
+
+    update(
+        &mut detail_model,
+        modified_key_event(KeyCode::Char('c'), KeyModifiers::CONTROL),
+    );
+
+    assert!(
+        detail_model.should_quit,
+        "Ctrl-C quits from the detail view"
+    );
 }
 
 #[test]
@@ -574,6 +710,21 @@ fn k_retreats_selection_and_clamps_at_zero() {
     update(&mut model, key_event(KeyCode::Char('k')));
     update(&mut model, key_event(KeyCode::Char('k')));
     assert_eq!(model.list.selected(), 0);
+}
+
+#[test]
+fn up_down_arrows_match_j_k_in_list_mode() {
+    let mut model = enriched_model(&[1, 2, 3]);
+    model.list.complete_fetch("mayfieldiv/legit");
+    model.relayout();
+
+    update(&mut model, key_event(KeyCode::Down));
+
+    assert_eq!(model.list.selected_pr().unwrap().number, 2);
+
+    update(&mut model, key_event(KeyCode::Up));
+
+    assert_eq!(model.list.selected_pr().unwrap().number, 1);
 }
 
 #[test]

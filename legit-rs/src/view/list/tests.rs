@@ -1,5 +1,5 @@
 use chrono::{DateTime, TimeZone, Utc};
-use ratatui::{Terminal, backend::TestBackend};
+use ratatui::{Terminal, backend::TestBackend, style::Color};
 
 use crate::{
     app::{
@@ -130,7 +130,7 @@ fn buffer_text(terminal: &Terminal<TestBackend>) -> Vec<String> {
 /// assertions about the list alone, independent of the panel beside it.
 fn list_rows(terminal: &Terminal<TestBackend>) -> Vec<String> {
     let width = terminal.backend().buffer().area().width;
-    let list_width = width - view::summary::panel_width(width).unwrap_or(0);
+    let list_width = crate::app::list_layout::list_width(width);
     let mut rows: Vec<String> = buffer_text(terminal)
         .into_iter()
         .map(|row| row.chars().take(list_width as usize).collect())
@@ -170,16 +170,17 @@ fn flat_list_renders_one_row_per_pull_request() {
         |_| Some(Tier::NeedsReview),
     );
 
-    // Render at 116 so the list region is 80 columns wide (the panel takes the
-    // right 36); the list-layout assertions stay about the same 80-col list.
+    // Render at 116 so the list region is 79 columns wide (the panel takes the
+    // right 36 plus a 1-cell divider); the list-layout assertions stay about
+    // the list alone.
     let terminal = render_snapshot(&model, 116, 5);
 
     assert_eq!(
         list_rows(&terminal),
         vec![
-            "#42  Add streaming PR list    octocat       +5/-3 3h    Awaiting review         ",
-            "#43  Wire FetchOpenPRs cmd    alice         +5/-3 1d    Awaiting review         ",
-            "#44  Render list view         bob           +5/-3 7d    Awaiting review         ",
+            "#42   Add streaming PR l… octocat        +5/-3  3h     Awaiting review         ",
+            "#43   Wire FetchOpenPRs … alice          +5/-3  1d     Awaiting review         ",
+            "#44   Render list view    bob            +5/-3  7d     Awaiting review         ",
         ]
     );
 }
@@ -290,6 +291,118 @@ fn all_tab_grouped_by_repo_shows_one_header_per_repo() {
     assert!(rows[1].contains("#1"), "{rows:?}");
     assert!(rows[2].starts_with("── zeta/api "), "{rows:?}");
     assert!(rows[3].contains("#2"), "{rows:?}");
+}
+
+#[test]
+fn all_tab_shows_repo_column_whenever_multiple_repos_are_tracked() {
+    // TS parity: `showRepo` keys off the tracked-repo count — a stable,
+    // structural condition — not the repo spread of the visible PRs, so the
+    // columns can't shift as PRs stream in or a filter narrows the list.
+    let mut model = model_with(vec![pr(1, "one", "carol", 1)], Grouping::None, |_| {
+        Some(Tier::NeedsReview)
+    });
+    model.config.repos.push(crate::config::RepoConfig {
+        slug: "zeta/api".to_owned(),
+        ..Default::default()
+    });
+    model.relayout();
+
+    let terminal = render_snapshot(&model, 136, 4);
+    let rows = list_rows(&terminal);
+
+    assert!(
+        rows[0].contains("web"),
+        "the repo column shows even while only one tracked repo has PRs: {rows:?}"
+    );
+
+    // Buffer row 1 is the first list row (row 0 is the tab bar), and the list
+    // starts at column 0, so the slice index doubles as the buffer x.
+    let repo_x = rows[0].find("web").expect("repo cell rendered") as u16;
+    assert_eq!(
+        terminal.backend().buffer()[(repo_x, 1)].fg,
+        Color::Magenta,
+        "repo cells use the self-highlight colour (TS selfHighlight)"
+    );
+}
+
+#[test]
+fn all_tab_multi_repo_rows_show_the_repo_column() {
+    let mut other = pr(2, "two", "dave", 2);
+    other.repo_slug = "zeta/api".to_owned();
+    let mut model = model_with(
+        vec![pr(1, "one", "carol", 1), other],
+        Grouping::None,
+        |_| Some(Tier::NeedsReview),
+    );
+    model.config.repos.push(crate::config::RepoConfig {
+        slug: "zeta/api".to_owned(),
+        ..Default::default()
+    });
+    model.relayout();
+
+    let terminal = render_snapshot(&model, 136, 4);
+    let rows = list_rows(&terminal);
+
+    assert!(
+        rows[0].contains("web") && rows[1].contains("api"),
+        "All-tab rows should include the short repo name: {rows:?}"
+    );
+}
+
+#[test]
+fn list_and_summary_are_separated_by_a_divider_cell() {
+    let model = model_with(vec![pr(1, "one", "carol", 1)], Grouping::None, |_| {
+        Some(Tier::NeedsReview)
+    });
+    let width = 116;
+    let height = 5;
+    let terminal = render_snapshot(&model, width, height);
+    let panel_width = crate::app::list_layout::panel_width(width).expect("panel visible");
+    let divider_x = width - panel_width - 1;
+
+    let buffer = terminal.backend().buffer();
+    for y in 1..height - 1 {
+        assert_eq!(
+            buffer[(divider_x, y)].symbol(),
+            "│",
+            "list and summary should stay separated across row {y}"
+        );
+    }
+}
+
+#[test]
+fn list_cells_use_distinct_ts_parity_colours() {
+    let model = model_with(
+        vec![
+            pr(1, "selected", "carol", 1),
+            pr(2, "not selected", "alice", 2),
+        ],
+        Grouping::None,
+        |_| Some(Tier::NeedsReview),
+    );
+    let terminal = render_snapshot(&model, 116, 4);
+    let buffer = terminal.backend().buffer();
+    let rows = buffer_text(&terminal);
+    let row = &rows[2]; // second PR row: first non-selected list row
+    let author_x = row.find("alice").expect("author rendered") as u16;
+
+    assert_eq!(
+        buffer[(0, 2)].fg,
+        Color::Cyan,
+        "PR numbers should use the accent colour"
+    );
+    assert_eq!(
+        buffer[(author_x, 2)].fg,
+        Color::Green,
+        "author names should use the success colour"
+    );
+
+    let age_x = row.find("2h").expect("age rendered") as u16;
+    assert_eq!(
+        buffer[(age_x, 2)].fg,
+        Color::Reset,
+        "age should use the default foreground like the TS list"
+    );
 }
 
 // ── repo tabs ──────────────────────────────────────────────────────────────
@@ -495,7 +608,7 @@ fn long_titles_truncate_with_ellipsis_to_fit_column() {
         |_| Some(Tier::NeedsReview),
     );
 
-    // 116 total -> 80-col list region (panel takes the right 36).
+    // 116 total -> 79-col list region (panel takes the right 36 plus divider).
     let terminal = render_snapshot(&model, 116, 3);
 
     let rows = list_rows(&terminal);
@@ -516,8 +629,32 @@ fn long_titles_truncate_with_ellipsis_to_fit_column() {
     );
     assert_eq!(
         rows[0].chars().count(),
-        80,
+        79,
         "row should fill exact terminal width"
+    );
+}
+
+#[test]
+fn long_author_names_truncate_in_the_middle() {
+    let model = model_with(
+        vec![pr(7, "Short title", "very-long-author-name", 2)],
+        Grouping::None,
+        |_| Some(Tier::NeedsReview),
+    );
+
+    // 116 total -> 80-col list region (panel takes the right 36).
+    let terminal = render_snapshot(&model, 116, 3);
+    let rows = list_rows(&terminal);
+
+    assert!(
+        rows[0].contains("very-lo…r-name"),
+        "author should preserve both ends when truncated: {:?}",
+        rows[0]
+    );
+    assert!(
+        !rows[0].contains("very-long-aut…"),
+        "author should not use end-only truncation: {:?}",
+        rows[0]
     );
 }
 
@@ -527,11 +664,12 @@ fn draft_pr_is_marked_in_its_row() {
     draft.is_draft = true;
     let model = model_with(vec![draft], Grouping::None, |_| Some(Tier::WaitingOnAuthor));
 
-    // 116 total -> 80-col list region, leaving room for the draft title.
+    // 116 total -> 79-col list region (panel + divider split off the right).
     let terminal = render_snapshot(&model, 116, 3);
     let rows = list_rows(&terminal);
 
-    assert!(rows[0].contains("[draft] Polish things"), "{rows:?}");
+    assert!(rows[0].contains("[draft]"), "{rows:?}");
+    assert!(rows[0].contains("Polish"), "{rows:?}");
     assert!(rows[0].contains("octocat"), "{rows:?}");
 }
 
@@ -546,7 +684,7 @@ fn large_diff_size_widens_size_column_for_all_rows() {
         |_| Some(Tier::NeedsReview),
     );
 
-    // 126 total -> 90-col list region (panel takes the right 36).
+    // 126 total -> 89-col list region (panel takes the right 36 plus divider).
     let terminal = render_snapshot(&model, 126, 4);
     let rows = list_rows(&terminal);
 
@@ -560,8 +698,8 @@ fn large_diff_size_widens_size_column_for_all_rows() {
         "large-diff size must render in full: {:?}",
         rows[1]
     );
-    assert_eq!(rows[0].chars().count(), 90);
-    assert_eq!(rows[1].chars().count(), 90);
+    assert_eq!(rows[0].chars().count(), 89);
+    assert_eq!(rows[1].chars().count(), 89);
 }
 
 #[test]
@@ -575,7 +713,7 @@ fn wide_pr_number_widens_num_column_for_all_rows() {
         |_| Some(Tier::NeedsReview),
     );
 
-    // 126 total -> 90-col list region (panel takes the right 36).
+    // 126 total -> 89-col list region (panel takes the right 36 plus divider).
     let terminal = render_snapshot(&model, 126, 4);
     let rows = list_rows(&terminal);
 
@@ -590,8 +728,8 @@ fn wide_pr_number_widens_num_column_for_all_rows() {
         "title columns must align; got row1={:?} row2={:?}",
         rows[0], rows[1]
     );
-    assert_eq!(rows[0].chars().count(), 90);
-    assert_eq!(rows[1].chars().count(), 90);
+    assert_eq!(rows[0].chars().count(), 89);
+    assert_eq!(rows[1].chars().count(), 89);
 }
 
 #[test]
@@ -723,14 +861,21 @@ fn status_bar_shows_error_message_on_the_right() {
 }
 
 #[test]
-fn narrow_width_empties_age_rather_than_overflowing_the_row() {
-    // Choose a width where the title clamps to its 1-column floor and the age
-    // column saturates to 0. The age must then render empty, not pass the full
-    // age string through and overflow into the trailing reason cell — a row
-    // must never render wider than its width.
+fn narrow_width_clamps_title_rather_than_overflowing_the_row() {
+    // Choose a width one column past the fixed cells, so the title clamps to
+    // its 1-column floor — a row must never render wider than its width.
     let pr_num_col = 6;
     let size_col = 8;
-    let width = (pr_num_col + super::AUTHOR_COL + size_col + super::REASON_COL + 1) as u16;
+    let column_count = 6;
+    let gaps = column_count - 1;
+    let width =
+        pr_num_col + super::AUTHOR_COL + size_col + super::AGE_COL + super::REASON_COL + gaps + 1;
+    let layout = super::RowLayout {
+        width,
+        pr_num_col,
+        size_col,
+        show_repo: false,
+    };
 
     let pr = pr(
         1234,
@@ -738,18 +883,15 @@ fn narrow_width_empties_age_rather_than_overflowing_the_row() {
         "octocat",
         72,
     );
-    let line = super::row_line(
-        &pr,
-        Some("needs review"),
-        width,
-        pr_num_col,
-        size_col,
-        fixed_now(),
-        false,
-    );
+    let blocker = BlockerResult {
+        blocker: "someone".to_owned(),
+        tier: Tier::NeedsReview,
+        reason: "needs review".to_owned(),
+    };
+    let line = super::row_line(&pr, Some(&blocker), &layout, fixed_now(), false);
 
     assert!(
-        line.width() <= width as usize,
+        line.width() <= width,
         "row overflowed its width: {} > {width}",
         line.width(),
     );

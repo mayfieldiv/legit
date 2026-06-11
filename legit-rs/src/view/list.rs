@@ -10,7 +10,8 @@ use ratatui::{
 use crate::{
     app::grouping::DisplayRow,
     app::model::Model,
-    format::{format_age, format_size, pad_to_width, truncate},
+    blocker::BlockerResult,
+    format::{format_age, format_repo_short, format_size, pad_to_width, truncate, truncate_middle},
     github::rest::PR,
 };
 
@@ -44,16 +45,19 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, now: DateTime<Ut
     // Size columns to the visible PRs only, so an off-tab PR's wide number or
     // diff size can't widen this tab's columns.
     let visible: Vec<&PR> = pr_list.visible_pr_indices().map(|i| &prs[i]).collect();
-    let pr_num_col = pr_num_col_width(&visible);
-    let size_col = size_col_width(&visible);
+    let layout = RowLayout {
+        width: usize::from(width),
+        pr_num_col: pr_num_col_width(&visible),
+        size_col: size_col_width(&visible),
+        show_repo: should_show_repo_column(model),
+    };
     let lines: Vec<Line<'_>> = pr_list
         .visible_rows()
         .map(|(row, selected)| match row {
             DisplayRow::Header(label) => header_line(label, width),
             DisplayRow::Pr(index) => {
                 let pr = &prs[*index];
-                let reason = model.blockers.get(&pr.key()).map(|b| b.reason.as_str());
-                row_line(pr, reason, width, pr_num_col, size_col, now, selected)
+                row_line(pr, model.blockers.get(&pr.key()), &layout, now, selected)
             }
         })
         .collect();
@@ -63,10 +67,20 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, now: DateTime<Ut
 
 const PR_NUM_COL_MIN: usize = 5;
 const AUTHOR_COL: usize = 14;
+const REPO_COL: usize = 14;
 const SIZE_COL_MIN: usize = 6;
 const AGE_COL: usize = 6;
 /// Width reserved for the trailing smart-status reason hint.
 const REASON_COL: usize = 24;
+const GAP: usize = 1;
+
+/// Whether the All tab shows the repo column. Keys off the tracked-repo count
+/// (mirroring the TS `showRepo`) rather than the repo spread of the visible
+/// PRs: a structural condition stays put while PRs stream in or a filter
+/// narrows the list, so the columns never shift mid-read.
+fn should_show_repo_column(model: &Model) -> bool {
+    model.active_scope().is_none() && model.tracked_repos().len() > 1
+}
 
 /// Width of the `#<number>` column, sized to fit the widest visible PR number.
 /// Floored at `PR_NUM_COL_MIN` so single-digit-PR repos still get a
@@ -106,54 +120,90 @@ fn header_line(label: &str, width: u16) -> Line<'static> {
     ))
 }
 
-fn row_line<'a>(
-    pr: &'a PR,
-    reason: Option<&str>,
-    width: u16,
+/// Per-render layout shared by every PR row: the row width and the column
+/// sizing derived from the visible PRs (widest number/size, repo column on a
+/// multi-repo All tab).
+struct RowLayout {
+    width: usize,
     pr_num_col: usize,
     size_col: usize,
+    show_repo: bool,
+}
+
+/// One PR's display row. The fixed-width cells are built as data — (text,
+/// width, style) in display order — so the leftover-title-width math and the
+/// rendered spans derive from the same list and can't drift apart.
+fn row_line(
+    pr: &PR,
+    blocker: Option<&BlockerResult>,
+    layout: &RowLayout,
     now: DateTime<Utc>,
     selected: bool,
-) -> Line<'a> {
-    let width = width as usize;
-    let num = format!("#{}", pr.number);
-    let raw_title = if pr.is_draft {
+) -> Line<'static> {
+    let title = if pr.is_draft {
         format!("[draft] {}", pr.title)
     } else {
         pr.title.clone()
     };
-    let author = pr.author.clone();
-    let size = format_size(pr.additions, pr.deletions);
-    let age = format_age(pr.created_at, now);
-    // The smart-status reason renders as a short trailing hint; "…" while the
-    // PR's enrichment (and thus its blocker) is still being derived.
-    let reason = reason.unwrap_or("…");
+    // The smart-status reason renders as a short trailing hint; "…" (in gray)
+    // while the PR's enrichment (and thus its blocker) is still being derived.
+    let reason = blocker.map(|b| b.reason.as_str()).unwrap_or("…");
+    let reason_color = blocker.map_or(Color::Gray, |b| super::tier_color(b.tier));
 
-    let fixed = pr_num_col + AUTHOR_COL + size_col + AGE_COL + REASON_COL;
-    let title_col = width.saturating_sub(fixed).max(1);
+    let mut cells: Vec<(String, usize, Style)> = vec![(
+        format!("#{}", pr.number),
+        layout.pr_num_col,
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )];
+    if layout.show_repo {
+        // Magenta is this port's mapping for the TS selfHighlight colour the
+        // repo cell uses (the same mapping as the me-blocking tier).
+        let repo = truncate_middle(format_repo_short(&pr.repo_slug), REPO_COL);
+        cells.push((repo, REPO_COL, Style::default().fg(Color::Magenta)));
+    }
+    let title_slot = cells.len();
+    cells.push((
+        truncate_middle(&pr.author, AUTHOR_COL),
+        AUTHOR_COL,
+        Style::default().fg(Color::Green),
+    ));
+    cells.push((
+        format_size(pr.additions, pr.deletions),
+        layout.size_col,
+        Style::default(),
+    ));
+    cells.push((
+        truncate(&format_age(pr.created_at, now), AGE_COL),
+        AGE_COL,
+        Style::default(),
+    ));
+    cells.push((
+        truncate(reason, REASON_COL),
+        REASON_COL,
+        Style::default().fg(reason_color),
+    ));
 
-    let title = truncate(&raw_title, title_col);
-    let author = truncate(&author, AUTHOR_COL);
-    let reason = truncate(reason, REASON_COL);
-    let age_col = width.saturating_sub(pr_num_col + title_col + AUTHOR_COL + size_col + REASON_COL);
-    // Truncate, not just pad: in a narrow terminal `age_col` can saturate to 0,
-    // and `pad_to_width` returns the string untouched when it already meets the
-    // width — so without this the full age would overflow into the reason cell.
-    let age = truncate(&age, age_col);
-
-    // Pad each column by display width (not char count) so rows with wide
-    // glyphs in the title/author stay aligned with ASCII rows.
-    let rendered = format!(
-        "{}{}{}{}{}{}",
-        pad_to_width(&num, pr_num_col),
-        pad_to_width(&title, title_col),
-        pad_to_width(&author, AUTHOR_COL),
-        pad_to_width(&size, size_col),
-        pad_to_width(&age, age_col),
-        pad_to_width(&reason, REASON_COL),
+    // The title takes whatever the fixed cells and the inter-cell gaps leave.
+    // With the title joining, every fixed cell borders exactly one gap, so
+    // `cells.len()` (still the fixed count here) is also the gap count.
+    let fixed: usize = cells.iter().map(|(_, w, _)| *w).sum::<usize>() + cells.len() * GAP;
+    let title_col = layout.width.saturating_sub(fixed).max(1);
+    cells.insert(
+        title_slot,
+        (truncate(&title, title_col), title_col, Style::default()),
     );
 
-    let line = Line::from(rendered);
+    let mut spans = Vec::with_capacity(cells.len() * 2 - 1);
+    for (i, (text, width, style)) in cells.into_iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" ".repeat(GAP)));
+        }
+        spans.push(Span::styled(pad_to_width(&text, width), style));
+    }
+
+    let line = Line::from(spans);
     if selected {
         line.style(Style::default().add_modifier(Modifier::REVERSED))
     } else {

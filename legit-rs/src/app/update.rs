@@ -1,12 +1,14 @@
 use std::sync::Arc;
 
-use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind, MouseEventKind};
+use ratatui::crossterm::event::{
+    Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 
 use crate::{git_remote::RepoInfo, github::rest::PrKey, secret::Secret};
 
 use super::{
     cmd::{Cmd, RequestContext},
-    detail_items, detail_layout,
+    detail_items, detail_layout, list_layout,
     model::{DetailState, FilesState, Model, RepoDetection, StatusKind, StatusMessage, ViewMode},
     msg::Msg,
 };
@@ -286,8 +288,8 @@ fn handle_filter_editing_key(model: &mut Model, code: KeyCode) {
 fn handle_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
     match code {
         KeyCode::Char('q') => model.should_quit = true,
-        KeyCode::Char('j') => model.list.move_down(),
-        KeyCode::Char('k') => model.list.move_up(),
+        KeyCode::Char('j') | KeyCode::Down => model.list.move_down(),
+        KeyCode::Char('k') | KeyCode::Up => model.list.move_up(),
         KeyCode::Char('g') => {
             // Cycle smart-status -> repo -> none -> smart-status, resetting
             // selection, then rebuild the layout under the new grouping.
@@ -344,6 +346,9 @@ const DETAIL_SCROLL_PAGE: usize = 10;
 /// Lines scrolled per mouse-wheel tick in the detail body.
 const DETAIL_SCROLL_WHEEL: usize = 3;
 
+/// Display rows scrolled per mouse-wheel tick in the Open PR List.
+const LIST_SCROLL_WHEEL: usize = 3;
+
 /// The open detail view's Focus Sequence derivation under the current
 /// filters, or `None` outside Detail mode. The shared input to focus stepping
 /// and re-anchoring.
@@ -356,6 +361,48 @@ fn detail_items(model: &Model) -> Option<detail_items::DetailItems<'_>> {
         model.enrichment.comments_for(&detail.key),
         model.detail_filters(),
     ))
+}
+
+fn handle_list_left_click(model: &mut Model, mouse: MouseEvent) -> Vec<Cmd> {
+    let Some(visible_row) = list_layout::visible_row_at(model, mouse.column, mouse.row) else {
+        return Vec::new();
+    };
+    if model.list.select_visible_row(visible_row) {
+        maybe_fetch_selected_files(model)
+    } else {
+        Vec::new()
+    }
+}
+
+fn handle_detail_left_click(model: &mut Model, mouse: MouseEvent) -> Vec<Cmd> {
+    let body_top = detail_layout::HEADER_HEIGHT;
+    let status_row = model.terminal_height.saturating_sub(1);
+    if mouse.row < body_top || mouse.row >= status_row {
+        return Vec::new();
+    }
+    let body_row = usize::from(mouse.row - body_top);
+    let ViewMode::Detail(detail) = &model.view_mode else {
+        return Vec::new();
+    };
+    let content_row = detail.scroll.saturating_add(body_row);
+    let Some(content) = measured_detail_content(model) else {
+        return Vec::new();
+    };
+    let Some(index) = content
+        .item_ranges
+        .iter()
+        .position(|range| range.contains(&content_row))
+    else {
+        return Vec::new();
+    };
+    let Some(items) = detail_items(model) else {
+        return Vec::new();
+    };
+    let focus = items.focus_at(index);
+    if let ViewMode::Detail(detail) = &mut model.view_mode {
+        detail.focus = focus;
+    }
+    Vec::new()
 }
 
 /// Step the detail focus by `delta` through the Focus Sequence (`j`/`Down`
@@ -623,6 +670,10 @@ fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             if key.kind != KeyEventKind::Press {
                 return Vec::new();
             }
+            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                model.should_quit = true;
+                return Vec::new();
+            }
             // Detail mode owns the keypress entirely: its keys never touch the
             // list selection, so the list-mode files-fetch path below must not
             // run for them (e.g. Esc-to-list must not act as if the key was a
@@ -661,9 +712,8 @@ fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
         // a selection device (the runtime captures the mouse precisely so the
         // terminal can't translate ticks into arrow keys, which are focus
         // keys). The follow anchor is untouched, so `normalize_detail` only
-        // clamps. The list has no free scroll (its viewport derives from the
-        // selection), so there a tick steps the selection like j/k — followed
-        // by the same just-in-time files fetch a selection key triggers.
+        // clamps. In the list, wheel input scrolls the display window without
+        // moving the selected PR or triggering selection-side effects.
         Msg::TerminalEvent(Event::Mouse(mouse))
             if matches!(
                 mouse.kind,
@@ -682,12 +732,20 @@ fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
                 }
                 ViewMode::List => {
                     if down {
-                        model.list.move_down();
+                        model.list.scroll_down(LIST_SCROLL_WHEEL);
                     } else {
-                        model.list.move_up();
+                        model.list.scroll_up(LIST_SCROLL_WHEEL);
                     }
-                    maybe_fetch_selected_files(model)
+                    Vec::new()
                 }
+            }
+        }
+        Msg::TerminalEvent(Event::Mouse(mouse))
+            if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) =>
+        {
+            match model.view_mode {
+                ViewMode::Detail(_) => handle_detail_left_click(model, mouse),
+                ViewMode::List => handle_list_left_click(model, mouse),
             }
         }
         Msg::TerminalEvent(_) => Vec::new(),

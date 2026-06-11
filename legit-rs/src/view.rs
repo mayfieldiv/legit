@@ -8,12 +8,25 @@ use ratatui::{
 };
 
 use crate::app::grouping::Grouping;
+use crate::app::list_layout;
 use crate::app::model::{Model, StatusKind, ViewMode};
+use crate::blocker::Tier;
 use crate::git_remote::RepoInfo;
 
 pub mod detail;
 pub mod list;
 pub mod summary;
+
+/// Theme colour for a smart-status tier. Mirrors the TS `blockerTierColor`;
+/// the one tier-to-colour mapping, shared by the list's reason cell and the
+/// summary panel's smart-status line.
+fn tier_color(tier: Tier) -> Color {
+    match tier {
+        Tier::MeBlocking => Color::Magenta,
+        Tier::WaitingOnAuthor => Color::Yellow,
+        Tier::NeedsReview => Color::Gray,
+    }
+}
 
 /// Short label for the active grouping mode, shown in the status-bar `g` hint.
 fn grouping_label(model: &Model) -> &'static str {
@@ -53,17 +66,31 @@ pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
     }
     // Split the main region into the list and the summary panel when the
     // terminal is wide enough; below 80 columns the list takes the whole row.
-    match summary::panel_width(main.width) {
+    // The widths come from `list_layout`, the same geometry mouse hit-testing
+    // maps clicks against.
+    match list_layout::panel_width(main.width) {
         Some(panel_width) => {
-            let [list_area, summary_area] =
-                Layout::horizontal([Constraint::Min(1), Constraint::Length(panel_width)])
-                    .areas(main);
+            let [list_area, divider_area, summary_area] = Layout::horizontal([
+                Constraint::Min(1),
+                Constraint::Length(list_layout::DIVIDER_WIDTH),
+                Constraint::Length(panel_width),
+            ])
+            .areas(main);
             list::render(model, frame, list_area, now);
+            render_summary_divider(frame, divider_area);
             summary::render(model, frame, summary_area);
         }
         None => list::render(model, frame, main, now),
     }
     render_status(model, frame, status);
+}
+
+fn render_summary_divider(frame: &mut Frame<'_>, area: Rect) {
+    let style = Style::default().fg(Color::Gray);
+    let lines = (0..area.height)
+        .map(|_| Line::from(Span::styled("│", style)))
+        .collect::<Vec<_>>();
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 /// The filter chip above the list: `/text` plus a block cursor while editing;

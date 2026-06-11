@@ -6,9 +6,9 @@
 //! reactively as the per-PR fan-out lands.
 //!
 //! Panel width is a function of the terminal width: hidden below 80 columns,
-//! 36 columns at 80-139, 50 columns at >=140. `panel_width` is the single
-//! source of truth shared by `view::view` (which splits the main area) and the
-//! tests.
+//! 36 columns at 80-139, 50 columns at >=140 — defined by
+//! `app::list_layout::panel_width`, the canonical list-view geometry shared
+//! with `view::view` (which splits the main area) and mouse hit-testing.
 
 use ratatui::{
     Frame,
@@ -19,7 +19,6 @@ use ratatui::{
 };
 
 use crate::app::model::{FilesState, Model};
-use crate::blocker::Tier;
 use crate::format::{
     CheckOutcome, check_row, checks_summary, comment_counts, format_mergeable, format_review_state,
     format_size, outcome, review_icon, reviews_summary, sort_check_runs,
@@ -36,28 +35,6 @@ const MAX_VISIBLE_CHECKS: usize = 6;
 
 #[cfg(test)]
 mod tests;
-
-/// Below this width the summary panel is hidden entirely — the list takes the
-/// whole row.
-const MIN_WIDTH_FOR_PANEL: u16 = 80;
-/// At this width and above the panel widens from 36 to 50 columns.
-const WIDE_WIDTH: u16 = 140;
-/// Panel width in the narrow band (80-139 columns).
-const NARROW_PANEL_WIDTH: u16 = 36;
-/// Panel width at >=140 columns.
-const WIDE_PANEL_WIDTH: u16 = 50;
-
-/// The summary panel's width for a given terminal width, or `None` when the
-/// terminal is too narrow to show it (the list then takes the whole row).
-pub fn panel_width(total_cols: u16) -> Option<u16> {
-    if total_cols < MIN_WIDTH_FOR_PANEL {
-        None
-    } else if total_cols < WIDE_WIDTH {
-        Some(NARROW_PANEL_WIDTH)
-    } else {
-        Some(WIDE_PANEL_WIDTH)
-    }
-}
 
 /// Render the summary panel into `area`. Assumes `area` is the panel's region
 /// (already split off the list by the caller).
@@ -91,7 +68,7 @@ fn smart_status_line(model: &Model, pr: &PR) -> Line<'static> {
     match model.blockers.get(&pr.key()) {
         Some(result) => Line::from(Span::styled(
             result.reason.clone(),
-            Style::default().fg(tier_color(result.tier)),
+            Style::default().fg(super::tier_color(result.tier)),
         )),
         None => loading_line(),
     }
@@ -283,15 +260,6 @@ fn header_with_loading(label: &str) -> Line<'static> {
         Span::raw(" "),
         Span::styled(LOADING, Style::default().fg(Color::Gray)),
     ])
-}
-
-/// Theme colour for a smart-status tier. Mirrors the TS `blockerTierColor`.
-fn tier_color(tier: Tier) -> Color {
-    match tier {
-        Tier::MeBlocking => Color::Magenta,
-        Tier::WaitingOnAuthor => Color::Yellow,
-        Tier::NeedsReview => Color::Gray,
-    }
 }
 
 /// A muted `Loading…` placeholder line for a not-yet-arrived section.
