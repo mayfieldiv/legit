@@ -19,7 +19,6 @@ use ratatui::{
 };
 
 use crate::app::model::{FilesState, Model};
-use crate::blocker::Tier;
 use crate::format::{
     CheckOutcome, check_row, checks_summary, comment_counts, format_mergeable, format_review_state,
     format_size, outcome, review_icon, reviews_summary, sort_check_runs,
@@ -91,7 +90,7 @@ fn smart_status_line(model: &Model, pr: &PR) -> Line<'static> {
     match model.blockers.get(&pr.key()) {
         Some(result) => Line::from(Span::styled(
             result.reason.clone(),
-            Style::default().fg(tier_color(result.tier)),
+            Style::default().fg(super::tier_color(result.tier)),
         )),
         None => loading_line(),
     }
@@ -283,15 +282,6 @@ fn header_with_loading(label: &str) -> Line<'static> {
         Span::raw(" "),
         Span::styled(LOADING, Style::default().fg(Color::Gray)),
     ])
-}
-
-/// Theme colour for a smart-status tier. Mirrors the TS `blockerTierColor`.
-fn tier_color(tier: Tier) -> Color {
-    match tier {
-        Tier::MeBlocking => Color::Magenta,
-        Tier::WaitingOnAuthor => Color::Yellow,
-        Tier::NeedsReview => Color::Gray,
-    }
 }
 
 /// A muted `Loading…` placeholder line for a not-yet-arrived section.

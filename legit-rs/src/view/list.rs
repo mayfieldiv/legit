@@ -10,7 +10,7 @@ use ratatui::{
 use crate::{
     app::grouping::DisplayRow,
     app::model::Model,
-    blocker::{BlockerResult, Tier},
+    blocker::BlockerResult,
     format::{format_age, format_repo_short, format_size, pad_to_width, truncate, truncate_middle},
     github::rest::PR,
 };
@@ -186,7 +186,8 @@ fn row_line<'a>(
     spans.push(cell(
         &reason,
         REASON_COL,
-        Style::default().fg(reason_color(blocker.map(|b| b.tier))),
+        // Gray while the blocker is still being derived (the "…" placeholder).
+        Style::default().fg(blocker.map_or(Color::Gray, |b| super::tier_color(b.tier))),
     ));
 
     let line = Line::from(spans);
@@ -203,12 +204,4 @@ fn push_gap<'a>(spans: &mut Vec<Span<'a>>) {
 
 fn cell<'a>(text: &str, width: usize, style: Style) -> Span<'a> {
     Span::styled(pad_to_width(text, width), style)
-}
-
-fn reason_color(tier: Option<Tier>) -> Color {
-    match tier {
-        Some(Tier::MeBlocking) => Color::Magenta,
-        Some(Tier::WaitingOnAuthor) => Color::Yellow,
-        Some(Tier::NeedsReview) | None => Color::Gray,
-    }
 }

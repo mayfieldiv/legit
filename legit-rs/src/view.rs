@@ -9,11 +9,23 @@ use ratatui::{
 
 use crate::app::grouping::Grouping;
 use crate::app::model::{Model, StatusKind, ViewMode};
+use crate::blocker::Tier;
 use crate::git_remote::RepoInfo;
 
 pub mod detail;
 pub mod list;
 pub mod summary;
+
+/// Theme colour for a smart-status tier. Mirrors the TS `blockerTierColor`;
+/// the one tier-to-colour mapping, shared by the list's reason cell and the
+/// summary panel's smart-status line.
+fn tier_color(tier: Tier) -> Color {
+    match tier {
+        Tier::MeBlocking => Color::Magenta,
+        Tier::WaitingOnAuthor => Color::Yellow,
+        Tier::NeedsReview => Color::Gray,
+    }
+}
 
 /// Short label for the active grouping mode, shown in the status-bar `g` hint.
 fn grouping_label(model: &Model) -> &'static str {
