@@ -2,6 +2,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use ratatui::{Terminal, backend::TestBackend};
 
 use crate::{
+    app::detail_items::{DetailFocus, DetailItems},
     app::model::{DetailState, Model, RepoDetection, ViewMode},
     git_remote::RepoInfo,
     github::rest::{PR, PRState},
@@ -86,7 +87,7 @@ fn model_in_detail(pr: PR, body: &str) -> Model {
         key,
         body: Some(crate::app::detail_layout::render_description_lines(body)),
         scroll: 0,
-        focused_index: 0,
+        focus: DetailFocus::Body,
         expanded: std::collections::HashSet::new(),
     });
     model
@@ -109,7 +110,7 @@ fn model_in_detail_with_checks(pr: PR, body: &str, checks: Vec<CheckRun>) -> Mod
         key,
         body: Some(crate::app::detail_layout::render_description_lines(body)),
         scroll: 0,
-        focused_index: 0,
+        focus: DetailFocus::Body,
         expanded: std::collections::HashSet::new(),
     });
     model.enrichment.checks.insert((repo_slug, sha), checks);
@@ -179,7 +180,7 @@ fn detail_loading_state_shows_header_and_loading_placeholder() {
         key,
         body: None,
         scroll: 0,
-        focused_index: 0,
+        focus: DetailFocus::Body,
         expanded: std::collections::HashSet::new(),
     });
 
@@ -549,10 +550,20 @@ fn detail_arrived_but_empty_threads_and_comments_show_no_sections() {
 
 // ── Focus borders ───────────────────────────────────────────────────────────
 
-/// Set the open detail view's focused item index.
+/// Focus the Focus Sequence item at `index`, resolved to its identity through
+/// the same derivation `update` uses.
 fn set_focus(model: &mut Model, index: usize) {
+    let ViewMode::Detail(detail) = &model.view_mode else {
+        panic!("expected Detail mode");
+    };
+    let focus = DetailItems::derive(
+        model.enrichment.threads_for(&detail.key),
+        model.enrichment.comments_for(&detail.key),
+        model.detail_filters(),
+    )
+    .focus_at(index);
     match &mut model.view_mode {
-        ViewMode::Detail(detail) => detail.focused_index = index,
+        ViewMode::Detail(detail) => detail.focus = focus,
         ViewMode::List => panic!("expected Detail mode"),
     }
 }

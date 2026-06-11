@@ -13,7 +13,11 @@ use crate::{
     secret::Secret,
 };
 
-use super::{cmd::Cmd, detail_items::DetailFilters, pr_list::PrList};
+use super::{
+    cmd::Cmd,
+    detail_items::{DetailFilters, DetailFocus},
+    pr_list::PrList,
+};
 
 /// Which top-level view is active. `List` is the default PR list; `Detail`
 /// carries the whole detail-view state in one variant so illegal combinations
@@ -53,10 +57,13 @@ pub struct DetailState {
     /// exact however tall the content; the one narrowing to ratatui's `u16`
     /// happens at the render edge.
     pub scroll: usize,
-    /// Index into the `detail_items::focusable_items` sequence (0 = the body).
-    /// `j`/`k`/arrows move it; it's re-clamped whenever the sequence shrinks
-    /// (threads/comments arriving, `t`/`b` filter toggles).
-    pub focused_index: usize,
+    /// The focused Focus Sequence item, identity-keyed by comment URL (the
+    /// same stable key `expanded` uses) with its last-resolved index.
+    /// `j`/`k`/arrows move it; every update re-anchors it against the fresh
+    /// sequence, so arrivals or filter toggles that insert/remove items above
+    /// it move the index — never which card is focused. A vanished item falls
+    /// back to its last position.
+    pub focus: DetailFocus,
     /// Cards whose long bodies the user expanded with Enter, keyed by the
     /// comment's URL (unique per review/issue comment, and stable across
     /// filter toggles — unlike a focus index). Lives in `DetailState` so

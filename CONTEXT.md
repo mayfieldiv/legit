@@ -57,7 +57,7 @@ A GitHub Bot account or any login matching `botLogins` in config or ending with 
 ### Detail view
 
 **Focus Sequence**:
-The detail view's flat ordering of focusable items: the PR body first, then each visible **Review Thread**'s root comment followed by its replies, then each visible **Issue Comment**. `j`/`k` move a positional focus index through it. Derived from enrichment plus the [[Detail Filters]], so arriving data or a filter toggle changes what sits under the index (the index itself only re-clamps when the sequence shrinks).
+The detail view's flat ordering of focusable items: the PR body first, then each visible **Review Thread**'s root comment followed by its replies, then each visible **Issue Comment**. `j`/`k` move the focus through it. Derived from enrichment plus the [[Detail Filters]]. The focus is identity-keyed by comment URL (the body is the special URL-less first item) and re-anchored against the fresh sequence after every update — arriving data or a filter toggle moves the focused card's _index_, never _which card_ is focused. Only when the focused item vanishes (filtered out, gone on refresh) does the focus fall back to its last position.
 
 **Card**:
 One Focus Sequence item's framed block in the detail body: byline plus markdown body (thread roots also carry their `path:line` and **Thread Classification** badge). The focused card draws a rounded border; unfocused cards reserve the same rows so focus changes never shift the layout. A card body longer than a few rows collapses with a "+N more lines" marker; Enter toggles the focused card's expansion, keyed by the comment's URL so it survives filter toggles.

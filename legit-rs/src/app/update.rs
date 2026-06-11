@@ -326,7 +326,7 @@ fn handle_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
                     key,
                     body: None,
                     scroll: 0,
-                    focused_index: 0,
+                    focus: detail_items::DetailFocus::Body,
                     expanded: std::collections::HashSet::new(),
                 });
                 return cmds;
@@ -340,57 +340,55 @@ fn handle_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
 /// Lines scrolled per PageUp/PageDown in the detail body.
 const DETAIL_SCROLL_PAGE: usize = 10;
 
-/// How many items the open detail view's focus sequence holds (1 — just the
-/// body — while threads/comments haven't arrived). 0 outside Detail mode.
-fn detail_focusable_len(model: &Model) -> usize {
-    let ViewMode::Detail(detail) = &model.view_mode else {
-        return 0;
-    };
-    detail_items::DetailItems::derive(
-        model.enrichment.threads_for(&detail.key),
-        model.enrichment.comments_for(&detail.key),
-        model.detail_filters(),
-    )
-    .focusable_len()
-}
-
-/// Step the detail focus by `delta`, clamped to the focusable sequence
-/// (`j`/`Down` forward, `k`/`Up` back). A no-op outside Detail mode.
-fn move_detail_focus(model: &mut Model, delta: isize) {
-    let len = detail_focusable_len(model);
-    if let ViewMode::Detail(detail) = &mut model.view_mode {
-        detail.focused_index = detail
-            .focused_index
-            .saturating_add_signed(delta)
-            .min(len.saturating_sub(1));
-    }
-}
-
-/// Re-clamp the detail focus after the focusable sequence may have shrunk
-/// (threads/comments arriving with fewer items, or a filter hiding the focused
-/// card). A no-op outside Detail mode.
-fn clamp_detail_focus(model: &mut Model) {
-    let len = detail_focusable_len(model);
-    if let ViewMode::Detail(detail) = &mut model.view_mode {
-        detail.focused_index = detail.focused_index.min(len.saturating_sub(1));
-    }
-}
-
-/// The deep-link URL of the detail view's focused thread/reply/comment, or
-/// `None` when the body is focused (or outside Detail mode).
-fn detail_focused_item_url(model: &Model) -> Option<String> {
+/// The open detail view's Focus Sequence derivation under the current
+/// filters, or `None` outside Detail mode. The shared input to focus stepping
+/// and re-anchoring.
+fn detail_items(model: &Model) -> Option<detail_items::DetailItems<'_>> {
     let ViewMode::Detail(detail) = &model.view_mode else {
         return None;
     };
-    detail_items::DetailItems::derive(
+    Some(detail_items::DetailItems::derive(
         model.enrichment.threads_for(&detail.key),
         model.enrichment.comments_for(&detail.key),
         model.detail_filters(),
-    )
-    .focusable()
-    .get(detail.focused_index)
-    .and_then(detail_items::FocusableItem::url)
-    .map(str::to_owned)
+    ))
+}
+
+/// Step the detail focus by `delta` through the Focus Sequence (`j`/`Down`
+/// forward, `k`/`Up` back), clamped at the ends. The target card's identity
+/// is stored, not its raw position, so later sequence changes can't retarget
+/// it. A no-op outside Detail mode.
+fn move_detail_focus(model: &mut Model, delta: isize) {
+    let Some(items) = detail_items(model) else {
+        return;
+    };
+    let ViewMode::Detail(detail) = &model.view_mode else {
+        return;
+    };
+    let index = items.resolve_focus(&detail.focus).index();
+    let focus = items.focus_at(index.saturating_add_signed(delta));
+    if let ViewMode::Detail(detail) = &mut model.view_mode {
+        detail.focus = focus;
+    }
+}
+
+/// Re-anchor the detail focus against the current Focus Sequence: identity
+/// wins, so threads/comments arriving or filter toggles that insert items
+/// above the focus move its index — never which card is focused. A focus
+/// whose item vanished (hidden by a filter, gone on refresh) falls back to
+/// its last position, clamped to the shrunk sequence. A no-op outside Detail
+/// mode.
+fn resolve_detail_focus(model: &mut Model) {
+    let Some(items) = detail_items(model) else {
+        return;
+    };
+    let ViewMode::Detail(detail) = &model.view_mode else {
+        return;
+    };
+    let focus = items.resolve_focus(&detail.focus);
+    if let ViewMode::Detail(detail) = &mut model.view_mode {
+        detail.focus = focus;
+    }
 }
 
 /// Measure the open detail view's body via the same `detail_content` layout
@@ -452,7 +450,7 @@ fn clamp_detail_scroll(model: &mut Model) {
 /// Enter expansion, t/b filters); raw scrolling (PageUp/PageDown) deliberately
 /// doesn't follow. Mirrors the TS `scrollChildIntoView` on focus change.
 fn follow_detail_focus(model: &mut Model) {
-    clamp_detail_focus(model);
+    resolve_detail_focus(model);
     let Some(content) = measured_detail_content(model) else {
         return;
     };
@@ -461,7 +459,7 @@ fn follow_detail_focus(model: &mut Model) {
     let ViewMode::Detail(detail) = &mut model.view_mode else {
         return;
     };
-    let Some(range) = content.item_ranges.get(detail.focused_index) else {
+    let Some(range) = content.item_ranges.get(detail.focus.index()) else {
         return;
     };
     let scroll = detail.scroll.min(max_scroll);
@@ -522,10 +520,14 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
         }
         // Open the focused item in the browser: a thread/reply/comment opens
         // its deep link; the body falls back to the PR itself (mirrors the TS
-        // fallback to `openInBrowser(pr)`).
+        // fallback to `openInBrowser(pr)`). The stored focus is re-anchored
+        // after every update, so its URL is never stale here.
         KeyCode::Char('o') => {
             if let ViewMode::Detail(detail) = &model.view_mode {
-                let url = detail_focused_item_url(model).unwrap_or_else(|| detail.key.html_url());
+                let url = detail
+                    .focus
+                    .url()
+                    .map_or_else(|| detail.key.html_url(), str::to_owned);
                 return vec![Cmd::OpenUrl { url }];
             }
         }
@@ -535,8 +537,8 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
         // body (no URL) has nothing to toggle. Expansion changes the content
         // height, so the follow re-clamps and keeps the card in view.
         KeyCode::Enter => {
-            if let Some(url) = detail_focused_item_url(model)
-                && let ViewMode::Detail(detail) = &mut model.view_mode
+            if let ViewMode::Detail(detail) = &mut model.view_mode
+                && let Some(url) = detail.focus.url().map(str::to_owned)
             {
                 if !detail.expanded.remove(&url) {
                     detail.expanded.insert(url);
@@ -575,16 +577,16 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
 }
 
 /// Re-establish the open detail view's invariants after a state change: the
-/// focused index stays inside the focus sequence (threads/comments arriving or
-/// filters hiding items can shrink it), and the scroll offset never sits more
-/// than one screenful above the last content line (a refresh returning a
-/// shorter body, a shrinking sequence, or a taller terminal can all strand
-/// it — and PageUp deliberately doesn't clamp, so a stranded offset reads as
-/// dead keypresses). Runs once at the end of every `update` rather than at
-/// each mutation site, so no message path can forget it. A no-op outside
-/// Detail mode, and cheap while the body hasn't arrived.
+/// focus re-anchors to its item's place in the fresh Focus Sequence (falling
+/// back positionally when the item vanished), and the scroll offset never
+/// sits more than one screenful above the last content line (a refresh
+/// returning a shorter body, a shrinking sequence, or a taller terminal can
+/// all strand it — and PageUp deliberately doesn't clamp, so a stranded
+/// offset reads as dead keypresses). Runs once at the end of every `update`
+/// rather than at each mutation site, so no message path can forget it. A
+/// no-op outside Detail mode, and cheap while the body hasn't arrived.
 fn normalize_detail(model: &mut Model) {
-    clamp_detail_focus(model);
+    resolve_detail_focus(model);
     clamp_detail_scroll(model);
 }
 

@@ -34,10 +34,20 @@ fn detail_body_text(model: &crate::app::model::Model) -> String {
     }
 }
 
-/// The focused item index of the open detail view; panics if not in Detail mode.
+/// The focused item's resolved index in the open detail view; panics if not
+/// in Detail mode.
 fn detail_focus(model: &crate::app::model::Model) -> usize {
     match &model.view_mode {
-        ViewMode::Detail(detail) => detail.focused_index,
+        ViewMode::Detail(detail) => detail.focus.index(),
+        ViewMode::List => panic!("expected Detail mode"),
+    }
+}
+
+/// The focused item's identity URL (`None` = the body); panics if not in
+/// Detail mode.
+fn detail_focus_url(model: &crate::app::model::Model) -> Option<String> {
+    match &model.view_mode {
+        ViewMode::Detail(detail) => detail.focus.url().map(str::to_owned),
         ViewMode::List => panic!("expected Detail mode"),
     }
 }
@@ -446,10 +456,10 @@ fn j_with_no_threads_or_comments_keeps_focus_on_the_body() {
 }
 
 #[test]
-fn threads_arrival_clamps_an_out_of_range_focus() {
+fn threads_arrival_follows_the_focused_comment_to_its_new_index() {
     // Focus the last item (the issue comment), then deliver a fresh thread
-    // list that removes the thread (and its reply) — the rebuilt sequence is
-    // body + comment (2 items), so focus must clamp into range.
+    // list that removes the thread (and its reply) — the comment is still in
+    // the rebuilt sequence, so the focus follows its identity to index 1.
     let mut model = focusable_detail_model();
     for _ in 0..3 {
         update(&mut model, key_event(KeyCode::Char('j')));
@@ -467,7 +477,57 @@ fn threads_arrival_clamps_an_out_of_range_focus() {
     assert_eq!(
         detail_focus(&model),
         1,
-        "focus must clamp to the last item of the rebuilt sequence"
+        "the focus must follow the comment into the rebuilt sequence"
+    );
+    assert_eq!(
+        detail_focus_url(&model).as_deref(),
+        Some("https://example.test/c/10"),
+        "the focused card must still be the comment the user selected"
+    );
+}
+
+#[test]
+fn late_thread_arrival_keeps_the_focused_comments_identity() {
+    // Focus the trailing issue comment, then deliver a fresh thread list that
+    // inserts a second thread above it. A positional focus would silently
+    // retarget to whatever card landed at the old index; the identity-keyed
+    // focus must follow the comment to its new position so `o` still opens
+    // the card the user selected.
+    let mut model = focusable_detail_model();
+    for _ in 0..3 {
+        update(&mut model, key_event(KeyCode::Char('j')));
+    }
+    assert_eq!(
+        detail_focus_url(&model).as_deref(),
+        Some("https://example.test/c/10"),
+        "precondition: the issue comment is focused"
+    );
+
+    update(
+        &mut model,
+        Msg::ThreadsArrived {
+            pr: pr_key_42(),
+            threads: vec![
+                thread("t0", false, vec![review_comment("c0", "dave")]),
+                thread(
+                    "t1",
+                    false,
+                    vec![review_comment("c1", "alice"), review_comment("c2", "bob")],
+                ),
+            ],
+        },
+    );
+
+    assert_eq!(
+        detail_focus(&model),
+        4,
+        "the focused comment must move down one slot with the inserted thread"
+    );
+    let cmds = update(&mut model, key_event(KeyCode::Char('o')));
+    assert_eq!(
+        open_url(&cmds),
+        "https://example.test/c/10",
+        "o must open the card the user focused, not the card at the old index"
     );
 }
 
@@ -700,7 +760,7 @@ fn focused_item_range(model: &crate::app::model::Model) -> std::ops::Range<usize
     let ViewMode::Detail(detail) = &model.view_mode else {
         panic!("expected Detail mode");
     };
-    measured_content(model).item_ranges[detail.focused_index].clone()
+    measured_content(model).item_ranges[detail.focus.index()].clone()
 }
 
 /// A focusable detail model with a body tall enough that the thread and
@@ -821,9 +881,10 @@ fn refreshing_to_a_shorter_body_reclamps_scroll_so_page_up_stays_live() {
 #[test]
 fn showing_resolved_threads_keeps_the_focused_card_in_view() {
     // Focus the issue comment at the bottom (the scroll followed it). Toggling
-    // `t` reveals a resolved thread ABOVE it, pushing the focused card's lines
-    // below the viewport — the toggle must scroll the card back into view,
-    // exactly like a j/k focus move would.
+    // `t` reveals a resolved thread ABOVE it: the focus keeps the comment's
+    // identity (its index shifts down by the inserted card), and the toggle
+    // must scroll the card back into view, exactly like a j/k focus move
+    // would.
     let mut model = tall_focusable_detail_model();
     let resolved_body: String = (1..=6).map(|n| format!("Resolved para {n}\n\n")).collect();
     update(
@@ -848,14 +909,19 @@ fn showing_resolved_threads_keeps_the_focused_card_in_view() {
         update(&mut model, key_event(KeyCode::Char('j')));
     }
     let focused_before = detail_focus(&model);
+    let url_before = detail_focus_url(&model);
 
     update(&mut model, key_event(KeyCode::Char('t')));
 
     assert_eq!(
+        detail_focus_url(&model),
+        url_before,
+        "revealing threads must not change which card is focused"
+    );
+    assert_eq!(
         detail_focus(&model),
-        focused_before,
-        "the focus index is positional: revealing threads changes what sits \
-         under it, not the index itself"
+        focused_before + 1,
+        "the revealed resolved thread above shifts the focused card's index"
     );
     let range = focused_item_range(&model);
     let viewport = (model.terminal_height - crate::app::detail_layout::CHROME_ROWS) as usize;

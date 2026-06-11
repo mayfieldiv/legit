@@ -261,7 +261,7 @@ pub(crate) fn detail_content(
     width: u16,
     now: DateTime<Utc>,
 ) -> DetailContent {
-    let focused_index = detail.focused_index;
+    let focused_index = detail.focus.index();
     let key = pr.key();
     let items = detail_items::DetailItems::derive(
         model.enrichment.threads_for(&key),

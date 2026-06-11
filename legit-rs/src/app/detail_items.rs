@@ -94,6 +94,41 @@ impl FocusableItem<'_> {
     }
 }
 
+/// The detail view's focused item, identity-keyed. `Body` is the description
+/// (always position 0); `Item` names a thread root / reply / issue comment by
+/// its comment URL — the same stable key card expansion uses — plus the
+/// position it resolved to in the Focus Sequence on the last `resolve_focus`.
+/// Keying by identity instead of raw position means arriving threads/comments
+/// or filter toggles that insert items above the focus move its *index*, never
+/// *which card* is focused — so `o`/Enter can't act on a card the user didn't
+/// select.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DetailFocus {
+    Body,
+    Item { url: String, index: usize },
+}
+
+impl DetailFocus {
+    /// The focused position in the Focus Sequence as of the last resolution
+    /// (0 for the body). Read by the layout's focused-border check and as the
+    /// fallback when the focused item vanishes.
+    pub fn index(&self) -> usize {
+        match self {
+            DetailFocus::Body => 0,
+            DetailFocus::Item { index, .. } => *index,
+        }
+    }
+
+    /// The focused item's comment URL — `None` for the body (`o` falls back
+    /// to the PR URL).
+    pub fn url(&self) -> Option<&str> {
+        match self {
+            DetailFocus::Body => None,
+            DetailFocus::Item { url, .. } => Some(url),
+        }
+    }
+}
+
 impl<'a> DetailItems<'a> {
     /// Derive the sections from the enrichment maps' entries (`None` = that
     /// fetch hasn't arrived) under `filters`. The single filtering pass both
@@ -154,6 +189,43 @@ impl<'a> DetailItems<'a> {
                 .map(|&comment| FocusableItem::Comment { comment }),
         );
         items
+    }
+
+    /// The identity-keyed focus for the item at `index` in this derivation's
+    /// Focus Sequence, clamped into range. How a positional intent (a `j`/`k`
+    /// step, a vanished-item fallback) is anchored to an identity to store.
+    pub fn focus_at(&self, index: usize) -> DetailFocus {
+        let focusable = self.focusable();
+        let index = index.min(focusable.len() - 1);
+        match focusable[index].url() {
+            Some(url) => DetailFocus::Item {
+                url: url.to_owned(),
+                index,
+            },
+            None => DetailFocus::Body,
+        }
+    }
+
+    /// Re-anchor a stored focus against this derivation: the URL wins while
+    /// its item is still in the sequence (re-indexed to wherever it sits now);
+    /// a vanished item falls back to its last position, clamped to the shrunk
+    /// sequence and adopting whatever card sits there. Every update runs this,
+    /// so a stored focus is never stale for longer than one message.
+    pub fn resolve_focus(&self, focus: &DetailFocus) -> DetailFocus {
+        let DetailFocus::Item { url, index } = focus else {
+            return DetailFocus::Body;
+        };
+        let position = self
+            .focusable()
+            .iter()
+            .position(|item| item.url() == Some(url));
+        match position {
+            Some(index) => DetailFocus::Item {
+                url: url.clone(),
+                index,
+            },
+            None => self.focus_at(*index),
+        }
     }
 
     /// `focusable().len()` without building the sequence — focus clamping
