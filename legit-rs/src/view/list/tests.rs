@@ -130,8 +130,7 @@ fn buffer_text(terminal: &Terminal<TestBackend>) -> Vec<String> {
 /// assertions about the list alone, independent of the panel beside it.
 fn list_rows(terminal: &Terminal<TestBackend>) -> Vec<String> {
     let width = terminal.backend().buffer().area().width;
-    let summary_and_divider = view::summary::panel_width(width).map_or(0, |w| w + 1);
-    let list_width = width - summary_and_divider;
+    let list_width = crate::app::list_layout::list_width(width);
     let mut rows: Vec<String> = buffer_text(terminal)
         .into_iter()
         .map(|row| row.chars().take(list_width as usize).collect())
@@ -357,7 +356,7 @@ fn list_and_summary_are_separated_by_a_divider_cell() {
     });
     let width = 116;
     let terminal = render_snapshot(&model, width, 4);
-    let panel_width = view::summary::panel_width(width).expect("panel visible");
+    let panel_width = crate::app::list_layout::panel_width(width).expect("panel visible");
     let divider_x = width - panel_width - 1;
 
     let buffer = terminal.backend().buffer();

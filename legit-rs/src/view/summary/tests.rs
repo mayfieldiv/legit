@@ -1,8 +1,8 @@
 use chrono::{DateTime, TimeZone, Utc};
 use ratatui::{Terminal, backend::TestBackend};
 
-use super::panel_width;
 use crate::{
+    app::list_layout::panel_width,
     app::model::{Model, RepoDetection},
     blocker::{BlockerResult, Tier},
     git_remote::RepoInfo,
@@ -406,24 +406,6 @@ fn renders_github_url_footer_line() {
             .any(|r| r.contains("https://github.com/acme/web/pull/42")),
         "footer GitHub URL must render: {rows:?}"
     );
-}
-
-#[test]
-fn panel_is_hidden_below_eighty_columns() {
-    assert_eq!(panel_width(79), None);
-    assert_eq!(panel_width(0), None);
-}
-
-#[test]
-fn panel_is_thirty_six_columns_in_the_narrow_band() {
-    assert_eq!(panel_width(80), Some(36));
-    assert_eq!(panel_width(139), Some(36));
-}
-
-#[test]
-fn panel_is_fifty_columns_at_one_forty_and_above() {
-    assert_eq!(panel_width(140), Some(50));
-    assert_eq!(panel_width(200), Some(50));
 }
 
 // ── full-panel snapshot scenarios across the supported widths ────────────────

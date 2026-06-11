@@ -8,7 +8,7 @@ use crate::{git_remote::RepoInfo, github::rest::PrKey, secret::Secret};
 
 use super::{
     cmd::{Cmd, RequestContext},
-    detail_items, detail_layout,
+    detail_items, detail_layout, list_layout,
     model::{DetailState, FilesState, Model, RepoDetection, StatusKind, StatusMessage, ViewMode},
     msg::Msg,
 };
@@ -349,12 +349,6 @@ const DETAIL_SCROLL_WHEEL: usize = 3;
 /// Display rows scrolled per mouse-wheel tick in the Open PR List.
 const LIST_SCROLL_WHEEL: usize = 3;
 
-const SUMMARY_MIN_WIDTH: u16 = 80;
-const SUMMARY_WIDE_WIDTH: u16 = 140;
-const SUMMARY_NARROW_PANEL_WIDTH: u16 = 36;
-const SUMMARY_WIDE_PANEL_WIDTH: u16 = 50;
-const SUMMARY_DIVIDER_WIDTH: u16 = 1;
-
 /// The open detail view's Focus Sequence derivation under the current
 /// filters, or `None` outside Detail mode. The shared input to focus stepping
 /// and re-anchoring.
@@ -369,29 +363,10 @@ fn detail_items(model: &Model) -> Option<detail_items::DetailItems<'_>> {
     ))
 }
 
-fn summary_panel_width(total_cols: u16) -> Option<u16> {
-    if total_cols < SUMMARY_MIN_WIDTH {
-        None
-    } else if total_cols < SUMMARY_WIDE_WIDTH {
-        Some(SUMMARY_NARROW_PANEL_WIDTH)
-    } else {
-        Some(SUMMARY_WIDE_PANEL_WIDTH)
-    }
-}
-
-fn list_width(total_cols: u16) -> u16 {
-    summary_panel_width(total_cols).map_or(total_cols, |panel| {
-        total_cols.saturating_sub(panel + SUMMARY_DIVIDER_WIDTH)
-    })
-}
-
 fn handle_list_left_click(model: &mut Model, mouse: MouseEvent) -> Vec<Cmd> {
-    let top = 1 + u16::from(model.list.filter().is_visible());
-    let bottom = model.terminal_height.saturating_sub(1);
-    if mouse.row < top || mouse.row >= bottom || mouse.column >= list_width(model.terminal_width) {
+    let Some(visible_row) = list_layout::visible_row_at(model, mouse.column, mouse.row) else {
         return Vec::new();
-    }
-    let visible_row = usize::from(mouse.row - top);
+    };
     if model.list.select_visible_row(visible_row) {
         maybe_fetch_selected_files(model)
     } else {

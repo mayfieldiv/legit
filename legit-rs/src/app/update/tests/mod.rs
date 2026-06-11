@@ -249,6 +249,59 @@ fn q_key_sets_should_quit() {
 }
 
 #[test]
+fn left_click_accounts_for_the_filter_chip_row() {
+    let mut model = enriched_model(&[1, 2, 3]);
+    model.list.complete_fetch("mayfieldiv/legit");
+    // Flat list, as in the plain click test: row maps directly to a PR row.
+    model.list.cycle_grouping();
+    model.list.cycle_grouping();
+    model.relayout();
+    update(
+        &mut model,
+        Msg::TerminalEvent(ratatui::crossterm::event::Event::Resize(100, 8)),
+    );
+    // Apply a filter ("p" matches every sample title) so its chip occupies
+    // row 1 and the list starts one row lower, at row 2.
+    update(&mut model, key_event(KeyCode::Char('/')));
+    update(&mut model, key_event(KeyCode::Char('p')));
+    update(&mut model, key_event(KeyCode::Enter));
+    assert_eq!(model.list.selected_pr().unwrap().number, 1);
+
+    update(&mut model, mouse_down_event(0, 3));
+
+    assert_eq!(
+        model.list.selected_pr().unwrap().number,
+        2,
+        "with the filter chip visible, terminal row 3 is the second list row"
+    );
+}
+
+#[test]
+fn left_click_in_the_summary_panel_leaves_the_selection_alone() {
+    let mut model = enriched_model(&[1, 2, 3]);
+    model.list.complete_fetch("mayfieldiv/legit");
+    model.list.cycle_grouping();
+    model.list.cycle_grouping();
+    model.relayout();
+    update(
+        &mut model,
+        Msg::TerminalEvent(ratatui::crossterm::event::Event::Resize(100, 8)),
+    );
+    assert_eq!(model.list.selected_pr().unwrap().number, 1);
+
+    // 100 columns -> 63-col list + 1-col divider + 36-col panel, so column 70
+    // lands inside the summary panel; row 2 would otherwise select PR #2.
+    let cmds = update(&mut model, mouse_down_event(70, 2));
+
+    assert_eq!(
+        model.list.selected_pr().unwrap().number,
+        1,
+        "a click in the summary panel must not move the list selection"
+    );
+    assert!(cmds.is_empty(), "and must trigger no fetches: {cmds:?}");
+}
+
+#[test]
 fn ctrl_c_sets_should_quit_from_list_and_detail_views() {
     let mut list_model = enriched_model(&[1]);
 

@@ -8,6 +8,7 @@ use ratatui::{
 };
 
 use crate::app::grouping::Grouping;
+use crate::app::list_layout;
 use crate::app::model::{Model, StatusKind, ViewMode};
 use crate::blocker::Tier;
 use crate::git_remote::RepoInfo;
@@ -65,11 +66,13 @@ pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
     }
     // Split the main region into the list and the summary panel when the
     // terminal is wide enough; below 80 columns the list takes the whole row.
-    match summary::panel_width(main.width) {
+    // The widths come from `list_layout`, the same geometry mouse hit-testing
+    // maps clicks against.
+    match list_layout::panel_width(main.width) {
         Some(panel_width) => {
             let [list_area, divider_area, summary_area] = Layout::horizontal([
                 Constraint::Min(1),
-                Constraint::Length(1),
+                Constraint::Length(list_layout::DIVIDER_WIDTH),
                 Constraint::Length(panel_width),
             ])
             .areas(main);

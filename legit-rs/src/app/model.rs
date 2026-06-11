@@ -422,12 +422,12 @@ impl Model {
     }
 
     /// Number of non-list "chrome" rows around the list: the always-present tab
-    /// bar and status bar, plus the filter chip while it's visible. The single
-    /// source of truth shared by `sync_viewport` (which subtracts it from the
-    /// terminal height) and `view::view` (which lays out exactly this many
-    /// fixed rows around the list).
+    /// bar and status bar, plus the filter chip while it's visible. Defined by
+    /// `list_layout` — the canonical list-view geometry — so the viewport
+    /// `sync_viewport` sizes, the rows `view::view` lays out, and the rows
+    /// mouse hit-testing maps can't disagree.
     pub fn chrome_rows(&self) -> usize {
-        2 + usize::from(self.list.filter().is_visible())
+        super::list_layout::chrome_rows(self.list.filter().is_visible())
     }
 
     /// Re-derive the list viewport from the terminal height minus the chrome
