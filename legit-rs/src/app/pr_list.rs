@@ -295,6 +295,18 @@ impl PrList {
         self.scroll_offset = self.scroll_offset.saturating_sub(rows);
     }
 
+    /// Select the PR row at `visible_row` within the current viewport. Headers
+    /// are ignored. Unlike keyboard movement, this does not normalize scroll:
+    /// the clicked row is already visible, so the viewport should stay put.
+    pub fn select_visible_row(&mut self, visible_row: usize) -> bool {
+        let display_row = self.scroll_offset.saturating_add(visible_row);
+        let Some(DisplayRow::Pr(index)) = self.rows.get(display_row) else {
+            return false;
+        };
+        self.selected = *index;
+        true
+    }
+
     /// PR index of the selection cursor. Read by tests and future features
     /// (e.g. opening the selected PR); the view itself reads the selected flag
     /// straight off `visible_rows`.

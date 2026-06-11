@@ -76,7 +76,7 @@ fn set_detail_body(model: &mut crate::app::model::Model, body: &str) {
     );
 }
 
-use super::{enriched_model, key_event, wheel_event};
+use super::{enriched_model, key_event, mouse_down_event, wheel_event};
 
 /// A model with auth + repo detected and one PR streamed in and selected.
 fn model_with_one_pr() -> crate::app::model::Model {
@@ -443,6 +443,23 @@ fn arrow_keys_move_focus_like_j_and_k() {
 
     update(&mut model, key_event(KeyCode::Up));
     assert_eq!(detail_focus(&model), 0, "Up must retreat focus");
+}
+
+#[test]
+fn left_click_on_a_visible_detail_card_focuses_that_card() {
+    let mut model = focusable_detail_model();
+    model.terminal_width = 80;
+    assert_eq!(detail_focus(&model), 0);
+    let thread_root = measured_content(&model).item_ranges[1].clone();
+    let click_row = crate::app::detail_layout::HEADER_HEIGHT + thread_root.start as u16;
+
+    update(&mut model, mouse_down_event(0, click_row));
+
+    assert_eq!(detail_focus(&model), 1);
+    assert_eq!(
+        detail_focus_url(&model),
+        Some("https://example.test/r/c1".to_owned())
+    );
 }
 
 #[test]

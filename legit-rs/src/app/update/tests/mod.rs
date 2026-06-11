@@ -83,6 +83,16 @@ pub(super) fn wheel_event(down: bool) -> Msg {
     }))
 }
 
+pub(super) fn mouse_down_event(column: u16, row: u16) -> Msg {
+    use ratatui::crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    Msg::TerminalEvent(Event::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    }))
+}
+
 #[test]
 fn wheel_in_list_mode_scrolls_the_viewport_without_moving_selection() {
     let mut model = enriched_model(&[1, 2, 3, 4, 5, 6]);
@@ -119,6 +129,30 @@ fn wheel_in_list_mode_scrolls_the_viewport_without_moving_selection() {
         model.list.scroll_offset(),
         0,
         "wheel-up scrolls the visible viewport back toward the top"
+    );
+}
+
+#[test]
+fn left_click_on_a_visible_list_row_selects_that_pr() {
+    let mut model = enriched_model(&[1, 2, 3]);
+    model.list.complete_fetch("mayfieldiv/legit");
+    // Use a flat list so terminal row 2 maps directly to the second PR row:
+    // row 0 tab bar, row 1 first list row, row 2 second list row.
+    model.list.cycle_grouping();
+    model.list.cycle_grouping();
+    model.relayout();
+    update(
+        &mut model,
+        Msg::TerminalEvent(ratatui::crossterm::event::Event::Resize(100, 8)),
+    );
+    assert_eq!(model.list.selected_pr().unwrap().number, 1);
+
+    let cmds = update(&mut model, mouse_down_event(0, 2));
+
+    assert_eq!(model.list.selected_pr().unwrap().number, 2);
+    assert!(
+        cmds.iter().any(|cmd| matches!(cmd, Cmd::FetchFiles { .. })),
+        "clicking a PR row selects it and fetches its files: {cmds:?}"
     );
 }
 
