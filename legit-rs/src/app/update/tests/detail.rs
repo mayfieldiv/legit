@@ -295,6 +295,53 @@ fn r_in_detail_dispatches_refetch_and_clears_detail() {
 }
 
 #[test]
+fn r_in_detail_refetches_threads_reviews_and_comments() {
+    // Enrichment otherwise fetches exactly once per list load, so `r` is both
+    // the staleness refresh for the Review Threads / Conversation sections and
+    // the retry path when an initial fetch failed and left a section stuck on
+    // its loading placeholder.
+    let mut model = model_with_one_pr();
+    update(&mut model, key_event(KeyCode::Enter));
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('r')));
+
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Cmd::FetchThreads { number: 42, .. })),
+        "r must refetch the open PR's review threads: {cmds:?}"
+    );
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Cmd::FetchReviews { number: 42, .. })),
+        "r must refetch the open PR's reviews: {cmds:?}"
+    );
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Cmd::FetchIssueComments { number: 42, .. })),
+        "r must refetch the open PR's issue comments: {cmds:?}"
+    );
+}
+
+#[test]
+fn r_keeps_existing_threads_and_comments_until_fresh_ones_arrive() {
+    // Unlike the body (cleared to show the loading placeholder), the already-
+    // rendered thread/comment cards stay up during a refresh — the arriving
+    // lists overwrite them, so there is no flicker through "Loading threads…".
+    let mut model = focusable_detail_model();
+
+    update(&mut model, key_event(KeyCode::Char('r')));
+
+    assert!(
+        model.enrichment.threads_for(&pr_key_42()).is_some(),
+        "r must not clear the threads already on screen"
+    );
+    assert!(
+        model.enrichment.comments_for(&pr_key_42()).is_some(),
+        "r must not clear the comments already on screen"
+    );
+}
+
+#[test]
 fn r_in_list_mode_does_not_dispatch_fetch_pr_detail() {
     // 'r' in list mode is unbound (no handler). It must not accidentally
     // dispatch FetchPRDetail.

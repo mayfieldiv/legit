@@ -94,20 +94,30 @@ fn enrichment_cmds(model: &Model, repo_slug: &str) -> Vec<Cmd> {
         pr_numbers: numbers.clone(),
     });
     for number in numbers {
-        cmds.push(Cmd::FetchThreads {
-            ctx: Arc::clone(&ctx),
-            number,
-        });
-        cmds.push(Cmd::FetchReviews {
-            ctx: Arc::clone(&ctx),
-            number,
-        });
-        cmds.push(Cmd::FetchIssueComments {
-            ctx: Arc::clone(&ctx),
-            number,
-        });
+        cmds.extend(pr_enrichment_cmds(&ctx, number));
     }
     cmds
+}
+
+/// The per-PR enrichment trio — threads, reviews, issue comments — for one PR.
+/// The shared definition of "enrich this PR": `enrichment_cmds` fans it out
+/// across a repo's whole list, and the detail view's `r` re-dispatches it for
+/// the open PR.
+fn pr_enrichment_cmds(ctx: &Arc<RequestContext>, number: u64) -> [Cmd; 3] {
+    [
+        Cmd::FetchThreads {
+            ctx: Arc::clone(ctx),
+            number,
+        },
+        Cmd::FetchReviews {
+            ctx: Arc::clone(ctx),
+            number,
+        },
+        Cmd::FetchIssueComments {
+            ctx: Arc::clone(ctx),
+            number,
+        },
+    ]
 }
 
 /// Build the `Arc<RequestContext>` shared by a fan-out of enrichment commands:
@@ -197,6 +207,28 @@ fn fetch_pr_detail_cmd(model: &Model, key: &PrKey) -> Vec<Cmd> {
         ctx,
         key: key.clone(),
     }]
+}
+
+/// Every fetch the detail view's `r` refresh re-dispatches for the open PR:
+/// the body plus the per-PR enrichment trio whose results the Review Threads
+/// and Conversation sections render. Enrichment otherwise fetches exactly once
+/// per list load, so this is also the retry path when an initial fetch failed
+/// and left a section stuck on its loading placeholder. Yields nothing when
+/// auth isn't ready or the PR's repo isn't tracked, like `fetch_pr_detail_cmd`.
+fn refresh_detail_cmds(model: &Model, key: &PrKey) -> Vec<Cmd> {
+    let Some(token) = model.auth_token.as_ref() else {
+        return Vec::new();
+    };
+    let Some(repo) = model.tracked_repo(&key.repo_slug) else {
+        return Vec::new();
+    };
+    let ctx = request_context(&repo, token, &model.config.bot_logins);
+    let mut cmds = vec![Cmd::FetchPRDetail {
+        ctx: Arc::clone(&ctx),
+        key: key.clone(),
+    }];
+    cmds.extend(pr_enrichment_cmds(&ctx, key.number));
+    cmds
 }
 
 /// Switch to the Repo Tab at `index` (0 = All): re-derive the visible list
@@ -454,18 +486,20 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
             model.view_mode = ViewMode::List;
         }
         KeyCode::Char('r') => {
-            // Refresh the current PR detail: refetch the body. Clears the
-            // cached body first so the view briefly shows the loading
-            // placeholder, consistent with the initial enter-and-fetch flow.
-            // Preserves the scroll position so the user stays at the same
-            // place after a quick re-fetch.
+            // Refresh the open PR: refetch the body plus the threads / reviews
+            // / issue comments behind the Review Threads and Conversation
+            // sections. The cached body clears so the view shows the loading
+            // placeholder, consistent with the initial enter-and-fetch flow;
+            // threads/comments keep rendering their current data until the
+            // fresh lists overwrite it. Preserves the scroll position so the
+            // user stays at the same place after a quick re-fetch.
             //
             // Clone the key so the borrow of model.view_mode ends before the
             // body is reassigned below (which needs a unique borrow of the
-            // model via `fetch_pr_detail_cmd`).
+            // model via `refresh_detail_cmds`).
             if let ViewMode::Detail(detail) = &model.view_mode {
                 let key = detail.key.clone();
-                let cmds = fetch_pr_detail_cmd(model, &key);
+                let cmds = refresh_detail_cmds(model, &key);
                 if !cmds.is_empty()
                     && let ViewMode::Detail(detail) = &mut model.view_mode
                 {
