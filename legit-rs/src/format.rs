@@ -65,6 +65,11 @@ pub fn format_size(additions: u64, deletions: u64) -> String {
     format!("+{additions}/-{deletions}")
 }
 
+/// Compact display for a repo slug: `owner/repo` -> `repo`.
+pub fn format_repo_short(slug: &str) -> &str {
+    slug.rsplit('/').next().unwrap_or(slug)
+}
+
 /// Truncate `s` to at most `max` terminal columns, appending `…` when
 /// shortened. Width is measured in display columns (via `unicode-width`), not
 /// `char` count: CJK ideographs and emoji occupy two columns, so a char-count
@@ -379,9 +384,9 @@ mod tests {
 
     use super::{
         CheckOutcome, ChecksSummary, CommentCounts, ReviewsSummary, check_icon, check_row,
-        check_sort_group, checks_summary, comment_counts, format_age, format_review_state,
-        format_size, outcome, pad_to_width, review_icon, reviews_summary, sort_check_runs,
-        truncate, truncate_middle,
+        check_sort_group, checks_summary, comment_counts, format_age, format_repo_short,
+        format_review_state, format_size, outcome, pad_to_width, review_icon, reviews_summary,
+        sort_check_runs, truncate, truncate_middle,
     };
     use crate::github::types::{CheckRun, FullReviewThread, Review, ReviewComment};
 
@@ -448,6 +453,12 @@ mod tests {
     fn format_size_renders_additions_and_deletions() {
         assert_eq!(format_size(5, 3), "+5/-3");
         assert_eq!(format_size(0, 0), "+0/-0");
+    }
+
+    #[test]
+    fn format_repo_short_keeps_only_the_repo_name() {
+        assert_eq!(format_repo_short("owner/widgets"), "widgets");
+        assert_eq!(format_repo_short("widgets"), "widgets");
     }
 
     #[test]

@@ -55,15 +55,29 @@ pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
     // terminal is wide enough; below 80 columns the list takes the whole row.
     match summary::panel_width(main.width) {
         Some(panel_width) => {
-            let [list_area, summary_area] =
-                Layout::horizontal([Constraint::Min(1), Constraint::Length(panel_width)])
-                    .areas(main);
+            let [list_area, divider_area, summary_area] = Layout::horizontal([
+                Constraint::Min(1),
+                Constraint::Length(1),
+                Constraint::Length(panel_width),
+            ])
+            .areas(main);
             list::render(model, frame, list_area, now);
+            render_summary_divider(frame, divider_area);
             summary::render(model, frame, summary_area);
         }
         None => list::render(model, frame, main, now),
     }
     render_status(model, frame, status);
+}
+
+fn render_summary_divider(frame: &mut Frame<'_>, area: Rect) {
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "│",
+            Style::default().fg(Color::Gray),
+        ))),
+        area,
+    );
 }
 
 /// The filter chip above the list: `/text` plus a block cursor while editing;

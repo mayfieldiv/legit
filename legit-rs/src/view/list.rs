@@ -10,7 +10,8 @@ use ratatui::{
 use crate::{
     app::grouping::DisplayRow,
     app::model::Model,
-    format::{format_age, format_size, pad_to_width, truncate, truncate_middle},
+    blocker::{BlockerResult, Tier},
+    format::{format_age, format_repo_short, format_size, pad_to_width, truncate, truncate_middle},
     github::rest::PR,
 };
 
@@ -44,6 +45,7 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, now: DateTime<Ut
     // Size columns to the visible PRs only, so an off-tab PR's wide number or
     // diff size can't widen this tab's columns.
     let visible: Vec<&PR> = pr_list.visible_pr_indices().map(|i| &prs[i]).collect();
+    let show_repo = should_show_repo_column(model, &visible);
     let pr_num_col = pr_num_col_width(&visible);
     let size_col = size_col_width(&visible);
     let lines: Vec<Line<'_>> = pr_list
@@ -52,8 +54,10 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, now: DateTime<Ut
             DisplayRow::Header(label) => header_line(label, width),
             DisplayRow::Pr(index) => {
                 let pr = &prs[*index];
-                let reason = model.blockers.get(&pr.key()).map(|b| b.reason.as_str());
-                row_line(pr, reason, width, pr_num_col, size_col, now, selected)
+                let blocker = model.blockers.get(&pr.key());
+                row_line(
+                    pr, blocker, width, pr_num_col, size_col, show_repo, now, selected,
+                )
             }
         })
         .collect();
@@ -63,10 +67,19 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, now: DateTime<Ut
 
 const PR_NUM_COL_MIN: usize = 5;
 const AUTHOR_COL: usize = 14;
+const REPO_COL: usize = 14;
 const SIZE_COL_MIN: usize = 6;
 const AGE_COL: usize = 6;
 /// Width reserved for the trailing smart-status reason hint.
 const REASON_COL: usize = 24;
+const GAP: usize = 1;
+
+fn should_show_repo_column(model: &Model, visible: &[&PR]) -> bool {
+    model.active_scope().is_none()
+        && visible
+            .first()
+            .is_some_and(|first| visible.iter().any(|pr| pr.repo_slug != first.repo_slug))
+}
 
 /// Width of the `#<number>` column, sized to fit the widest visible PR number.
 /// Floored at `PR_NUM_COL_MIN` so single-digit-PR repos still get a
@@ -108,10 +121,11 @@ fn header_line(label: &str, width: u16) -> Line<'static> {
 
 fn row_line<'a>(
     pr: &'a PR,
-    reason: Option<&str>,
+    blocker: Option<&BlockerResult>,
     width: u16,
     pr_num_col: usize,
     size_col: usize,
+    show_repo: bool,
     now: DateTime<Utc>,
     selected: bool,
 ) -> Line<'a> {
@@ -123,40 +137,75 @@ fn row_line<'a>(
         pr.title.clone()
     };
     let author = pr.author.clone();
+    let repo = format_repo_short(&pr.repo_slug);
     let size = format_size(pr.additions, pr.deletions);
     let age = format_age(pr.created_at, now);
     // The smart-status reason renders as a short trailing hint; "…" while the
     // PR's enrichment (and thus its blocker) is still being derived.
-    let reason = reason.unwrap_or("…");
+    let reason = blocker.map(|b| b.reason.as_str()).unwrap_or("…");
 
-    let fixed = pr_num_col + AUTHOR_COL + size_col + AGE_COL + REASON_COL;
+    let column_count = 6 + usize::from(show_repo);
+    let fixed = pr_num_col
+        + usize::from(show_repo) * REPO_COL
+        + AUTHOR_COL
+        + size_col
+        + AGE_COL
+        + REASON_COL
+        + (column_count - 1) * GAP;
     let title_col = width.saturating_sub(fixed).max(1);
 
     let title = truncate(&raw_title, title_col);
     let author = truncate_middle(&author, AUTHOR_COL);
+    let repo = truncate_middle(repo, REPO_COL);
     let reason = truncate(reason, REASON_COL);
-    let age_col = width.saturating_sub(pr_num_col + title_col + AUTHOR_COL + size_col + REASON_COL);
-    // Truncate, not just pad: in a narrow terminal `age_col` can saturate to 0,
-    // and `pad_to_width` returns the string untouched when it already meets the
-    // width — so without this the full age would overflow into the reason cell.
-    let age = truncate(&age, age_col);
+    let age = truncate(&age, AGE_COL);
 
-    // Pad each column by display width (not char count) so rows with wide
-    // glyphs in the title/author stay aligned with ASCII rows.
-    let rendered = format!(
-        "{}{}{}{}{}{}",
-        pad_to_width(&num, pr_num_col),
-        pad_to_width(&title, title_col),
-        pad_to_width(&author, AUTHOR_COL),
-        pad_to_width(&size, size_col),
-        pad_to_width(&age, age_col),
-        pad_to_width(&reason, REASON_COL),
-    );
+    let mut spans = vec![cell(
+        &num,
+        pr_num_col,
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )];
+    push_gap(&mut spans);
+    if show_repo {
+        spans.push(cell(&repo, REPO_COL, Style::default().fg(Color::Cyan)));
+        push_gap(&mut spans);
+    }
+    spans.push(cell(&title, title_col, Style::default()));
+    push_gap(&mut spans);
+    spans.push(cell(&author, AUTHOR_COL, Style::default().fg(Color::Green)));
+    push_gap(&mut spans);
+    spans.push(cell(&size, size_col, Style::default()));
+    push_gap(&mut spans);
+    spans.push(cell(&age, AGE_COL, Style::default().fg(Color::Gray)));
+    push_gap(&mut spans);
+    spans.push(cell(
+        &reason,
+        REASON_COL,
+        Style::default().fg(reason_color(blocker.map(|b| b.tier))),
+    ));
 
-    let line = Line::from(rendered);
+    let line = Line::from(spans);
     if selected {
         line.style(Style::default().add_modifier(Modifier::REVERSED))
     } else {
         line
+    }
+}
+
+fn push_gap<'a>(spans: &mut Vec<Span<'a>>) {
+    spans.push(Span::raw(" ".repeat(GAP)));
+}
+
+fn cell<'a>(text: &str, width: usize, style: Style) -> Span<'a> {
+    Span::styled(pad_to_width(text, width), style)
+}
+
+fn reason_color(tier: Option<Tier>) -> Color {
+    match tier {
+        Some(Tier::MeBlocking) => Color::Magenta,
+        Some(Tier::WaitingOnAuthor) => Color::Yellow,
+        Some(Tier::NeedsReview) | None => Color::Gray,
     }
 }
