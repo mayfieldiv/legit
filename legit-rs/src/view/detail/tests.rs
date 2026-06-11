@@ -88,6 +88,7 @@ fn model_in_detail(pr: PR, body: &str) -> Model {
         body: Some(crate::app::detail_layout::render_description_lines(body)),
         scroll: 0,
         focus: DetailFocus::Body,
+        followed: None,
         expanded: std::collections::HashSet::new(),
     });
     model
@@ -111,6 +112,7 @@ fn model_in_detail_with_checks(pr: PR, body: &str, checks: Vec<CheckRun>) -> Mod
         body: Some(crate::app::detail_layout::render_description_lines(body)),
         scroll: 0,
         focus: DetailFocus::Body,
+        followed: None,
         expanded: std::collections::HashSet::new(),
     });
     model.enrichment.checks.insert((repo_slug, sha), checks);
@@ -181,6 +183,7 @@ fn detail_loading_state_shows_header_and_loading_placeholder() {
         body: None,
         scroll: 0,
         focus: DetailFocus::Body,
+        followed: None,
         expanded: std::collections::HashSet::new(),
     });
 

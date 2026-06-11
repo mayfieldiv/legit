@@ -327,6 +327,7 @@ fn handle_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
                     body: None,
                     scroll: 0,
                     focus: detail_items::DetailFocus::Body,
+                    followed: None,
                     expanded: std::collections::HashSet::new(),
                 });
                 return cmds;
@@ -419,59 +420,6 @@ fn detail_viewport_rows(model: &Model) -> usize {
     usize::from(model.terminal_height).saturating_sub(usize::from(detail_layout::CHROME_ROWS))
 }
 
-/// Clamp the open detail view's scroll offset so it can never sit more than
-/// one screenful above the last content line. The content is the full
-/// `detail_layout` — description, checks, thread and conversation cards —
-/// under-clamping to a subset would stop the user reaching the bottom. A no-op
-/// outside Detail mode or while the body hasn't arrived (there is nothing to
-/// scroll yet). Mirrors the render-time backstop in
-/// `view::detail::render_body`, but here `scroll` is the stored source of
-/// intent: clamping in `update` keeps a held PageDown from drifting
-/// unboundedly and leaving the subsequent PageUp presses visually dead.
-fn clamp_detail_scroll(model: &mut Model) {
-    let Some(content) = measured_detail_content(model) else {
-        return;
-    };
-    let max_scroll = content
-        .lines
-        .len()
-        .saturating_sub(detail_viewport_rows(model));
-    if let ViewMode::Detail(detail) = &mut model.view_mode {
-        detail.scroll = detail.scroll.min(max_scroll);
-    }
-}
-
-/// Bring the focused card fully into view: scroll up to its first line when
-/// it starts above the viewport, down to its last line when it ends below —
-/// and never past its first line, so a card taller than the viewport shows
-/// its top. Clamps the focus and scroll first (against the same single layout
-/// build), since the keys this serves can also shrink or shift the sequence.
-/// Used by every key that moves the focus or changes what's under it (j/k,
-/// Enter expansion, t/b filters); raw scrolling (PageUp/PageDown) deliberately
-/// doesn't follow. Mirrors the TS `scrollChildIntoView` on focus change.
-fn follow_detail_focus(model: &mut Model) {
-    resolve_detail_focus(model);
-    let Some(content) = measured_detail_content(model) else {
-        return;
-    };
-    let viewport = detail_viewport_rows(model);
-    let max_scroll = content.lines.len().saturating_sub(viewport);
-    let ViewMode::Detail(detail) = &mut model.view_mode else {
-        return;
-    };
-    let Some(range) = content.item_ranges.get(detail.focus.index()) else {
-        return;
-    };
-    let scroll = detail.scroll.min(max_scroll);
-    detail.scroll = if range.start < scroll {
-        range.start
-    } else if range.end > scroll + viewport {
-        (range.end - viewport).min(range.start)
-    } else {
-        scroll
-    };
-}
-
 /// Handle one keypress while the detail view is open. The caller guarantees
 /// `model.view_mode` is `ViewMode::Detail`, so the scroll/refresh arms match
 /// the inner `DetailState` directly.
@@ -507,16 +455,16 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
             }
         }
         // Toggle resolved-thread visibility (hidden by default). The toggle
-        // can shift or shrink the sequence under the focus index, so the
-        // (possibly new) focused card follows into view.
+        // can shift the focused card or fall the focus back to another card;
+        // either way `normalize_detail` sees the moved anchor and scrolls the
+        // card back into view.
         KeyCode::Char('t') => {
             model.show_resolved = !model.show_resolved;
-            follow_detail_focus(model);
         }
-        // Toggle bot-comment visibility (shown by default). Same follow.
+        // Toggle bot-comment visibility (shown by default). Same derived
+        // follow as `t`.
         KeyCode::Char('b') => {
             model.show_bot_comments = !model.show_bot_comments;
-            follow_detail_focus(model);
         }
         // Open the focused item in the browser: a thread/reply/comment opens
         // its deep link; the body falls back to the PR itself (mirrors the TS
@@ -534,8 +482,10 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
         // Toggle the focused card's long-body expansion (collapsed by
         // default; see `detail_layout::collapse_body`). Keyed by the comment's
         // URL, so the state survives filter toggles moving the indices. The
-        // body (no URL) has nothing to toggle. Expansion changes the content
-        // height, so the follow re-clamps and keeps the card in view.
+        // body (no URL) has nothing to toggle. Expansion grows the card in
+        // place — identity and start line unchanged — so the follow anchor is
+        // cleared explicitly to make `normalize_detail` pull the grown card
+        // back into view.
         KeyCode::Enter => {
             if let ViewMode::Detail(detail) = &mut model.view_mode
                 && let Some(url) = detail.focus.url().map(str::to_owned)
@@ -543,21 +493,16 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
                 if !detail.expanded.remove(&url) {
                     detail.expanded.insert(url);
                 }
-                follow_detail_focus(model);
+                detail.followed = None;
             }
         }
         // Focus forward/back: j/k (and arrows) cycle the focusable items —
         // body, thread roots, replies, issue comments — not the raw scroll
-        // offset (PageUp/PageDown still scroll). The scroll follows the focus
-        // so the newly-focused card is always on screen.
-        KeyCode::Char('j') | KeyCode::Down => {
-            move_detail_focus(model, 1);
-            follow_detail_focus(model);
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            move_detail_focus(model, -1);
-            follow_detail_focus(model);
-        }
+        // offset (PageUp/PageDown still scroll). The moved focus changes the
+        // `normalize_detail` anchor, so the newly-focused card scrolls into
+        // view.
+        KeyCode::Char('j') | KeyCode::Down => move_detail_focus(model, 1),
+        KeyCode::Char('k') | KeyCode::Up => move_detail_focus(model, -1),
         // Page down. `normalize_detail` clamps the offset to the last
         // screenful, so a held PageDown can't drift past the end.
         KeyCode::PageDown => {
@@ -576,23 +521,94 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
     Vec::new()
 }
 
-/// Re-establish the open detail view's invariants after a state change: the
-/// focus re-anchors to its item's place in the fresh Focus Sequence (falling
-/// back positionally when the item vanished), and the scroll offset never
-/// sits more than one screenful above the last content line (a refresh
-/// returning a shorter body, a shrinking sequence, or a taller terminal can
-/// all strand it — and PageUp deliberately doesn't clamp, so a stranded
-/// offset reads as dead keypresses). Runs once at the end of every `update`
-/// rather than at each mutation site, so no message path can forget it. A
-/// no-op outside Detail mode, and cheap while the body hasn't arrived.
+/// Re-establish the open detail view's invariants after a state change, in
+/// one pass over at most one layout build:
+///
+/// - the focus re-anchors to its item's place in the fresh Focus Sequence
+///   (falling back positionally when the item vanished);
+/// - the focused card scrolls back into view — up to its first line when it
+///   starts above the viewport, down to its last when it ends below, never
+///   past its first so a card taller than the viewport shows its top — but
+///   only when the follow anchor (focus identity + card start line) moved
+///   since the last pass. Focus moves, filter toggles, and content arriving
+///   above the card all move the anchor; raw PageUp/PageDown scrolling never
+///   does. Mirrors the TS `scrollChildIntoView` on focus change.
+/// - the scroll offset clamps so it never sits more than one screenful above
+///   the last content line, measured against the full layout (a refresh
+///   returning a shorter body, a shrinking sequence, or a taller terminal can
+///   all strand it — and PageUp deliberately doesn't clamp, so a stranded
+///   offset reads as dead keypresses). Mirrors the render-time backstop in
+///   `view::detail::render_body`, but here `scroll` is the stored source of
+///   intent.
+///
+/// Runs once at the end of every `update` (minus the `skips_normalize` fast
+/// path) rather than at each mutation site, so no message path can forget it
+/// — a missed pass self-heals on the next message. A no-op outside Detail
+/// mode, and cheap while the body hasn't arrived.
 fn normalize_detail(model: &mut Model) {
     resolve_detail_focus(model);
-    clamp_detail_scroll(model);
+    let Some(content) = measured_detail_content(model) else {
+        return;
+    };
+    let viewport = detail_viewport_rows(model);
+    let max_scroll = content.lines.len().saturating_sub(viewport);
+    let ViewMode::Detail(detail) = &mut model.view_mode else {
+        return;
+    };
+    let scroll = detail.scroll.min(max_scroll);
+    let Some(range) = content.item_ranges.get(detail.focus.index()) else {
+        // Unreachable (the focus was just resolved against the same
+        // derivation the layout walks), but degrade to the bare clamp.
+        detail.scroll = scroll;
+        return;
+    };
+    let anchor = (detail.focus.clone(), range.start);
+    detail.scroll = if detail.followed.as_ref() != Some(&anchor) {
+        if range.start < scroll {
+            range.start
+        } else if range.end > scroll + viewport {
+            (range.end - viewport).min(range.start)
+        } else {
+            scroll
+        }
+    } else {
+        scroll
+    };
+    detail.followed = Some(anchor);
+}
+
+/// True for messages that provably can't change the open detail view's
+/// content, Focus Sequence, or viewport, letting `update` skip the
+/// `normalize_detail` layout build. An explicit skip-list, so any new message
+/// defaults to normalizing — the safe direction (a wasted pass costs one
+/// build; a wrong skip strands the invariants until the next message). The
+/// per-PR arrivals are the high-volume case: the enrichment fan-out lands
+/// threads/reviews/comments for every listed PR while the user reads one of
+/// them, and only the open PR's own arrivals can move its cards.
+fn skips_normalize(msg: &Msg, model: &Model) -> bool {
+    let ViewMode::Detail(detail) = &model.view_mode else {
+        // normalize_detail is already a cheap no-op outside Detail mode.
+        return false;
+    };
+    match msg {
+        Msg::NetworkStatsChanged(_) | Msg::StatusCleared { .. } => true,
+        Msg::ThreadsArrived { pr, .. }
+        | Msg::ReviewsArrived { pr, .. }
+        | Msg::IssueCommentsArrived { pr, .. }
+        | Msg::ReviewStatusArrived { pr, .. }
+        | Msg::FilesArrived { pr, .. }
+        | Msg::FilesFetchFailed { pr }
+        | Msg::PRDetailArrived { pr, .. } => *pr != detail.key,
+        _ => false,
+    }
 }
 
 pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
+    let skip_normalize = skips_normalize(&msg, model);
     let cmds = apply(model, msg);
-    normalize_detail(model);
+    if !skip_normalize {
+        normalize_detail(model);
+    }
     cmds
 }
 

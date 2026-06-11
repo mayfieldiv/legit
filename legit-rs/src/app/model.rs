@@ -64,6 +64,15 @@ pub struct DetailState {
     /// it move the index — never which card is focused. A vanished item falls
     /// back to its last position.
     pub focus: DetailFocus,
+    /// What the last `normalize_detail` pass resolved the focus to: its
+    /// identity plus the first line of its card in the measured layout.
+    /// `None` until a pass has measured an arrived body. The change detector
+    /// behind scroll-follows-focus: a pass whose resolved identity or card
+    /// start differs scrolls the card back into view, so focus moves, filter
+    /// toggles, and content arriving above the card all follow it — while raw
+    /// PageUp/PageDown scrolling (which changes neither) never does. Enter
+    /// clears it to force a follow after expanding the focused card in place.
+    pub followed: Option<(DetailFocus, usize)>,
     /// Cards whose long bodies the user expanded with Enter, keyed by the
     /// comment's URL (unique per review/issue comment, and stable across
     /// filter toggles — unlike a focus index). Lives in `DetailState` so

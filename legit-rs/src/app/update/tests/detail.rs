@@ -1,7 +1,5 @@
 use ratatui::crossterm::event::KeyCode;
 
-use ratatui::text::Line;
-
 use crate::{
     app::{cmd::Cmd, model::ViewMode, msg::Msg, update::update},
     git_remote::RepoInfo,
@@ -60,14 +58,22 @@ fn detail_scroll(model: &crate::app::model::Model) -> usize {
     }
 }
 
-/// Set the open detail view's body to lines rendered from `body`; panics if not
-/// in Detail mode. Mirrors how `Msg::PRDetailArrived` caches the description.
+/// Deliver `body` to the open detail view through the real
+/// `Msg::PRDetailArrived` path, so the normalize pass runs exactly as it
+/// would in production (recording the follow anchor included); panics if not
+/// in Detail mode.
 fn set_detail_body(model: &mut crate::app::model::Model, body: &str) {
-    let lines: Vec<Line<'static>> = crate::app::detail_layout::render_description_lines(body);
-    match &mut model.view_mode {
-        ViewMode::Detail(detail) => detail.body = Some(lines),
-        ViewMode::List => panic!("expected Detail mode"),
-    }
+    let ViewMode::Detail(detail) = &model.view_mode else {
+        panic!("expected Detail mode");
+    };
+    let pr = detail.key.clone();
+    update(
+        model,
+        Msg::PRDetailArrived {
+            pr,
+            body: body.to_owned(),
+        },
+    );
 }
 
 use super::{enriched_model, key_event};
@@ -930,6 +936,74 @@ fn showing_resolved_threads_keeps_the_focused_card_in_view() {
         scroll <= range.start && range.end <= scroll + viewport,
         "the focused card (lines {range:?}) must stay fully inside the viewport \
          after a filter toggle (scroll {scroll}, {viewport} rows)"
+    );
+}
+
+#[test]
+fn body_arrival_scrolls_the_already_focused_card_into_view() {
+    // While the body is still loading, j/k already move the focus (the
+    // threads/comments arrived independently), but there is nothing to
+    // measure, so the scroll stays at 0. When the body lands, the focused
+    // card can sit far below the viewport — the arrival must scroll it into
+    // view, not leave the focus border off-screen with o/Enter acting on an
+    // invisible card.
+    let mut model = model_with_one_pr();
+    model.terminal_height = crate::app::detail_layout::CHROME_ROWS + 8;
+    model.terminal_width = 80;
+    update(&mut model, key_event(KeyCode::Enter));
+    seed_detail_enrichment(&mut model);
+    for _ in 0..3 {
+        update(&mut model, key_event(KeyCode::Char('j')));
+    }
+    assert_eq!(detail_focus(&model), 3, "precondition: comment focused");
+    assert_eq!(detail_scroll(&model), 0, "precondition: nothing to scroll");
+
+    let body: String = (1..=30).map(|n| format!("Line {n}\n\n")).collect();
+    set_detail_body(&mut model, &body);
+
+    let range = focused_item_range(&model);
+    let viewport = (model.terminal_height - crate::app::detail_layout::CHROME_ROWS) as usize;
+    let scroll = detail_scroll(&model);
+    assert!(
+        scroll <= range.start && range.end <= scroll + viewport,
+        "the focused card (lines {range:?}) must be scrolled into view when \
+         the body arrives (scroll {scroll}, {viewport} rows)"
+    );
+}
+
+#[test]
+fn expanding_the_focused_card_brings_its_grown_tail_into_view() {
+    // Expansion grows the focused card in place (same identity, same first
+    // line), so it is the one change the follow anchor can't see — Enter
+    // forces the follow, which scrolls down to the expanded card's tail
+    // (capped at its first line for cards taller than the viewport).
+    let mut model = tall_focusable_detail_model();
+    let long_body: String = (1..=12).map(|n| format!("Para {n}\n\n")).collect();
+    update(
+        &mut model,
+        Msg::IssueCommentsArrived {
+            pr: pr_key_42(),
+            comments: vec![issue_comment(10, "carol", &long_body)],
+        },
+    );
+    for _ in 0..3 {
+        update(&mut model, key_event(KeyCode::Char('j')));
+    }
+    let collapsed_range = focused_item_range(&model);
+
+    update(&mut model, key_event(KeyCode::Enter));
+
+    let range = focused_item_range(&model);
+    assert!(
+        range.end > collapsed_range.end,
+        "precondition: expansion must grow the focused card"
+    );
+    let viewport = (model.terminal_height - crate::app::detail_layout::CHROME_ROWS) as usize;
+    let scroll = detail_scroll(&model);
+    assert!(
+        scroll <= range.start && (range.end <= scroll + viewport || scroll == range.start),
+        "the expanded card (lines {range:?}) must be followed into view \
+         (scroll {scroll}, {viewport} rows)"
     );
 }
 
