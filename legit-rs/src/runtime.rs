@@ -5,7 +5,7 @@ use ratatui::{
     Terminal,
     backend::CrosstermBackend,
     crossterm::{
-        event::{self, Event},
+        event::{self, DisableMouseCapture, EnableMouseCapture, Event},
         execute,
         terminal::{
             DisableLineWrap, EnableLineWrap, EnterAlternateScreen, LeaveAlternateScreen,
@@ -174,8 +174,18 @@ impl TerminalGuard {
         // ssh+tmux at large sizes, ratatui#2167) the terminal would wrap each
         // full-width row and tile the list into columns. With auto-wrap off the
         // overflow is clipped instead of wrapped, so rows stay one-per-line.
-        execute!(io::stdout(), EnterAlternateScreen, DisableLineWrap)
-            .context("failed to enter alternate screen")?;
+        //
+        // Capture the mouse so wheel ticks arrive as scroll events `update`
+        // can route to the viewport. Without capture, terminals translate
+        // wheel input in the alternate screen into arrow-key presses — which
+        // are focus keys, so scrolling would drag the focused card along.
+        execute!(
+            io::stdout(),
+            EnterAlternateScreen,
+            DisableLineWrap,
+            EnableMouseCapture
+        )
+        .context("failed to enter alternate screen")?;
         guard.entered_alt_screen = true;
         Ok(guard)
     }
@@ -184,7 +194,12 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         if self.entered_alt_screen {
-            let _ = execute!(io::stdout(), EnableLineWrap, LeaveAlternateScreen);
+            let _ = execute!(
+                io::stdout(),
+                DisableMouseCapture,
+                EnableLineWrap,
+                LeaveAlternateScreen
+            );
         }
         let _ = disable_raw_mode();
         tracing::debug!("terminal restored");

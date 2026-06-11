@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind};
+use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind, MouseEventKind};
 
 use crate::{git_remote::RepoInfo, github::rest::PrKey, secret::Secret};
 
@@ -341,6 +341,9 @@ fn handle_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
 /// Lines scrolled per PageUp/PageDown in the detail body.
 const DETAIL_SCROLL_PAGE: usize = 10;
 
+/// Lines scrolled per mouse-wheel tick in the detail body.
+const DETAIL_SCROLL_WHEEL: usize = 3;
+
 /// The open detail view's Focus Sequence derivation under the current
 /// filters, or `None` outside Detail mode. The shared input to focus stepping
 /// and re-anchoring.
@@ -653,6 +656,39 @@ fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             model.terminal_height = height;
             model.sync_viewport();
             Vec::new()
+        }
+        // Wheel ticks scroll the viewport, never the focus — the wheel is not
+        // a selection device (the runtime captures the mouse precisely so the
+        // terminal can't translate ticks into arrow keys, which are focus
+        // keys). The follow anchor is untouched, so `normalize_detail` only
+        // clamps. The list has no free scroll (its viewport derives from the
+        // selection), so there a tick steps the selection like j/k — followed
+        // by the same just-in-time files fetch a selection key triggers.
+        Msg::TerminalEvent(Event::Mouse(mouse))
+            if matches!(
+                mouse.kind,
+                MouseEventKind::ScrollDown | MouseEventKind::ScrollUp
+            ) =>
+        {
+            let down = mouse.kind == MouseEventKind::ScrollDown;
+            match &mut model.view_mode {
+                ViewMode::Detail(detail) => {
+                    detail.scroll = if down {
+                        detail.scroll.saturating_add(DETAIL_SCROLL_WHEEL)
+                    } else {
+                        detail.scroll.saturating_sub(DETAIL_SCROLL_WHEEL)
+                    };
+                    Vec::new()
+                }
+                ViewMode::List => {
+                    if down {
+                        model.list.move_down();
+                    } else {
+                        model.list.move_up();
+                    }
+                    maybe_fetch_selected_files(model)
+                }
+            }
         }
         Msg::TerminalEvent(_) => Vec::new(),
         Msg::ConfigLoaded(config) => {

@@ -76,7 +76,7 @@ fn set_detail_body(model: &mut crate::app::model::Model, body: &str) {
     );
 }
 
-use super::{enriched_model, key_event};
+use super::{enriched_model, key_event, wheel_event};
 
 /// A model with auth + repo detected and one PR streamed in and selected.
 fn model_with_one_pr() -> crate::app::model::Model {
@@ -534,6 +534,39 @@ fn late_thread_arrival_keeps_the_focused_comments_identity() {
         open_url(&cmds),
         "https://example.test/c/10",
         "o must open the card the user focused, not the card at the old index"
+    );
+}
+
+#[test]
+fn wheel_in_detail_scrolls_the_viewport_without_moving_focus() {
+    // The wheel is not a selection device: ticks move the viewport only,
+    // leaving the focused card (and the follow anchor) untouched — unlike
+    // the arrow keys the terminal would synthesize without mouse capture.
+    let mut model = tall_focusable_detail_model();
+    update(&mut model, key_event(KeyCode::Char('j')));
+    let focus_before = detail_focus_url(&model);
+    let scroll_before = detail_scroll(&model);
+
+    update(&mut model, wheel_event(true));
+    update(&mut model, wheel_event(true));
+
+    assert_eq!(
+        detail_scroll(&model),
+        scroll_before + 6,
+        "two wheel-down ticks must scroll the viewport by 3 lines each"
+    );
+    assert_eq!(
+        detail_focus_url(&model),
+        focus_before,
+        "wheel scrolling must not move the focus"
+    );
+
+    update(&mut model, wheel_event(false));
+    update(&mut model, wheel_event(false));
+    assert_eq!(
+        detail_scroll(&model),
+        scroll_before,
+        "wheel-up ticks must scroll back without yanking to the focused card"
     );
 }
 
