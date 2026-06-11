@@ -1,11 +1,15 @@
 use std::{future::Future, sync::Arc};
 
-use anyhow::Context;
 use tokio::sync::mpsc;
 
 use crate::{
-    app::msg::Msg, auth, config, git_remote, git_remote::RepoInfo, github::graphql::GraphQlClient,
-    github::limiter::NetworkLimiter, github::rest::OctocrabRest, github::rest::PrKey,
+    app::{browser, msg::Msg},
+    auth, config, git_remote,
+    git_remote::RepoInfo,
+    github::graphql::GraphQlClient,
+    github::limiter::NetworkLimiter,
+    github::rest::OctocrabRest,
+    github::rest::PrKey,
     secret::Secret,
 };
 
@@ -81,11 +85,9 @@ pub enum Cmd {
         ctx: Arc<RequestContext>,
         key: PrKey,
     },
-    /// Open `url` in the user's browser (detail-view `o`: the focused
-    /// thread/reply/comment's deep link, or the PR URL from the body). Runs
-    /// the platform opener on the blocking pool and waits for it to exit, so
-    /// both a spawn failure and a failure exit (e.g. headless `xdg-open` with
-    /// no DISPLAY) surface as a transient `CommandFailed`.
+    /// Open `url` in the user's browser. The platform opener is spawned and
+    /// reaped off the UI loop; spawn success/failure comes back as an open-url
+    /// status message.
     OpenUrl {
         url: String,
     },
@@ -301,11 +303,16 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
             let _ = tx.send(Msg::StatusCleared { token });
         }
-        Cmd::OpenUrl { url } => {
-            if let Err(error) = blocking(move || open_url(&url)).await {
-                let _ = tx.send(command_failed("open url", error));
+        Cmd::OpenUrl { url } => match browser::spawn_open_url(&url) {
+            Ok(()) => {
+                let _ = tx.send(Msg::OpenUrlSucceeded { url });
             }
-        }
+            Err(error) => {
+                let error = format!("{error:#}");
+                tracing::warn!(%url, %error, "open url failed");
+                let _ = tx.send(Msg::OpenUrlFailed { url, error });
+            }
+        },
         Cmd::FetchPRDetail { ctx, key } => {
             let number = key.number;
             request(
@@ -428,40 +435,6 @@ fn pr_list_failed(repo_slug: String, context: &'static str, error: anyhow::Error
         context,
         error,
     }
-}
-
-/// Run the platform's URL opener and wait for it to exit. Openers hand the URL
-/// to the browser and exit immediately, so the wait is cheap — and it both
-/// reaps the child (a dropped `std::process::Child` is never reaped, so each
-/// press would leak one defunct process) and surfaces a failure exit, e.g.
-/// `xdg-open` over SSH with no DISPLAY/BROWSER, which spawns fine and then
-/// exits non-zero. stdin is nulled so an opener falling back to a terminal
-/// browser can't contend with the TUI for the raw-mode tty; a wedged opener
-/// only ties up a blocking-pool thread. Blocking: callers run it via
-/// `blocking`.
-fn open_url(url: &str) -> anyhow::Result<()> {
-    // `open` on macOS, freedesktop's `xdg-open` everywhere else. Windows isn't
-    // targeted today; there the missing opener surfaces as the same transient
-    // CommandFailed status as any other spawn failure.
-    let opener = if cfg!(target_os = "macos") {
-        "open"
-    } else {
-        "xdg-open"
-    };
-    let output = std::process::Command::new(opener)
-        .arg(url)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .context("spawn browser opener")?
-        .wait_with_output()
-        .context("wait for browser opener")?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("{opener} {}: {}", output.status, stderr.trim());
-    }
-    Ok(())
 }
 
 /// Run `f` on the blocking pool and fold the `JoinError` into the same

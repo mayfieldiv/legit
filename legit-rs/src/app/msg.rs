@@ -80,6 +80,22 @@ pub enum Msg {
         context: &'static str,
         error: String,
     },
+    /// Open an arbitrary URL using the platform browser opener.
+    OpenUrl(String),
+    /// Open a PR's GitHub web URL from any view that has a PR value.
+    OpenInBrowser(PR),
+    /// Open a PR's Devin review deep link from any view that has a PR value.
+    OpenInDevin(PR),
+    /// The platform opener spawned successfully. The browser command itself is
+    /// detached, so this acknowledges only successful dispatch.
+    OpenUrlSucceeded {
+        url: String,
+    },
+    /// The platform opener failed to spawn.
+    OpenUrlFailed {
+        url: String,
+        error: String,
+    },
     /// Config load failed validation (a malformed `~/.legit/config.json`).
     /// Config is a hard prerequisite for fetching PRs — it supplies the current
     /// user and bot logins that drive smart-status — so this halts the list with

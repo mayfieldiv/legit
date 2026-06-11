@@ -301,6 +301,148 @@ fn left_click_in_the_summary_panel_leaves_the_selection_alone() {
     assert!(cmds.is_empty(), "and must trigger no fetches: {cmds:?}");
 }
 
+fn only_open_url(cmds: &[Cmd]) -> &str {
+    match cmds {
+        [Cmd::OpenUrl { url }] => url,
+        other => panic!("expected exactly one OpenUrl, got {other:?}"),
+    }
+}
+
+#[test]
+fn open_url_message_dispatches_generic_open_url_cmd() {
+    let (mut model, _) = Model::new();
+
+    let cmds = update(
+        &mut model,
+        Msg::OpenUrl("https://example.test/thread/1".to_owned()),
+    );
+
+    assert_eq!(only_open_url(&cmds), "https://example.test/thread/1");
+}
+
+#[test]
+fn open_in_browser_message_dispatches_pr_github_url() {
+    let (mut model, _) = Model::new();
+
+    let cmds = update(
+        &mut model,
+        Msg::OpenInBrowser(sample_pr(45, "browser actions")),
+    );
+
+    assert_eq!(
+        only_open_url(&cmds),
+        "https://github.com/mayfieldiv/legit/pull/45"
+    );
+}
+
+#[test]
+fn open_in_devin_message_dispatches_ts_devin_url() {
+    let (mut model, _) = Model::new();
+
+    let cmds = update(
+        &mut model,
+        Msg::OpenInDevin(sample_pr(45, "browser actions")),
+    );
+
+    assert_eq!(
+        only_open_url(&cmds),
+        "https://app.devin.ai/review/mayfieldiv/legit/pull/45"
+    );
+}
+
+#[test]
+fn o_key_opens_selected_pr_in_browser() {
+    let mut model = enriched_model(&[45]);
+    model.list.complete_fetch("mayfieldiv/legit");
+    model.relayout();
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('o')));
+
+    assert_eq!(
+        only_open_url(&cmds),
+        "https://github.com/mayfieldiv/legit/pull/45"
+    );
+}
+
+#[test]
+fn d_key_opens_selected_pr_in_devin() {
+    let mut model = enriched_model(&[45]);
+    model.list.complete_fetch("mayfieldiv/legit");
+    model.relayout();
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('d')));
+
+    assert_eq!(
+        only_open_url(&cmds),
+        "https://app.devin.ai/review/mayfieldiv/legit/pull/45"
+    );
+}
+
+#[test]
+fn browser_keys_without_selected_pr_are_noops() {
+    let (mut model, _) = Model::new();
+
+    let browser_cmds = update(&mut model, key_event(KeyCode::Char('o')));
+    let devin_cmds = update(&mut model, key_event(KeyCode::Char('d')));
+
+    assert!(browser_cmds.is_empty(), "empty list o: {browser_cmds:?}");
+    assert!(devin_cmds.is_empty(), "empty list d: {devin_cmds:?}");
+    assert!(
+        model.status.is_none(),
+        "no selection should not create a status message"
+    );
+}
+
+#[test]
+fn open_url_success_sets_success_status_that_schedules_a_clear() {
+    let (mut model, _) = Model::new();
+
+    let cmds = update(
+        &mut model,
+        Msg::OpenUrlSucceeded {
+            url: "https://github.com/mayfieldiv/legit/pull/45".to_owned(),
+        },
+    );
+
+    let status = model.status.as_ref().expect("success status set");
+    assert_eq!(status.kind, StatusKind::Success);
+    assert_eq!(status.text, "Opened browser");
+    match cmds.as_slice() {
+        [Cmd::ScheduleStatusClear { token, delay_ms }] => {
+            assert_eq!(*token, model.status_gen);
+            assert_eq!(*delay_ms, 4_000);
+        }
+        other => panic!("expected one ScheduleStatusClear, got {other:?}"),
+    }
+}
+
+#[test]
+fn open_url_failure_sets_error_status_that_schedules_a_clear() {
+    let (mut model, _) = Model::new();
+
+    let cmds = update(
+        &mut model,
+        Msg::OpenUrlFailed {
+            url: "https://app.devin.ai/review/mayfieldiv/legit/pull/45".to_owned(),
+            error: "spawn browser opener: xdg-open not found".to_owned(),
+        },
+    );
+
+    let status = model.status.as_ref().expect("error status set");
+    assert_eq!(status.kind, StatusKind::Error);
+    assert_eq!(
+        status.text,
+        "Failed to open Devin: spawn browser opener: xdg-open not found"
+    );
+    match cmds.as_slice() {
+        [Cmd::ScheduleStatusClear { token, delay_ms }] => {
+            assert_eq!(*token, model.status_gen);
+            assert_eq!(*delay_ms, 8_000);
+        }
+        other => panic!("expected one ScheduleStatusClear, got {other:?}"),
+    }
+}
+
 #[test]
 fn ctrl_c_sets_should_quit_from_list_and_detail_views() {
     let mut list_model = enriched_model(&[1]);
