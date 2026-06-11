@@ -358,10 +358,12 @@ pub(crate) fn detail_content(
     content
 }
 
-/// Rows of a card's markdown body shown while collapsed. Long comment bodies
-/// (bot dumps, pasted logs) would otherwise dominate the page; Enter expands
-/// the focused card (the TUI stand-in for the TS `details-store` toggle).
-const COLLAPSED_CARD_BODY_ROWS: usize = 6;
+/// Rows of a card's markdown body shown while collapsed. A backstop for
+/// pathological bodies (multi-thousand-line bot dumps, pasted logs), not an
+/// everyday fold — ordinary long comments render in full, and Enter expands
+/// the focused card past the cap (the TUI stand-in for the TS `details-store`
+/// toggle until `<details>`/`<summary>` rendering lands).
+const COLLAPSED_CARD_BODY_ROWS: usize = 100;
 
 /// Cap a card's body at `COLLAPSED_CARD_BODY_ROWS` lines unless expanded,
 /// appending a muted marker advertising the hidden tail.

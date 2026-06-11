@@ -976,9 +976,10 @@ fn expanding_the_focused_card_brings_its_grown_tail_into_view() {
     // Expansion grows the focused card in place (same identity, same first
     // line), so it is the one change the follow anchor can't see — Enter
     // forces the follow, which scrolls down to the expanded card's tail
-    // (capped at its first line for cards taller than the viewport).
+    // (capped at its first line for cards taller than the viewport). The body
+    // must clear the 100-line collapse backstop to truncate at all.
     let mut model = tall_focusable_detail_model();
-    let long_body: String = (1..=12).map(|n| format!("Para {n}\n\n")).collect();
+    let long_body: String = (1..=60).map(|n| format!("Para {n}\n\n")).collect();
     update(
         &mut model,
         Msg::IssueCommentsArrived {

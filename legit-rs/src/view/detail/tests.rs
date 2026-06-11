@@ -761,7 +761,10 @@ fn detail_conversation_only_shows_no_threads_section() {
 
 #[test]
 fn detail_long_card_bodies_collapse_with_a_more_marker_until_expanded() {
-    let long_body: String = (1..=12).map(|n| format!("Para {n}\n\n")).collect();
+    // The collapse threshold is a backstop for pathological bodies (100+
+    // rendered lines), so the fixture body must clear it: 60 paragraphs
+    // render to 120 lines.
+    let long_body: String = (1..=60).map(|n| format!("Para {n}\n\n")).collect();
     let mut model = model_in_detail(sample_pr(), "The description.");
     seed_comments(
         &mut model,
@@ -773,8 +776,15 @@ fn detail_long_card_bodies_collapse_with_a_more_marker_until_expanded() {
         rows.iter().any(|r| r.contains("Para 1")),
         "the collapsed card must show the body's first lines: {rows:?}"
     );
+
+    // Scroll to the bottom (the render backstop clamps the huge offset) so
+    // the card's tail is in the viewport.
+    if let ViewMode::Detail(detail) = &mut model.view_mode {
+        detail.scroll = 10_000;
+    }
+    let rows = buffer_text(&render_snapshot(&model, 80, 40));
     assert!(
-        !rows.iter().any(|r| r.contains("Para 12")),
+        !rows.iter().any(|r| r.contains("Para 60")),
         "the collapsed card must hide the body's tail: {rows:?}"
     );
     assert!(
@@ -790,12 +800,35 @@ fn detail_long_card_bodies_collapse_with_a_more_marker_until_expanded() {
     }
     let rows = buffer_text(&render_snapshot(&model, 80, 40));
     assert!(
-        rows.iter().any(|r| r.contains("Para 12")),
+        rows.iter().any(|r| r.contains("Para 60")),
         "an expanded card must show the full body: {rows:?}"
     );
     assert!(
         !rows.iter().any(|r| r.contains("more line")),
         "an expanded card needs no truncation marker: {rows:?}"
+    );
+}
+
+#[test]
+fn detail_hundred_line_card_bodies_render_in_full() {
+    // Ordinary long comments must not fold — only the pathological backstop
+    // (past 100 rendered lines) truncates.
+    let body: String = (1..=49).map(|n| format!("Para {n}\n\n")).collect();
+    let mut model = model_in_detail(sample_pr(), "The description.");
+    seed_comments(&mut model, vec![issue_comment(10, "carol", &body, false)]);
+
+    if let ViewMode::Detail(detail) = &mut model.view_mode {
+        detail.scroll = 10_000;
+    }
+    let rows = buffer_text(&render_snapshot(&model, 80, 40));
+
+    assert!(
+        rows.iter().any(|r| r.contains("Para 49")),
+        "a sub-threshold body must render to its end: {rows:?}"
+    );
+    assert!(
+        !rows.iter().any(|r| r.contains("more line")),
+        "a sub-threshold body must not truncate: {rows:?}"
     );
 }
 
