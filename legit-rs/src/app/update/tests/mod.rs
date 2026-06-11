@@ -62,6 +62,51 @@ pub(super) fn key_event(code: KeyCode) -> Msg {
     )))
 }
 
+/// A mouse-wheel tick as the runtime delivers it (mouse capture enabled).
+pub(super) fn wheel_event(down: bool) -> Msg {
+    use ratatui::crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
+    Msg::TerminalEvent(Event::Mouse(MouseEvent {
+        kind: if down {
+            MouseEventKind::ScrollDown
+        } else {
+            MouseEventKind::ScrollUp
+        },
+        column: 0,
+        row: 0,
+        modifiers: KeyModifiers::NONE,
+    }))
+}
+
+#[test]
+fn wheel_in_list_mode_moves_the_selection() {
+    // The list viewport derives from the selection (no free scroll), so a
+    // wheel tick steps the selection like j/k — including the selection's
+    // just-in-time files fetch.
+    let mut model = enriched_model(&[1, 2]);
+    model.list.complete_fetch("mayfieldiv/legit");
+    model.relayout();
+    assert_eq!(model.list.selected_pr().unwrap().number, 1);
+
+    let cmds = update(&mut model, wheel_event(true));
+
+    assert_eq!(
+        model.list.selected_pr().unwrap().number,
+        2,
+        "a wheel-down tick must move the selection down"
+    );
+    assert!(
+        cmds.iter().any(|c| matches!(c, Cmd::FetchFiles { .. })),
+        "the moved selection must fetch its files just-in-time: {cmds:?}"
+    );
+
+    update(&mut model, wheel_event(false));
+    assert_eq!(
+        model.list.selected_pr().unwrap().number,
+        1,
+        "a wheel-up tick must move the selection back up"
+    );
+}
+
 /// A `sample_pr` stamped with a specific Tracked Repo slug.
 pub(super) fn sample_pr_in(repo_slug: &str, number: u64, title: &str) -> PR {
     PR {

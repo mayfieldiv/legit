@@ -1,13 +1,20 @@
-//! Detail view: renders the full PR detail page when `Model::view_mode` is
+//! Detail view: paints the full PR detail page when `Model::view_mode` is
 //! `ViewMode::Detail(DetailState)`. Layout:
 //!
 //! - Pinned header (number + title, author + repo + created/updated/size +
 //!   draft marker, full GitHub URL, head→base branch + mergeable, divider)
-//! - Scrollable body: markdown-rendered PR description (via `markdown::render`)
-//!   and CI checks, offset by `DetailState::scroll` (lines from the top).
-//!   Scroll keys: `j`/`k`/arrows (1 line), PageDown/PageUp (10 lines).
-//! - CI checks section: summary line + per-check rows (icon from `check_icon`)
-//! - Status bar: "esc back  j/k scroll  r refresh" hints
+//! - Scrollable body (offset by `DetailState::scroll`): the lines derived by
+//!   `app::detail_layout::detail_content` — markdown-rendered PR description,
+//!   the CI checks section, then the Review Threads and Conversation sections
+//!   as focusable cards. `j`/`k`/arrows move the focus card-to-card (the
+//!   scroll follows); PageDown/PageUp scroll raw (10 lines).
+//! - The focused card draws a rounded border; unfocused cards reserve the same
+//!   rows/columns with blanks so focus changes never shift the layout.
+//! - Status bar: key hints, plus the shared right-aligned status overlay
+//!   (`view::render_status_overlay`) so transient errors show here too
+//!
+//! All content derivation (which lines exist, where each card sits) lives in
+//! `app::detail_layout`; this module only splits the frame and paints.
 
 use chrono::{DateTime, Utc};
 use ratatui::{
@@ -19,13 +26,10 @@ use ratatui::{
 };
 
 use crate::{
+    app::detail_layout::{HEADER_HEIGHT, detail_content},
     app::model::{DetailState, Model},
-    format::{
-        check_row, checks_summary, format_age, format_mergeable, format_size, sort_check_runs,
-    },
+    format::{format_age, format_mergeable, format_size},
     github::rest::PR,
-    github::types::CheckRun,
-    markdown,
 };
 
 #[cfg(test)]
@@ -50,7 +54,9 @@ pub fn render(
         return;
     };
 
-    // The detail area is split into: header, body (fills remaining), status bar.
+    // The detail area is split into: header, body (fills remaining), status
+    // bar. The header and status-bar rows are what `detail_layout::CHROME_ROWS`
+    // accounts for when `update` derives the body viewport.
     let [header_area, body_area, status_area] = Layout::vertical([
         Constraint::Length(HEADER_HEIGHT),
         Constraint::Min(1),
@@ -63,26 +69,13 @@ pub fn render(
     // header at once and only the body waits on the fetch. The loading
     // placeholder occupies just the body area until the body arrives.
     render_header(pr, frame, header_area, now);
-    render_status_bar(frame, status_area);
+    render_status_bar(model, frame, status_area);
 
     match &detail.body {
         None => render_loading(frame, body_area),
-        Some(body) => render_body(model, pr, body, detail.scroll, frame, body_area),
+        Some(body) => render_body(model, pr, body, detail, frame, body_area, now),
     }
 }
-
-/// Number of rows in the pinned header: title, meta, URL, branch+mergeable,
-/// divider. Constant — the header draws from the list PR, which is always
-/// available, so it shows even while the body fetch is in flight.
-const HEADER_HEIGHT: u16 = 5;
-
-/// Fixed chrome rows the detail layout reserves around the scrollable body: the
-/// pinned `HEADER_HEIGHT` plus the 1-row status bar (the `Constraint::Length(1)`
-/// in `render`'s `Layout::vertical`). The single source of truth shared by this
-/// module's layout and `update::clamp_detail_scroll`, which subtracts it from
-/// the terminal height to derive the same body viewport. Mirrors how
-/// `Model::chrome_rows` is shared between `sync_viewport` and `view::view`.
-pub(crate) const CHROME_ROWS: u16 = HEADER_HEIGHT + 1;
 
 /// Render the "Loading PR detail…" placeholder while the fetch is in flight.
 fn render_loading(frame: &mut Frame<'_>, area: Rect) {
@@ -121,8 +114,10 @@ fn render_header(pr: &PR, frame: &mut Frame<'_>, area: Rect, now: DateTime<Utc>)
     let meta_line = Line::from(meta_spans);
 
     // Row 2: full GitHub URL
-    let url = format!("https://github.com/{}/pull/{}", pr.repo_slug, pr.number);
-    let url_line = Line::from(Span::styled(url, Style::default().fg(Color::Cyan)));
+    let url_line = Line::from(Span::styled(
+        pr.key().html_url(),
+        Style::default().fg(Color::Cyan),
+    ));
 
     // Row 3: head → base  ·  mergeable state
     let (merge_text, merge_color) = format_mergeable(&pr.mergeable);
@@ -144,111 +139,61 @@ fn render_header(pr: &PR, frame: &mut Frame<'_>, area: Rect, now: DateTime<Utc>)
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-// ── Body (scrollable description + checks) ───────────────────────────────────
+// ── Body (scrollable description + checks + cards) ───────────────────────────
 
-/// Render the PR description to display lines: the markdown body, or a muted
-/// "No description." placeholder when the body is blank. Pure (no model/area):
-/// called once on `Msg::PRDetailArrived` so the markdown is parsed a single
-/// time and the result cached in `DetailState::body`, not re-parsed per frame.
-pub(crate) fn render_description_lines(body: &str) -> Vec<Line<'static>> {
-    let trimmed = body.trim();
-    if trimmed.is_empty() {
-        vec![Line::from(Span::styled(
-            "No description.",
-            Style::default().fg(Color::DarkGray),
-        ))]
-    } else {
-        markdown::render(trimmed)
-    }
-}
-
-/// Build the CI checks section lines: blank separator + bold header with
-/// pass/fail/pending counts + one row per check (sorted failing-first, then
-/// pending, then passed). Returns an empty `Vec` when checks haven't arrived
-/// for this PR's commit or the check list is empty. Mirrors `summary::checks_lines`.
-///
-/// `pub(crate)` so the `update` scroll-clamp can measure these lines too: the
-/// checks section is appended to the description per-frame (so late-arriving
-/// checks show without a re-fetch), so the true content height — and thus the
-/// max scroll offset — includes it.
-pub(crate) fn checks_section_lines(model: &Model, pr: &PR) -> Vec<Line<'static>> {
-    let Some(checks) = model.enrichment.checks_for(pr) else {
-        return Vec::new();
-    };
-    if checks.is_empty() {
-        return Vec::new();
-    }
-
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(Line::from(""));
-
-    let summary = checks_summary(checks);
-    let mut header_spans: Vec<Span<'static>> = vec![
-        // Use the canonical markdown heading helper so the accent colour and
-        // bold rule stay in one place (markdown::heading_style).
-        markdown::heading_span(2, "CI Checks"),
-        Span::styled(
-            format!(" {}/{} passed", summary.passed, summary.total),
-            Style::default().fg(Color::DarkGray),
-        ),
-    ];
-    if summary.failed > 0 {
-        header_spans.push(Span::styled(
-            format!(" · {} failed", summary.failed),
-            Style::default().fg(Color::Red),
-        ));
-    }
-    if summary.pending > 0 {
-        header_spans.push(Span::styled(
-            format!(" · {} pending", summary.pending),
-            Style::default().fg(Color::Yellow),
-        ));
-    }
-    lines.push(Line::from(header_spans));
-
-    // All check rows, sorted (failing first, then pending, then passed).
-    let mut sorted: Vec<&CheckRun> = checks.iter().collect();
-    sort_check_runs(&mut sorted);
-    lines.extend(sorted.into_iter().map(check_row));
-    lines
-}
-
-/// Render the scrollable body: the pre-rendered `description` lines (cached in
-/// `DetailState::body`) followed by the CI checks section, offset by `scroll`
-/// rows from the top. `update` already clamps `scroll` to the true content
-/// height; this render keeps a backstop clamp so a stale offset (e.g. a resize
-/// between the keypress and this frame) can never show blank space past the
-/// end.
+/// Render the scrollable body: the full `detail_content` (description, checks,
+/// thread and conversation cards), offset by `scroll` rows from the top.
+/// `update` already clamps `scroll` to the true content height; this render
+/// keeps a backstop clamp so a stale offset (e.g. a resize between the
+/// keypress and this frame) can never show blank space past the end.
 fn render_body(
     model: &Model,
     pr: &PR,
     description: &[Line<'static>],
-    scroll: u16,
+    detail: &DetailState,
     frame: &mut Frame<'_>,
     area: Rect,
+    now: DateTime<Utc>,
 ) {
-    let mut lines: Vec<Line<'static>> = description.to_vec();
-    lines.extend(checks_section_lines(model, pr));
+    let content = detail_content(model, pr, description, detail, area.width, now);
 
-    let content_lines = lines.len() as u16;
-    let viewport_rows = area.height;
-    let max_scroll = content_lines.saturating_sub(viewport_rows);
-    let scroll = scroll.min(max_scroll);
+    let max_scroll = content.lines.len().saturating_sub(usize::from(area.height));
+    let scroll = detail.scroll.min(max_scroll);
+    // The one place the usize scroll meets ratatui's u16: saturate, so content
+    // past 65535 lines pins at the cap instead of wrapping back to the top.
+    let scroll = u16::try_from(scroll).unwrap_or(u16::MAX);
 
-    frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), area);
+    frame.render_widget(Paragraph::new(content.lines).scroll((scroll, 0)), area);
 }
 
 // ── Status bar ────────────────────────────────────────────────────────────────
 
-fn render_status_bar(frame: &mut Frame<'_>, area: Rect) {
+fn render_status_bar(model: &Model, frame: &mut Frame<'_>, area: Rect) {
     let bold = Style::default().add_modifier(Modifier::BOLD);
+    let resolved_hint = if model.show_resolved {
+        " hide resolved  "
+    } else {
+        " show resolved  "
+    };
+    let bots_hint = if model.show_bot_comments {
+        " hide bots  "
+    } else {
+        " show bots  "
+    };
     let hints = Line::from(vec![
         Span::styled("esc", bold),
         Span::raw(" back  "),
         Span::styled("j/k", bold),
-        Span::raw(" scroll  "),
+        Span::raw(" focus  "),
+        Span::styled("o", bold),
+        Span::raw(" open  "),
+        Span::styled("t", bold),
+        Span::raw(resolved_hint),
+        Span::styled("b", bold),
+        Span::raw(bots_hint),
         Span::styled("r", bold),
         Span::raw(" refresh"),
     ]);
     frame.render_widget(Paragraph::new(hints), area);
+    super::render_status_overlay(model, frame, area);
 }

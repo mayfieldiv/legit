@@ -153,10 +153,16 @@ fn render_status(model: &Model, frame: &mut Frame<'_>, area: Rect) {
         left.push(Span::raw(" filter"));
     }
     frame.render_widget(Paragraph::new(Line::from(left)), area);
+    render_status_overlay(model, frame, area);
+}
 
-    // Right: an app-level fatal (a malformed config) wins, then a hard list-load
-    // failure, then the transient status message (info / success / error).
-    // Rendered right-aligned over the same row so it sits opposite the hints.
+/// The right-aligned overlay every status bar shares (list and detail): an
+/// app-level fatal (a malformed config) wins, then a hard list-load failure,
+/// then the transient status message (info / success / error). Painted
+/// right-aligned over the same row so it sits opposite that bar's key hints —
+/// one renderer, so a `CommandFailed` raised in any view is visible there
+/// before its scheduled clear wipes it.
+pub(crate) fn render_status_overlay(model: &Model, frame: &mut Frame<'_>, area: Rect) {
     if let Some(failure) = model.fatal.as_deref().or_else(|| model.list.failure()) {
         let line = Line::from(vec![
             Span::styled("error: ", Style::default().fg(Color::Red)),

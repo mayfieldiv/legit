@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
-use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind};
+use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind, MouseEventKind};
 
 use crate::{git_remote::RepoInfo, github::rest::PrKey, secret::Secret};
 
 use super::{
     cmd::{Cmd, RequestContext},
+    detail_items, detail_layout,
     model::{DetailState, FilesState, Model, RepoDetection, StatusKind, StatusMessage, ViewMode},
     msg::Msg,
 };
@@ -93,20 +94,30 @@ fn enrichment_cmds(model: &Model, repo_slug: &str) -> Vec<Cmd> {
         pr_numbers: numbers.clone(),
     });
     for number in numbers {
-        cmds.push(Cmd::FetchThreads {
-            ctx: Arc::clone(&ctx),
-            number,
-        });
-        cmds.push(Cmd::FetchReviews {
-            ctx: Arc::clone(&ctx),
-            number,
-        });
-        cmds.push(Cmd::FetchIssueComments {
-            ctx: Arc::clone(&ctx),
-            number,
-        });
+        cmds.extend(pr_enrichment_cmds(&ctx, number));
     }
     cmds
+}
+
+/// The per-PR enrichment trio — threads, reviews, issue comments — for one PR.
+/// The shared definition of "enrich this PR": `enrichment_cmds` fans it out
+/// across a repo's whole list, and the detail view's `r` re-dispatches it for
+/// the open PR.
+fn pr_enrichment_cmds(ctx: &Arc<RequestContext>, number: u64) -> [Cmd; 3] {
+    [
+        Cmd::FetchThreads {
+            ctx: Arc::clone(ctx),
+            number,
+        },
+        Cmd::FetchReviews {
+            ctx: Arc::clone(ctx),
+            number,
+        },
+        Cmd::FetchIssueComments {
+            ctx: Arc::clone(ctx),
+            number,
+        },
+    ]
 }
 
 /// Build the `Arc<RequestContext>` shared by a fan-out of enrichment commands:
@@ -196,6 +207,28 @@ fn fetch_pr_detail_cmd(model: &Model, key: &PrKey) -> Vec<Cmd> {
         ctx,
         key: key.clone(),
     }]
+}
+
+/// Every fetch the detail view's `r` refresh re-dispatches for the open PR:
+/// the body plus the per-PR enrichment trio whose results the Review Threads
+/// and Conversation sections render. Enrichment otherwise fetches exactly once
+/// per list load, so this is also the retry path when an initial fetch failed
+/// and left a section stuck on its loading placeholder. Yields nothing when
+/// auth isn't ready or the PR's repo isn't tracked, like `fetch_pr_detail_cmd`.
+fn refresh_detail_cmds(model: &Model, key: &PrKey) -> Vec<Cmd> {
+    let Some(token) = model.auth_token.as_ref() else {
+        return Vec::new();
+    };
+    let Some(repo) = model.tracked_repo(&key.repo_slug) else {
+        return Vec::new();
+    };
+    let ctx = request_context(&repo, token, &model.config.bot_logins);
+    let mut cmds = vec![Cmd::FetchPRDetail {
+        ctx: Arc::clone(&ctx),
+        key: key.clone(),
+    }];
+    cmds.extend(pr_enrichment_cmds(&ctx, key.number));
+    cmds
 }
 
 /// Switch to the Repo Tab at `index` (0 = All): re-derive the visible list
@@ -293,6 +326,9 @@ fn handle_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
                     key,
                     body: None,
                     scroll: 0,
+                    focus: detail_items::DetailFocus::Body,
+                    followed: None,
+                    expanded: std::collections::HashSet::new(),
                 });
                 return cmds;
             }
@@ -302,39 +338,89 @@ fn handle_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
     Vec::new()
 }
 
-/// Lines scrolled per `j`/`k`/arrow press in the detail body.
-const DETAIL_SCROLL_STEP: u16 = 1;
 /// Lines scrolled per PageUp/PageDown in the detail body.
-const DETAIL_SCROLL_PAGE: u16 = 10;
+const DETAIL_SCROLL_PAGE: usize = 10;
 
-/// Clamp the open detail view's scroll offset so it can never sit more than one
-/// screenful above the last content line. The content is the cached
-/// description body **plus** the per-frame CI checks section — under-clamping
-/// to the description alone would stop the user reaching the bottom of the
-/// checks. A no-op outside Detail mode or while the body hasn't arrived (there
-/// is nothing to scroll yet). Mirrors the render-time backstop in
-/// `view::detail::render_body`, but here `scroll` is the stored source of
-/// intent: clamping in `update` keeps a held `j` from drifting unboundedly and
-/// leaving the subsequent `k` presses visually dead.
-fn clamp_detail_scroll(model: &mut Model) {
+/// Lines scrolled per mouse-wheel tick in the detail body.
+const DETAIL_SCROLL_WHEEL: usize = 3;
+
+/// The open detail view's Focus Sequence derivation under the current
+/// filters, or `None` outside Detail mode. The shared input to focus stepping
+/// and re-anchoring.
+fn detail_items(model: &Model) -> Option<detail_items::DetailItems<'_>> {
+    let ViewMode::Detail(detail) = &model.view_mode else {
+        return None;
+    };
+    Some(detail_items::DetailItems::derive(
+        model.enrichment.threads_for(&detail.key),
+        model.enrichment.comments_for(&detail.key),
+        model.detail_filters(),
+    ))
+}
+
+/// Step the detail focus by `delta` through the Focus Sequence (`j`/`Down`
+/// forward, `k`/`Up` back), clamped at the ends. The target card's identity
+/// is stored, not its raw position, so later sequence changes can't retarget
+/// it. A no-op outside Detail mode.
+fn move_detail_focus(model: &mut Model, delta: isize) {
+    let Some(items) = detail_items(model) else {
+        return;
+    };
     let ViewMode::Detail(detail) = &model.view_mode else {
         return;
     };
-    let Some(description) = &detail.body else {
-        return;
-    };
-    let Some(pr) = model.list.pr(&detail.key) else {
-        return;
-    };
-    let content_lines =
-        (description.len() + crate::view::detail::checks_section_lines(model, pr).len()) as u16;
-    let viewport_rows = model
-        .terminal_height
-        .saturating_sub(crate::view::detail::CHROME_ROWS);
-    let max_scroll = content_lines.saturating_sub(viewport_rows);
+    let index = items.resolve_focus(&detail.focus).index();
+    let focus = items.focus_at(index.saturating_add_signed(delta));
     if let ViewMode::Detail(detail) = &mut model.view_mode {
-        detail.scroll = detail.scroll.min(max_scroll);
+        detail.focus = focus;
     }
+}
+
+/// Re-anchor the detail focus against the current Focus Sequence: identity
+/// wins, so threads/comments arriving or filter toggles that insert items
+/// above the focus move its index — never which card is focused. A focus
+/// whose item vanished (hidden by a filter, gone on refresh) falls back to
+/// its last position, clamped to the shrunk sequence. A no-op outside Detail
+/// mode.
+fn resolve_detail_focus(model: &mut Model) {
+    let Some(items) = detail_items(model) else {
+        return;
+    };
+    let ViewMode::Detail(detail) = &model.view_mode else {
+        return;
+    };
+    let focus = items.resolve_focus(&detail.focus);
+    if let ViewMode::Detail(detail) = &mut model.view_mode {
+        detail.focus = focus;
+    }
+}
+
+/// Measure the open detail view's body via the same `detail_content` layout
+/// the view renders, so scroll math and rendering can't disagree. `None`
+/// outside Detail mode, while the body hasn't arrived, or if the PR left the
+/// list. Measured at a fixed epoch: the layout's line ranges are
+/// age-independent (a byline is one line whatever its age string says), and
+/// `update` stays a pure `(Model, Msg)` reducer with no clock.
+fn measured_detail_content(model: &Model) -> Option<detail_layout::DetailContent> {
+    let ViewMode::Detail(detail) = &model.view_mode else {
+        return None;
+    };
+    let description = detail.body.as_ref()?;
+    let pr = model.list.pr(&detail.key)?;
+    Some(detail_layout::detail_content(
+        model,
+        pr,
+        description,
+        detail,
+        model.terminal_width,
+        chrono::DateTime::UNIX_EPOCH,
+    ))
+}
+
+/// The detail body's viewport height: the terminal minus the pinned header and
+/// status bar.
+fn detail_viewport_rows(model: &Model) -> usize {
+    usize::from(model.terminal_height).saturating_sub(usize::from(detail_layout::CHROME_ROWS))
 }
 
 /// Handle one keypress while the detail view is open. The caller guarantees
@@ -349,18 +435,20 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
             model.view_mode = ViewMode::List;
         }
         KeyCode::Char('r') => {
-            // Refresh the current PR detail: refetch the body. Clears the
-            // cached body first so the view briefly shows the loading
-            // placeholder, consistent with the initial enter-and-fetch flow.
-            // Preserves the scroll position so the user stays at the same
-            // place after a quick re-fetch.
+            // Refresh the open PR: refetch the body plus the threads / reviews
+            // / issue comments behind the Review Threads and Conversation
+            // sections. The cached body clears so the view shows the loading
+            // placeholder, consistent with the initial enter-and-fetch flow;
+            // threads/comments keep rendering their current data until the
+            // fresh lists overwrite it. Preserves the scroll position so the
+            // user stays at the same place after a quick re-fetch.
             //
             // Clone the key so the borrow of model.view_mode ends before the
             // body is reassigned below (which needs a unique borrow of the
-            // model via `fetch_pr_detail_cmd`).
+            // model via `refresh_detail_cmds`).
             if let ViewMode::Detail(detail) = &model.view_mode {
                 let key = detail.key.clone();
-                let cmds = fetch_pr_detail_cmd(model, &key);
+                let cmds = refresh_detail_cmds(model, &key);
                 if !cmds.is_empty()
                     && let ViewMode::Detail(detail) = &mut model.view_mode
                 {
@@ -369,27 +457,61 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
                 return cmds;
             }
         }
-        // Scroll down: j, Down arrow. Clamp to the last screenful so a held key
-        // can't drift the offset past the content (which would make the next
-        // `k` presses appear dead until the offset works back down).
-        KeyCode::Char('j') | KeyCode::Down => {
-            if let ViewMode::Detail(detail) = &mut model.view_mode {
-                detail.scroll = detail.scroll.saturating_add(DETAIL_SCROLL_STEP);
-            }
-            clamp_detail_scroll(model);
+        // Toggle resolved-thread visibility (hidden by default). The toggle
+        // can shift the focused card or fall the focus back to another card;
+        // either way `normalize_detail` sees the moved anchor and scrolls the
+        // card back into view.
+        KeyCode::Char('t') => {
+            model.show_resolved = !model.show_resolved;
         }
-        // Scroll up: k, Up arrow
-        KeyCode::Char('k') | KeyCode::Up => {
-            if let ViewMode::Detail(detail) = &mut model.view_mode {
-                detail.scroll = detail.scroll.saturating_sub(DETAIL_SCROLL_STEP);
+        // Toggle bot-comment visibility (shown by default). Same derived
+        // follow as `t`.
+        KeyCode::Char('b') => {
+            model.show_bot_comments = !model.show_bot_comments;
+        }
+        // Open the focused item in the browser: a thread/reply/comment opens
+        // its deep link; the body falls back to the PR itself (mirrors the TS
+        // fallback to `openInBrowser(pr)`). The stored focus is re-anchored
+        // after every update, so its URL is never stale here.
+        KeyCode::Char('o') => {
+            if let ViewMode::Detail(detail) = &model.view_mode {
+                let url = detail
+                    .focus
+                    .url()
+                    .map_or_else(|| detail.key.html_url(), str::to_owned);
+                return vec![Cmd::OpenUrl { url }];
             }
         }
-        // Page down
+        // Toggle the focused card's long-body expansion (collapsed by
+        // default; see `detail_layout::collapse_body`). Keyed by the comment's
+        // URL, so the state survives filter toggles moving the indices. The
+        // body (no URL) has nothing to toggle. Expansion grows the card in
+        // place — identity and start line unchanged — so the follow anchor is
+        // cleared explicitly to make `normalize_detail` pull the grown card
+        // back into view.
+        KeyCode::Enter => {
+            if let ViewMode::Detail(detail) = &mut model.view_mode
+                && let Some(url) = detail.focus.url().map(str::to_owned)
+            {
+                if !detail.expanded.remove(&url) {
+                    detail.expanded.insert(url);
+                }
+                detail.followed = None;
+            }
+        }
+        // Focus forward/back: j/k (and arrows) cycle the focusable items —
+        // body, thread roots, replies, issue comments — not the raw scroll
+        // offset (PageUp/PageDown still scroll). The moved focus changes the
+        // `normalize_detail` anchor, so the newly-focused card scrolls into
+        // view.
+        KeyCode::Char('j') | KeyCode::Down => move_detail_focus(model, 1),
+        KeyCode::Char('k') | KeyCode::Up => move_detail_focus(model, -1),
+        // Page down. `normalize_detail` clamps the offset to the last
+        // screenful, so a held PageDown can't drift past the end.
         KeyCode::PageDown => {
             if let ViewMode::Detail(detail) = &mut model.view_mode {
                 detail.scroll = detail.scroll.saturating_add(DETAIL_SCROLL_PAGE);
             }
-            clamp_detail_scroll(model);
         }
         // Page up
         KeyCode::PageUp => {
@@ -402,7 +524,100 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
     Vec::new()
 }
 
+/// Re-establish the open detail view's invariants after a state change, in
+/// one pass over at most one layout build:
+///
+/// - the focus re-anchors to its item's place in the fresh Focus Sequence
+///   (falling back positionally when the item vanished);
+/// - the focused card scrolls back into view — up to its first line when it
+///   starts above the viewport, down to its last when it ends below, never
+///   past its first so a card taller than the viewport shows its top — but
+///   only when the follow anchor (focus identity + card start line) moved
+///   since the last pass. Focus moves, filter toggles, and content arriving
+///   above the card all move the anchor; raw PageUp/PageDown scrolling never
+///   does. Mirrors the TS `scrollChildIntoView` on focus change.
+/// - the scroll offset clamps so it never sits more than one screenful above
+///   the last content line, measured against the full layout (a refresh
+///   returning a shorter body, a shrinking sequence, or a taller terminal can
+///   all strand it — and PageUp deliberately doesn't clamp, so a stranded
+///   offset reads as dead keypresses). Mirrors the render-time backstop in
+///   `view::detail::render_body`, but here `scroll` is the stored source of
+///   intent.
+///
+/// Runs once at the end of every `update` (minus the `skips_normalize` fast
+/// path) rather than at each mutation site, so no message path can forget it
+/// — a missed pass self-heals on the next message. A no-op outside Detail
+/// mode, and cheap while the body hasn't arrived.
+fn normalize_detail(model: &mut Model) {
+    resolve_detail_focus(model);
+    let Some(content) = measured_detail_content(model) else {
+        return;
+    };
+    let viewport = detail_viewport_rows(model);
+    let max_scroll = content.lines.len().saturating_sub(viewport);
+    let ViewMode::Detail(detail) = &mut model.view_mode else {
+        return;
+    };
+    let scroll = detail.scroll.min(max_scroll);
+    let Some(range) = content.item_ranges.get(detail.focus.index()) else {
+        // Unreachable (the focus was just resolved against the same
+        // derivation the layout walks), but degrade to the bare clamp.
+        detail.scroll = scroll;
+        return;
+    };
+    let anchor = (detail.focus.clone(), range.start);
+    detail.scroll = if detail.followed.as_ref() != Some(&anchor) {
+        if range.start < scroll {
+            range.start
+        } else if range.end > scroll + viewport {
+            (range.end - viewport).min(range.start)
+        } else {
+            scroll
+        }
+    } else {
+        scroll
+    };
+    detail.followed = Some(anchor);
+}
+
+/// True for messages that provably can't change the open detail view's
+/// content, Focus Sequence, or viewport, letting `update` skip the
+/// `normalize_detail` layout build. An explicit skip-list, so any new message
+/// defaults to normalizing — the safe direction (a wasted pass costs one
+/// build; a wrong skip strands the invariants until the next message). The
+/// per-PR arrivals are the high-volume case: the enrichment fan-out lands
+/// threads/reviews/comments for every listed PR while the user reads one of
+/// them, and only the open PR's own arrivals can move its cards.
+fn skips_normalize(msg: &Msg, model: &Model) -> bool {
+    let ViewMode::Detail(detail) = &model.view_mode else {
+        // normalize_detail is already a cheap no-op outside Detail mode.
+        return false;
+    };
+    match msg {
+        Msg::NetworkStatsChanged(_) | Msg::StatusCleared { .. } => true,
+        Msg::ThreadsArrived { pr, .. }
+        | Msg::ReviewsArrived { pr, .. }
+        | Msg::IssueCommentsArrived { pr, .. }
+        | Msg::ReviewStatusArrived { pr, .. }
+        | Msg::FilesArrived { pr, .. }
+        | Msg::FilesFetchFailed { pr }
+        | Msg::PRDetailArrived { pr, .. } => *pr != detail.key,
+        _ => false,
+    }
+}
+
 pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
+    let skip_normalize = skips_normalize(&msg, model);
+    let cmds = apply(model, msg);
+    if !skip_normalize {
+        normalize_detail(model);
+    }
+    cmds
+}
+
+/// The reducer's message dispatch. Detail-view invariant maintenance lives in
+/// `update`'s `normalize_detail` pass, not in the individual arms.
+fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
     match msg {
         Msg::TerminalEvent(Event::Key(key)) => {
             if key.kind != KeyEventKind::Press {
@@ -436,10 +651,44 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             }
             Vec::new()
         }
-        Msg::TerminalEvent(Event::Resize(_, height)) => {
+        Msg::TerminalEvent(Event::Resize(width, height)) => {
+            model.terminal_width = width;
             model.terminal_height = height;
             model.sync_viewport();
             Vec::new()
+        }
+        // Wheel ticks scroll the viewport, never the focus — the wheel is not
+        // a selection device (the runtime captures the mouse precisely so the
+        // terminal can't translate ticks into arrow keys, which are focus
+        // keys). The follow anchor is untouched, so `normalize_detail` only
+        // clamps. The list has no free scroll (its viewport derives from the
+        // selection), so there a tick steps the selection like j/k — followed
+        // by the same just-in-time files fetch a selection key triggers.
+        Msg::TerminalEvent(Event::Mouse(mouse))
+            if matches!(
+                mouse.kind,
+                MouseEventKind::ScrollDown | MouseEventKind::ScrollUp
+            ) =>
+        {
+            let down = mouse.kind == MouseEventKind::ScrollDown;
+            match &mut model.view_mode {
+                ViewMode::Detail(detail) => {
+                    detail.scroll = if down {
+                        detail.scroll.saturating_add(DETAIL_SCROLL_WHEEL)
+                    } else {
+                        detail.scroll.saturating_sub(DETAIL_SCROLL_WHEEL)
+                    };
+                    Vec::new()
+                }
+                ViewMode::List => {
+                    if down {
+                        model.list.move_down();
+                    } else {
+                        model.list.move_up();
+                    }
+                    maybe_fetch_selected_files(model)
+                }
+            }
         }
         Msg::TerminalEvent(_) => Vec::new(),
         Msg::ConfigLoaded(config) => {
@@ -505,7 +754,7 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             maybe_fetch_checks(model, head_sha, &pr)
         }
         Msg::ThreadsArrived { pr, threads } => {
-            model.enrichment.review_threads.insert(pr, threads);
+            model.enrichment.store_threads(pr, threads);
             model.refresh_blockers();
             Vec::new()
         }
@@ -527,7 +776,7 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             Vec::new()
         }
         Msg::IssueCommentsArrived { pr, comments } => {
-            model.enrichment.issue_comments.insert(pr, comments);
+            model.enrichment.store_issue_comments(pr, comments);
             Vec::new()
         }
         Msg::FilesArrived { pr, files } => {
@@ -590,7 +839,7 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             if let ViewMode::Detail(detail) = &mut model.view_mode
                 && detail.key == pr
             {
-                detail.body = Some(crate::view::detail::render_description_lines(&body));
+                detail.body = Some(detail_layout::render_description_lines(&body));
             }
             Vec::new()
         }

@@ -32,12 +32,24 @@ const CODE: Color = Color::LightCyan;
 /// Render a markdown string to a list of ratatui lines ready to be passed to
 /// a `Paragraph` or collected into a `Text`. Each `Line` owns its spans
 /// (all strings are `'static`), so the returned `Vec` is independent of the
-/// source lifetime.
+/// source lifetime. The output ends at its last content line: the block
+/// handlers emit a blank separator after every block, which would leave one
+/// trailing blank on the whole document — but spacing *around* a rendered
+/// body is the consumer's concern (detail cards must end at their content so
+/// adjacent cards sit one shared separator row apart).
 pub fn render(source: &str) -> Vec<Line<'static>> {
     let parser = Parser::new_ext(source, Options::empty());
     let mut ctx = RenderCtx::default();
     ctx.process(parser);
+    while ctx.lines.last().is_some_and(line_is_blank) {
+        ctx.lines.pop();
+    }
     ctx.lines
+}
+
+/// True when the line renders as visually empty (no non-whitespace content).
+fn line_is_blank(line: &Line<'_>) -> bool {
+    line.spans.iter().all(|span| span.content.trim().is_empty())
 }
 
 /// Return a `Span` that renders `text` as a heading at `depth`, prepending the

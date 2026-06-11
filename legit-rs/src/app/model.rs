@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ratatui::text::Line;
 
@@ -13,7 +13,11 @@ use crate::{
     secret::Secret,
 };
 
-use super::{cmd::Cmd, pr_list::PrList};
+use super::{
+    cmd::Cmd,
+    detail_items::{DetailFilters, DetailFocus},
+    pr_list::PrList,
+};
 
 /// Which top-level view is active. `List` is the default PR list; `Detail`
 /// carries the whole detail-view state in one variant so illegal combinations
@@ -47,9 +51,34 @@ pub struct DetailState {
     /// show without a re-fetch.
     pub body: Option<Vec<Line<'static>>>,
     /// Vertical scroll offset for the body (lines scrolled past the top). Starts
-    /// at zero on entry; `update` mutates it on `j`/`k`/PageUp/PageDown/arrow
-    /// keys and clamps it so it can never sit past the last screenful.
-    pub scroll: u16,
+    /// at zero on entry; `update` mutates it on PageUp/PageDown (and to keep the
+    /// focused item visible) and clamps it so it can never sit past the last
+    /// screenful. `usize` like every other line count, so the clamp math is
+    /// exact however tall the content; the one narrowing to ratatui's `u16`
+    /// happens at the render edge.
+    pub scroll: usize,
+    /// The focused Focus Sequence item, identity-keyed by comment URL (the
+    /// same stable key `expanded` uses) with its last-resolved index.
+    /// `j`/`k`/arrows move it; every update re-anchors it against the fresh
+    /// sequence, so arrivals or filter toggles that insert/remove items above
+    /// it move the index — never which card is focused. A vanished item falls
+    /// back to its last position.
+    pub focus: DetailFocus,
+    /// What the last `normalize_detail` pass resolved the focus to: its
+    /// identity plus the first line of its card in the measured layout.
+    /// `None` until a pass has measured an arrived body. The change detector
+    /// behind scroll-follows-focus: a pass whose resolved identity or card
+    /// start differs scrolls the card back into view, so focus moves, filter
+    /// toggles, and content arriving above the card all follow it — while raw
+    /// PageUp/PageDown scrolling (which changes neither) never does. Enter
+    /// clears it to force a follow after expanding the focused card in place.
+    pub followed: Option<(DetailFocus, usize)>,
+    /// Cards whose long bodies the user expanded with Enter, keyed by the
+    /// comment's URL (unique per review/issue comment, and stable across
+    /// filter toggles — unlike a focus index). Lives in `DetailState` so
+    /// closing the view structurally resets every card to collapsed, mirroring
+    /// the TS details-store being dropped per PR.
+    pub expanded: HashSet<String>,
 }
 
 /// Per-PR enrichment landed by the GraphQL/REST fan-out. Keyed by `PrKey`
@@ -65,6 +94,16 @@ pub struct Enrichment {
     pub reviews: HashMap<PrKey, Vec<Review>>,
     pub issue_comments: HashMap<PrKey, Vec<IssueComment>>,
     pub checks: HashMap<(String, String), Vec<CheckRun>>,
+    /// Comment bodies rendered to display lines once on arrival, keyed by the
+    /// comment's URL (the same stable key `DetailState::expanded` uses).
+    /// Private: written only by `store_threads`/`store_issue_comments`, so the
+    /// cache stays adjacent to the raw maps and can't drift from them. Read by
+    /// `detail_layout` via `rendered_body`, which would otherwise re-parse
+    /// every comment's markdown each frame — the same rationale as caching the
+    /// rendered description in `DetailState::body`. Entries for comments that
+    /// vanish on a refresh linger (bounded by the session) and are overwritten
+    /// whenever their URL re-arrives.
+    rendered_bodies: HashMap<String, Vec<Line<'static>>>,
     /// Per-PR changed-files fetch state, fetched just-in-time on selection
     /// change. Keyed by `PrKey`; absent until the PR's files are first
     /// requested. This one map IS the files fetch's whole state machine
@@ -75,6 +114,50 @@ pub struct Enrichment {
 }
 
 impl Enrichment {
+    /// Store an arrived thread list, rendering each comment's markdown body to
+    /// display lines exactly once. The one write path for `review_threads`, so
+    /// the rendered cache always covers what the maps hold.
+    pub fn store_threads(&mut self, pr: PrKey, threads: Vec<FullReviewThread>) {
+        for comment in threads.iter().flat_map(|thread| &thread.comments) {
+            self.rendered_bodies
+                .insert(comment.url.clone(), crate::markdown::render(&comment.body));
+        }
+        self.review_threads.insert(pr, threads);
+    }
+
+    /// Store an arrived issue-comment list; same render-once contract as
+    /// `store_threads`.
+    pub fn store_issue_comments(&mut self, pr: PrKey, comments: Vec<IssueComment>) {
+        for comment in &comments {
+            self.rendered_bodies
+                .insert(comment.url.clone(), crate::markdown::render(&comment.body));
+        }
+        self.issue_comments.insert(pr, comments);
+    }
+
+    /// The display lines for a comment's body, cloned from the render-once
+    /// cache. Falls back to rendering fresh for a comment that bypassed the
+    /// `store_*` writers — behaviourally identical, just uncached.
+    pub fn rendered_body(&self, url: &str, body: &str) -> Vec<Line<'static>> {
+        self.rendered_bodies
+            .get(url)
+            .cloned()
+            .unwrap_or_else(|| crate::markdown::render(body))
+    }
+
+    /// The review threads fetched for `pr`, or `None` until `ThreadsArrived`.
+    /// Callers that don't care about arrival (focus math) `unwrap_or(&[])`;
+    /// the detail view distinguishes `None` (loading placeholder) from empty.
+    pub fn threads_for(&self, pr: &PrKey) -> Option<&[FullReviewThread]> {
+        self.review_threads.get(pr).map(Vec::as_slice)
+    }
+
+    /// The issue comments fetched for `pr`, or `None` until
+    /// `IssueCommentsArrived`. Same `None`-vs-empty contract as `threads_for`.
+    pub fn comments_for(&self, pr: &PrKey) -> Option<&[IssueComment]> {
+        self.issue_comments.get(pr).map(Vec::as_slice)
+    }
+
     /// The check runs fetched for `pr`'s head commit, or `None` until they
     /// arrive. The `checks` map is keyed by (repo slug, head SHA) — not `PrKey`
     /// — because check runs are repo-scoped on GitHub (a fork PR shares its
@@ -199,6 +282,10 @@ pub struct Model {
     /// list viewport when chrome rows (tab bar, filter chip) appear or vanish
     /// without a resize event.
     pub terminal_height: u16,
+    /// Last reported terminal width, kept so `update` can measure the detail
+    /// body via the same `detail_content` layout the view renders (the runtime
+    /// seeds both dimensions with a synthetic initial Resize).
+    pub terminal_width: u16,
     /// Transient status message + a generation counter. A scheduled clear only
     /// fires if its token still matches `status_gen`, so a newer message is
     /// never wiped by an older message's timer.
@@ -217,6 +304,13 @@ pub struct Model {
     /// offset live inside that variant). `Esc` in the detail view returns to
     /// `List`.
     pub view_mode: ViewMode,
+    /// Detail-view filter: show resolved threads (`t` toggles; default false).
+    /// Lives on the `Model`, not `DetailState`, so the preference survives
+    /// closing and reopening detail views (mirrors the TS app-level ui-state).
+    pub show_resolved: bool,
+    /// Detail-view filter: show bot comments (`b` toggles; default true).
+    /// Model-level for the same reason as `show_resolved`.
+    pub show_bot_comments: bool,
 }
 
 impl Model {
@@ -232,15 +326,27 @@ impl Model {
                 list: PrList::new(),
                 active_tab: 0,
                 terminal_height: 0,
+                terminal_width: 0,
                 status: None,
                 status_gen: 0,
                 network_stats: NetworkStats::default(),
                 enrichment: Enrichment::default(),
                 blockers: HashMap::new(),
                 view_mode: ViewMode::List,
+                show_resolved: false,
+                show_bot_comments: true,
             },
             vec![Cmd::LoadConfig, Cmd::ResolveAuthToken, Cmd::DetectRepo],
         )
+    }
+
+    /// The detail view's comment-visibility filters, bundled for the
+    /// `detail_items` derivation shared by `update` and `detail_layout`.
+    pub fn detail_filters(&self) -> DetailFilters {
+        DetailFilters {
+            show_resolved: self.show_resolved,
+            show_bot_comments: self.show_bot_comments,
+        }
     }
 
     /// The current user's login, from config (`~/.legit/config.json` `user`).

@@ -65,6 +65,14 @@ pub struct PrKey {
     pub number: u64,
 }
 
+impl PrKey {
+    /// The PR's GitHub web URL — the one canonical construction, shared by the
+    /// detail header and the `o` browser action's body fallback.
+    pub fn html_url(&self) -> String {
+        format!("https://github.com/{}/pull/{}", self.repo_slug, self.number)
+    }
+}
+
 impl PR {
     /// The cross-repo identity key for this PR.
     pub fn key(&self) -> PrKey {

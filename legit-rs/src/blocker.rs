@@ -75,10 +75,9 @@ pub struct BlockerOptions<'a> {
     pub threads: Option<&'a [FullReviewThread]>,
 }
 
-/// How a single unresolved review thread is waiting. Mirrors the TS
-/// `classifyThread` return union. Consumed by `classify_thread`, which the
-/// detail view will use to badge individual threads in a later milestone.
-#[allow(dead_code)]
+/// How a single review thread is waiting. Mirrors the TS `classifyThread`
+/// return union. Consumed by `classify_thread`, which the detail view uses to
+/// badge individual threads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThreadKind {
     /// Closed; not blocking anyone.
@@ -158,10 +157,9 @@ fn last_non_bot(thread: &FullReviewThread) -> Option<&crate::github::types::Revi
     thread.comments.iter().rev().find(|c| !c.is_bot)
 }
 
-/// Classify a single unresolved thread. Mirrors the TS `classifyThread`.
-/// Standalone API (the aggregate path uses `classify_threads`); the detail view
-/// will badge per-thread state with it in a later milestone.
-#[allow(dead_code)]
+/// Classify a single thread. Mirrors the TS `classifyThread`. Standalone API
+/// (the aggregate path uses `classify_threads`); the detail view badges
+/// per-thread state with it.
 pub fn classify_thread(thread: &FullReviewThread) -> ThreadKind {
     if thread.is_resolved {
         return ThreadKind::Resolved;

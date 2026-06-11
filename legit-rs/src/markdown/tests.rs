@@ -260,7 +260,7 @@ fn loose_list_separates_items_with_single_blank_line() {
     let lines = render("- foo\n\n- bar");
     assert_eq!(
         line_texts(&lines),
-        vec!["• foo", "", "• bar", ""],
+        vec!["• foo", "", "• bar"],
         "loose list items must be separated by exactly one blank line"
     );
 }
@@ -273,7 +273,7 @@ fn nested_list_indents_child_items() {
     let lines = render("- outer\n  - inner");
     assert_eq!(
         line_texts(&lines),
-        vec!["• outer", "  • inner", ""],
+        vec!["• outer", "  • inner"],
         "nested item must be on its own, indented line"
     );
 }
@@ -343,15 +343,14 @@ fn text_after_nested_blockquote_stays_barred_and_muted() {
     // trailing paragraph lost its bar/muting; each End also emitted a blank,
     // so nesting doubled the internal separators.
     //
-    // The trailing single blank after the whole quote is the same one a
-    // flat quote produces (one from the paragraph End, one from the
-    // outermost blockquote End) — nesting must not add to it. We assert the
-    // nested output equals a flat three-paragraph quote so any future change
-    // to the trailing-blank convention stays consistent across both.
+    // Trailing blanks are trimmed by `render`, so the document ends at the
+    // last barred line — nesting must not differ from a flat quote. We assert
+    // the nested output equals a flat three-paragraph quote so any future
+    // change to the blank-line convention stays consistent across both.
     let nested = render("> outer\n>\n> > inner\n>\n> trailing");
     assert_eq!(
         line_texts(&nested),
-        vec!["│ outer", "", "│ inner", "", "│ trailing", "", ""],
+        vec!["│ outer", "", "│ inner", "", "│ trailing"],
         "nested quote must bar every line with a single blank between paragraphs"
     );
     let flat = render("> outer\n>\n> inner\n>\n> trailing");
@@ -475,7 +474,7 @@ fn image_alt_with_inline_code_stays_inside_placeholder() {
     let lines = render("![click `code`](http://x.test/i.png)");
     assert_eq!(
         line_texts(&lines),
-        vec!["[image: click code]", ""],
+        vec!["[image: click code]"],
         "code in alt must render inside the placeholder, not before it"
     );
 }

@@ -1,12 +1,12 @@
 use ratatui::crossterm::event::KeyCode;
 
-use ratatui::text::Line;
-
 use crate::{
     app::{cmd::Cmd, model::ViewMode, msg::Msg, update::update},
     git_remote::RepoInfo,
     github::rest::PrKey,
+    github::types::{IssueComment, ReviewComment},
     secret::Secret,
+    test_fixtures::{self, issue_comment, thread},
 };
 
 /// True when the open detail view has its rendered body cached. `false` if not
@@ -32,25 +32,51 @@ fn detail_body_text(model: &crate::app::model::Model) -> String {
     }
 }
 
+/// The focused item's resolved index in the open detail view; panics if not
+/// in Detail mode.
+fn detail_focus(model: &crate::app::model::Model) -> usize {
+    match &model.view_mode {
+        ViewMode::Detail(detail) => detail.focus.index(),
+        ViewMode::List => panic!("expected Detail mode"),
+    }
+}
+
+/// The focused item's identity URL (`None` = the body); panics if not in
+/// Detail mode.
+fn detail_focus_url(model: &crate::app::model::Model) -> Option<String> {
+    match &model.view_mode {
+        ViewMode::Detail(detail) => detail.focus.url().map(str::to_owned),
+        ViewMode::List => panic!("expected Detail mode"),
+    }
+}
+
 /// The scroll offset of the open detail view; panics if not in Detail mode.
-fn detail_scroll(model: &crate::app::model::Model) -> u16 {
+fn detail_scroll(model: &crate::app::model::Model) -> usize {
     match &model.view_mode {
         ViewMode::Detail(detail) => detail.scroll,
         ViewMode::List => panic!("expected Detail mode"),
     }
 }
 
-/// Set the open detail view's body to lines rendered from `body`; panics if not
-/// in Detail mode. Mirrors how `Msg::PRDetailArrived` caches the description.
+/// Deliver `body` to the open detail view through the real
+/// `Msg::PRDetailArrived` path, so the normalize pass runs exactly as it
+/// would in production (recording the follow anchor included); panics if not
+/// in Detail mode.
 fn set_detail_body(model: &mut crate::app::model::Model, body: &str) {
-    let lines: Vec<Line<'static>> = crate::view::detail::render_description_lines(body);
-    match &mut model.view_mode {
-        ViewMode::Detail(detail) => detail.body = Some(lines),
-        ViewMode::List => panic!("expected Detail mode"),
-    }
+    let ViewMode::Detail(detail) = &model.view_mode else {
+        panic!("expected Detail mode");
+    };
+    let pr = detail.key.clone();
+    update(
+        model,
+        Msg::PRDetailArrived {
+            pr,
+            body: body.to_owned(),
+        },
+    );
 }
 
-use super::{enriched_model, key_event};
+use super::{enriched_model, key_event, wheel_event};
 
 /// A model with auth + repo detected and one PR streamed in and selected.
 fn model_with_one_pr() -> crate::app::model::Model {
@@ -84,6 +110,47 @@ fn scrollable_detail_model() -> crate::app::model::Model {
     update(&mut model, key_event(KeyCode::Enter));
     let body: String = (1..=100).map(|n| format!("Line {n}\n\n")).collect();
     set_detail_body(&mut model, &body);
+    model
+}
+
+fn review_comment(id: &str, author: &str) -> ReviewComment {
+    test_fixtures::review_comment(id, author, &format!("body of {id}"))
+}
+
+/// Deliver one thread (root + one reply) and one issue comment to the open
+/// detail PR via the real enrichment messages, yielding the focus sequence
+/// body → thread root → reply → comment (4 items).
+fn seed_detail_enrichment(model: &mut crate::app::model::Model) {
+    let threads = vec![thread(
+        "t1",
+        false,
+        vec![review_comment("c1", "alice"), review_comment("c2", "bob")],
+    )];
+    let comments = vec![issue_comment(10, "carol", "Looks good.")];
+    update(
+        model,
+        Msg::ThreadsArrived {
+            pr: pr_key_42(),
+            threads,
+        },
+    );
+    update(
+        model,
+        Msg::IssueCommentsArrived {
+            pr: pr_key_42(),
+            comments,
+        },
+    );
+}
+
+/// A model in Detail with body arrived and the 4-item focus sequence seeded
+/// (body, thread root, reply, issue comment).
+fn focusable_detail_model() -> crate::app::model::Model {
+    let mut model = model_with_one_pr();
+    model.terminal_height = 30;
+    update(&mut model, key_event(KeyCode::Enter));
+    set_detail_body(&mut model, "The description.");
+    seed_detail_enrichment(&mut model);
     model
 }
 
@@ -244,6 +311,53 @@ fn r_in_detail_dispatches_refetch_and_clears_detail() {
 }
 
 #[test]
+fn r_in_detail_refetches_threads_reviews_and_comments() {
+    // Enrichment otherwise fetches exactly once per list load, so `r` is both
+    // the staleness refresh for the Review Threads / Conversation sections and
+    // the retry path when an initial fetch failed and left a section stuck on
+    // its loading placeholder.
+    let mut model = model_with_one_pr();
+    update(&mut model, key_event(KeyCode::Enter));
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('r')));
+
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Cmd::FetchThreads { number: 42, .. })),
+        "r must refetch the open PR's review threads: {cmds:?}"
+    );
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Cmd::FetchReviews { number: 42, .. })),
+        "r must refetch the open PR's reviews: {cmds:?}"
+    );
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Cmd::FetchIssueComments { number: 42, .. })),
+        "r must refetch the open PR's issue comments: {cmds:?}"
+    );
+}
+
+#[test]
+fn r_keeps_existing_threads_and_comments_until_fresh_ones_arrive() {
+    // Unlike the body (cleared to show the loading placeholder), the already-
+    // rendered thread/comment cards stay up during a refresh — the arriving
+    // lists overwrite them, so there is no flicker through "Loading threads…".
+    let mut model = focusable_detail_model();
+
+    update(&mut model, key_event(KeyCode::Char('r')));
+
+    assert!(
+        model.enrichment.threads_for(&pr_key_42()).is_some(),
+        "r must not clear the threads already on screen"
+    );
+    assert!(
+        model.enrichment.comments_for(&pr_key_42()).is_some(),
+        "r must not clear the comments already on screen"
+    );
+}
+
+#[test]
 fn r_in_list_mode_does_not_dispatch_fetch_pr_detail() {
     // 'r' in list mode is unbound (no handler). It must not accidentally
     // dispatch FetchPRDetail.
@@ -271,34 +385,188 @@ fn entering_detail_starts_scroll_at_zero() {
     );
 }
 
+// ── Focus selection (j/k cycles the focusable items) ────────────────────────
+
 #[test]
-fn j_in_detail_increments_scroll() {
-    let mut model = scrollable_detail_model();
-    assert_eq!(detail_scroll(&model), 0);
+fn entering_detail_starts_focus_on_the_body() {
+    let mut model = model_with_one_pr();
 
-    update(&mut model, key_event(KeyCode::Char('j')));
-    assert_eq!(detail_scroll(&model), 1, "j must scroll down by 1");
+    update(&mut model, key_event(KeyCode::Enter));
 
-    update(&mut model, key_event(KeyCode::Char('j')));
-    assert_eq!(detail_scroll(&model), 2, "second j must scroll down again");
+    assert_eq!(
+        detail_focus(&model),
+        0,
+        "a freshly-entered detail view must focus the body (item 0)"
+    );
 }
 
 #[test]
-fn k_in_detail_decrements_scroll_and_clamps_at_zero() {
-    let mut model = scrollable_detail_model();
+fn j_advances_focus_through_items_and_clamps_at_the_last() {
+    // Sequence: body(0) -> thread root(1) -> reply(2) -> issue comment(3).
+    let mut model = focusable_detail_model();
+    assert_eq!(detail_focus(&model), 0);
+
+    update(&mut model, key_event(KeyCode::Char('j')));
+    assert_eq!(detail_focus(&model), 1, "j must focus the thread root");
+
+    update(&mut model, key_event(KeyCode::Char('j')));
+    assert_eq!(detail_focus(&model), 2, "j must focus the reply");
+
+    update(&mut model, key_event(KeyCode::Char('j')));
+    assert_eq!(detail_focus(&model), 3, "j must focus the issue comment");
+
+    update(&mut model, key_event(KeyCode::Char('j')));
+    assert_eq!(detail_focus(&model), 3, "j must clamp at the last item");
+}
+
+#[test]
+fn k_retreats_focus_and_clamps_at_the_body() {
+    let mut model = focusable_detail_model();
     update(&mut model, key_event(KeyCode::Char('j')));
     update(&mut model, key_event(KeyCode::Char('j')));
-    assert_eq!(detail_scroll(&model), 2);
+    assert_eq!(detail_focus(&model), 2);
 
     update(&mut model, key_event(KeyCode::Char('k')));
-    assert_eq!(detail_scroll(&model), 1, "k must scroll up by 1");
+    assert_eq!(detail_focus(&model), 1, "k must move focus back");
 
     update(&mut model, key_event(KeyCode::Char('k')));
     update(&mut model, key_event(KeyCode::Char('k')));
+    assert_eq!(detail_focus(&model), 0, "k must clamp at the body");
+}
+
+#[test]
+fn arrow_keys_move_focus_like_j_and_k() {
+    let mut model = focusable_detail_model();
+
+    update(&mut model, key_event(KeyCode::Down));
+    assert_eq!(detail_focus(&model), 1, "Down must advance focus");
+
+    update(&mut model, key_event(KeyCode::Up));
+    assert_eq!(detail_focus(&model), 0, "Up must retreat focus");
+}
+
+#[test]
+fn j_with_no_threads_or_comments_keeps_focus_on_the_body() {
+    // Only the body is focusable while enrichment hasn't arrived.
+    let mut model = model_with_one_pr();
+    update(&mut model, key_event(KeyCode::Enter));
+    set_detail_body(&mut model, "The description.");
+
+    update(&mut model, key_event(KeyCode::Char('j')));
+
+    assert_eq!(
+        detail_focus(&model),
+        0,
+        "with a lone body item, j has nowhere to go"
+    );
+}
+
+#[test]
+fn threads_arrival_follows_the_focused_comment_to_its_new_index() {
+    // Focus the last item (the issue comment), then deliver a fresh thread
+    // list that removes the thread (and its reply) — the comment is still in
+    // the rebuilt sequence, so the focus follows its identity to index 1.
+    let mut model = focusable_detail_model();
+    for _ in 0..3 {
+        update(&mut model, key_event(KeyCode::Char('j')));
+    }
+    assert_eq!(detail_focus(&model), 3);
+
+    update(
+        &mut model,
+        Msg::ThreadsArrived {
+            pr: pr_key_42(),
+            threads: Vec::new(),
+        },
+    );
+
+    assert_eq!(
+        detail_focus(&model),
+        1,
+        "the focus must follow the comment into the rebuilt sequence"
+    );
+    assert_eq!(
+        detail_focus_url(&model).as_deref(),
+        Some("https://example.test/c/10"),
+        "the focused card must still be the comment the user selected"
+    );
+}
+
+#[test]
+fn late_thread_arrival_keeps_the_focused_comments_identity() {
+    // Focus the trailing issue comment, then deliver a fresh thread list that
+    // inserts a second thread above it. A positional focus would silently
+    // retarget to whatever card landed at the old index; the identity-keyed
+    // focus must follow the comment to its new position so `o` still opens
+    // the card the user selected.
+    let mut model = focusable_detail_model();
+    for _ in 0..3 {
+        update(&mut model, key_event(KeyCode::Char('j')));
+    }
+    assert_eq!(
+        detail_focus_url(&model).as_deref(),
+        Some("https://example.test/c/10"),
+        "precondition: the issue comment is focused"
+    );
+
+    update(
+        &mut model,
+        Msg::ThreadsArrived {
+            pr: pr_key_42(),
+            threads: vec![
+                thread("t0", false, vec![review_comment("c0", "dave")]),
+                thread(
+                    "t1",
+                    false,
+                    vec![review_comment("c1", "alice"), review_comment("c2", "bob")],
+                ),
+            ],
+        },
+    );
+
+    assert_eq!(
+        detail_focus(&model),
+        4,
+        "the focused comment must move down one slot with the inserted thread"
+    );
+    let cmds = update(&mut model, key_event(KeyCode::Char('o')));
+    assert_eq!(
+        open_url(&cmds),
+        "https://example.test/c/10",
+        "o must open the card the user focused, not the card at the old index"
+    );
+}
+
+#[test]
+fn wheel_in_detail_scrolls_the_viewport_without_moving_focus() {
+    // The wheel is not a selection device: ticks move the viewport only,
+    // leaving the focused card (and the follow anchor) untouched — unlike
+    // the arrow keys the terminal would synthesize without mouse capture.
+    let mut model = tall_focusable_detail_model();
+    update(&mut model, key_event(KeyCode::Char('j')));
+    let focus_before = detail_focus_url(&model);
+    let scroll_before = detail_scroll(&model);
+
+    update(&mut model, wheel_event(true));
+    update(&mut model, wheel_event(true));
+
     assert_eq!(
         detail_scroll(&model),
-        0,
-        "k must clamp at zero, not underflow"
+        scroll_before + 6,
+        "two wheel-down ticks must scroll the viewport by 3 lines each"
+    );
+    assert_eq!(
+        detail_focus_url(&model),
+        focus_before,
+        "wheel scrolling must not move the focus"
+    );
+
+    update(&mut model, wheel_event(false));
+    update(&mut model, wheel_event(false));
+    assert_eq!(
+        detail_scroll(&model),
+        scroll_before,
+        "wheel-up ticks must scroll back without yanking to the focused card"
     );
 }
 
@@ -328,33 +596,515 @@ fn page_up_in_detail_scrolls_by_ten_and_clamps_at_zero() {
     );
 }
 
-#[test]
-fn down_arrow_in_detail_increments_scroll() {
-    let mut model = scrollable_detail_model();
+// ── o opens the focused item's URL ──────────────────────────────────────────
 
-    update(&mut model, key_event(KeyCode::Down));
-    assert_eq!(detail_scroll(&model), 1, "Down arrow must scroll down by 1");
+/// The URL of the single `Cmd::OpenUrl` in `cmds`; panics otherwise.
+fn open_url(cmds: &[Cmd]) -> &str {
+    match cmds {
+        [Cmd::OpenUrl { url }] => url,
+        other => panic!("expected exactly one OpenUrl, got {other:?}"),
+    }
 }
 
 #[test]
-fn up_arrow_in_detail_decrements_scroll() {
-    let mut model = scrollable_detail_model();
-    update(&mut model, key_event(KeyCode::Down));
-    update(&mut model, key_event(KeyCode::Down));
-    assert_eq!(detail_scroll(&model), 2);
+fn o_on_a_focused_thread_root_opens_its_deep_link() {
+    let mut model = focusable_detail_model();
+    update(&mut model, key_event(KeyCode::Char('j'))); // thread root
 
-    update(&mut model, key_event(KeyCode::Up));
-    assert_eq!(detail_scroll(&model), 1, "Up arrow must scroll up by 1");
+    let cmds = update(&mut model, key_event(KeyCode::Char('o')));
+
+    assert_eq!(
+        open_url(&cmds),
+        "https://example.test/r/c1",
+        "o must deep-link to the thread's root comment"
+    );
+}
+
+#[test]
+fn o_on_a_focused_reply_opens_the_reply_deep_link() {
+    let mut model = focusable_detail_model();
+    update(&mut model, key_event(KeyCode::Char('j')));
+    update(&mut model, key_event(KeyCode::Char('j'))); // the reply
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('o')));
+
+    assert_eq!(
+        open_url(&cmds),
+        "https://example.test/r/c2",
+        "o must deep-link to the specific reply"
+    );
+}
+
+#[test]
+fn o_on_a_focused_issue_comment_opens_its_url() {
+    let mut model = focusable_detail_model();
+    for _ in 0..3 {
+        update(&mut model, key_event(KeyCode::Char('j'))); // the issue comment
+    }
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('o')));
+
+    assert_eq!(open_url(&cmds), "https://example.test/c/10");
+}
+
+#[test]
+fn o_on_the_body_falls_back_to_the_pr_url() {
+    let mut model = focusable_detail_model();
+    assert_eq!(detail_focus(&model), 0);
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('o')));
+
+    assert_eq!(
+        open_url(&cmds),
+        "https://github.com/mayfieldiv/legit/pull/42",
+        "o on the body (focus 0) must open the PR itself"
+    );
+}
+
+// ── t / b filter toggles ────────────────────────────────────────────────────
+
+#[test]
+fn t_toggles_resolved_thread_visibility() {
+    let mut model = focusable_detail_model();
+    assert!(!model.show_resolved, "resolved threads hidden by default");
+
+    update(&mut model, key_event(KeyCode::Char('t')));
+    assert!(model.show_resolved, "t must reveal resolved threads");
+
+    update(&mut model, key_event(KeyCode::Char('t')));
+    assert!(!model.show_resolved, "t must toggle back off");
+}
+
+#[test]
+fn b_toggles_bot_comment_visibility() {
+    let mut model = focusable_detail_model();
+    assert!(model.show_bot_comments, "bot comments shown by default");
+
+    update(&mut model, key_event(KeyCode::Char('b')));
+    assert!(!model.show_bot_comments, "b must hide bot comments");
+
+    update(&mut model, key_event(KeyCode::Char('b')));
+    assert!(model.show_bot_comments, "b must toggle back on");
+}
+
+#[test]
+fn hiding_bots_clamps_a_focus_stranded_past_the_shrunk_sequence() {
+    // Make the trailing issue comment a bot, focus it, then hide bots: the
+    // sequence loses its last item and the focus must clamp back into range.
+    let mut model = focusable_detail_model();
+    update(
+        &mut model,
+        Msg::IssueCommentsArrived {
+            pr: pr_key_42(),
+            comments: vec![IssueComment {
+                is_bot: true,
+                ..issue_comment(11, "ci", "bot says hi")
+            }],
+        },
+    );
+    for _ in 0..3 {
+        update(&mut model, key_event(KeyCode::Char('j')));
+    }
+    assert_eq!(detail_focus(&model), 3, "focused on the bot comment");
+
+    update(&mut model, key_event(KeyCode::Char('b')));
+
+    assert_eq!(
+        detail_focus(&model),
+        2,
+        "hiding bots must clamp the focus to the shrunk sequence"
+    );
+}
+
+#[test]
+fn filter_toggles_persist_across_detail_views() {
+    // The filters live on the Model, not the DetailState: leaving and
+    // re-entering detail must keep the user's t/b preferences.
+    let mut model = focusable_detail_model();
+    update(&mut model, key_event(KeyCode::Char('t')));
+    update(&mut model, key_event(KeyCode::Char('b')));
+
+    update(&mut model, key_event(KeyCode::Esc));
+    update(&mut model, key_event(KeyCode::Enter));
+
+    assert!(model.show_resolved, "t survives re-entering detail");
+    assert!(!model.show_bot_comments, "b survives re-entering detail");
+}
+
+// ── Enter toggles card expansion ────────────────────────────────────────────
+
+/// The expansion set of the open detail view; panics if not in Detail mode.
+fn detail_expanded(model: &crate::app::model::Model) -> &std::collections::HashSet<String> {
+    match &model.view_mode {
+        ViewMode::Detail(detail) => &detail.expanded,
+        ViewMode::List => panic!("expected Detail mode"),
+    }
+}
+
+#[test]
+fn enter_toggles_the_focused_cards_expansion() {
+    let mut model = focusable_detail_model();
+    update(&mut model, key_event(KeyCode::Char('j'))); // thread root (c1)
+
+    update(&mut model, key_event(KeyCode::Enter));
+    assert!(
+        detail_expanded(&model).contains("https://example.test/r/c1"),
+        "enter must mark the focused card expanded"
+    );
+
+    update(&mut model, key_event(KeyCode::Enter));
+    assert!(
+        detail_expanded(&model).is_empty(),
+        "a second enter must collapse the card again"
+    );
+}
+
+#[test]
+fn enter_on_the_body_does_not_touch_expansion_state() {
+    let mut model = focusable_detail_model();
+    assert_eq!(detail_focus(&model), 0);
+
+    let cmds = update(&mut model, key_event(KeyCode::Enter));
+
+    assert!(cmds.is_empty(), "enter on the body dispatches nothing");
+    assert!(
+        detail_expanded(&model).is_empty(),
+        "the body has no expansion state to toggle"
+    );
+}
+
+// ── Scroll follows focus ────────────────────────────────────────────────────
+
+/// The open detail view's measured layout, via the same canonical
+/// `detail_layout::detail_content` the view renders (at the same fixed epoch
+/// `update`'s own measurements use). Panics if not in Detail mode with an
+/// arrived body.
+fn measured_content(model: &crate::app::model::Model) -> crate::app::detail_layout::DetailContent {
+    let ViewMode::Detail(detail) = &model.view_mode else {
+        panic!("expected Detail mode");
+    };
+    let pr = model.list.pr(&detail.key).expect("pr in list");
+    crate::app::detail_layout::detail_content(
+        model,
+        pr,
+        detail.body.as_ref().expect("body arrived"),
+        detail,
+        model.terminal_width,
+        chrono::DateTime::UNIX_EPOCH,
+    )
+}
+
+/// The line range the focused item occupies in the measured layout.
+fn focused_item_range(model: &crate::app::model::Model) -> std::ops::Range<usize> {
+    let ViewMode::Detail(detail) = &model.view_mode else {
+        panic!("expected Detail mode");
+    };
+    measured_content(model).item_ranges[detail.focus.index()].clone()
+}
+
+/// A focusable detail model with a body tall enough that the thread and
+/// comment cards start below the fold of its small viewport.
+fn tall_focusable_detail_model() -> crate::app::model::Model {
+    let mut model = model_with_one_pr();
+    model.terminal_height = crate::app::detail_layout::CHROME_ROWS + 8;
+    model.terminal_width = 80;
+    update(&mut model, key_event(KeyCode::Enter));
+    let body: String = (1..=30).map(|n| format!("Line {n}\n\n")).collect();
+    set_detail_body(&mut model, &body);
+    seed_detail_enrichment(&mut model);
+    model
+}
+
+#[test]
+fn focusing_an_offscreen_card_scrolls_it_into_view() {
+    let mut model = tall_focusable_detail_model();
+    assert_eq!(detail_scroll(&model), 0);
+
+    // Focus the thread root, which sits far below the 8-row viewport.
+    update(&mut model, key_event(KeyCode::Char('j')));
+
+    let range = focused_item_range(&model);
+    let viewport = (model.terminal_height - crate::app::detail_layout::CHROME_ROWS) as usize;
+    let scroll = detail_scroll(&model);
+    assert!(
+        scroll <= range.start && range.end <= scroll + viewport,
+        "the focused card (lines {range:?}) must be fully inside the viewport \
+         (scroll {scroll}, {viewport} rows)"
+    );
+}
+
+#[test]
+fn focusing_back_to_the_body_scrolls_to_its_top() {
+    let mut model = tall_focusable_detail_model();
+    update(&mut model, key_event(KeyCode::Char('j')));
+    assert!(detail_scroll(&model) > 0, "precondition: scrolled down");
+
+    update(&mut model, key_event(KeyCode::Char('k')));
+
+    assert_eq!(
+        detail_scroll(&model),
+        0,
+        "re-focusing the body (which starts at line 0) must scroll back to the top"
+    );
+}
+
+#[test]
+fn scroll_clamp_covers_the_thread_and_conversation_sections() {
+    // PageDown far past the end: the clamp must allow reaching the bottom of
+    // the conversation section, not stop at the description+checks height the
+    // M7 clamp measured.
+    let mut model = tall_focusable_detail_model();
+    let max_scroll = max_detail_scroll(&model);
+
+    for _ in 0..50 {
+        update(&mut model, key_event(KeyCode::PageDown));
+    }
+
+    assert_eq!(
+        detail_scroll(&model),
+        max_scroll,
+        "PageDown must clamp at the bottom of the FULL content (threads + conversation included)"
+    );
+}
+
+/// The open detail view's true max scroll: full measured content minus the
+/// body viewport.
+fn max_detail_scroll(model: &crate::app::model::Model) -> usize {
+    let viewport = usize::from(model.terminal_height - crate::app::detail_layout::CHROME_ROWS);
+    measured_content(model).lines.len().saturating_sub(viewport)
+}
+
+#[test]
+fn refreshing_to_a_shorter_body_reclamps_scroll_so_page_up_stays_live() {
+    // `r` deliberately preserves the scroll offset across a refresh. When the
+    // refetched body comes back shorter, the preserved offset can sit past the
+    // new content's last screenful — it must re-clamp when the body arrives,
+    // or the user's next PageUp presses are visually dead unwinding phantom
+    // offset (the same drift bug the over-scroll test guards against on the
+    // PageDown path).
+    let mut model = model_with_one_pr();
+    model.terminal_height = crate::app::detail_layout::CHROME_ROWS + 6;
+    update(&mut model, key_event(KeyCode::Enter));
+    let tall: String = (1..=40).map(|n| format!("Line {n}\n\n")).collect();
+    update(
+        &mut model,
+        Msg::PRDetailArrived {
+            pr: pr_key_42(),
+            body: tall,
+        },
+    );
+    for _ in 0..50 {
+        update(&mut model, key_event(KeyCode::PageDown));
+    }
+    assert!(
+        detail_scroll(&model) > 20,
+        "precondition: scrolled deep into the tall body"
+    );
+
+    update(&mut model, key_event(KeyCode::Char('r')));
+    update(
+        &mut model,
+        Msg::PRDetailArrived {
+            pr: pr_key_42(),
+            body: "Short.".to_owned(),
+        },
+    );
+
+    assert_eq!(
+        detail_scroll(&model),
+        max_detail_scroll(&model),
+        "the preserved offset must re-clamp to the shorter refreshed content"
+    );
+}
+
+#[test]
+fn showing_resolved_threads_keeps_the_focused_card_in_view() {
+    // Focus the issue comment at the bottom (the scroll followed it). Toggling
+    // `t` reveals a resolved thread ABOVE it: the focus keeps the comment's
+    // identity (its index shifts down by the inserted card), and the toggle
+    // must scroll the card back into view, exactly like a j/k focus move
+    // would.
+    let mut model = tall_focusable_detail_model();
+    let resolved_body: String = (1..=6).map(|n| format!("Resolved para {n}\n\n")).collect();
+    update(
+        &mut model,
+        Msg::ThreadsArrived {
+            pr: pr_key_42(),
+            threads: vec![
+                thread(
+                    "done",
+                    true,
+                    vec![ReviewComment {
+                        body: resolved_body,
+                        ..review_comment("c9", "bob")
+                    }],
+                ),
+                thread("t1", false, vec![review_comment("c1", "alice")]),
+            ],
+        },
+    );
+    // Walk the focus to the last item (the issue comment); the scroll follows.
+    for _ in 0..5 {
+        update(&mut model, key_event(KeyCode::Char('j')));
+    }
+    let focused_before = detail_focus(&model);
+    let url_before = detail_focus_url(&model);
+
+    update(&mut model, key_event(KeyCode::Char('t')));
+
+    assert_eq!(
+        detail_focus_url(&model),
+        url_before,
+        "revealing threads must not change which card is focused"
+    );
+    assert_eq!(
+        detail_focus(&model),
+        focused_before + 1,
+        "the revealed resolved thread above shifts the focused card's index"
+    );
+    let range = focused_item_range(&model);
+    let viewport = (model.terminal_height - crate::app::detail_layout::CHROME_ROWS) as usize;
+    let scroll = detail_scroll(&model);
+    assert!(
+        scroll <= range.start && range.end <= scroll + viewport,
+        "the focused card (lines {range:?}) must stay fully inside the viewport \
+         after a filter toggle (scroll {scroll}, {viewport} rows)"
+    );
+}
+
+#[test]
+fn body_arrival_scrolls_the_already_focused_card_into_view() {
+    // While the body is still loading, j/k already move the focus (the
+    // threads/comments arrived independently), but there is nothing to
+    // measure, so the scroll stays at 0. When the body lands, the focused
+    // card can sit far below the viewport — the arrival must scroll it into
+    // view, not leave the focus border off-screen with o/Enter acting on an
+    // invisible card.
+    let mut model = model_with_one_pr();
+    model.terminal_height = crate::app::detail_layout::CHROME_ROWS + 8;
+    model.terminal_width = 80;
+    update(&mut model, key_event(KeyCode::Enter));
+    seed_detail_enrichment(&mut model);
+    for _ in 0..3 {
+        update(&mut model, key_event(KeyCode::Char('j')));
+    }
+    assert_eq!(detail_focus(&model), 3, "precondition: comment focused");
+    assert_eq!(detail_scroll(&model), 0, "precondition: nothing to scroll");
+
+    let body: String = (1..=30).map(|n| format!("Line {n}\n\n")).collect();
+    set_detail_body(&mut model, &body);
+
+    let range = focused_item_range(&model);
+    let viewport = (model.terminal_height - crate::app::detail_layout::CHROME_ROWS) as usize;
+    let scroll = detail_scroll(&model);
+    assert!(
+        scroll <= range.start && range.end <= scroll + viewport,
+        "the focused card (lines {range:?}) must be scrolled into view when \
+         the body arrives (scroll {scroll}, {viewport} rows)"
+    );
+}
+
+#[test]
+fn expanding_the_focused_card_brings_its_grown_tail_into_view() {
+    // Expansion grows the focused card in place (same identity, same first
+    // line), so it is the one change the follow anchor can't see — Enter
+    // forces the follow, which scrolls down to the expanded card's tail
+    // (capped at its first line for cards taller than the viewport). The body
+    // must clear the 100-line collapse backstop to truncate at all.
+    let mut model = tall_focusable_detail_model();
+    let long_body: String = (1..=60).map(|n| format!("Para {n}\n\n")).collect();
+    update(
+        &mut model,
+        Msg::IssueCommentsArrived {
+            pr: pr_key_42(),
+            comments: vec![issue_comment(10, "carol", &long_body)],
+        },
+    );
+    for _ in 0..3 {
+        update(&mut model, key_event(KeyCode::Char('j')));
+    }
+    let collapsed_range = focused_item_range(&model);
+
+    update(&mut model, key_event(KeyCode::Enter));
+
+    let range = focused_item_range(&model);
+    assert!(
+        range.end > collapsed_range.end,
+        "precondition: expansion must grow the focused card"
+    );
+    let viewport = (model.terminal_height - crate::app::detail_layout::CHROME_ROWS) as usize;
+    let scroll = detail_scroll(&model);
+    assert!(
+        scroll <= range.start && (range.end <= scroll + viewport || scroll == range.start),
+        "the expanded card (lines {range:?}) must be followed into view \
+         (scroll {scroll}, {viewport} rows)"
+    );
+}
+
+#[test]
+fn threads_arrival_that_shrinks_the_content_reclamps_scroll() {
+    // Scrolled to the bottom of a view whose threads section is long; a fresh
+    // (empty) thread list shortens the content, so the offset must follow it
+    // down — not strand past the new end.
+    let mut model = tall_focusable_detail_model();
+    for _ in 0..50 {
+        update(&mut model, key_event(KeyCode::PageDown));
+    }
+    let deep_scroll = detail_scroll(&model);
+
+    update(
+        &mut model,
+        Msg::ThreadsArrived {
+            pr: pr_key_42(),
+            threads: Vec::new(),
+        },
+    );
+
+    let max_scroll = max_detail_scroll(&model);
+    assert!(
+        max_scroll < deep_scroll,
+        "precondition: dropping the thread cards must shorten the content"
+    );
+    assert_eq!(
+        detail_scroll(&model),
+        max_scroll,
+        "the scroll must re-clamp when arriving threads shrink the content"
+    );
+}
+
+#[test]
+fn growing_the_terminal_reclamps_the_detail_scroll() {
+    // A taller terminal shrinks the max scroll (more content fits per
+    // screenful); the stored offset must follow it down so the next PageUp
+    // visibly moves.
+    let mut model = tall_focusable_detail_model();
+    for _ in 0..50 {
+        update(&mut model, key_event(KeyCode::PageDown));
+    }
+    let small_viewport_scroll = detail_scroll(&model);
+
+    update(
+        &mut model,
+        Msg::TerminalEvent(ratatui::crossterm::event::Event::Resize(80, 40)),
+    );
+
+    let max_scroll = max_detail_scroll(&model);
+    assert!(
+        max_scroll < small_viewport_scroll,
+        "precondition: the taller viewport must lower the max scroll"
+    );
+    assert_eq!(
+        detail_scroll(&model),
+        max_scroll,
+        "a resize must re-clamp the detail scroll to the new viewport"
+    );
 }
 
 #[test]
 fn esc_in_detail_drops_scroll_with_the_detail_state() {
     let mut model = scrollable_detail_model();
-    // Scroll down a few lines.
-    for _ in 0..5 {
-        update(&mut model, key_event(KeyCode::Char('j')));
-    }
-    assert_eq!(detail_scroll(&model), 5);
+    update(&mut model, key_event(KeyCode::PageDown));
+    assert_eq!(detail_scroll(&model), 10);
 
     update(&mut model, key_event(KeyCode::Esc));
 
@@ -364,31 +1114,30 @@ fn esc_in_detail_drops_scroll_with_the_detail_state() {
 }
 
 #[test]
-fn over_scrolling_clamps_to_the_last_screenful_and_k_stays_live() {
-    // Regression for the unbounded-drift bug: holding `j` far past the end must
-    // pin the offset at the last screenful, not let it accumulate — otherwise
-    // the next `k` presses are visually dead until the inflated offset works
-    // back down into view.
+fn over_scrolling_clamps_to_the_last_screenful_and_page_up_stays_live() {
+    // Regression for the unbounded-drift bug: holding PageDown far past the end
+    // must pin the offset at the last screenful, not let it accumulate —
+    // otherwise the next PageUp presses are visually dead until the inflated
+    // offset works back down into view.
     // Reference the canonical chrome-row count so a future layout change keeps
     // this regression test in sync with the clamp it guards (rather than a
     // hardcoded literal that would silently desync).
-    let chrome_rows = crate::view::detail::CHROME_ROWS;
+    let chrome_rows = crate::app::detail_layout::CHROME_ROWS;
     let mut model = model_with_one_pr();
     model.terminal_height = chrome_rows + 6; // body viewport = 6 rows
     update(&mut model, key_event(KeyCode::Enter));
     let body: String = (1..=20).map(|n| format!("Line {n}\n\n")).collect();
     set_detail_body(&mut model, &body);
 
-    // The true max scroll: description lines (no checks here) minus the
-    // viewport, computed via the same content the view assembles.
-    let content_lines = crate::view::detail::render_description_lines(&body).len() as u16;
-    let viewport_rows = model.terminal_height - chrome_rows;
-    let max_scroll = content_lines - viewport_rows;
+    // The true max scroll: the full body content (description plus the
+    // threads/comments loading placeholders here) minus the viewport, measured
+    // via the same layout the view renders.
+    let max_scroll = max_detail_scroll(&model);
     assert!(max_scroll > 1, "test body must be taller than the viewport");
 
-    // Hold `j` far past the end.
-    for _ in 0..(content_lines + 50) {
-        update(&mut model, key_event(KeyCode::Char('j')));
+    // Hold PageDown far past the end.
+    for _ in 0..(max_scroll + 50) {
+        update(&mut model, key_event(KeyCode::PageDown));
     }
     assert_eq!(
         detail_scroll(&model),
@@ -396,12 +1145,12 @@ fn over_scrolling_clamps_to_the_last_screenful_and_k_stays_live() {
         "over-scroll must clamp to the last screenful, not drift past it"
     );
 
-    // A single `k` must visibly move — it can't be eaten unwinding phantom
+    // A single PageUp must visibly move — it can't be eaten unwinding phantom
     // offset, because there is none.
-    update(&mut model, key_event(KeyCode::Char('k')));
+    update(&mut model, key_event(KeyCode::PageUp));
     assert_eq!(
         detail_scroll(&model),
-        max_scroll - 1,
-        "one k after over-scroll must decrement by exactly one"
+        max_scroll.saturating_sub(10),
+        "one PageUp after over-scroll must step back by exactly one page"
     );
 }
