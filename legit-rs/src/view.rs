@@ -86,13 +86,11 @@ pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
 }
 
 fn render_summary_divider(frame: &mut Frame<'_>, area: Rect) {
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            "│",
-            Style::default().fg(Color::Gray),
-        ))),
-        area,
-    );
+    let style = Style::default().fg(Color::Gray);
+    let lines = (0..area.height)
+        .map(|_| Line::from(Span::styled("│", style)))
+        .collect::<Vec<_>>();
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 /// The filter chip above the list: `/text` plus a block cursor while editing;

@@ -355,16 +355,19 @@ fn list_and_summary_are_separated_by_a_divider_cell() {
         Some(Tier::NeedsReview)
     });
     let width = 116;
-    let terminal = render_snapshot(&model, width, 4);
+    let height = 5;
+    let terminal = render_snapshot(&model, width, height);
     let panel_width = crate::app::list_layout::panel_width(width).expect("panel visible");
     let divider_x = width - panel_width - 1;
 
     let buffer = terminal.backend().buffer();
-    assert_eq!(
-        buffer[(divider_x, 1)].symbol(),
-        "│",
-        "list and summary should not touch with no separator"
-    );
+    for y in 1..height - 1 {
+        assert_eq!(
+            buffer[(divider_x, y)].symbol(),
+            "│",
+            "list and summary should stay separated across row {y}"
+        );
+    }
 }
 
 #[test]
