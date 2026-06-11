@@ -295,10 +295,13 @@ pub(crate) fn detail_content(
         last_card_bottom: None,
     };
 
-    // Item 0: the body. Unstyled — no border even focused, matching the TS
-    // DetailView where only thread/reply/comment cards are framed.
+    // Item 0: the body, wrapped to the terminal width here at derivation time
+    // (the cached render is width-independent). Unstyled — no border even
+    // focused, matching the TS DetailView where only thread/reply/comment
+    // cards are framed.
+    let description = crate::wrap::wrap_lines(description.to_vec(), width as usize);
     content.item_ranges.push(0..description.len());
-    content.lines.extend_from_slice(description);
+    content.lines.extend(description);
 
     content.lines.extend(checks_section_lines(model, pr));
 
@@ -325,10 +328,7 @@ pub(crate) fn detail_content(
             ]),
             comment_byline(&root.author, root.is_bot, root.created_at, now),
         ];
-        card.extend(collapse_body(
-            model.enrichment.rendered_body(&root.url, &root.body),
-            detail.expanded.contains(&root.url),
-        ));
+        card.extend(card_body(model, detail, &root.url, &root.body, 0, width));
         content.push_card(card, focused_index, 0, width);
 
         // Replies: each visible comment after the root is its own indented
@@ -340,9 +340,13 @@ pub(crate) fn detail_content(
                 .spans
                 .insert(0, Span::styled("↳ ", Style::default().fg(Color::DarkGray)));
             let mut card = vec![byline];
-            card.extend(collapse_body(
-                model.enrichment.rendered_body(&comment.url, &comment.body),
-                detail.expanded.contains(&comment.url),
+            card.extend(card_body(
+                model,
+                detail,
+                &comment.url,
+                &comment.body,
+                2,
+                width,
             ));
             content.push_card(card, focused_index, 2, width);
         }
@@ -365,9 +369,13 @@ pub(crate) fn detail_content(
             comment.created_at,
             now,
         )];
-        card.extend(collapse_body(
-            model.enrichment.rendered_body(&comment.url, &comment.body),
-            detail.expanded.contains(&comment.url),
+        card.extend(card_body(
+            model,
+            detail,
+            &comment.url,
+            &comment.body,
+            0,
+            width,
         ));
         content.push_card(card, focused_index, 0, width);
     }
@@ -386,6 +394,28 @@ pub(crate) fn detail_content(
 /// the focused card past the cap (the TUI stand-in for the TS `details-store`
 /// toggle until `<details>`/`<summary>` rendering lands).
 const COLLAPSED_CARD_BODY_ROWS: usize = 100;
+
+/// One card's body lines: the render-once cached markdown, capped at
+/// `COLLAPSED_CARD_BODY_ROWS` while collapsed, then wrapped to the card's
+/// content width — the full width minus the indent and the 2-column gutter
+/// `push_card` prepends. Wrapping happens here at derivation time (the cached
+/// render is width-independent), so the scroll clamp and card ranges measure
+/// exactly the rows the view paints. Bylines and section headers deliberately
+/// don't wrap — they clip, like the TS `truncate` rows.
+fn card_body(
+    model: &Model,
+    detail: &DetailState,
+    comment_url: &str,
+    comment_body: &str,
+    indent: usize,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let body = collapse_body(
+        model.enrichment.rendered_body(comment_url, comment_body),
+        detail.expanded.contains(comment_url),
+    );
+    crate::wrap::wrap_lines(body, (width as usize).saturating_sub(indent + 2))
+}
 
 /// Cap a card's body at `COLLAPSED_CARD_BODY_ROWS` lines unless expanded,
 /// appending a muted marker advertising the hidden tail.

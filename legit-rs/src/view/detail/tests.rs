@@ -851,6 +851,35 @@ fn detail_hundred_line_card_bodies_render_in_full() {
 }
 
 #[test]
+fn detail_long_body_lines_wrap_to_the_terminal_width() {
+    // Markdown bodies wrap at layout time (bylines and headers clip instead,
+    // like the TS truncate rows), so a long paragraph must reach its last
+    // word across multiple rows rather than being clipped at the right edge.
+    let long_paragraph = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima";
+    let mut model = model_in_detail(sample_pr(), long_paragraph);
+    seed_comments(
+        &mut model,
+        vec![issue_comment(10, "carol", long_paragraph, false)],
+    );
+
+    let rows = buffer_text(&render_snapshot(&model, 40, 30));
+
+    let description_first = row_of(&rows, "alpha");
+    let description_last = row_of(&rows, "lima");
+    assert!(
+        description_last > description_first,
+        "the description must wrap onto continuation rows: {rows:?}"
+    );
+    // The comment body repeats the paragraph: its words must all survive too
+    // (two "lima" rows in total — description + card).
+    assert_eq!(
+        rows.iter().filter(|r| r.contains("lima")).count(),
+        2,
+        "the card body must wrap instead of clipping its tail: {rows:?}"
+    );
+}
+
+#[test]
 fn detail_short_card_bodies_never_show_a_marker() {
     let mut model = model_in_detail(sample_pr(), "The description.");
     seed_comments(
