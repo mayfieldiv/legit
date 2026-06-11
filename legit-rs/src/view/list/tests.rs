@@ -522,6 +522,30 @@ fn long_titles_truncate_with_ellipsis_to_fit_column() {
 }
 
 #[test]
+fn long_author_names_truncate_in_the_middle() {
+    let model = model_with(
+        vec![pr(7, "Short title", "very-long-author-name", 2)],
+        Grouping::None,
+        |_| Some(Tier::NeedsReview),
+    );
+
+    // 116 total -> 80-col list region (panel takes the right 36).
+    let terminal = render_snapshot(&model, 116, 3);
+    let rows = list_rows(&terminal);
+
+    assert!(
+        rows[0].contains("very-lo…r-name"),
+        "author should preserve both ends when truncated: {:?}",
+        rows[0]
+    );
+    assert!(
+        !rows[0].contains("very-long-aut…"),
+        "author should not use end-only truncation: {:?}",
+        rows[0]
+    );
+}
+
+#[test]
 fn draft_pr_is_marked_in_its_row() {
     let mut draft = pr(50, "Polish things", "octocat", 1);
     draft.is_draft = true;

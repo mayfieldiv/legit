@@ -93,6 +93,49 @@ pub fn truncate(s: &str, max: usize) -> String {
     format!("{head}…")
 }
 
+/// Truncate `s` to at most `max` terminal columns, replacing the middle with
+/// `…` when shortened. Use this for path-like or identity-like cells where the
+/// beginning and end both carry signal (repo slugs, long logins).
+pub fn truncate_middle(s: &str, max: usize) -> String {
+    if max == 0 {
+        return String::new();
+    }
+    if s.width() <= max {
+        return s.to_owned();
+    }
+    if max == 1 {
+        return "…".to_owned();
+    }
+
+    let keep = max - 1;
+    let head_budget = keep.div_ceil(2);
+    let tail_budget = keep - head_budget;
+    let mut head = String::new();
+    let mut head_width = 0;
+    for ch in s.chars() {
+        let width = ch.width().unwrap_or(0);
+        if head_width + width > head_budget {
+            break;
+        }
+        head_width += width;
+        head.push(ch);
+    }
+
+    let mut tail_chars = Vec::new();
+    let mut tail_width = 0;
+    for ch in s.chars().rev() {
+        let width = ch.width().unwrap_or(0);
+        if tail_width + width > tail_budget {
+            break;
+        }
+        tail_width += width;
+        tail_chars.push(ch);
+    }
+    tail_chars.reverse();
+    let tail: String = tail_chars.into_iter().collect();
+    format!("{head}…{tail}")
+}
+
 /// Right-pad `s` with spaces to at least `width` terminal columns. Like
 /// `format!("{s:<width$}")` but measures display columns instead of `char`
 /// count, so columns stay aligned when a cell contains wide glyphs.
@@ -338,7 +381,7 @@ mod tests {
         CheckOutcome, ChecksSummary, CommentCounts, ReviewsSummary, check_icon, check_row,
         check_sort_group, checks_summary, comment_counts, format_age, format_review_state,
         format_size, outcome, pad_to_width, review_icon, reviews_summary, sort_check_runs,
-        truncate,
+        truncate, truncate_middle,
     };
     use crate::github::types::{CheckRun, FullReviewThread, Review, ReviewComment};
 
@@ -424,6 +467,14 @@ mod tests {
         let result = truncate("一二三四五", 5);
         assert_eq!(result, "一二…");
         assert!(result.width() <= 5, "must fit the column: {result:?}");
+    }
+
+    #[test]
+    fn truncate_middle_preserves_both_ends_of_long_strings() {
+        assert_eq!(
+            truncate_middle("very-long-author-name", 14),
+            "very-lo…r-name"
+        );
     }
 
     #[test]

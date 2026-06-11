@@ -10,7 +10,7 @@ use ratatui::{
 use crate::{
     app::grouping::DisplayRow,
     app::model::Model,
-    format::{format_age, format_size, pad_to_width, truncate},
+    format::{format_age, format_size, pad_to_width, truncate, truncate_middle},
     github::rest::PR,
 };
 
@@ -133,7 +133,7 @@ fn row_line<'a>(
     let title_col = width.saturating_sub(fixed).max(1);
 
     let title = truncate(&raw_title, title_col);
-    let author = truncate(&author, AUTHOR_COL);
+    let author = truncate_middle(&author, AUTHOR_COL);
     let reason = truncate(reason, REASON_COL);
     let age_col = width.saturating_sub(pr_num_col + title_col + AUTHOR_COL + size_col + REASON_COL);
     // Truncate, not just pad: in a narrow terminal `age_col` can saturate to 0,
