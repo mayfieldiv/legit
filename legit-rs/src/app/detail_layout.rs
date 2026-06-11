@@ -197,6 +197,12 @@ fn section_intro(
 pub(crate) struct DetailContent {
     pub lines: Vec<Line<'static>>,
     pub item_ranges: Vec<std::ops::Range<usize>>,
+    /// Index of the most recently pushed card's bottom-border row, valid only
+    /// while it is still the last line — the next `push_card` shares it as
+    /// its own top-border row, so adjacent cards sit one row apart. Section
+    /// headers and placeholders push lines without updating this, which
+    /// naturally breaks the sharing across section boundaries.
+    last_card_bottom: Option<usize>,
 }
 
 impl DetailContent {
@@ -209,8 +215,12 @@ impl DetailContent {
     /// The card occupies the same rows focused or not (a top and bottom border
     /// row plus a 2-char left gutter per content row) — focused cards draw the
     /// border characters, unfocused cards draw spaces, so focus changes never
-    /// shift the layout. Mirrors the TS `FocusableCard`'s invisible-border
-    /// trick.
+    /// shift the layout. A card directly following another card shares one
+    /// separator row with it: this card's top-border row IS the previous
+    /// card's bottom-border row. At most one of the two is focused, so the
+    /// shared row carries that card's border — or stays blank. Mirrors the TS
+    /// `FocusableCard`'s invisible-border trick and its `marginTop: -1`
+    /// overlap (where the focused card's border wins via zIndex).
     fn push_card(
         &mut self,
         card: Vec<Line<'static>>,
@@ -219,7 +229,6 @@ impl DetailContent {
         width: u16,
     ) {
         let focused = self.item_ranges.len() == focused_index;
-        let start = self.lines.len();
         let pad = " ".repeat(indent);
         let border = Style::default().fg(Color::DarkGray);
         // Horizontal rule spanning the row minus the indent and two corners.
@@ -232,7 +241,18 @@ impl DetailContent {
         } else {
             (Line::from(""), Line::from(""))
         };
-        self.lines.push(top);
+        let shares_separator = self.last_card_bottom.is_some()
+            && self.last_card_bottom == self.lines.len().checked_sub(1);
+        let start = if shares_separator {
+            let shared = self.lines.len() - 1;
+            if focused {
+                self.lines[shared] = top;
+            }
+            shared
+        } else {
+            self.lines.push(top);
+            self.lines.len() - 1
+        };
         for mut line in card {
             let gutter = if focused {
                 Span::styled(format!("{pad}│ "), border)
@@ -243,6 +263,7 @@ impl DetailContent {
             self.lines.push(line);
         }
         self.lines.push(bottom);
+        self.last_card_bottom = Some(self.lines.len() - 1);
         self.item_ranges.push(start..self.lines.len());
     }
 }
@@ -271,6 +292,7 @@ pub(crate) fn detail_content(
     let mut content = DetailContent {
         lines: Vec::new(),
         item_ranges: Vec::new(),
+        last_card_bottom: None,
     };
 
     // Item 0: the body. Unstyled — no border even focused, matching the TS

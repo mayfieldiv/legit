@@ -603,6 +603,24 @@ fn row_of(rows: &[String], needle: &str) -> usize {
 }
 
 #[test]
+fn detail_adjacent_cards_share_a_single_separator_row() {
+    // Adjacent cards sit one row apart: the row is the previous card's bottom
+    // border and the next card's top border at once (whichever is focused
+    // draws it; both blank otherwise). Two rows apart would make focus
+    // changes read as the cards jumping.
+    let model = focusable_model();
+    let rows = buffer_text(&render_snapshot(&model, 80, 30));
+
+    let root_body = row_of(&rows, "Please rename this.");
+    let reply_byline = row_of(&rows, "↳");
+    assert_eq!(
+        reply_byline,
+        root_body + 2,
+        "adjacent cards must be separated by exactly one shared row: {rows:?}"
+    );
+}
+
+#[test]
 fn detail_focus_on_body_renders_no_card_borders() {
     // The body (focus 0) is unstyled — matching the TS DetailView, where only
     // thread/reply/comment cards carry a border.
