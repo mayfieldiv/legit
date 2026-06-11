@@ -45,7 +45,7 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, now: DateTime<Ut
     // Size columns to the visible PRs only, so an off-tab PR's wide number or
     // diff size can't widen this tab's columns.
     let visible: Vec<&PR> = pr_list.visible_pr_indices().map(|i| &prs[i]).collect();
-    let show_repo = should_show_repo_column(model, &visible);
+    let show_repo = should_show_repo_column(model);
     let pr_num_col = pr_num_col_width(&visible);
     let size_col = size_col_width(&visible);
     let lines: Vec<Line<'_>> = pr_list
@@ -74,11 +74,12 @@ const AGE_COL: usize = 6;
 const REASON_COL: usize = 24;
 const GAP: usize = 1;
 
-fn should_show_repo_column(model: &Model, visible: &[&PR]) -> bool {
-    model.active_scope().is_none()
-        && visible
-            .first()
-            .is_some_and(|first| visible.iter().any(|pr| pr.repo_slug != first.repo_slug))
+/// Whether the All tab shows the repo column. Keys off the tracked-repo count
+/// (mirroring the TS `showRepo`) rather than the repo spread of the visible
+/// PRs: a structural condition stays put while PRs stream in or a filter
+/// narrows the list, so the columns never shift mid-read.
+fn should_show_repo_column(model: &Model) -> bool {
+    model.active_scope().is_none() && model.tracked_repos().len() > 1
 }
 
 /// Width of the `#<number>` column, sized to fit the widest visible PR number.

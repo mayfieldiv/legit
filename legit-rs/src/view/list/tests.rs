@@ -295,14 +295,42 @@ fn all_tab_grouped_by_repo_shows_one_header_per_repo() {
 }
 
 #[test]
+fn all_tab_shows_repo_column_whenever_multiple_repos_are_tracked() {
+    // TS parity: `showRepo` keys off the tracked-repo count — a stable,
+    // structural condition — not the repo spread of the visible PRs, so the
+    // columns can't shift as PRs stream in or a filter narrows the list.
+    let mut model = model_with(vec![pr(1, "one", "carol", 1)], Grouping::None, |_| {
+        Some(Tier::NeedsReview)
+    });
+    model.config.repos.push(crate::config::RepoConfig {
+        slug: "zeta/api".to_owned(),
+        ..Default::default()
+    });
+    model.relayout();
+
+    let terminal = render_snapshot(&model, 136, 4);
+    let rows = list_rows(&terminal);
+
+    assert!(
+        rows[0].contains("web"),
+        "the repo column shows even while only one tracked repo has PRs: {rows:?}"
+    );
+}
+
+#[test]
 fn all_tab_multi_repo_rows_show_the_repo_column() {
     let mut other = pr(2, "two", "dave", 2);
     other.repo_slug = "zeta/api".to_owned();
-    let model = model_with(
+    let mut model = model_with(
         vec![pr(1, "one", "carol", 1), other],
         Grouping::None,
         |_| Some(Tier::NeedsReview),
     );
+    model.config.repos.push(crate::config::RepoConfig {
+        slug: "zeta/api".to_owned(),
+        ..Default::default()
+    });
+    model.relayout();
 
     let terminal = render_snapshot(&model, 136, 4);
     let rows = list_rows(&terminal);
