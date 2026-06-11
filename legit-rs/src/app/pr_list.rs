@@ -279,6 +279,22 @@ impl PrList {
         self.normalize_scroll();
     }
 
+    /// Scroll the visible display window down without changing the selected
+    /// PR. Mouse wheel input is a viewport operation, unlike keyboard
+    /// navigation (`j`/`k`), so the selection may temporarily sit off-screen.
+    pub fn scroll_down(&mut self, rows: usize) {
+        if self.viewport_height == 0 || self.rows.is_empty() {
+            return;
+        }
+        let max_offset = self.rows.len().saturating_sub(self.viewport_height);
+        self.scroll_offset = self.scroll_offset.saturating_add(rows).min(max_offset);
+    }
+
+    /// Scroll the visible display window up without changing the selected PR.
+    pub fn scroll_up(&mut self, rows: usize) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(rows);
+    }
+
     /// PR index of the selection cursor. Read by tests and future features
     /// (e.g. opening the selected PR); the view itself reads the selected flag
     /// straight off `visible_rows`.
