@@ -982,6 +982,26 @@ fn detail_status_bar_shows_focus_filter_and_open_hints() {
 }
 
 #[test]
+fn detail_status_bar_shows_transient_status_messages() {
+    // A CommandFailed raised while the detail view is open (e.g. a failed `o`)
+    // must be visible in the detail status bar — not only back in the list,
+    // where the scheduled clear may wipe it before the user returns.
+    let mut model = model_in_detail(sample_pr(), "");
+    model.status = Some(crate::app::model::StatusMessage {
+        kind: crate::app::model::StatusKind::Error,
+        text: "open url: spawn browser opener failed".to_owned(),
+    });
+
+    let rows = buffer_text(&render_snapshot(&model, 100, 10));
+
+    let status = rows.last().expect("status row");
+    assert!(
+        status.contains("open url: spawn browser opener failed"),
+        "the transient status must render in the detail status bar: {status:?}"
+    );
+}
+
+#[test]
 fn detail_status_bar_shows_jk_focus_hint() {
     let model = model_in_detail(sample_pr(), "");
 

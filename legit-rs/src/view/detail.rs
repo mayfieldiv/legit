@@ -10,7 +10,8 @@
 //!   scroll follows); PageDown/PageUp scroll raw (10 lines).
 //! - The focused card draws a rounded border; unfocused cards reserve the same
 //!   rows/columns with blanks so focus changes never shift the layout.
-//! - Status bar: key hints
+//! - Status bar: key hints, plus the shared right-aligned status overlay
+//!   (`view::render_status_overlay`) so transient errors show here too
 //!
 //! All content derivation (which lines exist, where each card sits) lives in
 //! `app::detail_layout`; this module only splits the frame and paints.
@@ -194,4 +195,5 @@ fn render_status_bar(model: &Model, frame: &mut Frame<'_>, area: Rect) {
         Span::raw(" refresh"),
     ]);
     frame.render_widget(Paragraph::new(hints), area);
+    super::render_status_overlay(model, frame, area);
 }
