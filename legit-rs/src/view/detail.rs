@@ -156,10 +156,11 @@ fn render_body(
 ) {
     let content = detail_content(model, pr, description, detail, area.width, now);
 
-    let content_lines = content.lines.len() as u16;
-    let viewport_rows = area.height;
-    let max_scroll = content_lines.saturating_sub(viewport_rows);
+    let max_scroll = content.lines.len().saturating_sub(usize::from(area.height));
     let scroll = detail.scroll.min(max_scroll);
+    // The one place the usize scroll meets ratatui's u16: saturate, so content
+    // past 65535 lines pins at the cap instead of wrapping back to the top.
+    let scroll = u16::try_from(scroll).unwrap_or(u16::MAX);
 
     frame.render_widget(Paragraph::new(content.lines).scroll((scroll, 0)), area);
 }

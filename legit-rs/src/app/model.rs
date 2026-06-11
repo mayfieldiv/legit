@@ -49,8 +49,10 @@ pub struct DetailState {
     /// Vertical scroll offset for the body (lines scrolled past the top). Starts
     /// at zero on entry; `update` mutates it on PageUp/PageDown (and to keep the
     /// focused item visible) and clamps it so it can never sit past the last
-    /// screenful.
-    pub scroll: u16,
+    /// screenful. `usize` like every other line count, so the clamp math is
+    /// exact however tall the content; the one narrowing to ratatui's `u16`
+    /// happens at the render edge.
+    pub scroll: usize,
     /// Index into the `detail_items::focusable_items` sequence (0 = the body).
     /// `j`/`k`/arrows move it; it's re-clamped whenever the sequence shrinks
     /// (threads/comments arriving, `t`/`b` filter toggles).

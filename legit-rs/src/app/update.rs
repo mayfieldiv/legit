@@ -306,7 +306,7 @@ fn handle_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
 }
 
 /// Lines scrolled per PageUp/PageDown in the detail body.
-const DETAIL_SCROLL_PAGE: u16 = 10;
+const DETAIL_SCROLL_PAGE: usize = 10;
 
 /// How many items the open detail view's focus sequence holds (1 — just the
 /// body — while threads/comments haven't arrived). 0 outside Detail mode.
@@ -385,10 +385,8 @@ fn measured_detail_content(model: &Model) -> Option<detail_layout::DetailContent
 
 /// The detail body's viewport height: the terminal minus the pinned header and
 /// status bar.
-fn detail_viewport_rows(model: &Model) -> u16 {
-    model
-        .terminal_height
-        .saturating_sub(detail_layout::CHROME_ROWS)
+fn detail_viewport_rows(model: &Model) -> usize {
+    usize::from(model.terminal_height).saturating_sub(usize::from(detail_layout::CHROME_ROWS))
 }
 
 /// Clamp the open detail view's scroll offset so it can never sit more than
@@ -404,7 +402,10 @@ fn clamp_detail_scroll(model: &mut Model) {
     let Some(content) = measured_detail_content(model) else {
         return;
     };
-    let max_scroll = (content.lines.len() as u16).saturating_sub(detail_viewport_rows(model));
+    let max_scroll = content
+        .lines
+        .len()
+        .saturating_sub(detail_viewport_rows(model));
     if let ViewMode::Detail(detail) = &mut model.view_mode {
         detail.scroll = detail.scroll.min(max_scroll);
     }
@@ -423,7 +424,7 @@ fn follow_detail_focus(model: &mut Model) {
     let Some(content) = measured_detail_content(model) else {
         return;
     };
-    let viewport = detail_viewport_rows(model) as usize;
+    let viewport = detail_viewport_rows(model);
     let max_scroll = content.lines.len().saturating_sub(viewport);
     let ViewMode::Detail(detail) = &mut model.view_mode else {
         return;
@@ -431,15 +432,14 @@ fn follow_detail_focus(model: &mut Model) {
     let Some(range) = content.item_ranges.get(detail.focused_index) else {
         return;
     };
-    let scroll = (detail.scroll as usize).min(max_scroll);
-    let new_scroll = if range.start < scroll {
+    let scroll = detail.scroll.min(max_scroll);
+    detail.scroll = if range.start < scroll {
         range.start
     } else if range.end > scroll + viewport {
         (range.end - viewport).min(range.start)
     } else {
         scroll
     };
-    detail.scroll = new_scroll as u16;
 }
 
 /// Handle one keypress while the detail view is open. The caller guarantees

@@ -43,7 +43,7 @@ fn detail_focus(model: &crate::app::model::Model) -> usize {
 }
 
 /// The scroll offset of the open detail view; panics if not in Detail mode.
-fn detail_scroll(model: &crate::app::model::Model) -> u16 {
+fn detail_scroll(model: &crate::app::model::Model) -> usize {
     match &model.view_mode {
         ViewMode::Detail(detail) => detail.scroll,
         ViewMode::List => panic!("expected Detail mode"),
@@ -679,7 +679,7 @@ fn focusing_an_offscreen_card_scrolls_it_into_view() {
 
     let range = focused_item_range(&model);
     let viewport = (model.terminal_height - crate::app::detail_layout::CHROME_ROWS) as usize;
-    let scroll = detail_scroll(&model) as usize;
+    let scroll = detail_scroll(&model);
     assert!(
         scroll <= range.start && range.end <= scroll + viewport,
         "the focused card (lines {range:?}) must be fully inside the viewport \
@@ -723,10 +723,9 @@ fn scroll_clamp_covers_the_thread_and_conversation_sections() {
 
 /// The open detail view's true max scroll: full measured content minus the
 /// body viewport.
-fn max_detail_scroll(model: &crate::app::model::Model) -> u16 {
-    let content_lines = measured_content(model).lines.len() as u16;
-    let viewport = model.terminal_height - crate::app::detail_layout::CHROME_ROWS;
-    content_lines.saturating_sub(viewport)
+fn max_detail_scroll(model: &crate::app::model::Model) -> usize {
+    let viewport = usize::from(model.terminal_height - crate::app::detail_layout::CHROME_ROWS);
+    measured_content(model).lines.len().saturating_sub(viewport)
 }
 
 #[test]
@@ -813,7 +812,7 @@ fn showing_resolved_threads_keeps_the_focused_card_in_view() {
     );
     let range = focused_item_range(&model);
     let viewport = (model.terminal_height - crate::app::detail_layout::CHROME_ROWS) as usize;
-    let scroll = detail_scroll(&model) as usize;
+    let scroll = detail_scroll(&model);
     assert!(
         scroll <= range.start && range.end <= scroll + viewport,
         "the focused card (lines {range:?}) must stay fully inside the viewport \
