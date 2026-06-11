@@ -3,7 +3,10 @@
 //! The reducer stays pure: helpers here only build URLs and `Cmd::OpenUrl`.
 //! The impure platform opener runs from `cmd`.
 
-use std::process::{Command, Stdio};
+use std::{
+    process::{Child, Command, Stdio},
+    sync::{Arc, Mutex},
+};
 
 use anyhow::Context;
 
@@ -49,20 +52,44 @@ pub fn open_label(url: &str) -> &'static str {
 /// defunct opener processes behind, but the TUI never waits for the browser
 /// command to finish.
 pub fn spawn_open_url(url: &str) -> anyhow::Result<()> {
-    let mut child = platform_open_command(url)
+    let child = platform_open_command(url)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .context("spawn browser opener")?;
 
-    let _ = std::thread::Builder::new()
-        .name("legit-browser-open-reaper".to_owned())
-        .spawn(move || {
-            let _ = child.wait();
-        });
+    reap_child(child)?;
 
     Ok(())
+}
+
+fn reap_child(child: Child) -> anyhow::Result<()> {
+    let child = Arc::new(Mutex::new(Some(child)));
+    let reaper_child = Arc::clone(&child);
+    match std::thread::Builder::new()
+        .name("legit-browser-open-reaper".to_owned())
+        .spawn(move || {
+            if let Ok(mut child) = reaper_child.lock()
+                && let Some(mut child) = child.take()
+            {
+                let _ = child.wait();
+            }
+        }) {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            let mut child = child
+                .lock()
+                .map_err(|_| anyhow::anyhow!("browser opener reaper state poisoned"))?;
+            if let Some(mut child) = child.take() {
+                child
+                    .wait()
+                    .context("wait for browser opener after reaper spawn failed")?;
+            }
+            tracing::warn!(%error, "browser opener reaper thread failed; waited inline");
+            Ok(())
+        }
+    }
 }
 
 fn platform_open_command(url: &str) -> Command {
@@ -75,8 +102,9 @@ fn platform_open_command(url: &str) -> Command {
 
     #[cfg(target_os = "windows")]
     {
-        let mut command = Command::new("cmd");
-        command.args(["/c", "start", "", url]);
+        let (program, args) = windows_open_command_parts(url);
+        let mut command = Command::new(program);
+        command.args(args);
         command
     }
 
@@ -88,9 +116,14 @@ fn platform_open_command(url: &str) -> Command {
     }
 }
 
+#[cfg(any(target_os = "windows", test))]
+fn windows_open_command_parts(url: &str) -> (&'static str, [&str; 1]) {
+    ("explorer.exe", [url])
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{devin_url, open_label, pr_url};
+    use super::{devin_url, open_label, pr_url, windows_open_command_parts};
 
     #[test]
     fn builds_github_pr_url() {
@@ -118,5 +151,15 @@ mod tests {
             open_label("https://github.com/mayfieldiv/legit/pull/45"),
             "browser"
         );
+    }
+
+    #[test]
+    fn windows_opener_avoids_cmd_shell_parsing() {
+        let url = "https://github.com/mayfieldiv/legit/pull/45?foo=1&bar=2|baz";
+
+        let (program, args) = windows_open_command_parts(url);
+
+        assert_eq!(program, "explorer.exe");
+        assert_eq!(args, [url]);
     }
 }
