@@ -67,7 +67,40 @@ pub fn format_size(additions: u64, deletions: u64) -> String {
 
 /// Compact display for a repo slug: `owner/repo` -> `repo`.
 pub fn format_repo_short(slug: &str) -> &str {
-    slug.rsplit('/').next().unwrap_or(slug)
+    slug.rsplit_once('/').map_or(slug, |(_, repo)| repo)
+}
+
+/// The longest prefix of `s` that fits within `budget` display columns
+/// (measured via `unicode-width`, not `char` count). A wide char straddling
+/// the boundary is dropped whole rather than clipped to half a glyph.
+fn width_prefix(s: &str, budget: usize) -> &str {
+    let mut width = 0;
+    let mut end = 0;
+    for ch in s.chars() {
+        let w = ch.width().unwrap_or(0);
+        if width + w > budget {
+            break;
+        }
+        width += w;
+        end += ch.len_utf8();
+    }
+    &s[..end]
+}
+
+/// The longest suffix of `s` that fits within `budget` display columns; the
+/// suffix twin of `width_prefix`, with the same whole-glyph boundary rule.
+fn width_suffix(s: &str, budget: usize) -> &str {
+    let mut width = 0;
+    let mut start = s.len();
+    for ch in s.chars().rev() {
+        let w = ch.width().unwrap_or(0);
+        if width + w > budget {
+            break;
+        }
+        width += w;
+        start -= ch.len_utf8();
+    }
+    &s[start..]
 }
 
 /// Truncate `s` to at most `max` terminal columns, appending `…` when
@@ -81,21 +114,8 @@ pub fn truncate(s: &str, max: usize) -> String {
     if s.width() <= max {
         return s.to_owned();
     }
-    // Reserve one column for the ellipsis, then take chars until the next one
-    // would spill past the budget. A wide char straddling the boundary is
-    // dropped whole rather than clipped to half a glyph.
-    let budget = max - 1;
-    let mut width = 0;
-    let mut head = String::new();
-    for ch in s.chars() {
-        let w = ch.width().unwrap_or(0);
-        if width + w > budget {
-            break;
-        }
-        width += w;
-        head.push(ch);
-    }
-    format!("{head}…")
+    // One column reserved for the ellipsis.
+    format!("{}…", width_prefix(s, max - 1))
 }
 
 /// Truncate `s` to at most `max` terminal columns, replacing the middle with
@@ -111,34 +131,14 @@ pub fn truncate_middle(s: &str, max: usize) -> String {
     if max == 1 {
         return "…".to_owned();
     }
-
+    // One column reserved for the ellipsis; the head rounds up on odd splits.
     let keep = max - 1;
     let head_budget = keep.div_ceil(2);
-    let tail_budget = keep - head_budget;
-    let mut head = String::new();
-    let mut head_width = 0;
-    for ch in s.chars() {
-        let width = ch.width().unwrap_or(0);
-        if head_width + width > head_budget {
-            break;
-        }
-        head_width += width;
-        head.push(ch);
-    }
-
-    let mut tail_chars = Vec::new();
-    let mut tail_width = 0;
-    for ch in s.chars().rev() {
-        let width = ch.width().unwrap_or(0);
-        if tail_width + width > tail_budget {
-            break;
-        }
-        tail_width += width;
-        tail_chars.push(ch);
-    }
-    tail_chars.reverse();
-    let tail: String = tail_chars.into_iter().collect();
-    format!("{head}…{tail}")
+    format!(
+        "{}…{}",
+        width_prefix(s, head_budget),
+        width_suffix(s, keep - head_budget)
+    )
 }
 
 /// Right-pad `s` with spaces to at least `width` terminal columns. Like
@@ -486,6 +486,15 @@ mod tests {
             truncate_middle("very-long-author-name", 14),
             "very-lo…r-name"
         );
+    }
+
+    #[test]
+    fn truncate_middle_counts_display_columns_for_wide_glyphs() {
+        // Five ideographs are ten columns. At max 7 the head budget is 3
+        // columns — only one whole 2-column glyph fits (a glyph straddling
+        // the boundary is dropped, not clipped) — and likewise the tail.
+        let result = truncate_middle("一二三四五", 7);
+        assert_eq!(result, "一…五");
     }
 
     #[test]
