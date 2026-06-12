@@ -1,9 +1,10 @@
 //! The right-side summary panel for the selected PR. Renders, top to bottom:
-//! PR identity metadata -> smart-status reason (coloured by tier) -> mergeable
-//! state -> reviews/requested reviewers -> threads summary -> CI checks summary
-//! -> file-category size breakdown -> worktree path placeholder -> footer
-//! GitHub URL. Sections whose enrichment hasn't arrived render a "Loading…"
-//! placeholder so the panel fills in reactively as the per-PR fan-out lands.
+//! PR identity metadata -> Next Action (coloured by smart-status tier) ->
+//! mergeable state -> threads summary -> reviews/requested reviewers -> CI
+//! checks summary -> file-category size breakdown -> contextual metadata ->
+//! worktree path placeholder -> footer GitHub URL. Sections whose enrichment
+//! hasn't arrived render a "Loading…" placeholder so the panel fills in
+//! reactively as the per-PR fan-out lands.
 //!
 //! Panel width is a function of the terminal width: hidden below 80 columns,
 //! 36 columns at 80-139, 50 columns at >=140 — defined by
@@ -52,15 +53,15 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, now: DateTime<Ut
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.extend(identity_lines(pr, now, usize::from(area.width)));
-    lines.push(smart_status_line(model, pr));
+    lines.push(next_action_line(model, pr));
     lines.push(mergeable_line(pr));
-    lines.extend(labels_lines(pr, usize::from(area.width)));
-    lines.extend(assignees_lines(pr, usize::from(area.width)));
+    lines.push(threads_line(model, pr));
     lines.extend(reviews_lines(model, pr));
     lines.extend(requested_reviewers_lines(pr));
-    lines.push(threads_line(model, pr));
     lines.extend(checks_lines(model, pr));
     lines.extend(files_lines(model, pr));
+    lines.extend(labels_lines(pr, usize::from(area.width)));
+    lines.extend(assignees_lines(pr, usize::from(area.width)));
     lines.push(worktree_line(pr));
     lines.push(url_footer_line(pr));
 
@@ -129,10 +130,10 @@ fn assignees_lines(pr: &PR, width: usize) -> Vec<Line<'static>> {
     ])]
 }
 
-/// The smart-status reason line, coloured by tier (me-blocking magenta,
+/// The Next Action line, coloured by smart-status tier (me-blocking magenta,
 /// waiting-on-author yellow, needs-review gray). `Loading…` until the PR's
 /// blocker has been derived (both threads and reviews arrived).
-fn smart_status_line(model: &Model, pr: &PR) -> Line<'static> {
+fn next_action_line(model: &Model, pr: &PR) -> Line<'static> {
     match model.blockers.get(&pr.key()) {
         Some(result) => Line::from(Span::styled(
             result.reason.clone(),
@@ -219,10 +220,10 @@ fn threads_line(model: &Model, pr: &PR) -> Line<'static> {
 }
 
 /// The CI checks section: a `checks` header with failed / pending / passed
-/// counts, then one indented row per non-passing check (passing checks are
-/// summarised by the count alone). `Loading…` until the checks fetch arrives —
-/// which can't start until review-status reports the PR's head SHA, so a PR
-/// with no head SHA also reads as loading.
+/// counts, then one indented row per failed, pending, or action-required check
+/// (passing checks are summarised by the count alone). `Loading…` until the
+/// checks fetch arrives — which can't start until review-status reports the
+/// PR's head SHA, so a PR with no head SHA also reads as loading.
 fn checks_lines(model: &Model, pr: &PR) -> Vec<Line<'static>> {
     let Some(checks) = model.enrichment.checks_for(pr) else {
         return vec![header_with_loading("checks")];

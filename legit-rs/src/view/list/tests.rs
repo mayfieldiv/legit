@@ -94,9 +94,9 @@ fn model_with(prs: Vec<PR>, grouping: Grouping, tier_of: impl Fn(&PR) -> Option<
 /// A short, recognisable reason per tier for snapshot assertions.
 fn reason_for(tier: Tier) -> String {
     match tier {
-        Tier::MeBlocking => "You are a requested reviewer".to_owned(),
-        Tier::NeedsReview => "Awaiting review".to_owned(),
-        Tier::WaitingOnAuthor => "Draft".to_owned(),
+        Tier::MeBlocking => "Review requested from you".to_owned(),
+        Tier::NeedsReview => "Review requested from someone".to_owned(),
+        Tier::WaitingOnAuthor => "Draft - not ready for review".to_owned(),
     }
 }
 
@@ -232,7 +232,7 @@ fn flat_list_renders_one_row_per_pull_request() {
 }
 
 #[test]
-fn wide_list_renders_header_review_threads_and_blocker_columns() {
+fn wide_list_renders_header_review_threads_and_action_columns() {
     let mut rich = pr(7, "Expose richer list columns", "octocat", 1);
     rich.review_decision = "APPROVED".to_owned();
     rich.head_commit_sha = Some("abc123".to_owned());
@@ -259,12 +259,12 @@ fn wide_list_renders_header_review_threads_and_blocker_columns() {
             && header.contains("Title")
             && header.contains("Review")
             && header.contains("Threads")
-            && header.contains("Blocker"),
+            && header.contains("Action"),
         "header includes new columns: {header:?}"
     );
     assert!(rows[0].contains("x approved"), "{rows:?}");
     assert!(rows[0].contains("1H 1B"), "{rows:?}");
-    assert!(rows[0].contains("someone"), "{rows:?}");
+    assert!(rows[0].contains("review from someone"), "{rows:?}");
 }
 
 #[test]
@@ -979,7 +979,7 @@ fn narrow_width_clamps_title_rather_than_overflowing_the_row() {
         + super::AGE_COL
         + super::REVIEW_COL
         + super::THREADS_COL
-        + super::BLOCKER_COL
+        + super::ACTION_COL
         + gaps
         + 1;
     let layout = super::RowLayout {
@@ -993,7 +993,7 @@ fn narrow_width_clamps_title_rather_than_overflowing_the_row() {
             age: true,
             review: true,
             threads: true,
-            blocker: true,
+            action: true,
         },
     };
 
@@ -1007,7 +1007,7 @@ fn narrow_width_clamps_title_rather_than_overflowing_the_row() {
     let blocker = BlockerResult {
         blocker: "someone".to_owned(),
         tier: Tier::NeedsReview,
-        reason: "needs review".to_owned(),
+        reason: "Review requested from someone".to_owned(),
     };
     model.blockers.insert(pr.key(), blocker);
     let line = super::row_line(&pr, &model, &layout, fixed_now(), false);

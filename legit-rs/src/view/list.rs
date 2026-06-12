@@ -10,8 +10,7 @@ use ratatui::{
 use crate::{
     app::grouping::DisplayRow,
     app::model::Model,
-    blocker::BlockerResult,
-    blocker::Tier,
+    blocker::{BlockerResult, Tier, compact_next_action},
     format::{
         CheckOutcome, comment_counts, format_age, format_repo_short, format_review_state,
         format_size, outcome, pad_to_width, truncate, truncate_middle,
@@ -85,7 +84,7 @@ const SIZE_COL_MIN: usize = 14;
 const AGE_COL: usize = 6;
 const REVIEW_COL: usize = 18;
 const THREADS_COL: usize = 10;
-const BLOCKER_COL: usize = 14;
+const ACTION_COL: usize = 20;
 const GAP: usize = 1;
 
 /// Whether the All tab shows the repo column. Keys off the tracked-repo count
@@ -152,12 +151,12 @@ struct VisibleColumns {
     age: bool,
     review: bool,
     threads: bool,
-    blocker: bool,
+    action: bool,
 }
 
 /// Compute optional list-column visibility from the available list width.
 /// Columns are added from most to least important, which means shrinking hides
-/// them in the TS priority order: blocker -> threads -> review -> size ->
+/// them in the TS priority order: action -> threads -> review -> size ->
 /// author -> age.
 fn compute_visible_columns(width: usize, show_repo: bool, pr_num_col: usize) -> VisibleColumns {
     let base = pr_num_col + TITLE_MIN + usize::from(show_repo) * REPO_COL;
@@ -168,7 +167,7 @@ fn compute_visible_columns(width: usize, show_repo: bool, pr_num_col: usize) -> 
         size: false,
         review: false,
         threads: false,
-        blocker: false,
+        action: false,
     };
 
     if budget >= AGE_COL {
@@ -191,8 +190,8 @@ fn compute_visible_columns(width: usize, show_repo: bool, pr_num_col: usize) -> 
         columns.threads = true;
         budget -= THREADS_COL;
     }
-    if budget >= BLOCKER_COL {
-        columns.blocker = true;
+    if budget >= ACTION_COL {
+        columns.action = true;
     }
 
     columns
@@ -253,10 +252,10 @@ fn header_row_line(layout: &RowLayout) -> Line<'static> {
             style: bold,
         });
     }
-    if layout.visible.blocker {
+    if layout.visible.action {
         cells.push(Cell {
-            text: "Blocker".to_owned(),
-            width: BLOCKER_COL,
+            text: "Action".to_owned(),
+            width: ACTION_COL,
             style: bold,
         });
     }
@@ -328,11 +327,11 @@ fn row_line(
             style,
         });
     }
-    if layout.visible.blocker {
-        let (text, style) = blocker_cell(model.blockers.get(&pr.key()), model.current_user());
+    if layout.visible.action {
+        let (text, style) = action_cell(model.blockers.get(&pr.key()));
         cells.push(Cell {
             text,
-            width: BLOCKER_COL,
+            width: ACTION_COL,
             style,
         });
     }
@@ -471,40 +470,14 @@ fn threads_cell(pr: &PR, model: &Model) -> (String, Style) {
     (parts.join(" "), Style::default().fg(color))
 }
 
-fn blocker_cell(blocker: Option<&BlockerResult>, current_user: &str) -> (String, Style) {
+fn action_cell(blocker: Option<&BlockerResult>) -> (String, Style) {
     let Some(blocker) = blocker else {
         return ("…".to_owned(), Style::default().fg(Color::Gray));
     };
-    let is_me = !current_user.is_empty() && blocker.blocker == current_user;
-    let text = match blocker.tier {
-        Tier::MeBlocking => "you".to_owned(),
-        Tier::WaitingOnAuthor => {
-            if is_me {
-                "you".to_owned()
-            } else if blocker.blocker.is_empty() {
-                "author".to_owned()
-            } else {
-                blocker.blocker.clone()
-            }
-        }
-        Tier::NeedsReview => {
-            if is_me {
-                "you".to_owned()
-            } else {
-                blocker.blocker.clone()
-            }
-        }
-    };
     let color = match blocker.tier {
         Tier::MeBlocking => Color::Magenta,
-        Tier::WaitingOnAuthor => {
-            if is_me {
-                Color::Magenta
-            } else {
-                Color::Yellow
-            }
-        }
+        Tier::WaitingOnAuthor => Color::Yellow,
         Tier::NeedsReview => Color::Gray,
     };
-    (text, Style::default().fg(color))
+    (compact_next_action(blocker), Style::default().fg(color))
 }

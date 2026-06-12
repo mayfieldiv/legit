@@ -17,14 +17,10 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::github::types::{CheckRun, FullReviewThread, Review};
 
-/// Conclusions that count as a failing check for *display*. Deliberately one
-/// entry wider than the TS `FAILING_CONCLUSIONS` and the blocker engine's set
-/// (which both omit `action_required`): the TS code was internally
-/// inconsistent — `checkSortGroup`/`checkIcon` treated `action_required` as
-/// failing while `checksSummary` counted it as passed — and because this panel
-/// renders only non-passing rows, porting that would hide a check that's
-/// blocked on human action behind "N/N passed". Smart-status is unaffected;
-/// the blocker engine keeps its own TS-faithful set.
+/// Conclusions that count as a failing check for display. `action_required`
+/// is included here so a completed check that needs follow-up gets an
+/// individual row instead of hiding behind the passed count. The blocker
+/// engine treats it as its own Next Action after hard CI failures.
 const FAILING_CONCLUSIONS: [&str; 4] = ["failure", "timed_out", "cancelled", "action_required"];
 
 /// Format a past instant as a compact age relative to `now`. Mirrors the TS
@@ -258,8 +254,8 @@ pub enum CheckOutcome {
 /// Classify a check run's outcome: a non-completed run is pending; a completed
 /// run whose conclusion is in `FAILING_CONCLUSIONS` is failed; every other
 /// completed run (success, neutral, skipped, stale, …) counts as passed.
-/// Follows the TS `checksSummary` bucketing except for `action_required`,
-/// which counts as failed here — see `FAILING_CONCLUSIONS`.
+/// `action_required` counts as failed for display — see
+/// `FAILING_CONCLUSIONS`.
 pub fn outcome(check: &CheckRun) -> CheckOutcome {
     if check.status != "completed" {
         CheckOutcome::Pending

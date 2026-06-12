@@ -34,6 +34,34 @@ _Avoid_: priority, severity, status (overloaded with GitHub's PR `state`).
 **Blocker**:
 The login of the person who must act next on a PR, or empty for `needs-review` with no specific reviewer. Distinct from PR author — for a `waiting-on-author` PR the blocker is the author; for a `me-blocking` PR the blocker is the current user.
 
+**Next Action**:
+A short user-facing reason for why a PR is in its **Smart-status**, chosen by the blocker engine's first matching rule.
+_Avoid_: blocker reason, status text.
+
+**Review Requested**:
+A **Next Action** meaning a specific reviewer has been asked to review and has not yet responded; word as "Review requested from you" for the current user and "Review requested from <login>" for someone else.
+_Avoid_: You are a requested reviewer.
+
+**Waiting on Reviewer Threads**:
+A **Next Action** meaning every unresolved review thread has an author reply and the reviewer must resolve or reply; word as "<N> threads waiting on you" for the current user and "<N> threads waiting on <login>" for someone else.
+_Avoid_: awaiting reviewer.
+
+**Author Reply Needed**:
+A **Next Action** meaning unresolved review threads are waiting for the **Effective Author** to respond; word as "<N> threads need your reply" for the current user and "<N> threads need author reply" otherwise.
+_Avoid_: unreplied threads.
+
+**Ready to Merge**:
+A **Next Action** meaning reviews approve the PR and the **Effective Author** should merge; word as "Ready for you to merge" when the current user is the **Blocker**, otherwise "Ready to merge".
+
+**Draft Not Ready**:
+A **Next Action** meaning the PR is a draft and should not be reviewed yet; word as "Draft - not ready for review".
+
+**Merge Conflict**:
+A **Next Action** meaning the PR cannot merge until conflicts are resolved; word as "Resolve merge conflict".
+
+**Requested Changes Response**:
+A **Next Action** meaning a reviewer requested changes and the **Effective Author** must respond before further review is needed; word as "Respond to requested changes".
+
 **Effective Author**:
 The current user when they are an assignee on a PR they did not author. The blocker engine treats them as "the author" for all `waiting-on-author` rules, modelling takeover of an in-flight PR.
 
@@ -114,6 +142,20 @@ One of `code`, `test`, `generated`, `docs`, `config`. Assigned per file by patte
 
 - A **PR** belongs to exactly one **Tracked Repo** and has many **Review Threads** and **Issue Comments**.
 - Every **PR** has exactly one **Smart-status** computed from its current state.
+- Every **PR** with a computed **Smart-status** has exactly one **Next Action**.
+- A **Next Action** explains why the **Blocker** must act; it can still be meaningful when **Blocker** is empty.
+- **Review Requested** is the requested-reviewer form of **Next Action**; when the requested reviewer is the current user, word it as a request "from you".
+- **Waiting on Reviewer Threads** uses the reviewer selected by the blocker engine as the **Blocker**.
+- **Author Reply Needed** uses the **Effective Author** as the **Blocker**.
+- **Ready to Merge** belongs to the `waiting-on-author` **Smart-status** unless the current user is the **Blocker**, in which case it is elevated to `me-blocking`.
+- **Draft Not Ready** and **Merge Conflict** use the **Effective Author** as the **Blocker**.
+- **Requested Changes Response** uses the **Effective Author** as the **Blocker** and takes precedence over pending review requests.
+- **Smart-status** and **Next Action** are authoritative only after the enrichment they depend on has arrived; raw PR facts such as draft, mergeability, and review decision may still be shown before then.
+- CI check summaries count all checks, but individual check rows are reserved for checks that are failed, pending, or action-required.
+- A check with GitHub's `action_required` conclusion is a **Next Action** after hard CI failures but before draft, conflict, and review rules.
+- The selected PR summary is action-first: identity, **Next Action**, mergeability, threads, reviews/requested reviewers, checks, files, contextual metadata, worktree, then URL.
+- Assignees are contextual metadata unless they make the current user the **Effective Author**; labels are contextual metadata until legit gives specific labels domain meaning.
+- The PR list keeps review state, unresolved thread counts, and **Next Action** as separate scanning signals when width allows.
 - A **Worktree** belongs to one **PR** and one **Source Clone**.
 - The **Blocker** of a `waiting-on-author` PR is the **Effective Author**; the **Blocker** of a `me-blocking` PR is the current user.
 - A **Refresh** sends each of its fetches through the **Priority Queue**, each with a **Fetch Priority**.
@@ -122,6 +164,9 @@ One of `code`, `test`, `generated`, `docs`, `config`. Assigned per file by patte
 
 > **Dev:** "If the **PR** is approved but CI is failing, who's the **Blocker**?"
 > **Domain expert:** "The **Effective Author** — CI rule fires before the approval rule. They have to fix CI before anyone needs to re-review."
+
+> **Dev:** "When I am requested as a reviewer, should the row say my login or what I need to do?"
+> **Domain expert:** "The **Blocker** is you, but the **Next Action** is the useful label: 'Review requested from you'."
 
 > **Dev:** "What if there are five unresolved **Review Threads**, all `awaiting-reviewer`, and one of them is awaiting me?"
 > **Domain expert:** "Pick the reviewer with the most awaiting threads as the **Blocker**. Ties go to the longest-waiting one. If that's me, the PR's **Smart-status** is `me-blocking`."
