@@ -10,6 +10,7 @@ use crate::{
     git_remote::RepoInfo,
     github::limiter::NetworkStats,
     github::rest::{PR, PRState},
+    github::types::{CheckRun, FullReviewThread, ReviewComment},
     view,
 };
 
@@ -125,9 +126,10 @@ fn buffer_text(terminal: &Terminal<TestBackend>) -> Vec<String> {
 }
 
 /// Rows of the list region only: excluding the tab bar (first row), the status
-/// bar (last row), and — at >=80 columns — the summary panel that splits off the
-/// right of the row. Slicing to the list columns keeps these list-layout
-/// assertions about the list alone, independent of the panel beside it.
+/// bar (last row), app header, optional filter chip, column header, and — at
+/// >=80 columns — the summary panel that splits off the right of the row.
+/// Slicing to the list columns keeps these list-layout assertions about the
+/// list alone, independent of the panel beside it.
 fn list_rows(terminal: &Terminal<TestBackend>) -> Vec<String> {
     let width = terminal.backend().buffer().area().width;
     let list_width = crate::app::list_layout::list_width(width);
@@ -136,8 +138,52 @@ fn list_rows(terminal: &Terminal<TestBackend>) -> Vec<String> {
         .map(|row| row.chars().take(list_width as usize).collect())
         .collect();
     rows.pop();
-    rows.remove(0);
+    rows.drain(0..2);
+    if rows.first().is_some_and(|row| row.starts_with('/')) {
+        rows.remove(0);
+    }
+    if rows
+        .first()
+        .is_some_and(|row| row.contains("PR") && row.contains("Title"))
+    {
+        rows.remove(0);
+    }
     rows
+}
+
+fn table_header_row(terminal: &Terminal<TestBackend>) -> String {
+    let width = terminal.backend().buffer().area().width;
+    let list_width = crate::app::list_layout::list_width(width);
+    buffer_text(terminal)
+        .remove(2)
+        .chars()
+        .take(list_width as usize)
+        .collect()
+}
+
+fn review_thread(author: &str, is_bot: bool) -> FullReviewThread {
+    FullReviewThread {
+        id: format!("T-{author}"),
+        is_resolved: false,
+        path: "src/lib.rs".to_owned(),
+        line: Some(1),
+        comments: vec![ReviewComment {
+            id: format!("C-{author}"),
+            author: author.to_owned(),
+            body: "please look".to_owned(),
+            created_at: fixed_now(),
+            url: format!("https://example.com/{author}"),
+            is_bot,
+        }],
+    }
+}
+
+fn check(name: &str, status: &str, conclusion: Option<&str>) -> CheckRun {
+    CheckRun {
+        name: name.to_owned(),
+        status: status.to_owned(),
+        conclusion: conclusion.map(str::to_owned),
+    }
 }
 
 #[test]
@@ -149,11 +195,11 @@ fn empty_pr_list_renders_no_open_pull_requests_placeholder() {
     assert_eq!(
         buffer_text(&terminal),
         vec![
+            "legit — All repos — 0 open PRs          ",
             "[All]                                   ",
             "          No open pull requests         ",
             "                                        ",
-            "                                        ",
-            "q quit  g group: smart-status  h/l tabs ",
+            "j/k nav  ↵ open  0 in-flight · 0 waiting",
         ]
     );
 }
@@ -173,16 +219,52 @@ fn flat_list_renders_one_row_per_pull_request() {
     // Render at 116 so the list region is 79 columns wide (the panel takes the
     // right 36 plus a 1-cell divider); the list-layout assertions stay about
     // the list alone.
-    let terminal = render_snapshot(&model, 116, 5);
+    let terminal = render_snapshot(&model, 116, 7);
 
     assert_eq!(
         list_rows(&terminal),
         vec![
-            "#42   Add streaming PR l… octocat        +5/-3  3h     Awaiting review         ",
-            "#43   Wire FetchOpenPRs … alice          +5/-3  1d     Awaiting review         ",
-            "#44   Render list view    bob            +5/-3  7d     Awaiting review         ",
+            "#42     Add streaming PR list              octocat        +5/-3          3h    ",
+            "#43     Wire FetchOpenPRs cmd              alice          +5/-3          1d    ",
+            "#44     Render list view                   bob            +5/-3          7d    ",
         ]
     );
+}
+
+#[test]
+fn wide_list_renders_header_review_threads_and_blocker_columns() {
+    let mut rich = pr(7, "Expose richer list columns", "octocat", 1);
+    rich.review_decision = "APPROVED".to_owned();
+    rich.head_commit_sha = Some("abc123".to_owned());
+    let key = rich.key();
+    let mut model = model_with(vec![rich], Grouping::None, |_| Some(Tier::NeedsReview));
+    model.enrichment.review_threads.insert(
+        key.clone(),
+        vec![
+            review_thread("alice", false),
+            review_thread("dependabot[bot]", true),
+        ],
+    );
+    model.enrichment.checks.insert(
+        (key.repo_slug, "abc123".to_owned()),
+        vec![check("build", "completed", Some("failure"))],
+    );
+
+    let terminal = render_snapshot(&model, 200, 5);
+    let header = table_header_row(&terminal);
+    let rows = list_rows(&terminal);
+
+    assert!(
+        header.contains("PR")
+            && header.contains("Title")
+            && header.contains("Review")
+            && header.contains("Threads")
+            && header.contains("Blocker"),
+        "header includes new columns: {header:?}"
+    );
+    assert!(rows[0].contains("x approved"), "{rows:?}");
+    assert!(rows[0].contains("1H 1B"), "{rows:?}");
+    assert!(rows[0].contains("someone"), "{rows:?}");
 }
 
 #[test]
@@ -204,7 +286,7 @@ fn smart_status_grouping_renders_a_header_per_tier_in_order() {
         },
     );
 
-    let terminal = render_snapshot(&model, 80, 9);
+    let terminal = render_snapshot(&model, 80, 11);
     let rows = list_rows(&terminal);
 
     // Headers appear in tier order, each above its PRs; needs-review groups two.
@@ -226,7 +308,7 @@ fn smart_status_grouping_omits_empty_tiers_single_tier_list() {
         |_| Some(Tier::NeedsReview),
     );
 
-    let terminal = render_snapshot(&model, 80, 6);
+    let terminal = render_snapshot(&model, 200, 8);
     let rows = list_rows(&terminal);
 
     assert!(rows[0].starts_with("── Needs review "), "{rows:?}");
@@ -247,14 +329,14 @@ fn smart_status_undelivered_blockers_render_under_loading_details() {
         |pr| (pr.number == 1).then_some(Tier::NeedsReview),
     );
 
-    let terminal = render_snapshot(&model, 80, 6);
+    let terminal = render_snapshot(&model, 200, 8);
     let rows = list_rows(&terminal);
 
     assert!(rows[0].starts_with("── Needs review "), "{rows:?}");
     assert!(rows[1].contains("#1"), "{rows:?}");
     assert!(rows[2].starts_with("── Loading details… "), "{rows:?}");
     assert!(rows[3].contains("#2"), "{rows:?}");
-    // The pending PR shows the "…" placeholder reason hint.
+    // The pending PR shows "…" placeholders in the enrichment-backed columns.
     assert!(rows[3].trim_end().ends_with('…'), "{rows:?}");
 }
 
@@ -266,7 +348,7 @@ fn repo_grouping_renders_one_header_for_the_detected_repo() {
         |_| Some(Tier::NeedsReview),
     );
 
-    let terminal = render_snapshot(&model, 80, 6);
+    let terminal = render_snapshot(&model, 80, 8);
     let rows = list_rows(&terminal);
 
     assert!(rows[0].starts_with("── acme/web "), "{rows:?}");
@@ -284,7 +366,7 @@ fn all_tab_grouped_by_repo_shows_one_header_per_repo() {
         |_| Some(Tier::NeedsReview),
     );
 
-    let terminal = render_snapshot(&model, 80, 7);
+    let terminal = render_snapshot(&model, 80, 9);
     let rows = list_rows(&terminal);
 
     assert!(rows[0].starts_with("── acme/web "), "{rows:?}");
@@ -307,7 +389,7 @@ fn all_tab_shows_repo_column_whenever_multiple_repos_are_tracked() {
     });
     model.relayout();
 
-    let terminal = render_snapshot(&model, 136, 4);
+    let terminal = render_snapshot(&model, 136, 5);
     let rows = list_rows(&terminal);
 
     assert!(
@@ -319,7 +401,7 @@ fn all_tab_shows_repo_column_whenever_multiple_repos_are_tracked() {
     // starts at column 0, so the slice index doubles as the buffer x.
     let repo_x = rows[0].find("web").expect("repo cell rendered") as u16;
     assert_eq!(
-        terminal.backend().buffer()[(repo_x, 1)].fg,
+        terminal.backend().buffer()[(repo_x, 3)].fg,
         Color::Magenta,
         "repo cells use the self-highlight colour (TS selfHighlight)"
     );
@@ -340,7 +422,7 @@ fn all_tab_multi_repo_rows_show_the_repo_column() {
     });
     model.relayout();
 
-    let terminal = render_snapshot(&model, 136, 4);
+    let terminal = render_snapshot(&model, 136, 6);
     let rows = list_rows(&terminal);
 
     assert!(
@@ -361,7 +443,7 @@ fn list_and_summary_are_separated_by_a_divider_cell() {
     let divider_x = width - panel_width - 1;
 
     let buffer = terminal.backend().buffer();
-    for y in 1..height - 1 {
+    for y in 2..height - 1 {
         assert_eq!(
             buffer[(divider_x, y)].symbol(),
             "│",
@@ -380,26 +462,26 @@ fn list_cells_use_distinct_ts_parity_colours() {
         Grouping::None,
         |_| Some(Tier::NeedsReview),
     );
-    let terminal = render_snapshot(&model, 116, 4);
+    let terminal = render_snapshot(&model, 116, 6);
     let buffer = terminal.backend().buffer();
     let rows = buffer_text(&terminal);
-    let row = &rows[2]; // second PR row: first non-selected list row
+    let row = &rows[4]; // second PR row: first non-selected list row
     let author_x = row.find("alice").expect("author rendered") as u16;
 
     assert_eq!(
-        buffer[(0, 2)].fg,
+        buffer[(0, 4)].fg,
         Color::Cyan,
         "PR numbers should use the accent colour"
     );
     assert_eq!(
-        buffer[(author_x, 2)].fg,
+        buffer[(author_x, 4)].fg,
         Color::Green,
         "author names should use the success colour"
     );
 
     let age_x = row.find("2h").expect("age rendered") as u16;
     assert_eq!(
-        buffer[(age_x, 2)].fg,
+        buffer[(age_x, 4)].fg,
         Color::Reset,
         "age should use the default foreground like the TS list"
     );
@@ -409,6 +491,10 @@ fn list_cells_use_distinct_ts_parity_colours() {
 
 /// First row of a rendered snapshot — the Repo Tab bar.
 fn tab_row(terminal: &Terminal<TestBackend>) -> String {
+    buffer_text(terminal).remove(1)
+}
+
+fn app_header_row(terminal: &Terminal<TestBackend>) -> String {
     buffer_text(terminal).remove(0)
 }
 
@@ -434,6 +520,18 @@ fn tab_bar_lists_all_plus_tracked_repos_with_active_bracketed() {
     assert!(
         row.starts_with("[All]  acme/api   acme/web "),
         "All active: {row:?}"
+    );
+}
+
+#[test]
+fn app_header_shows_scope_and_open_pr_count() {
+    let model = two_repo_model();
+
+    let row = app_header_row(&render_snapshot(&model, 80, 5));
+
+    assert!(
+        row.starts_with("legit — All repos — 1 open PRs"),
+        "header: {row:?}"
     );
 }
 
@@ -479,12 +577,12 @@ fn filtered_model(text: &str, editing: bool) -> Model {
 fn filter_editing_renders_chip_with_cursor_and_editor_hints() {
     let model = filtered_model("rust", true);
 
-    let terminal = render_snapshot(&model, 60, 5);
+    let terminal = render_snapshot(&model, 80, 6);
     let rows = buffer_text(&terminal);
 
-    // Row 1 sits under the tab bar: the chip text plus a block cursor.
-    assert!(rows[1].starts_with("/rust█"), "{rows:?}");
-    assert!(rows[2].contains("#1"), "only the match renders: {rows:?}");
+    // Row 2 sits under the app header and tab bar: the chip text plus a block cursor.
+    assert!(rows[2].starts_with("/rust█"), "{rows:?}");
+    assert!(rows[4].contains("#1"), "only the match renders: {rows:?}");
     assert!(
         !rows.iter().any(|r| r.contains("#2")),
         "non-match hidden: {rows:?}"
@@ -500,20 +598,20 @@ fn filter_editing_renders_chip_with_cursor_and_editor_hints() {
 fn applied_filter_renders_chip_without_cursor_and_normal_hints() {
     let model = filtered_model("rust", false);
 
-    let terminal = render_snapshot(&model, 60, 5);
+    let terminal = render_snapshot(&model, 80, 6);
     let rows = buffer_text(&terminal);
 
-    assert!(rows[1].starts_with("/rust "), "{rows:?}");
-    assert!(!rows[1].contains('█'), "no cursor once applied: {rows:?}");
+    assert!(rows[2].starts_with("/rust "), "{rows:?}");
+    assert!(!rows[2].contains('█'), "no cursor once applied: {rows:?}");
     let status = rows.last().expect("status row");
-    assert!(status.starts_with("q quit"), "normal hints: {status:?}");
+    assert!(status.starts_with("j/k nav"), "normal hints: {status:?}");
 }
 
 #[test]
 fn filter_with_no_matches_renders_no_matching_prs() {
     let model = filtered_model("zzz", true);
 
-    let terminal = render_snapshot(&model, 60, 5);
+    let terminal = render_snapshot(&model, 60, 6);
     let rows = buffer_text(&terminal);
 
     assert!(
@@ -530,7 +628,7 @@ fn no_grouping_renders_no_headers() {
         |_| Some(Tier::NeedsReview),
     );
 
-    let terminal = render_snapshot(&model, 80, 6);
+    let terminal = render_snapshot(&model, 80, 8);
     let rows = list_rows(&terminal);
 
     assert!(
@@ -545,7 +643,7 @@ fn no_grouping_renders_no_headers() {
 fn empty_list_with_smart_status_grouping_shows_placeholder() {
     let model = model_with(Vec::new(), Grouping::SmartStatus, |_| None);
 
-    let terminal = render_snapshot(&model, 40, 3);
+    let terminal = render_snapshot(&model, 40, 5);
     let rows = list_rows(&terminal);
 
     assert!(
@@ -562,7 +660,7 @@ fn pr_list_error_appears_in_the_status_bar() {
         .list
         .fail_fetch("acme/web", "list open PRs: network down".to_owned());
 
-    let terminal = render_snapshot(&model, 60, 3);
+    let terminal = render_snapshot(&model, 120, 5);
 
     let rows = buffer_text(&terminal);
     let status = rows.last().expect("status row");
@@ -583,7 +681,7 @@ fn fatal_error_appears_in_the_status_bar_ahead_of_a_list_failure() {
         .fail_fetch("acme/web", "list open PRs: network down".to_owned());
     model.fatal = Some("config error: invalid bot_logins entry".to_owned());
 
-    let status = status_row(&render_snapshot(&model, 80, 3));
+    let status = status_row(&render_snapshot(&model, 140, 5));
 
     assert!(
         status.contains("config error: invalid bot_logins entry"),
@@ -609,7 +707,7 @@ fn long_titles_truncate_with_ellipsis_to_fit_column() {
     );
 
     // 116 total -> 79-col list region (panel takes the right 36 plus divider).
-    let terminal = render_snapshot(&model, 116, 3);
+    let terminal = render_snapshot(&model, 116, 5);
 
     let rows = list_rows(&terminal);
     assert!(
@@ -643,7 +741,7 @@ fn long_author_names_truncate_in_the_middle() {
     );
 
     // 116 total -> 80-col list region (panel takes the right 36).
-    let terminal = render_snapshot(&model, 116, 3);
+    let terminal = render_snapshot(&model, 116, 5);
     let rows = list_rows(&terminal);
 
     assert!(
@@ -659,16 +757,17 @@ fn long_author_names_truncate_in_the_middle() {
 }
 
 #[test]
-fn draft_pr_is_marked_in_its_row() {
+fn draft_pr_is_marked_in_the_review_column_not_the_title() {
     let mut draft = pr(50, "Polish things", "octocat", 1);
     draft.is_draft = true;
     let model = model_with(vec![draft], Grouping::None, |_| Some(Tier::WaitingOnAuthor));
 
-    // 116 total -> 79-col list region (panel + divider split off the right).
-    let terminal = render_snapshot(&model, 116, 3);
+    // 140 total -> 89-col list region, wide enough for the review column.
+    let terminal = render_snapshot(&model, 140, 5);
     let rows = list_rows(&terminal);
 
-    assert!(rows[0].contains("[draft]"), "{rows:?}");
+    assert!(!rows[0].contains("[draft]"), "{rows:?}");
+    assert!(rows[0].contains("draft"), "{rows:?}");
     assert!(rows[0].contains("Polish"), "{rows:?}");
     assert!(rows[0].contains("octocat"), "{rows:?}");
 }
@@ -685,7 +784,7 @@ fn large_diff_size_widens_size_column_for_all_rows() {
     );
 
     // 126 total -> 89-col list region (panel takes the right 36 plus divider).
-    let terminal = render_snapshot(&model, 126, 4);
+    let terminal = render_snapshot(&model, 126, 6);
     let rows = list_rows(&terminal);
 
     assert!(
@@ -714,7 +813,7 @@ fn wide_pr_number_widens_num_column_for_all_rows() {
     );
 
     // 126 total -> 89-col list region (panel takes the right 36 plus divider).
-    let terminal = render_snapshot(&model, 126, 4);
+    let terminal = render_snapshot(&model, 126, 6);
     let rows = list_rows(&terminal);
 
     let title_start = rows[0]
@@ -742,11 +841,11 @@ fn loading_pr_list_renders_loading_placeholder() {
     assert_eq!(
         buffer_text(&terminal),
         vec![
+            "legit — All repos — 0 open PRs          ",
             "[All]                                   ",
             "         Loading pull requests…         ",
             "                                        ",
-            "                                        ",
-            "q quit  g group: smart-status  h/l tabs ",
+            "j/k nav  ↵ open  0 in-flight · 0 waiting",
         ]
     );
 }
@@ -762,23 +861,26 @@ fn status_bar_shows_grouping_mode_and_cycles_with_g() {
         Some(Tier::NeedsReview)
     });
 
-    let status = status_row(&render_snapshot(&model, 60, 3));
+    let status = status_row(&render_snapshot(&model, 120, 5));
 
     assert!(status.contains("g group: repo"), "shows mode: {status:?}");
 }
 
 #[test]
-fn status_bar_with_no_network_activity_shows_only_hints() {
+fn status_bar_with_no_network_activity_still_shows_idle_indicator() {
     let model = model_with(vec![pr(1, "a", "octocat", 1)], Grouping::None, |_| {
         Some(Tier::NeedsReview)
     });
 
-    let status = status_row(&render_snapshot(&model, 60, 3));
+    let status = status_row(&render_snapshot(&model, 120, 5));
 
-    assert!(status.starts_with("q quit"), "hints at col 0: {status:?}");
     assert!(
-        !status.contains("in flight"),
-        "no indicator when idle: {status:?}"
+        status.starts_with("j/k nav  ↵ open"),
+        "hints at col 0: {status:?}"
+    );
+    assert!(
+        status.trim_end().ends_with("0 in-flight · 0 waiting"),
+        "idle indicator remains visible: {status:?}"
     );
 }
 
@@ -792,10 +894,10 @@ fn status_bar_shows_in_flight_and_waiting_counts() {
         waiting: 5,
     };
 
-    let status = status_row(&render_snapshot(&model, 60, 3));
+    let status = status_row(&render_snapshot(&model, 120, 5));
 
     assert!(
-        status.contains("[3 in flight, 5 waiting]"),
+        status.trim_end().ends_with("3 in-flight · 5 waiting"),
         "indicator shows both counts: {status:?}"
     );
     assert!(status.contains("q quit"), "hints still present: {status:?}");
@@ -811,13 +913,12 @@ fn status_bar_shows_in_flight_only_when_nothing_waiting() {
         waiting: 0,
     };
 
-    let status = status_row(&render_snapshot(&model, 60, 3));
+    let status = status_row(&render_snapshot(&model, 120, 5));
 
     assert!(
-        status.contains("[2 in flight]"),
-        "no waiting segment when zero queued: {status:?}"
+        status.trim_end().ends_with("2 in-flight · 0 waiting"),
+        "indicator shows the zero waiting count: {status:?}"
     );
-    assert!(!status.contains("waiting"), "waiting omitted: {status:?}");
 }
 
 #[test]
@@ -830,15 +931,19 @@ fn status_bar_shows_info_message_on_the_right() {
         text: "loading details".to_owned(),
     });
 
-    let status = status_row(&render_snapshot(&model, 80, 3));
+    let status = status_row(&render_snapshot(&model, 140, 5));
 
     assert!(
-        status.starts_with("q quit"),
+        status.starts_with("j/k nav"),
         "hints on the left: {status:?}"
     );
     assert!(
-        status.trim_end().ends_with("loading details"),
+        status.contains("loading details"),
         "info message on the right: {status:?}"
+    );
+    assert!(
+        status.trim_end().ends_with("0 in-flight · 0 waiting"),
+        "network indicator remains visible: {status:?}"
     );
 }
 
@@ -852,7 +957,7 @@ fn status_bar_shows_error_message_on_the_right() {
         text: "fetch review status: 500".to_owned(),
     });
 
-    let status = status_row(&render_snapshot(&model, 80, 3));
+    let status = status_row(&render_snapshot(&model, 140, 5));
 
     assert!(
         status.contains("fetch review status: 500"),
@@ -866,15 +971,30 @@ fn narrow_width_clamps_title_rather_than_overflowing_the_row() {
     // its 1-column floor — a row must never render wider than its width.
     let pr_num_col = 6;
     let size_col = 8;
-    let column_count = 6;
+    let column_count = 8;
     let gaps = column_count - 1;
-    let width =
-        pr_num_col + super::AUTHOR_COL + size_col + super::AGE_COL + super::REASON_COL + gaps + 1;
+    let width = pr_num_col
+        + super::AUTHOR_COL
+        + size_col
+        + super::AGE_COL
+        + super::REVIEW_COL
+        + super::THREADS_COL
+        + super::BLOCKER_COL
+        + gaps
+        + 1;
     let layout = super::RowLayout {
         width,
         pr_num_col,
         size_col,
         show_repo: false,
+        visible: super::VisibleColumns {
+            author: true,
+            size: true,
+            age: true,
+            review: true,
+            threads: true,
+            blocker: true,
+        },
     };
 
     let pr = pr(
@@ -883,12 +1003,14 @@ fn narrow_width_clamps_title_rather_than_overflowing_the_row() {
         "octocat",
         72,
     );
+    let mut model = model_with(vec![pr.clone()], Grouping::None, |_| None);
     let blocker = BlockerResult {
         blocker: "someone".to_owned(),
         tier: Tier::NeedsReview,
         reason: "needs review".to_owned(),
     };
-    let line = super::row_line(&pr, Some(&blocker), &layout, fixed_now(), false);
+    model.blockers.insert(pr.key(), blocker);
+    let line = super::row_line(&pr, &model, &layout, fixed_now(), false);
 
     assert!(
         line.width() <= width,

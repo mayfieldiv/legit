@@ -1,11 +1,12 @@
 //! Canonical geometry of the list view: which rows and columns the Open PR
-//! List occupies next to its chrome (tab bar, filter chip, status bar) and
-//! the summary panel. The single source of truth shared by `view::view`
-//! (which splits the frame into exactly these regions), `Model::chrome_rows`
-//! / `sync_viewport` (which size the list viewport), and `update`'s mouse
-//! hit-testing (which maps a click back to a visible row) — so rendering and
-//! hit-testing can't disagree. Mirrors the TS `AppShell`, which computes the
-//! same widths in one place. The detail view's analogue is `detail_layout`.
+//! List occupies next to its chrome (app header, tab bar, filter chip, table
+//! header, status bar) and the summary panel. The single source of truth shared
+//! by `view::view` (which splits the frame into exactly these regions),
+//! `Model::chrome_rows` / `sync_viewport` (which size the list viewport), and
+//! `update`'s mouse hit-testing (which maps a click back to a visible row) — so
+//! rendering and hit-testing can't disagree. Mirrors the TS `AppShell`, which
+//! computes the same widths in one place. The detail view's analogue is
+//! `detail_layout`.
 
 use super::model::Model;
 
@@ -24,6 +25,12 @@ pub const DIVIDER_WIDTH: u16 = 1;
 
 /// Rows of the status bar pinned to the bottom of every list-view frame.
 const STATUS_ROWS: u16 = 1;
+/// The top `legit — scope — N open PRs` line.
+const APP_HEADER_ROWS: u16 = 1;
+/// The Repo Tab row.
+const TAB_ROWS: u16 = 1;
+/// The column header row rendered above visible PR rows.
+const TABLE_HEADER_ROWS: u16 = 1;
 
 /// The summary panel's width for a given terminal width, or `None` when the
 /// terminal is too narrow to show it (the list then takes the whole row).
@@ -45,14 +52,16 @@ pub fn list_width(total_cols: u16) -> u16 {
     })
 }
 
-/// Rows of chrome above the list: the tab bar, plus the filter chip while it
-/// is visible. The list's first visible row renders at exactly this row.
+/// Rows of chrome above the selectable list rows: app header, tab bar, the
+/// filter chip while it is visible, plus the table column header. The list's
+/// first selectable visible row renders at exactly this row.
 pub fn rows_above_list(filter_visible: bool) -> u16 {
-    1 + u16::from(filter_visible)
+    APP_HEADER_ROWS + TAB_ROWS + u16::from(filter_visible) + TABLE_HEADER_ROWS
 }
 
-/// Total chrome rows around the list (above plus the status bar) — what
-/// `sync_viewport` subtracts from the terminal height to size the viewport.
+/// Total chrome rows around the selectable list rows (above plus the status
+/// bar) — what `sync_viewport` subtracts from the terminal height to size the
+/// viewport.
 pub fn chrome_rows(filter_visible: bool) -> usize {
     usize::from(rows_above_list(filter_visible) + STATUS_ROWS)
 }
@@ -100,9 +109,9 @@ mod tests {
 
     #[test]
     fn filter_chip_adds_a_chrome_row() {
-        assert_eq!(rows_above_list(false), 1);
-        assert_eq!(rows_above_list(true), 2);
-        assert_eq!(chrome_rows(false), 2);
-        assert_eq!(chrome_rows(true), 3);
+        assert_eq!(rows_above_list(false), 3);
+        assert_eq!(rows_above_list(true), 4);
+        assert_eq!(chrome_rows(false), 4);
+        assert_eq!(chrome_rows(true), 5);
     }
 }

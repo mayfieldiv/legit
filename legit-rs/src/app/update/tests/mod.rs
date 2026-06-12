@@ -136,8 +136,9 @@ fn wheel_in_list_mode_scrolls_the_viewport_without_moving_selection() {
 fn left_click_on_a_visible_list_row_selects_that_pr() {
     let mut model = enriched_model(&[1, 2, 3]);
     model.list.complete_fetch("mayfieldiv/legit");
-    // Use a flat list so terminal row 2 maps directly to the second PR row:
-    // row 0 tab bar, row 1 first list row, row 2 second list row.
+    // Use a flat list so terminal row 4 maps directly to the second PR row:
+    // row 0 app header, row 1 tab bar, row 2 table header, row 3 first list
+    // row, row 4 second list row.
     model.list.cycle_grouping();
     model.list.cycle_grouping();
     model.relayout();
@@ -147,7 +148,7 @@ fn left_click_on_a_visible_list_row_selects_that_pr() {
     );
     assert_eq!(model.list.selected_pr().unwrap().number, 1);
 
-    let cmds = update(&mut model, mouse_down_event(0, 2));
+    let cmds = update(&mut model, mouse_down_event(0, 4));
 
     assert_eq!(model.list.selected_pr().unwrap().number, 2);
     assert!(
@@ -261,18 +262,18 @@ fn left_click_accounts_for_the_filter_chip_row() {
         Msg::TerminalEvent(ratatui::crossterm::event::Event::Resize(100, 8)),
     );
     // Apply a filter ("p" matches every sample title) so its chip occupies
-    // row 1 and the list starts one row lower, at row 2.
+    // row 2 and the list starts one row lower, at row 4.
     update(&mut model, key_event(KeyCode::Char('/')));
     update(&mut model, key_event(KeyCode::Char('p')));
     update(&mut model, key_event(KeyCode::Enter));
     assert_eq!(model.list.selected_pr().unwrap().number, 1);
 
-    update(&mut model, mouse_down_event(0, 3));
+    update(&mut model, mouse_down_event(0, 5));
 
     assert_eq!(
         model.list.selected_pr().unwrap().number,
         2,
-        "with the filter chip visible, terminal row 3 is the second list row"
+        "with the filter chip visible, terminal row 5 is the second list row"
     );
 }
 
@@ -879,8 +880,8 @@ fn terminal_resize_updates_viewport_and_keeps_selection_visible() {
         &mut model,
         Msg::TerminalEvent(ratatui::crossterm::event::Event::Resize(80, 22)),
     );
-    // Viewport_height = terminal_height - 2 (tab bar + status bar).
-    assert_eq!(model.list.viewport_height(), 20);
+    // Viewport_height = terminal_height - 4 (app header + tab bar + table header + status bar).
+    assert_eq!(model.list.viewport_height(), 18);
 
     // Drive the selection deep into the list.
     for _ in 0..25 {
@@ -888,7 +889,7 @@ fn terminal_resize_updates_viewport_and_keeps_selection_visible() {
     }
     assert!(
         selection_is_visible(&model),
-        "selection must stay within the 20-row viewport"
+        "selection must stay within the 18-row viewport"
     );
 
     // Shrink: selection must remain on-screen after re-clamp.
@@ -896,10 +897,10 @@ fn terminal_resize_updates_viewport_and_keeps_selection_visible() {
         &mut model,
         Msg::TerminalEvent(ratatui::crossterm::event::Event::Resize(80, 7)),
     );
-    assert_eq!(model.list.viewport_height(), 5);
+    assert_eq!(model.list.viewport_height(), 3);
     assert!(
         selection_is_visible(&model),
-        "selection must stay within the 5-row viewport after shrink"
+        "selection must stay within the 3-row viewport after shrink"
     );
 }
 

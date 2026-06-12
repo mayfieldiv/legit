@@ -1,27 +1,29 @@
 //! The right-side summary panel for the selected PR. Renders, top to bottom:
-//! smart-status reason (coloured by tier) -> mergeable state -> reviews summary
-//! -> threads summary -> CI checks summary -> file-category size breakdown ->
-//! worktree path placeholder -> footer GitHub URL. Sections whose enrichment
-//! hasn't arrived render a "Loading…" placeholder so the panel fills in
-//! reactively as the per-PR fan-out lands.
+//! PR identity metadata -> smart-status reason (coloured by tier) -> mergeable
+//! state -> reviews/requested reviewers -> threads summary -> CI checks summary
+//! -> file-category size breakdown -> worktree path placeholder -> footer
+//! GitHub URL. Sections whose enrichment hasn't arrived render a "Loading…"
+//! placeholder so the panel fills in reactively as the per-PR fan-out lands.
 //!
 //! Panel width is a function of the terminal width: hidden below 80 columns,
 //! 36 columns at 80-139, 50 columns at >=140 — defined by
 //! `app::list_layout::panel_width`, the canonical list-view geometry shared
 //! with `view::view` (which splits the main area) and mouse hit-testing.
 
+use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
 };
 
 use crate::app::model::{FilesState, Model};
 use crate::format::{
-    CheckOutcome, check_row, checks_summary, comment_counts, format_mergeable, format_review_state,
-    format_size, outcome, review_icon, reviews_summary, sort_check_runs,
+    CheckOutcome, check_row, checks_summary, comment_counts, format_age, format_mergeable,
+    format_review_state, format_size, outcome, review_icon, reviews_summary, sort_check_runs,
+    truncate,
 };
 use crate::github::rest::PR;
 use crate::github::types::CheckRun;
@@ -38,7 +40,7 @@ mod tests;
 
 /// Render the summary panel into `area`. Assumes `area` is the panel's region
 /// (already split off the list by the caller).
-pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect) {
+pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, now: DateTime<Utc>) {
     let Some(pr) = model.list.selected_pr() else {
         let line = Line::from(Span::styled(
             "No PR selected",
@@ -49,9 +51,13 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect) {
     };
 
     let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.extend(identity_lines(pr, now, usize::from(area.width)));
     lines.push(smart_status_line(model, pr));
     lines.push(mergeable_line(pr));
+    lines.extend(labels_lines(pr, usize::from(area.width)));
+    lines.extend(assignees_lines(pr, usize::from(area.width)));
     lines.extend(reviews_lines(model, pr));
+    lines.extend(requested_reviewers_lines(pr));
     lines.push(threads_line(model, pr));
     lines.extend(checks_lines(model, pr));
     lines.extend(files_lines(model, pr));
@@ -59,6 +65,68 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect) {
     lines.push(url_footer_line(pr));
 
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn identity_lines(pr: &PR, now: DateTime<Utc>, width: usize) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    lines.push(Line::from(Span::styled(
+        truncate(&pr.title, width.max(1)),
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+
+    let mut meta = vec![
+        Span::styled(pr.author.clone(), Style::default().fg(Color::Green)),
+        Span::raw(format!(" #{}", pr.number)),
+    ];
+    if pr.is_draft {
+        meta.push(Span::styled(" draft", Style::default().fg(Color::Yellow)));
+    }
+    lines.push(Line::from(meta));
+
+    if !pr.head_ref.is_empty() || !pr.base_ref.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled(pr.head_ref.clone(), Style::default().fg(Color::Cyan)),
+            Span::styled(" → ", Style::default().fg(Color::Gray)),
+            Span::styled(pr.base_ref.clone(), Style::default().fg(Color::Cyan)),
+        ]));
+    }
+
+    lines.push(Line::from(vec![
+        Span::styled("created ", Style::default().fg(Color::Gray)),
+        Span::raw(format_age(pr.created_at, now)),
+        Span::styled(" updated ", Style::default().fg(Color::Gray)),
+        Span::raw(format_age(pr.updated_at, now)),
+    ]));
+
+    lines
+}
+
+fn labels_lines(pr: &PR, width: usize) -> Vec<Line<'static>> {
+    if pr.labels.is_empty() {
+        return Vec::new();
+    }
+    let text = format!("labels: {}", pr.labels.join(", "));
+    vec![Line::from(vec![
+        Span::styled("labels: ", Style::default().fg(Color::Gray)),
+        Span::raw(truncate(
+            text.strip_prefix("labels: ").unwrap_or(&text),
+            width.saturating_sub("labels: ".len()).max(1),
+        )),
+    ])]
+}
+
+fn assignees_lines(pr: &PR, width: usize) -> Vec<Line<'static>> {
+    if pr.assignees.is_empty() {
+        return Vec::new();
+    }
+    let text = format!("assignees: {}", pr.assignees.join(", "));
+    vec![Line::from(vec![
+        Span::styled("assignees: ", Style::default().fg(Color::Gray)),
+        Span::raw(truncate(
+            text.strip_prefix("assignees: ").unwrap_or(&text),
+            width.saturating_sub("assignees: ".len()).max(1),
+        )),
+    ])]
 }
 
 /// The smart-status reason line, coloured by tier (me-blocking magenta,
@@ -109,6 +177,22 @@ fn reviews_lines(model: &Model, pr: &PR) -> Vec<Line<'static>> {
                 format_review_state(&review.state),
                 Style::default().fg(Color::Gray),
             ),
+        ]));
+    }
+    lines
+}
+
+fn requested_reviewers_lines(pr: &PR) -> Vec<Line<'static>> {
+    if pr.requested_reviewers.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec![Line::from(section_header("requested"))];
+    for reviewer in &pr.requested_reviewers {
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled("○", Style::default().fg(Color::Yellow)),
+            Span::raw(format!(" {reviewer} ")),
+            Span::styled("pending", Style::default().fg(Color::Gray)),
         ]));
     }
     lines

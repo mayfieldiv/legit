@@ -47,12 +47,14 @@ pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
     }
 
     // ── List view ────────────────────────────────────────────────────────────
-    // Fixed four-row layout: tab bar, filter chip, list, status bar. The chip
-    // collapses to zero height while the filter is inactive, giving its row back
-    // to the list — which keeps the row count in step with `Model::chrome_rows`,
-    // the shared definition `sync_viewport` derives the viewport height from.
+    // Fixed layout: app header, tab bar, filter chip, list, status bar. The
+    // chip collapses to zero height while the filter is inactive, giving its
+    // row back to the list — which keeps the row count in step with
+    // `Model::chrome_rows`, the shared definition `sync_viewport` derives the
+    // viewport height from.
     let filter_visible = model.list.filter().is_visible();
-    let [tabs, chip, main, status] = Layout::vertical([
+    let [header, tabs, chip, main, status] = Layout::vertical([
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(u16::from(filter_visible)),
         Constraint::Min(1),
@@ -60,6 +62,7 @@ pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
     ])
     .areas(area);
 
+    render_app_header(model, frame, header);
     render_tabs(model, frame, tabs);
     if filter_visible {
         render_filter_chip(model, frame, chip);
@@ -78,11 +81,35 @@ pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
             .areas(main);
             list::render(model, frame, list_area, now);
             render_summary_divider(frame, divider_area);
-            summary::render(model, frame, summary_area);
+            summary::render(model, frame, summary_area, now);
         }
         None => list::render(model, frame, main, now),
     }
     render_status(model, frame, status);
+}
+
+fn render_app_header(model: &Model, frame: &mut Frame<'_>, area: Rect) {
+    let scope = model
+        .active_scope()
+        .unwrap_or_else(|| "All repos".to_owned());
+    let count = model
+        .list
+        .prs()
+        .iter()
+        .filter(|pr| scope == "All repos" || pr.repo_slug == scope)
+        .count();
+    let line = Line::from(vec![
+        Span::styled(
+            "legit",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" — "),
+        Span::styled(scope, Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw(format!(" — {count} open PRs")),
+    ]);
+    frame.render_widget(Paragraph::new(line), area);
 }
 
 fn render_summary_divider(frame: &mut Frame<'_>, area: Rect) {
@@ -146,22 +173,10 @@ fn render_tabs(model: &Model, frame: &mut Frame<'_>, area: Rect) {
 }
 
 fn render_status(model: &Model, frame: &mut Frame<'_>, area: Rect) {
-    // Left: a network-activity indicator (only while requests are in flight or
-    // queued) followed by key hints — the filter editor's own hints while it
-    // is open, the normal-mode hints otherwise.
+    // Left: key hints — the filter editor's own hints while it is open, the
+    // normal-mode hints otherwise. The network indicator is always rendered on
+    // the right so the app's activity signal does not disappear when idle.
     let mut left = Vec::new();
-    let stats = model.network_stats;
-    if stats.in_flight > 0 || stats.waiting > 0 {
-        let indicator = if stats.waiting > 0 {
-            format!(
-                "[{} in flight, {} waiting] ",
-                stats.in_flight, stats.waiting
-            )
-        } else {
-            format!("[{} in flight] ", stats.in_flight)
-        };
-        left.push(Span::styled(indicator, Style::default().fg(Color::Cyan)));
-    }
     let bold = Style::default().add_modifier(Modifier::BOLD);
     if model.list.filter().is_editing() {
         left.push(Span::styled("enter", bold));
@@ -169,6 +184,10 @@ fn render_status(model: &Model, frame: &mut Frame<'_>, area: Rect) {
         left.push(Span::styled("esc", bold));
         left.push(Span::raw(" clear"));
     } else {
+        left.push(Span::styled("j/k", bold));
+        left.push(Span::raw(" nav  "));
+        left.push(Span::styled("↵", bold));
+        left.push(Span::raw(" open  "));
         left.push(Span::styled("q", bold));
         left.push(Span::raw(" quit  "));
         left.push(Span::styled("g", bold));
@@ -180,7 +199,46 @@ fn render_status(model: &Model, frame: &mut Frame<'_>, area: Rect) {
         left.push(Span::raw(" filter"));
     }
     frame.render_widget(Paragraph::new(Line::from(left)), area);
-    render_status_overlay(model, frame, area);
+    let network_width = network_indicator_width(model, area.width);
+    let overlay_width = area.width.saturating_sub(network_width.saturating_add(1));
+    render_status_overlay(
+        model,
+        frame,
+        Rect {
+            width: overlay_width,
+            ..area
+        },
+    );
+    render_network_indicator(model, frame, area, network_width);
+}
+
+fn network_indicator_label(model: &Model) -> String {
+    let stats = model.network_stats;
+    format!("{} in-flight · {} waiting", stats.in_flight, stats.waiting)
+}
+
+fn network_indicator_width(model: &Model, max_width: u16) -> u16 {
+    (network_indicator_label(model).chars().count() as u16).min(max_width)
+}
+
+fn render_network_indicator(model: &Model, frame: &mut Frame<'_>, area: Rect, width: u16) {
+    let stats = model.network_stats;
+    let label = network_indicator_label(model);
+    let x = area.x + area.width.saturating_sub(width);
+    let color = if stats.in_flight > 0 || stats.waiting > 0 {
+        Color::Cyan
+    } else {
+        Color::Gray
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(label, Style::default().fg(color)))),
+        Rect {
+            x,
+            y: area.y,
+            width,
+            height: area.height,
+        },
+    );
 }
 
 /// The right-aligned overlay every status bar shares (list and detail): an
