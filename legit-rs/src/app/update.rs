@@ -7,6 +7,7 @@ use ratatui::crossterm::event::{
 use crate::{git_remote::RepoInfo, github::rest::PrKey, secret::Secret};
 
 use super::{
+    browser,
     cmd::{Cmd, RequestContext},
     detail_items, detail_layout, list_layout,
     model::{DetailState, FilesState, Model, RepoDetection, StatusKind, StatusMessage, ViewMode},
@@ -298,6 +299,16 @@ fn handle_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
         }
         KeyCode::Char('h') | KeyCode::Left | KeyCode::Char('[') => step_tab(model, -1),
         KeyCode::Char('l') | KeyCode::Right | KeyCode::Char(']') => step_tab(model, 1),
+        KeyCode::Char('o') => {
+            if let Some(pr) = model.list.selected_pr().cloned() {
+                return apply(model, Msg::OpenInBrowser(pr));
+            }
+        }
+        KeyCode::Char('d') => {
+            if let Some(pr) = model.list.selected_pr().cloned() {
+                return apply(model, Msg::OpenInDevin(pr));
+            }
+        }
         KeyCode::Char('/') => {
             model.list.filter_open();
             model.sync_viewport();
@@ -526,7 +537,7 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
                     .focus
                     .url()
                     .map_or_else(|| detail.key.html_url(), str::to_owned);
-                return vec![Cmd::OpenUrl { url }];
+                return apply(model, Msg::OpenUrl(url));
             }
         }
         // Toggle the focused card's long-body expansion (collapsed by
@@ -867,6 +878,19 @@ fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             model.list.fail_fetch(&repo_slug, message);
             Vec::new()
         }
+        Msg::OpenUrl(url) => vec![browser::open_url(url)],
+        Msg::OpenInBrowser(pr) => vec![browser::open_in_browser(&pr)],
+        Msg::OpenInDevin(pr) => vec![browser::open_in_devin(&pr)],
+        Msg::OpenUrlSucceeded { url } => set_status(
+            model,
+            StatusKind::Success,
+            format!("Opened {}", browser::open_label(&url)),
+        ),
+        Msg::OpenUrlFailed { url, error } => set_status(
+            model,
+            StatusKind::Error,
+            format!("Failed to open {}: {error}", browser::open_label(&url)),
+        ),
         Msg::ConfigLoadFailed { error } => {
             // Config is a hard prerequisite (current user + bot logins drive
             // smart-status), so a malformed config is an app-level fatal that

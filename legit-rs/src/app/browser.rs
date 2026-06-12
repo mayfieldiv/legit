@@ -1,0 +1,165 @@
+//! Browser URL construction and command helpers.
+//!
+//! The reducer stays pure: helpers here only build URLs and `Cmd::OpenUrl`.
+//! The impure platform opener runs from `cmd`.
+
+use std::{
+    process::{Child, Command, Stdio},
+    sync::{Arc, Mutex},
+};
+
+use anyhow::Context;
+
+use crate::github::rest::PR;
+
+use super::cmd::Cmd;
+
+const DEVIN_ORIGIN: &str = "https://app.devin.ai/";
+
+pub fn pr_url(repo_slug: &str, number: u64) -> String {
+    format!("https://github.com/{repo_slug}/pull/{number}")
+}
+
+pub fn devin_url(repo_slug: &str, number: u64) -> String {
+    let mut parts = repo_slug.split('/');
+    let owner = parts.next().unwrap_or("");
+    let repo = parts.next().unwrap_or("undefined");
+    format!("https://app.devin.ai/review/{owner}/{repo}/pull/{number}")
+}
+
+pub fn open_url(url: impl Into<String>) -> Cmd {
+    Cmd::OpenUrl { url: url.into() }
+}
+
+pub fn open_in_browser(pr: &PR) -> Cmd {
+    open_url(pr_url(&pr.repo_slug, pr.number))
+}
+
+pub fn open_in_devin(pr: &PR) -> Cmd {
+    open_url(devin_url(&pr.repo_slug, pr.number))
+}
+
+pub fn open_label(url: &str) -> &'static str {
+    if url.starts_with(DEVIN_ORIGIN) {
+        "Devin"
+    } else {
+        "browser"
+    }
+}
+
+/// Spawn the platform URL opener and return after the child has been created.
+/// A small reaper thread waits on the child so repeated opens do not leave
+/// defunct opener processes behind, but the TUI never waits for the browser
+/// command to finish.
+pub fn spawn_open_url(url: &str) -> anyhow::Result<()> {
+    let child = platform_open_command(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("spawn browser opener")?;
+
+    reap_child(child)?;
+
+    Ok(())
+}
+
+fn reap_child(child: Child) -> anyhow::Result<()> {
+    let child = Arc::new(Mutex::new(Some(child)));
+    let reaper_child = Arc::clone(&child);
+    match std::thread::Builder::new()
+        .name("legit-browser-open-reaper".to_owned())
+        .spawn(move || {
+            if let Ok(mut child) = reaper_child.lock()
+                && let Some(mut child) = child.take()
+            {
+                let _ = child.wait();
+            }
+        }) {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            let mut child = child
+                .lock()
+                .map_err(|_| anyhow::anyhow!("browser opener reaper state poisoned"))?;
+            if let Some(mut child) = child.take() {
+                child
+                    .wait()
+                    .context("wait for browser opener after reaper spawn failed")?;
+            }
+            tracing::warn!(%error, "browser opener reaper thread failed; waited inline");
+            Ok(())
+        }
+    }
+}
+
+fn platform_open_command(url: &str) -> Command {
+    #[cfg(target_os = "macos")]
+    {
+        let mut command = Command::new("open");
+        command.arg(url);
+        command
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let (program, args) = windows_open_command_parts(url);
+        let mut command = Command::new(program);
+        command.args(args);
+        command
+    }
+
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    {
+        let mut command = Command::new("xdg-open");
+        command.arg(url);
+        command
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_open_command_parts(url: &str) -> (&'static str, [&str; 1]) {
+    ("explorer.exe", [url])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{devin_url, open_label, pr_url, windows_open_command_parts};
+
+    #[test]
+    fn builds_github_pr_url() {
+        assert_eq!(
+            pr_url("mayfieldiv/legit", 45),
+            "https://github.com/mayfieldiv/legit/pull/45"
+        );
+    }
+
+    #[test]
+    fn builds_devin_url_with_ts_format() {
+        assert_eq!(
+            devin_url("mayfieldiv/legit", 45),
+            "https://app.devin.ai/review/mayfieldiv/legit/pull/45"
+        );
+    }
+
+    #[test]
+    fn labels_devin_urls_separately() {
+        assert_eq!(
+            open_label("https://app.devin.ai/review/mayfieldiv/legit/pull/45"),
+            "Devin"
+        );
+        assert_eq!(
+            open_label("https://github.com/mayfieldiv/legit/pull/45"),
+            "browser"
+        );
+    }
+
+    #[test]
+    fn windows_opener_avoids_cmd_shell_parsing() {
+        let url = "https://github.com/mayfieldiv/legit/pull/45?foo=1&bar=2|baz";
+
+        let (program, args) = windows_open_command_parts(url);
+
+        assert_eq!(program, "explorer.exe");
+        assert_eq!(args, [url]);
+    }
+}

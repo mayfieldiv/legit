@@ -1,3 +1,4 @@
+pub mod browser;
 pub mod cmd;
 pub mod detail_items;
 pub mod detail_layout;
