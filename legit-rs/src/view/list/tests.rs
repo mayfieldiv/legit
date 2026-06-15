@@ -267,6 +267,83 @@ fn wide_list_renders_header_review_threads_and_action_columns() {
     assert!(rows[0].contains("review from someone"), "{rows:?}");
 }
 
+fn title_width_for_visible_columns(
+    width: usize,
+    show_repo: bool,
+    pr_num_col: usize,
+    size_col: usize,
+    visible: super::VisibleColumns,
+) -> usize {
+    let mut fixed_width = pr_num_col;
+    let mut fixed_cells = 1;
+
+    if show_repo {
+        fixed_width += super::REPO_COL;
+        fixed_cells += 1;
+    }
+    if visible.author {
+        fixed_width += super::AUTHOR_COL;
+        fixed_cells += 1;
+    }
+    if visible.size {
+        fixed_width += size_col;
+        fixed_cells += 1;
+    }
+    if visible.age {
+        fixed_width += super::AGE_COL;
+        fixed_cells += 1;
+    }
+    if visible.review {
+        fixed_width += super::REVIEW_COL;
+        fixed_cells += 1;
+    }
+    if visible.threads {
+        fixed_width += super::THREADS_COL;
+        fixed_cells += 1;
+    }
+    if visible.action {
+        fixed_width += super::ACTION_COL;
+        fixed_cells += 1;
+    }
+
+    width.saturating_sub(fixed_width + fixed_cells * super::GAP)
+}
+
+#[test]
+fn visible_column_budget_accounts_for_gaps_before_enabling_size() {
+    let width = 85;
+    let pr_num_col = 7;
+    let show_repo = true;
+    let visible = super::compute_visible_columns(width, show_repo, pr_num_col, super::SIZE_COL_MIN);
+
+    assert!(visible.age, "age should still fit");
+    assert!(visible.author, "author should still fit");
+    assert!(!visible.size, "size plus its gap would shrink the title");
+    assert!(
+        title_width_for_visible_columns(width, show_repo, pr_num_col, super::SIZE_COL_MIN, visible)
+            >= super::TITLE_MIN
+    );
+}
+
+#[test]
+fn visible_column_budget_uses_the_actual_size_column_width() {
+    let width = 80;
+    let pr_num_col = 7;
+    let size_col = 20;
+    let visible = super::compute_visible_columns(width, false, pr_num_col, size_col);
+
+    assert!(visible.age, "age should still fit");
+    assert!(visible.author, "author should still fit");
+    assert!(
+        !visible.size,
+        "the widened size column plus its gap would shrink the title"
+    );
+    assert!(
+        title_width_for_visible_columns(width, false, pr_num_col, size_col, visible)
+            >= super::TITLE_MIN
+    );
+}
+
 #[test]
 fn smart_status_grouping_renders_a_header_per_tier_in_order() {
     let model = model_with(
@@ -762,8 +839,9 @@ fn draft_pr_is_marked_in_the_review_column_not_the_title() {
     draft.is_draft = true;
     let model = model_with(vec![draft], Grouping::None, |_| Some(Tier::WaitingOnAuthor));
 
-    // 140 total -> 89-col list region, wide enough for the review column.
-    let terminal = render_snapshot(&model, 140, 5);
+    // 131 total -> 94-col list region, wide enough for the review column while
+    // preserving the title minimum once inter-column gaps are counted.
+    let terminal = render_snapshot(&model, 131, 5);
     let rows = list_rows(&terminal);
 
     assert!(!rows[0].contains("[draft]"), "{rows:?}");

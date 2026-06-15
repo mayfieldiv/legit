@@ -53,12 +53,13 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, now: DateTime<Ut
     let visible: Vec<&PR> = pr_list.visible_pr_indices().map(|i| &prs[i]).collect();
     let pr_num_col = pr_num_col_width(&visible);
     let show_repo = should_show_repo_column(model);
+    let size_col = size_col_width(&visible);
     let layout = RowLayout {
         width: usize::from(width),
         pr_num_col,
-        size_col: size_col_width(&visible),
+        size_col,
         show_repo,
-        visible: compute_visible_columns(usize::from(width), show_repo, pr_num_col),
+        visible: compute_visible_columns(usize::from(width), show_repo, pr_num_col, size_col),
     };
     frame.render_widget(Paragraph::new(header_row_line(&layout)), header_area);
 
@@ -158,8 +159,13 @@ struct VisibleColumns {
 /// Columns are added from most to least important, which means shrinking hides
 /// them in the TS priority order: action -> threads -> review -> size ->
 /// author -> age.
-fn compute_visible_columns(width: usize, show_repo: bool, pr_num_col: usize) -> VisibleColumns {
-    let base = pr_num_col + TITLE_MIN + usize::from(show_repo) * REPO_COL;
+fn compute_visible_columns(
+    width: usize,
+    show_repo: bool,
+    pr_num_col: usize,
+    size_col: usize,
+) -> VisibleColumns {
+    let base = pr_num_col + GAP + TITLE_MIN + usize::from(show_repo) * (REPO_COL + GAP);
     let mut budget = width.saturating_sub(base);
     let mut columns = VisibleColumns {
         age: false,
@@ -170,31 +176,36 @@ fn compute_visible_columns(width: usize, show_repo: bool, pr_num_col: usize) -> 
         action: false,
     };
 
-    if budget >= AGE_COL {
+    if reserve_visible_column(&mut budget, AGE_COL) {
         columns.age = true;
-        budget -= AGE_COL;
     }
-    if budget >= AUTHOR_COL {
+    if reserve_visible_column(&mut budget, AUTHOR_COL) {
         columns.author = true;
-        budget -= AUTHOR_COL;
     }
-    if budget >= SIZE_COL_MIN {
+    if reserve_visible_column(&mut budget, size_col) {
         columns.size = true;
-        budget -= SIZE_COL_MIN;
     }
-    if budget >= REVIEW_COL {
+    if reserve_visible_column(&mut budget, REVIEW_COL) {
         columns.review = true;
-        budget -= REVIEW_COL;
     }
-    if budget >= THREADS_COL {
+    if reserve_visible_column(&mut budget, THREADS_COL) {
         columns.threads = true;
-        budget -= THREADS_COL;
     }
-    if budget >= ACTION_COL {
+    if reserve_visible_column(&mut budget, ACTION_COL) {
         columns.action = true;
     }
 
     columns
+}
+
+fn reserve_visible_column(budget: &mut usize, column_width: usize) -> bool {
+    let cost = column_width + GAP;
+    if *budget < cost {
+        return false;
+    }
+
+    *budget -= cost;
+    true
 }
 
 #[derive(Clone)]
