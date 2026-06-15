@@ -33,6 +33,7 @@ fn make_pr(author: &str) -> PR {
         mergeable: "UNKNOWN".to_owned(),
         last_commit_date: None,
         head_commit_sha: None,
+        review_status_loaded: true,
         head_ref: "feature".to_owned(),
         base_ref: "main".to_owned(),
         head_repository_owner: "mayfieldiv".to_owned(),

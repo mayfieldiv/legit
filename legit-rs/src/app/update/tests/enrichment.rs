@@ -103,6 +103,7 @@ fn review_status_arrived_overwrites_pr_fields_and_fetches_checks() {
     assert_eq!(pr.review_decision, "APPROVED");
     assert_eq!(pr.mergeable, "MERGEABLE");
     assert_eq!(pr.head_commit_sha.as_deref(), Some("abc123"));
+    assert!(pr.review_status_loaded);
 
     assert_eq!(cmds.len(), 1);
     match &cmds[0] {

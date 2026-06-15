@@ -32,6 +32,7 @@ fn sample_pr(number: u64, title: &str) -> PR {
         mergeable: "UNKNOWN".to_owned(),
         last_commit_date: None,
         head_commit_sha: None,
+        review_status_loaded: true,
         head_ref: "feat/x".to_owned(),
         base_ref: "main".to_owned(),
         head_repository_owner: "acme".to_owned(),

@@ -526,6 +526,7 @@ mod tests {
             mergeable: "UNKNOWN".to_owned(),
             last_commit_date: None,
             head_commit_sha: None,
+            review_status_loaded: false,
             head_ref: format!("feature/{number}"),
             base_ref: "main".to_owned(),
             head_repository_owner: "mayfieldiv".to_owned(),

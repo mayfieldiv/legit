@@ -814,6 +814,7 @@ fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
                 entry.mergeable = status.mergeable;
                 entry.last_commit_date = status.last_commit_date;
                 entry.head_commit_sha = status.head_commit_sha;
+                entry.review_status_loaded = true;
             } else {
                 // PR no longer in the list (e.g. filtered/refetched); drop it.
                 return Vec::new();

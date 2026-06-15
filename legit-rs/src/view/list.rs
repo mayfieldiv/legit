@@ -12,8 +12,8 @@ use crate::{
     app::model::Model,
     blocker::{BlockerResult, Tier, compact_next_action},
     format::{
-        CheckOutcome, comment_counts, format_age, format_repo_short, format_review_state,
-        format_size, outcome, pad_to_width, truncate, truncate_middle,
+        CheckOutcome, comment_counts, format_age, format_repo_short, format_review_state, outcome,
+        pad_to_width, truncate, truncate_middle,
     },
     github::rest::PR,
     github::types::Review,
@@ -81,7 +81,8 @@ const PR_NUM_COL_MIN: usize = 7;
 const TITLE_MIN: usize = 30;
 const AUTHOR_COL: usize = 14;
 const REPO_COL: usize = 14;
-const SIZE_COL_MIN: usize = 14;
+const SIZE_SIDE_COL_MIN: usize = 6;
+const SIZE_COL_MIN: usize = SIZE_SIDE_COL_MIN * 2 + 1;
 const AGE_COL: usize = 6;
 const REVIEW_COL: usize = 24;
 const ACTION_COL: usize = 20;
@@ -108,17 +109,51 @@ fn pr_num_col_width(prs: &[&PR]) -> usize {
     widest.max(PR_NUM_COL_MIN)
 }
 
-/// Width of the `+A/-D` size column, sized to fit the widest visible size
-/// string. Floored at `SIZE_COL_MIN` so the minimum `+0/-0` form sits in a
-/// stable column; `format_size` has no upper bound (PRs can touch thousands
-/// of lines) so a fixed width would clip otherwise.
+/// Width of the centred `+A/-D` size column. Each side reserves room for a sign
+/// plus five digits, with the slash fixed in the middle. PRs over five digits
+/// widen both sides uniformly so the slash remains vertically aligned.
 fn size_col_width(prs: &[&PR]) -> usize {
-    let widest = prs
+    let widest_side = prs
         .iter()
-        .map(|pr| format_size(pr.additions, pr.deletions).chars().count())
+        .flat_map(|pr| {
+            [
+                signed_size_width(pr.additions),
+                signed_size_width(pr.deletions),
+            ]
+        })
         .max()
         .unwrap_or(0);
-    widest.max(SIZE_COL_MIN)
+    (widest_side.max(SIZE_SIDE_COL_MIN) * 2 + 1).max(SIZE_COL_MIN)
+}
+
+fn signed_size_width(value: u64) -> usize {
+    1 + value.to_string().len()
+}
+
+fn format_list_size(pr: &PR, width: usize) -> String {
+    if !pr.review_status_loaded {
+        return centered_ellipsis(width);
+    }
+
+    let additions = pr.additions;
+    let deletions = pr.deletions;
+    let left = format!("+{additions}");
+    let right = format!("-{deletions}");
+    let left_width = width.saturating_sub(1) / 2;
+    let right_width = width.saturating_sub(1) - left_width;
+
+    format!(
+        "{}{left}/{right}{}",
+        " ".repeat(left_width.saturating_sub(left.len())),
+        " ".repeat(right_width.saturating_sub(right.len()))
+    )
+}
+
+fn centered_ellipsis(width: usize) -> String {
+    let padding = width.saturating_sub(1);
+    let left = padding / 2;
+    let right = padding - left;
+    format!("{}…{}", " ".repeat(left), " ".repeat(right))
 }
 
 /// A group header row: `── <label> ` in the accent colour, padded to the row
@@ -296,7 +331,7 @@ fn row_line(
     }
     if layout.visible.size {
         cells.push(Cell {
-            text: format_size(pr.additions, pr.deletions),
+            text: format_list_size(pr, layout.size_col),
             width: layout.size_col,
             style: Style::default(),
         });

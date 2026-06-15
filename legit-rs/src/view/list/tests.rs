@@ -55,6 +55,7 @@ fn pr(number: u64, title: &str, author: &str, hours_ago: i64) -> PR {
         mergeable: "UNKNOWN".to_owned(),
         last_commit_date: None,
         head_commit_sha: None,
+        review_status_loaded: true,
         head_ref: format!("feat/{number}"),
         base_ref: "main".to_owned(),
         head_repository_owner: "mayfieldiv".to_owned(),
@@ -231,9 +232,9 @@ fn flat_list_renders_one_row_per_pull_request() {
     assert_eq!(
         list_rows(&terminal),
         vec![
-            "#42     Add streaming PR list              octocat        +5/-3          3h    ",
-            "#43     Wire FetchOpenPRs cmd              alice          +5/-3          1d    ",
-            "#44     Render list view                   bob            +5/-3          7d    ",
+            "#42     Add streaming PR list               octocat            +5/-3     3h    ",
+            "#43     Wire FetchOpenPRs cmd               alice              +5/-3     1d    ",
+            "#44     Render list view                    bob                +5/-3     7d    ",
         ]
     );
 }
@@ -311,6 +312,62 @@ fn draft_marker_renders_after_review_thread_counts() {
     let rows = list_rows(&terminal);
 
     assert!(rows[0].contains("1H 1B draft"), "{rows:?}");
+}
+
+#[test]
+fn list_size_cell_aligns_slash_with_five_digit_sides() {
+    let mut medium = pr(1, "Medium diff", "octocat", 1);
+    medium.additions = 234;
+    medium.deletions = 12;
+    let mut small = pr(2, "Small diff", "octocat", 1);
+    small.additions = 5;
+    small.deletions = 3;
+    let mut five_digits = pr(3, "Five digit diff", "octocat", 1);
+    five_digits.additions = 12345;
+    five_digits.deletions = 6789;
+
+    assert_eq!(
+        super::format_list_size(&medium, super::SIZE_COL_MIN),
+        "  +234/-12   "
+    );
+    assert_eq!(
+        super::format_list_size(&small, super::SIZE_COL_MIN),
+        "    +5/-3    "
+    );
+    assert_eq!(
+        super::format_list_size(&five_digits, super::SIZE_COL_MIN),
+        "+12345/-6789 "
+    );
+}
+
+#[test]
+fn list_size_cell_shows_loading_until_review_status_arrives() {
+    let mut loading = pr(7, "Still loading size", "octocat", 1);
+    loading.additions = 0;
+    loading.deletions = 0;
+    loading.review_status_loaded = false;
+    let model = model_with(vec![loading], Grouping::None, |_| Some(Tier::NeedsReview));
+
+    let terminal = render_snapshot(&model, 116, 5);
+    let rows = list_rows(&terminal);
+
+    assert!(rows[0].contains('…'), "{rows:?}");
+    assert!(
+        !rows[0].contains("+0/-0"),
+        "unknown size must not render as a real zero-line diff: {rows:?}"
+    );
+}
+
+#[test]
+fn size_column_widens_uniformly_after_five_digits() {
+    let mut huge = pr(9, "Huge diff", "octocat", 1);
+    huge.additions = 123456;
+    huge.deletions = 7;
+    let prs = vec![&huge];
+    let width = super::size_col_width(&prs);
+
+    assert_eq!(width, 15);
+    assert_eq!(super::format_list_size(&huge, width), "+123456/-7     ");
 }
 
 fn title_width_for_visible_columns(
@@ -895,8 +952,8 @@ fn draft_pr_is_marked_in_the_review_column_not_the_title() {
 #[test]
 fn large_diff_size_widens_size_column_for_all_rows() {
     let mut big = pr(100, "huge diff", "octocat", 1);
-    big.additions = 1234;
-    big.deletions = 5678;
+    big.additions = 123456;
+    big.deletions = 567890;
     let model = model_with(
         vec![pr(101, "small diff", "alice", 2), big],
         Grouping::None,
@@ -913,9 +970,15 @@ fn large_diff_size_widens_size_column_for_all_rows() {
         rows[0]
     );
     assert!(
-        rows[1].contains("+1234/-5678"),
+        rows[1].contains("+123456/-567890"),
         "large-diff size must render in full: {:?}",
         rows[1]
+    );
+    assert_eq!(
+        rows[0].find('/'),
+        rows[1].find('/'),
+        "size slashes must align: {:?}",
+        rows
     );
     assert_eq!(rows[0].chars().count(), 89);
     assert_eq!(rows[1].chars().count(), 89);

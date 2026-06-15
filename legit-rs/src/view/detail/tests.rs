@@ -55,6 +55,7 @@ fn sample_pr() -> PR {
         mergeable: "MERGEABLE".to_owned(),
         last_commit_date: None,
         head_commit_sha: None,
+        review_status_loaded: true,
         head_ref: "feat/stream".to_owned(),
         base_ref: "main".to_owned(),
         head_repository_owner: "acme".to_owned(),
