@@ -83,8 +83,7 @@ const AUTHOR_COL: usize = 14;
 const REPO_COL: usize = 14;
 const SIZE_COL_MIN: usize = 14;
 const AGE_COL: usize = 6;
-const REVIEW_COL: usize = 18;
-const THREADS_COL: usize = 10;
+const REVIEW_COL: usize = 24;
 const ACTION_COL: usize = 20;
 const GAP: usize = 1;
 
@@ -151,14 +150,12 @@ struct VisibleColumns {
     size: bool,
     age: bool,
     review: bool,
-    threads: bool,
     action: bool,
 }
 
 /// Compute optional list-column visibility from the available list width.
 /// Columns are added from most to least important, which means shrinking hides
-/// them in the TS priority order: action -> threads -> review -> size ->
-/// author -> age.
+/// them in the TS priority order: action -> review -> size -> author -> age.
 fn compute_visible_columns(
     width: usize,
     show_repo: bool,
@@ -172,7 +169,6 @@ fn compute_visible_columns(
         author: false,
         size: false,
         review: false,
-        threads: false,
         action: false,
     };
 
@@ -187,9 +183,6 @@ fn compute_visible_columns(
     }
     if reserve_visible_column(&mut budget, REVIEW_COL) {
         columns.review = true;
-    }
-    if reserve_visible_column(&mut budget, THREADS_COL) {
-        columns.threads = true;
     }
     if reserve_visible_column(&mut budget, ACTION_COL) {
         columns.action = true;
@@ -253,13 +246,6 @@ fn header_row_line(layout: &RowLayout) -> Line<'static> {
         cells.push(Cell {
             text: "Review".to_owned(),
             width: REVIEW_COL,
-            style: bold,
-        });
-    }
-    if layout.visible.threads {
-        cells.push(Cell {
-            text: "Threads".to_owned(),
-            width: THREADS_COL,
             style: bold,
         });
     }
@@ -327,14 +313,6 @@ fn row_line(
         cells.push(Cell {
             text,
             width: REVIEW_COL,
-            style,
-        });
-    }
-    if layout.visible.threads {
-        let (text, style) = threads_cell(pr, model);
-        cells.push(Cell {
-            text,
-            width: THREADS_COL,
             style,
         });
     }
@@ -408,6 +386,7 @@ fn review_cell(pr: &PR, model: &Model) -> (String, Style) {
         .iter()
         .any(|check| outcome(check) == CheckOutcome::Failed);
     let reviews = model.enrichment.reviews.get(&pr.key()).map(Vec::as_slice);
+    let thread_label = review_thread_label(pr, model);
 
     let mut parts = Vec::new();
     if pr.mergeable == "CONFLICTING" {
@@ -416,19 +395,25 @@ fn review_cell(pr: &PR, model: &Model) -> (String, Style) {
     if has_failing_checks {
         parts.push("x".to_owned());
     }
-    if pr.is_draft {
-        parts.push("draft".to_owned());
-    }
     if let Some(label) = review_label(pr, reviews)
         && !label.is_empty()
     {
         parts.push(label);
     }
+    let has_review_parts = !parts.is_empty();
+    if let Some(text) = thread_label.text {
+        parts.push(text);
+    }
+    if pr.is_draft {
+        parts.push("draft".to_owned());
+    }
 
     let color = if pr.mergeable == "CONFLICTING" || has_failing_checks {
         Color::Red
-    } else if pr.is_draft {
+    } else if pr.is_draft || thread_label.unresolved_human {
         Color::Yellow
+    } else if !has_review_parts && thread_label.has_text {
+        Color::Gray
     } else {
         Color::Reset
     };
@@ -450,20 +435,27 @@ fn review_label(pr: &PR, reviews: Option<&[Review]>) -> Option<String> {
         if reviews.iter().any(|r| r.state == "APPROVED") {
             return Some(format_review_state("APPROVED").to_owned());
         }
-        if reviews.iter().any(|r| r.state == "COMMENTED") {
-            return Some(format_review_state("COMMENTED").to_owned());
-        }
     }
 
     match pr.review_decision.as_str() {
-        "" | "REVIEW_REQUIRED" => None,
+        "" | "REVIEW_REQUIRED" | "COMMENTED" => None,
         other => Some(other.to_lowercase()),
     }
 }
 
-fn threads_cell(pr: &PR, model: &Model) -> (String, Style) {
+struct ReviewThreadLabel {
+    text: Option<String>,
+    has_text: bool,
+    unresolved_human: bool,
+}
+
+fn review_thread_label(pr: &PR, model: &Model) -> ReviewThreadLabel {
     let Some(threads) = model.enrichment.review_threads.get(&pr.key()) else {
-        return ("…".to_owned(), Style::default().fg(Color::Gray));
+        return ReviewThreadLabel {
+            text: Some("…".to_owned()),
+            has_text: true,
+            unresolved_human: false,
+        };
     };
     let counts = comment_counts(threads, &model.config.bot_logins);
     let mut parts = Vec::new();
@@ -473,12 +465,12 @@ fn threads_cell(pr: &PR, model: &Model) -> (String, Style) {
     if counts.unresolved_bot > 0 {
         parts.push(format!("{}B", counts.unresolved_bot));
     }
-    let color = if counts.unresolved_human > 0 {
-        Color::Yellow
-    } else {
-        Color::Gray
-    };
-    (parts.join(" "), Style::default().fg(color))
+    let text = (!parts.is_empty()).then(|| parts.join(" "));
+    ReviewThreadLabel {
+        has_text: text.is_some(),
+        text,
+        unresolved_human: counts.unresolved_human > 0,
+    }
 }
 
 fn action_cell(blocker: Option<&BlockerResult>) -> (String, Style) {

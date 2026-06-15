@@ -7,7 +7,8 @@
 //! Grouping turns the flat PR vec into a `Vec<DisplayRow>` (headers + PR rows).
 //! Selection tracks a *PR index* (so it survives regrouping), while scrolling
 //! works over display rows (headers included). `j`/`k` step PR-to-PR, skipping
-//! header rows; the scroll viewport keeps the selected PR's row on-screen.
+//! header rows; keyboard navigation keeps the selected PR's row on-screen,
+//! while wheel scrolling can move the viewport independently of selection.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -92,6 +93,10 @@ pub struct PrList {
     /// First visible display row (headers count toward the offset).
     scroll_offset: usize,
     viewport_height: usize,
+    /// Mouse-wheel scrolling detaches the viewport from the selected PR until
+    /// the user explicitly moves/selects again; background relayouts then
+    /// preserve the viewport instead of snapping back to the selection.
+    scroll_detached: bool,
 }
 
 impl fmt::Debug for PrList {
@@ -105,6 +110,7 @@ impl fmt::Debug for PrList {
             .field("selected", &self.selected)
             .field("scroll_offset", &self.scroll_offset)
             .field("viewport_height", &self.viewport_height)
+            .field("scroll_detached", &self.scroll_detached)
             .finish()
     }
 }
@@ -137,9 +143,10 @@ impl PrList {
     /// or `None` when its enrichment hasn't been derived yet; the repo-grouping
     /// key is read straight off each PR's `repo_slug`. Selection sticks to the
     /// same PR when it remains visible and snaps to the first visible PR
-    /// otherwise; scroll re-clamps so the selection stays on-screen. Called by
-    /// `update` after PRs arrive, enrichment lands, or the grouping/scope
-    /// changes.
+    /// otherwise. If the same PR stays visible, preserve the current viewport
+    /// offset so enrichment refreshes do not undo wheel scrolling; if the
+    /// selection changes, scroll follows the new selection. Called by `update`
+    /// after PRs arrive, enrichment lands, or the grouping/scope changes.
     pub fn relayout(&mut self, scope: Option<&str>, tier_of: impl Fn(&PR) -> Option<Tier>) {
         let needle = self.filter.text().to_lowercase();
         let visible: Vec<usize> = (0..self.prs.len())
@@ -157,10 +164,17 @@ impl PrList {
             |i| prs[i].repo_slug.clone(),
         );
         self.rows = rows;
-        if !visible.contains(&self.selected) {
+        if visible.contains(&self.selected) {
+            if self.scroll_detached {
+                self.clamp_scroll_offset();
+            } else {
+                self.normalize_scroll();
+            }
+        } else {
             self.selected = visible.first().copied().unwrap_or(0);
+            self.scroll_detached = false;
+            self.normalize_scroll();
         }
-        self.normalize_scroll();
     }
 
     /// Whether the current layout shows no PR rows at all — the placeholder
@@ -246,6 +260,7 @@ impl PrList {
         self.grouping = self.grouping.next();
         self.selected = 0;
         self.scroll_offset = 0;
+        self.scroll_detached = false;
     }
 
     /// Reset the selection to the first visible PR and scroll to the top. Used
@@ -255,6 +270,7 @@ impl PrList {
         let first = self.visible_pr_indices().next().unwrap_or(0);
         self.selected = first;
         self.scroll_offset = 0;
+        self.scroll_detached = false;
         self.normalize_scroll();
     }
 
@@ -263,6 +279,7 @@ impl PrList {
         if let Some(next) = self.adjacent_pr(self.selected, Direction::Down) {
             self.selected = next;
         }
+        self.scroll_detached = false;
         self.normalize_scroll();
     }
 
@@ -271,11 +288,13 @@ impl PrList {
         if let Some(prev) = self.adjacent_pr(self.selected, Direction::Up) {
             self.selected = prev;
         }
+        self.scroll_detached = false;
         self.normalize_scroll();
     }
 
     pub fn resize(&mut self, viewport_height: usize) {
         self.viewport_height = viewport_height;
+        self.scroll_detached = false;
         self.normalize_scroll();
     }
 
@@ -288,11 +307,13 @@ impl PrList {
         }
         let max_offset = self.rows.len().saturating_sub(self.viewport_height);
         self.scroll_offset = self.scroll_offset.saturating_add(rows).min(max_offset);
+        self.scroll_detached = true;
     }
 
     /// Scroll the visible display window up without changing the selected PR.
     pub fn scroll_up(&mut self, rows: usize) {
         self.scroll_offset = self.scroll_offset.saturating_sub(rows);
+        self.scroll_detached = true;
     }
 
     /// Select the PR row at `visible_row` within the current viewport. Headers
@@ -304,6 +325,7 @@ impl PrList {
             return false;
         };
         self.selected = *index;
+        self.scroll_detached = false;
         true
     }
 
@@ -369,6 +391,10 @@ impl PrList {
             self.scroll_offset = max_for_top;
         }
 
+        self.clamp_scroll_offset();
+    }
+
+    fn clamp_scroll_offset(&mut self) {
         let max_offset = self.rows.len().saturating_sub(self.viewport_height);
         if self.scroll_offset > max_offset {
             self.scroll_offset = max_offset;

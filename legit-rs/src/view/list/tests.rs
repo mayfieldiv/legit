@@ -10,7 +10,7 @@ use crate::{
     git_remote::RepoInfo,
     github::limiter::NetworkStats,
     github::rest::{PR, PRState},
-    github::types::{CheckRun, FullReviewThread, ReviewComment},
+    github::types::{CheckRun, FullReviewThread, Review, ReviewComment},
     view,
 };
 
@@ -178,6 +178,13 @@ fn review_thread(author: &str, is_bot: bool) -> FullReviewThread {
     }
 }
 
+fn review(user: &str, state: &str) -> Review {
+    Review {
+        user: user.to_owned(),
+        state: state.to_owned(),
+    }
+}
+
 fn check(name: &str, status: &str, conclusion: Option<&str>) -> CheckRun {
     CheckRun {
         name: name.to_owned(),
@@ -232,7 +239,7 @@ fn flat_list_renders_one_row_per_pull_request() {
 }
 
 #[test]
-fn wide_list_renders_header_review_threads_and_action_columns() {
+fn wide_list_renders_header_review_and_action_columns() {
     let mut rich = pr(7, "Expose richer list columns", "octocat", 1);
     rich.review_decision = "APPROVED".to_owned();
     rich.head_commit_sha = Some("abc123".to_owned());
@@ -258,13 +265,52 @@ fn wide_list_renders_header_review_threads_and_action_columns() {
         header.contains("PR")
             && header.contains("Title")
             && header.contains("Review")
-            && header.contains("Threads")
             && header.contains("Action"),
         "header includes new columns: {header:?}"
     );
-    assert!(rows[0].contains("x approved"), "{rows:?}");
-    assert!(rows[0].contains("1H 1B"), "{rows:?}");
+    assert!(
+        !header.contains("Threads"),
+        "threads column is folded into review: {header:?}"
+    );
+    assert!(rows[0].contains("x approved 1H 1B"), "{rows:?}");
     assert!(rows[0].contains("review from someone"), "{rows:?}");
+}
+
+#[test]
+fn commented_reviews_do_not_render_a_review_label() {
+    let pr = pr(7, "Comment-only review", "octocat", 1);
+    let key = pr.key();
+    let mut model = model_with(vec![pr], Grouping::None, |_| Some(Tier::NeedsReview));
+    model
+        .enrichment
+        .reviews
+        .insert(key.clone(), vec![review("alice", "COMMENTED")]);
+    model.enrichment.review_threads.insert(key, Vec::new());
+
+    let terminal = render_snapshot(&model, 200, 5);
+    let rows = list_rows(&terminal);
+
+    assert!(!rows[0].contains("commented"), "{rows:?}");
+}
+
+#[test]
+fn draft_marker_renders_after_review_thread_counts() {
+    let mut draft = pr(7, "Draft with review threads", "octocat", 1);
+    draft.is_draft = true;
+    let key = draft.key();
+    let mut model = model_with(vec![draft], Grouping::None, |_| Some(Tier::WaitingOnAuthor));
+    model.enrichment.review_threads.insert(
+        key,
+        vec![
+            review_thread("alice", false),
+            review_thread("dependabot[bot]", true),
+        ],
+    );
+
+    let terminal = render_snapshot(&model, 200, 5);
+    let rows = list_rows(&terminal);
+
+    assert!(rows[0].contains("1H 1B draft"), "{rows:?}");
 }
 
 fn title_width_for_visible_columns(
@@ -295,10 +341,6 @@ fn title_width_for_visible_columns(
     }
     if visible.review {
         fixed_width += super::REVIEW_COL;
-        fixed_cells += 1;
-    }
-    if visible.threads {
-        fixed_width += super::THREADS_COL;
         fixed_cells += 1;
     }
     if visible.action {
@@ -839,9 +881,9 @@ fn draft_pr_is_marked_in_the_review_column_not_the_title() {
     draft.is_draft = true;
     let model = model_with(vec![draft], Grouping::None, |_| Some(Tier::WaitingOnAuthor));
 
-    // 131 total -> 94-col list region, wide enough for the review column while
+    // 137 total -> 100-col list region, wide enough for the review column while
     // preserving the title minimum once inter-column gaps are counted.
-    let terminal = render_snapshot(&model, 131, 5);
+    let terminal = render_snapshot(&model, 137, 5);
     let rows = list_rows(&terminal);
 
     assert!(!rows[0].contains("[draft]"), "{rows:?}");
@@ -1049,14 +1091,13 @@ fn narrow_width_clamps_title_rather_than_overflowing_the_row() {
     // its 1-column floor — a row must never render wider than its width.
     let pr_num_col = 6;
     let size_col = 8;
-    let column_count = 8;
+    let column_count = 7;
     let gaps = column_count - 1;
     let width = pr_num_col
         + super::AUTHOR_COL
         + size_col
         + super::AGE_COL
         + super::REVIEW_COL
-        + super::THREADS_COL
         + super::ACTION_COL
         + gaps
         + 1;
@@ -1070,7 +1111,6 @@ fn narrow_width_clamps_title_rather_than_overflowing_the_row() {
             size: true,
             age: true,
             review: true,
-            threads: true,
             action: true,
         },
     };
