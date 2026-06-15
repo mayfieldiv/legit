@@ -294,8 +294,11 @@ impl PrList {
 
     pub fn resize(&mut self, viewport_height: usize) {
         self.viewport_height = viewport_height;
-        self.scroll_detached = false;
-        self.normalize_scroll();
+        if self.scroll_detached {
+            self.clamp_scroll_offset();
+        } else {
+            self.normalize_scroll();
+        }
     }
 
     /// Scroll the visible display window down without changing the selected

@@ -164,6 +164,34 @@ fn enrichment_arrival_preserves_wheel_scrolled_list_viewport() {
 }
 
 #[test]
+fn terminal_resize_preserves_wheel_scrolled_list_viewport() {
+    let mut model = enriched_model(&[1, 2, 3, 4, 5, 6]);
+    model.list.complete_fetch("mayfieldiv/legit");
+    model.list.resize(3);
+    model.relayout();
+    update(&mut model, wheel_event(true));
+    assert_eq!(model.list.selected_pr().unwrap().number, 1);
+    assert_eq!(model.list.scroll_offset(), 3);
+
+    update(
+        &mut model,
+        Msg::TerminalEvent(ratatui::crossterm::event::Event::Resize(80, 7)),
+    );
+
+    assert_eq!(model.list.viewport_height(), 3);
+    assert_eq!(
+        model.list.selected_pr().unwrap().number,
+        1,
+        "resize must not move the selection"
+    );
+    assert_eq!(
+        model.list.scroll_offset(),
+        3,
+        "resize must not yank a wheel-scrolled viewport back to the selection"
+    );
+}
+
+#[test]
 fn left_click_on_a_visible_list_row_selects_that_pr() {
     let mut model = enriched_model(&[1, 2, 3]);
     model.list.complete_fetch("mayfieldiv/legit");
