@@ -137,6 +137,17 @@ impl PrList {
         self.prs.push(pr);
     }
 
+    /// Drop every pooled PR for `repo_slug`, returning whether any were removed.
+    /// A retry of a failed listing calls this first: the failed attempt may have
+    /// streamed some PRs before erroring, and a re-stream *appends*, so without
+    /// the reset the survivors would duplicate. Leaves `rows` referencing the
+    /// now-shrunk `prs`, so the caller must `relayout` before the next render.
+    pub fn clear_repo(&mut self, repo_slug: &str) -> bool {
+        let before = self.prs.len();
+        self.prs.retain(|pr| pr.repo_slug != repo_slug);
+        self.prs.len() != before
+    }
+
     /// Rebuild the display layout from the current PRs under the active
     /// grouping, showing only the PRs in `scope` (a Repo Tab's slug, or `None`
     /// for the All tab). `tier_of(pr)` returns the Smart-status tier for a PR,
@@ -460,12 +471,16 @@ impl PrList {
         self.phases.get(repo_slug)
     }
 
-    /// Whether a fetch has ever been dispatched for `repo_slug` (any phase:
-    /// loading, loaded, or failed). The config-reload gate (`R`) uses this to
-    /// skip repos already known and fetch only newly tracked ones, so a reload
-    /// never re-streams — and duplicates — PRs already in the list.
-    pub fn has_phase(&self, repo_slug: &str) -> bool {
-        self.phases.contains_key(repo_slug)
+    /// Whether `repo_slug` should have an open-PR listing dispatched: it has
+    /// never been fetched, or its last listing *failed* (so it retries). False
+    /// while a listing is in flight or has already loaded — re-dispatching then
+    /// would re-stream and duplicate the pooled PRs. The config-reload gate
+    /// (`R`) uses this to fetch only newly tracked or previously-failed repos.
+    pub fn needs_listing(&self, repo_slug: &str) -> bool {
+        match self.phases.get(repo_slug) {
+            None | Some(Phase::Failed(_)) => true,
+            Some(Phase::Loading | Phase::Loaded) => false,
+        }
     }
 
     /// Whether a listing is still in flight for `scope`: a specific repo slug,

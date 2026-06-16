@@ -417,3 +417,32 @@ fn config_reload_fetches_only_newly_tracked_repos() {
         "only the newly tracked repo fetches on reload",
     );
 }
+
+#[test]
+fn config_reload_retries_a_failed_repo_and_clears_its_partial_prs() {
+    // A listing that failed may have streamed some PRs before erroring. A reload
+    // must retry the repo — `R` means "refresh everything" — and drop those
+    // partial PRs first, since the re-stream appends and would otherwise
+    // duplicate them.
+    let mut model = enriched_model(&[1]); // mayfieldiv/legit, one PR streamed
+    model
+        .list
+        .fail_fetch("mayfieldiv/legit", "list open PRs: boom".to_owned());
+    assert_eq!(
+        model.list.prs().len(),
+        1,
+        "precondition: a partial PR pooled"
+    );
+
+    let cmds = update(&mut model, Msg::ConfigLoaded(config_with_repos(&[])));
+
+    assert_eq!(
+        fetched_slugs(&cmds),
+        ["mayfieldiv/legit"],
+        "the failed repo re-fetches on reload",
+    );
+    assert!(
+        model.list.prs().is_empty(),
+        "the failed attempt's partial PRs are cleared before the retry re-streams",
+    );
+}
