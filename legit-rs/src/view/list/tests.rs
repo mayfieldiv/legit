@@ -127,11 +127,11 @@ fn buffer_text(terminal: &Terminal<TestBackend>) -> Vec<String> {
         .collect()
 }
 
-/// Rows of the list region only: excluding the tab bar (first row), the status
-/// bar (last row), app header, optional filter chip, column header, and — at
-/// >=80 columns — the summary panel that splits off the right of the row.
-/// Slicing to the list columns keeps these list-layout assertions about the
-/// list alone, independent of the panel beside it.
+// Rows of the list region only: excluding the tab bar (first row), the status
+// bar (last row), app header, optional filter chip, column header, and — at
+// >=80 columns — the summary panel that splits off the right of the row.
+// Slicing to the list columns keeps these list-layout assertions about the
+// list alone, independent of the panel beside it.
 fn list_rows(terminal: &Terminal<TestBackend>) -> Vec<String> {
     let width = terminal.backend().buffer().area().width;
     let list_width = crate::app::list_layout::list_width(width);
@@ -249,6 +249,7 @@ fn worktree_gutter_shows_branch_glyph_for_matched_pr() {
         pr.number,
         &pr.head_ref,
     )
+    .expect("worktree path")
     .to_string_lossy()
     .to_string();
     let mut model = model_with(vec![pr], Grouping::None, |_| Some(Tier::NeedsReview));

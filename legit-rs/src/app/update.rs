@@ -77,12 +77,17 @@ fn list_worktree_cmds(model: &Model) -> Vec<Cmd> {
         .into_iter()
         .filter_map(|repo| {
             let repo_slug = repo.slug();
-            worktree::resolve_source_clone(&model.config, &repo_slug).map(|source_clone| {
-                Cmd::ListWorktrees {
+            match worktree::resolve_source_clone(&model.config, &repo_slug) {
+                Ok(Some(source_clone)) => Some(Cmd::ListWorktrees {
                     repo_slug,
                     source_clone,
+                }),
+                Ok(None) => None,
+                Err(error) => {
+                    tracing::warn!(%repo_slug, %error, "failed to resolve worktree source clone");
+                    None
                 }
-            })
+            }
         })
         .collect()
 }
@@ -242,18 +247,47 @@ fn create_worktree_cmds(model: &mut Model, pr: crate::github::rest::PR) -> Vec<C
         );
     }
 
-    let Some(source_clone) = worktree::resolve_source_clone(&model.config, &pr.repo_slug) else {
-        return set_status(
-            model,
-            StatusKind::Error,
-            format!(
-                "No sourceClone configured for {}; edit ~/.legit/config.json",
-                pr.repo_slug
-            ),
-        );
+    let source_clone = match worktree::resolve_source_clone(&model.config, &pr.repo_slug) {
+        Ok(Some(source_clone)) => source_clone,
+        Ok(None) => {
+            return set_status(
+                model,
+                StatusKind::Error,
+                format!(
+                    "No sourceClone configured for {}; edit ~/.legit/config.json",
+                    pr.repo_slug
+                ),
+            );
+        }
+        Err(error) => {
+            return set_status(
+                model,
+                StatusKind::Error,
+                format!(
+                    "Failed to resolve sourceClone for {}: {error:#}",
+                    pr.repo_slug
+                ),
+            );
+        }
     };
-    let target_path =
-        worktree::resolve_worktree_path(&model.config, &pr.repo_slug, pr.number, &pr.head_ref);
+    let target_path = match worktree::resolve_worktree_path(
+        &model.config,
+        &pr.repo_slug,
+        pr.number,
+        &pr.head_ref,
+    ) {
+        Ok(path) => path,
+        Err(error) => {
+            return set_status(
+                model,
+                StatusKind::Error,
+                format!(
+                    "Failed to resolve worktree path for {}: {error:#}",
+                    pr.repo_slug
+                ),
+            );
+        }
+    };
     let mut cmds = set_status(model, StatusKind::Info, "Creating worktree…".to_owned());
     cmds.push(Cmd::CreateWorktree {
         pr: pr.key(),

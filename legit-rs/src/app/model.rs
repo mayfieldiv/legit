@@ -422,7 +422,8 @@ impl Model {
         let entries = self.worktrees_by_repo.get(&pr.repo_slug)?;
         let expected_branch = worktree::expected_branch_for_pr(pr, &repo.owner);
         let expected_path =
-            worktree::resolve_worktree_path(&self.config, &pr.repo_slug, pr.number, &pr.head_ref);
+            worktree::resolve_worktree_path(&self.config, &pr.repo_slug, pr.number, &pr.head_ref)
+                .ok()?;
         let expected_path = expected_path.to_string_lossy();
         worktree::match_worktree(entries, &expected_branch, &expected_path)
     }

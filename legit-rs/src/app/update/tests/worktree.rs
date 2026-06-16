@@ -173,6 +173,7 @@ fn worktree_created_seeds_cache_and_re_lists_source_clones() {
     let mut model = model_with_selected_pr(config_with_source_clone());
     let path =
         crate::worktree::resolve_worktree_path(&model.config, "mayfieldiv/legit", 1, "feature/1")
+            .expect("worktree path")
             .to_string_lossy()
             .to_string();
 

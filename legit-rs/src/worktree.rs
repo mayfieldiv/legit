@@ -1,5 +1,7 @@
 use std::{
-    env, fs,
+    env,
+    ffi::OsString,
+    fs, io,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -112,20 +114,26 @@ pub fn sanitize_branch_for_path(branch: &str) -> String {
     sanitized.trim_matches('-').chars().take(80).collect()
 }
 
-pub fn resolve_source_clone(config: &LegitConfig, slug: &str) -> Option<PathBuf> {
-    repo_config(config, slug)
-        .and_then(|repo| repo.source_clone.as_deref())
-        .map(resolve_config_path)
+pub fn resolve_source_clone(config: &LegitConfig, slug: &str) -> anyhow::Result<Option<PathBuf>> {
+    let Some(path) = repo_config(config, slug).and_then(|repo| repo.source_clone.as_deref()) else {
+        return Ok(None);
+    };
+    resolve_config_path(path)
+        .with_context(|| format!("failed to resolve sourceClone for {slug}"))
+        .map(Some)
 }
 
-pub fn resolve_worktree_root(config: &LegitConfig, slug: &str) -> PathBuf {
+pub fn resolve_worktree_root(config: &LegitConfig, slug: &str) -> anyhow::Result<PathBuf> {
     if let Some(root) = repo_config(config, slug).and_then(|repo| repo.worktree_root.as_deref()) {
-        return resolve_config_path(root);
+        return resolve_config_path(root)
+            .with_context(|| format!("failed to resolve worktreeRoot for {slug}"));
     }
     if let Some(root) = config.worktree_root.as_deref() {
-        return resolve_config_path(root).join(slug);
+        return resolve_config_path(root)
+            .with_context(|| "failed to resolve worktreeRoot".to_owned())
+            .map(|root| root.join(slug));
     }
-    home_dir().join(".legit/worktrees").join(slug)
+    Ok(home_dir()?.join(".legit/worktrees").join(slug))
 }
 
 pub fn resolve_worktree_path(
@@ -133,11 +141,11 @@ pub fn resolve_worktree_path(
     slug: &str,
     pr_number: u64,
     head_ref: &str,
-) -> PathBuf {
-    resolve_worktree_root(config, slug).join(format!(
+) -> anyhow::Result<PathBuf> {
+    Ok(resolve_worktree_root(config, slug)?.join(format!(
         "{pr_number}-{}",
         sanitize_branch_for_path(head_ref)
-    ))
+    )))
 }
 
 pub fn expected_branch_for_pr(pr: &PR, repo_owner: &str) -> String {
@@ -205,27 +213,37 @@ fn repo_config<'a>(config: &'a LegitConfig, slug: &str) -> Option<&'a RepoConfig
         .find(|repo| repo.slug.eq_ignore_ascii_case(slug))
 }
 
-fn home_dir() -> PathBuf {
-    env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("~"))
+fn home_dir() -> anyhow::Result<PathBuf> {
+    home_dir_from(env::var_os("HOME"))
 }
 
-fn resolve_config_path(path: &str) -> PathBuf {
+fn home_dir_from(home: Option<OsString>) -> anyhow::Result<PathBuf> {
+    home.map(PathBuf::from).context("HOME is not set")
+}
+
+fn resolve_config_path(path: &str) -> anyhow::Result<PathBuf> {
+    resolve_config_path_with(path, home_dir, env::current_dir)
+}
+
+fn resolve_config_path_with(
+    path: &str,
+    home_dir: impl Fn() -> anyhow::Result<PathBuf>,
+    current_dir: impl Fn() -> io::Result<PathBuf>,
+) -> anyhow::Result<PathBuf> {
     let expanded = if path == "~" {
-        home_dir()
+        home_dir()?
     } else if let Some(rest) = path.strip_prefix("~/") {
-        home_dir().join(rest)
+        home_dir()?.join(rest)
     } else {
         PathBuf::from(path)
     };
 
     if expanded.is_absolute() {
-        expanded
+        Ok(expanded)
     } else {
-        env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(expanded)
+        Ok(current_dir()
+            .context("failed to resolve current directory")?
+            .join(expanded))
     }
 }
 
@@ -468,8 +486,11 @@ mod tests {
         };
 
         assert_eq!(
-            resolve_worktree_path(&config, "acme/widgets", 1234, "feature/foo"),
-            home_dir().join(".legit/worktrees/acme/widgets/1234-feature-foo")
+            resolve_worktree_path(&config, "acme/widgets", 1234, "feature/foo")
+                .expect("default worktree path"),
+            home_dir()
+                .expect("home directory")
+                .join(".legit/worktrees/acme/widgets/1234-feature-foo")
         );
 
         let config = LegitConfig {
@@ -481,7 +502,8 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            resolve_worktree_path(&config, "acme/widgets", 7, "main"),
+            resolve_worktree_path(&config, "acme/widgets", 7, "main")
+                .expect("repo-specific worktree path"),
             PathBuf::from("/wts/widgets/7-main")
         );
 
@@ -494,7 +516,8 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            resolve_worktree_path(&config, "acme/widgets", 7, "main"),
+            resolve_worktree_path(&config, "acme/widgets", 7, "main")
+                .expect("global worktree path"),
             PathBuf::from("/srv/wts/acme/widgets/7-main")
         );
     }
@@ -517,11 +540,52 @@ mod tests {
         };
 
         assert_eq!(
-            resolve_source_clone(&config, "acme/widgets"),
-            Some(home_dir().join("src/widgets"))
+            resolve_source_clone(&config, "acme/widgets").expect("sourceClone path"),
+            Some(home_dir().expect("home directory").join("src/widgets"))
         );
-        assert_eq!(resolve_source_clone(&config, "acme/gadgets"), None);
-        assert_eq!(resolve_source_clone(&config, "acme/unknown"), None);
+        assert_eq!(
+            resolve_source_clone(&config, "acme/gadgets").expect("missing sourceClone"),
+            None
+        );
+        assert_eq!(
+            resolve_source_clone(&config, "acme/unknown").expect("unknown repo sourceClone"),
+            None
+        );
+    }
+
+    #[test]
+    fn home_expansion_requires_home() {
+        let error = home_dir_from(None).expect_err("missing HOME should fail");
+
+        assert_eq!(error.to_string(), "HOME is not set");
+    }
+
+    #[test]
+    fn tilde_config_paths_require_home() {
+        let error = resolve_config_path_with(
+            "~/src/widgets",
+            || anyhow::bail!("HOME is not set"),
+            || Ok(PathBuf::from("/cwd")),
+        )
+        .expect_err("tilde path without HOME should fail");
+
+        assert!(error.to_string().contains("HOME is not set"));
+    }
+
+    #[test]
+    fn relative_config_paths_require_current_dir() {
+        let error = resolve_config_path_with(
+            "src/widgets",
+            || Ok(PathBuf::from("/home/me")),
+            || Err(io::Error::new(io::ErrorKind::NotFound, "cwd was deleted")),
+        )
+        .expect_err("relative path without current dir should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to resolve current directory")
+        );
     }
 
     #[test]
