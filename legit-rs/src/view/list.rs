@@ -10,6 +10,7 @@ use ratatui::{
 use crate::{
     app::grouping::DisplayRow,
     app::model::Model,
+    app::refresh_queue::RefreshPhase,
     blocker::{BlockerResult, Tier, compact_next_action},
     format::{
         CheckOutcome, comment_counts, format_age, format_repo_short, format_review_state, outcome,
@@ -256,7 +257,7 @@ struct Cell {
 /// cannot drift apart.
 fn header_row_line(layout: &RowLayout) -> Line<'static> {
     let bold = Style::default().add_modifier(Modifier::BOLD);
-    let mut cells = base_cells("", "PR", layout, bold);
+    let mut cells = base_cells("", Style::default(), "PR", layout, bold);
     if layout.show_repo {
         cells.push(Cell {
             text: "Repo".to_owned(),
@@ -313,12 +314,10 @@ fn row_line(
     now: DateTime<Utc>,
     selected: bool,
 ) -> Line<'static> {
+    let (glyph, glyph_style) = leading_glyph(pr, model);
     let mut cells = base_cells(
-        if model.worktree_for_pr(pr).is_some() {
-            super::WORKTREE_GLYPH
-        } else {
-            ""
-        },
+        glyph,
+        glyph_style,
         &format!("#{}", pr.number),
         layout,
         Style::default()
@@ -384,12 +383,34 @@ fn row_line(
     render_cells(cells, selected)
 }
 
-fn base_cells(worktree: &str, pr_number: &str, layout: &RowLayout, style: Style) -> Vec<Cell> {
+/// The leading one-column glyph for a PR row, with its colour: the refresh
+/// indicator while the PR is in the Refresh Priority Queue (cyan in flight, dim
+/// while only queued), the worktree glyph when one is attached, else empty. The
+/// refresh indicator wins so a pending refresh is visible even on a PR that
+/// also has a worktree.
+fn leading_glyph(pr: &PR, model: &Model) -> (&'static str, Style) {
+    match model.refresh_phase_for(pr) {
+        Some(RefreshPhase::Refreshing) => (super::REFRESH_GLYPH, Style::default().fg(Color::Cyan)),
+        Some(RefreshPhase::Queued) => (super::REFRESH_GLYPH, Style::default().fg(Color::DarkGray)),
+        None if model.worktree_for_pr(pr).is_some() => {
+            (super::WORKTREE_GLYPH, Style::default().fg(Color::Cyan))
+        }
+        None => ("", Style::default()),
+    }
+}
+
+fn base_cells(
+    glyph: &str,
+    glyph_style: Style,
+    pr_number: &str,
+    layout: &RowLayout,
+    style: Style,
+) -> Vec<Cell> {
     vec![
         Cell {
-            text: worktree.to_owned(),
+            text: glyph.to_owned(),
             width: WORKTREE_COL,
-            style: Style::default().fg(Color::Cyan),
+            style: glyph_style,
         },
         Cell {
             text: pr_number.to_owned(),

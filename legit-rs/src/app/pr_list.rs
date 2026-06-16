@@ -460,6 +460,14 @@ impl PrList {
         self.phases.get(repo_slug)
     }
 
+    /// Whether a fetch has ever been dispatched for `repo_slug` (any phase:
+    /// loading, loaded, or failed). The config-reload gate (`R`) uses this to
+    /// skip repos already known and fetch only newly tracked ones, so a reload
+    /// never re-streams — and duplicates — PRs already in the list.
+    pub fn has_phase(&self, repo_slug: &str) -> bool {
+        self.phases.contains_key(repo_slug)
+    }
+
     /// Whether a listing is still in flight for `scope`: a specific repo slug,
     /// or `None` meaning "any Tracked Repo" (the All tab).
     pub fn is_loading(&self, scope: Option<&str>) -> bool {

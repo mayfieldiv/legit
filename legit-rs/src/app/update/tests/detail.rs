@@ -311,30 +311,41 @@ fn r_in_detail_dispatches_refetch_and_clears_detail() {
 }
 
 #[test]
-fn r_in_detail_refetches_threads_reviews_and_comments() {
-    // Enrichment otherwise fetches exactly once per list load, so `r` is both
-    // the staleness refresh for the Review Threads / Conversation sections and
-    // the retry path when an initial fetch failed and left a section stuck on
-    // its loading placeholder.
+fn r_in_detail_enqueues_a_refresh_and_refetches_the_conversation() {
+    // `r` routes the open PR's review-status / threads / reviews / checks /
+    // files refresh through the Refresh Priority Queue (one `Cmd::RefreshPr`),
+    // and additionally refetches the body + issue comments the detail view
+    // shows on top of that. Enrichment otherwise fetches once per list load, so
+    // this doubles as the retry path when an initial fetch left a section stuck.
     let mut model = model_with_one_pr();
     update(&mut model, key_event(KeyCode::Enter));
 
     let cmds = update(&mut model, key_event(KeyCode::Char('r')));
 
     assert!(
-        cmds.iter()
-            .any(|c| matches!(c, Cmd::FetchThreads { number: 42, .. })),
-        "r must refetch the open PR's review threads: {cmds:?}"
+        cmds.iter().any(|c| matches!(
+            c,
+            Cmd::RefreshPr {
+                key: PrKey { number: 42, .. },
+                include_files: true,
+                ..
+            }
+        )),
+        "r must enqueue a refresh of the open PR (threads/reviews/files): {cmds:?}"
     );
     assert!(
-        cmds.iter()
-            .any(|c| matches!(c, Cmd::FetchReviews { number: 42, .. })),
-        "r must refetch the open PR's reviews: {cmds:?}"
+        cmds.iter().any(|c| matches!(c, Cmd::FetchPRDetail { .. })),
+        "r must refetch the open PR's body: {cmds:?}"
     );
     assert!(
         cmds.iter()
             .any(|c| matches!(c, Cmd::FetchIssueComments { number: 42, .. })),
         "r must refetch the open PR's issue comments: {cmds:?}"
+    );
+    // The selected PR is now marked refreshing for the list-row indicator.
+    assert_eq!(
+        model.refresh_phase_for(&model.list.prs()[0]),
+        Some(crate::app::refresh_queue::RefreshPhase::Refreshing),
     );
 }
 
@@ -358,9 +369,10 @@ fn r_keeps_existing_threads_and_comments_until_fresh_ones_arrive() {
 }
 
 #[test]
-fn r_in_list_mode_does_not_dispatch_fetch_pr_detail() {
-    // 'r' in list mode is unbound (no handler). It must not accidentally
-    // dispatch FetchPRDetail.
+fn r_in_list_mode_refreshes_without_opening_the_detail() {
+    // 'r' in list mode refreshes the selected PR through the queue (a
+    // `Cmd::RefreshPr`). It must not refetch the detail body — that PR's detail
+    // view isn't open — so no `FetchPRDetail` is dispatched.
     let mut model = model_with_one_pr();
     assert_eq!(model.view_mode, ViewMode::List);
 
@@ -369,6 +381,14 @@ fn r_in_list_mode_does_not_dispatch_fetch_pr_detail() {
     assert!(
         !cmds.iter().any(|c| matches!(c, Cmd::FetchPRDetail { .. })),
         "r in list mode must not dispatch FetchPRDetail: {cmds:?}"
+    );
+    assert!(
+        cmds.iter().any(|c| matches!(c, Cmd::RefreshPr { .. })),
+        "r in list mode must enqueue and dispatch a refresh: {cmds:?}"
+    );
+    assert!(
+        matches!(model.view_mode, ViewMode::List),
+        "r in list mode must not enter the detail view"
     );
 }
 

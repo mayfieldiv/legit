@@ -107,6 +107,27 @@ pub enum Cmd {
     CopyToClipboard {
         text: String,
     },
+    /// Refresh one PR's enrichment as a single unit of refresh-queue work:
+    /// review-status (which carries the head SHA), review threads, reviews,
+    /// the head commit's check runs, and — when `include_files` is set — its
+    /// changed files. Each sub-fetch acquires its own limiter permit (so the
+    /// `Semaphore` still bounds HTTP) and emits the same arrival `Msg` the
+    /// initial enrichment does; the command always finishes with one
+    /// `Msg::RefreshComplete` so the queue frees the PR's active slot even when
+    /// some sub-fetches failed.
+    RefreshPr {
+        ctx: Arc<RequestContext>,
+        key: PrKey,
+        include_files: bool,
+    },
+    /// Wait `delay_ms`, then emit `Msg::MergeableRetryDue` for `pr` — the
+    /// one-shot delayed re-fetch for a PR whose `OPEN` mergeable came back
+    /// `UNKNOWN`. The fetch itself is dispatched by `update` so the command
+    /// stays a pure timer (the same split as `ScheduleStatusClear`).
+    DelayedRetry {
+        pr: PrKey,
+        delay_ms: u64,
+    },
 }
 
 #[tracing::instrument(name = "command", skip(tx, limiter))]
@@ -380,6 +401,171 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                 },
             };
             let _ = tx.send(msg);
+        }
+        Cmd::RefreshPr {
+            ctx,
+            key,
+            include_files,
+        } => {
+            run_refresh_pr(ctx, key, include_files, tx, limiter).await;
+        }
+        Cmd::DelayedRetry { pr, delay_ms } => {
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            let _ = tx.send(Msg::MergeableRetryDue { pr });
+        }
+    }
+}
+
+/// Refresh one PR end-to-end for the refresh queue. Review-status goes first
+/// because it surfaces the head SHA the checks fetch needs; the remaining
+/// sub-fetches then run concurrently. Whatever fails surfaces its own
+/// `CommandFailed`; the trailing `Msg::RefreshComplete` always fires so the
+/// queue frees the PR's active slot.
+async fn run_refresh_pr(
+    ctx: Arc<RequestContext>,
+    key: PrKey,
+    include_files: bool,
+    tx: mpsc::UnboundedSender<Msg>,
+    limiter: Arc<NetworkLimiter>,
+) {
+    let number = key.number;
+    let head_sha = refresh_review_status(&ctx, &key, &tx, &limiter).await;
+
+    let threads = request(
+        &tx,
+        &limiter,
+        Some(key.clone()),
+        "fetch review threads",
+        {
+            let ctx = Arc::clone(&ctx);
+            async move {
+                GraphQlClient::new(&ctx.token)?
+                    .fetch_review_threads(&ctx.repo.owner, &ctx.repo.repo, number, &ctx.bot_logins)
+                    .await
+            }
+        },
+        {
+            let pr = key.clone();
+            move |threads| vec![Msg::ThreadsArrived { pr, threads }]
+        },
+    );
+    let reviews = request(
+        &tx,
+        &limiter,
+        Some(key.clone()),
+        "fetch reviews",
+        {
+            let ctx = Arc::clone(&ctx);
+            async move {
+                OctocrabRest::new(&ctx.token)?
+                    .list_reviews(&ctx.repo.owner, &ctx.repo.repo, number)
+                    .await
+            }
+        },
+        {
+            let pr = key.clone();
+            move |reviews| vec![Msg::ReviewsArrived { pr, reviews }]
+        },
+    );
+    let checks = async {
+        let Some(head_sha) = head_sha else {
+            return;
+        };
+        let repo_slug = ctx.repo.slug();
+        request(
+            &tx,
+            &limiter,
+            Some(key.clone()),
+            "fetch check runs",
+            {
+                let ctx = Arc::clone(&ctx);
+                let head_sha = head_sha.clone();
+                async move {
+                    let checks = OctocrabRest::new(&ctx.token)?
+                        .list_check_runs(&ctx.repo.owner, &ctx.repo.repo, &head_sha)
+                        .await?;
+                    Ok((head_sha, checks))
+                }
+            },
+            move |(head_sha, checks)| {
+                vec![Msg::ChecksArrived {
+                    repo_slug,
+                    head_sha,
+                    checks,
+                }]
+            },
+        )
+        .await;
+    };
+    let files = async {
+        if !include_files {
+            return;
+        }
+        request(
+            &tx,
+            &limiter,
+            Some(key.clone()),
+            "fetch files",
+            {
+                let ctx = Arc::clone(&ctx);
+                async move {
+                    OctocrabRest::new(&ctx.token)?
+                        .list_files(&ctx.repo.owner, &ctx.repo.repo, number)
+                        .await
+                }
+            },
+            {
+                let pr = key.clone();
+                move |files| vec![Msg::FilesArrived { pr, files }]
+            },
+        )
+        .await;
+        // A failure leaves any previously-loaded categorisation in place
+        // (best-effort) — the refresh path sets no `Requested` guard to roll
+        // back, unlike the on-selection `FetchFiles`.
+    };
+
+    tokio::join!(threads, reviews, checks, files);
+    let _ = tx.send(Msg::RefreshComplete { pr: key });
+}
+
+/// Refresh just one PR's review-status, emit its arrival `Msg`, and return the
+/// head SHA so the caller can fetch that commit's checks. A failure surfaces a
+/// `CommandFailed` and yields `None` (no checks fetch, the rest of the refresh
+/// still runs).
+async fn refresh_review_status(
+    ctx: &Arc<RequestContext>,
+    key: &PrKey,
+    tx: &mpsc::UnboundedSender<Msg>,
+    limiter: &Arc<NetworkLimiter>,
+) -> Option<String> {
+    let _permit = limiter.acquire(Some(key.clone())).await;
+    let result = async {
+        GraphQlClient::new(&ctx.token)?
+            .fetch_review_status(&ctx.repo.owner, &ctx.repo.repo, &[key.number])
+            .await
+    }
+    .await;
+    match result {
+        Ok(results) => {
+            let mut head_sha = None;
+            for (number, status) in results {
+                if number == key.number {
+                    head_sha = status.head_commit_sha.clone();
+                }
+                let _ = tx.send(Msg::ReviewStatusArrived {
+                    pr: PrKey {
+                        repo_slug: ctx.repo.slug(),
+                        number,
+                    },
+                    status,
+                });
+            }
+            head_sha
+        }
+        Err(error) => {
+            let _ = tx.send(command_failed("fetch review status", error));
+            None
         }
     }
 }

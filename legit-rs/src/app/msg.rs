@@ -143,6 +143,27 @@ pub enum Msg {
         pr: PrKey,
         body: String,
     },
+    /// `r` in the list view: enqueue a refresh of the selected PR at priority 0
+    /// (ahead of every tier), including its files. No-op when nothing is
+    /// selected.
+    RefreshSelected,
+    /// `R` (Shift-r) in the list view: re-read the config (to pick up newly
+    /// tracked repos) and enqueue every visible PR with a priority derived from
+    /// its smart-status tier.
+    RefreshAll,
+    /// One PR's `Cmd::RefreshPr` fan-out finished (success or failure — the
+    /// individual fetch failures surface their own `CommandFailed`). Frees the
+    /// PR's active refresh slot so the pump can dispatch the next queued PR.
+    RefreshComplete {
+        pr: PrKey,
+    },
+    /// A scheduled mergeable re-fetch is due: re-run review-status for one PR
+    /// whose `OPEN` mergeable came back `UNKNOWN`. Carries only the identity;
+    /// `update` rebuilds the request context. Mirrors the TS settled-index
+    /// `UNKNOWN` retry.
+    MergeableRetryDue {
+        pr: PrKey,
+    },
     Quit,
 }
 

@@ -18,6 +18,7 @@ use super::{
     cmd::Cmd,
     detail_items::{DetailFilters, DetailFocus},
     pr_list::PrList,
+    refresh_queue::{RefreshPhase, RefreshQueue},
 };
 
 /// Which top-level view is active. `List` is the default PR list; `Detail`
@@ -316,6 +317,17 @@ pub struct Model {
     /// Detail-view filter: show bot comments (`b` toggles; default true).
     /// Model-level for the same reason as `show_resolved`.
     pub show_bot_comments: bool,
+    /// The Refresh Priority Queue: PRs awaiting (or undergoing) a `r`/`R`
+    /// refresh, ordered by smart-status tier. `update` enqueues on the refresh
+    /// keys, pumps it up to the active cap, and `complete`s entries on
+    /// `Msg::RefreshComplete`; the list view reads `refresh_phase_for` to draw
+    /// the per-row indicator.
+    pub refresh_queue: RefreshQueue,
+    /// PRs whose `UNKNOWN` mergeable status has already triggered a one-shot
+    /// delayed re-fetch this session, so the retry fires at most once per PR.
+    /// A manual refresh of a PR clears its entry so a fresh `UNKNOWN` can retry
+    /// again (mirrors the TS `notePrRefreshed`).
+    pub mergeable_retried: HashSet<PrKey>,
 }
 
 impl Model {
@@ -341,6 +353,8 @@ impl Model {
                 view_mode: ViewMode::List,
                 show_resolved: false,
                 show_bot_comments: true,
+                refresh_queue: RefreshQueue::new(),
+                mergeable_retried: HashSet::new(),
             },
             vec![Cmd::LoadConfig, Cmd::ResolveAuthToken, Cmd::DetectRepo],
         )
@@ -426,6 +440,13 @@ impl Model {
                 .ok()?;
         let expected_path = expected_path.to_string_lossy();
         worktree::match_worktree(entries, &expected_branch, &expected_path)
+    }
+
+    /// The refresh phase of `pr` (queued / refreshing), or `None` when it isn't
+    /// in the Refresh Priority Queue. The list view reads this to draw the
+    /// per-row refresh indicator.
+    pub fn refresh_phase_for(&self, pr: &PR) -> Option<RefreshPhase> {
+        self.refresh_queue.phase_for(&pr.key())
     }
 
     /// The repo slug the active tab narrows the list to, or `None` for the All

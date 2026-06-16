@@ -684,9 +684,12 @@ fn list_cells_use_distinct_ts_parity_colours() {
     let rows = buffer_text(&terminal);
     let row = &rows[4]; // second PR row: first non-selected list row
     let author_x = row.find("alice").expect("author rendered") as u16;
+    // The leading column is the worktree/refresh glyph slot; the PR number
+    // follows it, so locate the number by its `#` rather than assuming column 0.
+    let pr_num_x = row.find('#').expect("pr number rendered") as u16;
 
     assert_eq!(
-        buffer[(0, 4)].fg,
+        buffer[(pr_num_x, 4)].fg,
         Color::Cyan,
         "PR numbers should use the accent colour"
     );
