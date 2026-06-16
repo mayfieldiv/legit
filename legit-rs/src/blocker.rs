@@ -114,17 +114,22 @@ pub struct AwaitingReviewer {
 
 // ── CI helpers ──────────────────────────────────────────────────────────────
 
-/// Conclusions that count as a failing check. Mirrors the TS
-/// `FAILING_CONCLUSIONS` set.
-const FAILING_CONCLUSIONS: [&str; 3] = ["failure", "timed_out", "cancelled"];
+/// Conclusions that count as hard CI failures.
+const HARD_FAILING_CONCLUSIONS: [&str; 3] = ["failure", "timed_out", "cancelled"];
 
-fn is_ci_failing(checks: &[CheckRun]) -> bool {
+fn has_hard_ci_failure(checks: &[CheckRun]) -> bool {
     checks.iter().any(|c| {
         c.status == "completed"
             && c.conclusion
                 .as_deref()
-                .is_some_and(|conclusion| FAILING_CONCLUSIONS.contains(&conclusion))
+                .is_some_and(|conclusion| HARD_FAILING_CONCLUSIONS.contains(&conclusion))
     })
+}
+
+fn has_action_required_check(checks: &[CheckRun]) -> bool {
+    checks
+        .iter()
+        .any(|c| c.status == "completed" && c.conclusion.as_deref() == Some("action_required"))
 }
 
 // ── Review-state aggregation ──────────────────────────────────────────────────
@@ -252,15 +257,17 @@ fn pick_top_awaiting_reviewer(awaiting: &[AwaitingReviewer]) -> &str {
 ///
 /// Decision order (first matching rule wins):
 ///  1. CI failing          -> waiting-on-author (fix CI before reviewing)
-///  2. Draft               -> waiting-on-author (not ready for review)
-///  3. Merge conflict      -> waiting-on-author (author must rebase)
-///  4. Changes requested   -> waiting-on-author (via `review_decision` or a
+///  2. Check action needed -> waiting-on-author (integration requires action)
+///  3. Draft               -> waiting-on-author (not ready for review)
+///  4. Merge conflict      -> waiting-on-author (author must rebase)
+///  5. Changes requested   -> waiting-on-author (via `review_decision` or a
 ///     review; author must respond before pending reviewers need to act)
-///  5. Unreplied threads   -> waiting-on-author (only when thread data loaded)
-///  6. Approved            -> waiting-on-author (author should merge)
-///  7. All awaiting-reviewer -> needs-review / me-blocking for that reviewer
-///  8. Current user requested reviewer -> me-blocking
-///  9. Default             -> needs-review (with first other reviewer, if any)
+///  6. Author reply needed -> waiting-on-author (only when thread data loaded)
+///  7. Approved            -> waiting-on-author (author should merge)
+///  8. All reviewer-waiting threads -> needs-review / me-blocking for that
+///     reviewer
+///  9. Current user requested reviewer -> me-blocking
+/// 10. Default             -> needs-review (with first other reviewer, if any)
 ///
 /// Effective author: when the current user is an assignee but the PR author is
 /// not, the current user is treated as the "effective author" throughout — all
@@ -296,32 +303,38 @@ fn compute_blocker_core(pr: &PR, current_user: &str, opts: &BlockerOptions<'_>) 
         &pr.author
     };
 
-    // 1. CI failing -> waiting-on-author, regardless of reviewers.
-    if is_ci_failing(checks) {
+    // 1. Hard CI failure -> waiting-on-author, regardless of reviewers.
+    if has_hard_ci_failure(checks) {
         return waiting(effective_author, "CI is failing");
     }
 
-    // 2. Draft -> waiting-on-author (author isn't ready for review).
+    // 2. A completed check is asking for an explicit follow-up action.
+    if has_action_required_check(checks) {
+        return waiting(effective_author, "Check action required");
+    }
+
+    // 3. Draft -> waiting-on-author (author isn't ready for review).
     if pr.is_draft {
-        return waiting(effective_author, "Draft — not ready for review");
+        return waiting(effective_author, "Draft - not ready for review");
     }
 
-    // 3. Merge conflict -> waiting-on-author (author must rebase).
+    // 4. Merge conflict -> waiting-on-author (author must rebase).
     if pr.mergeable == "CONFLICTING" {
-        return waiting(effective_author, "Merge conflict");
+        return waiting(effective_author, "Resolve merge conflict");
     }
 
-    // 4. Changes requested — via `review_decision` OR an individual review.
+    // 5. Changes requested — via `review_decision` OR an individual review.
     //    Checked before me-blocking so an existing change-request from another
     //    reviewer takes precedence over our pending review.
     let changes_requested = pr.review_decision == "CHANGES_REQUESTED"
         || reviews.iter().any(|r| r.state == "CHANGES_REQUESTED");
     if changes_requested {
-        return waiting(effective_author, "Changes requested");
+        return waiting(effective_author, "Respond to requested changes");
     }
 
-    // 5. Unreplied review threads (when full thread data is available). Only
-    //    threads where the author hasn't replied count against the author.
+    // 6. Author-reply-needed review threads (when full thread data is
+    //    available). Only threads where the author hasn't replied count
+    //    against the author.
     let classification = opts.threads.map(classify_threads);
     if let Some(c) = &classification
         && c.unreplied > 0
@@ -329,17 +342,20 @@ fn compute_blocker_core(pr: &PR, current_user: &str, opts: &BlockerOptions<'_>) 
         let n = c.unreplied;
         return waiting(
             effective_author,
-            &format!("{n} unreplied thread{}", plural(n)),
+            &author_reply_needed_reason(n, effective_author, current_user),
         );
     }
 
-    // 6. Approved — GitHub's aggregate decision or the loaded reviews show the
+    // 7. Approved — GitHub's aggregate decision or the loaded reviews show the
     //    green light. The author's turn to merge.
     if aggregate_review_state(pr, reviews) == Some("APPROVED") {
-        return waiting(effective_author, "Approved — ready to merge");
+        return waiting(
+            effective_author,
+            &ready_to_merge_reason(effective_author, current_user),
+        );
     }
 
-    // 7. All unresolved threads are awaiting-reviewer (author replied to every
+    // 8. All unresolved threads are waiting on a reviewer (author replied to every
     //    one). Identify the reviewer who needs to act.
     if let Some(c) = &classification
         && c.awaiting_reviewer > 0
@@ -354,27 +370,27 @@ fn compute_blocker_core(pr: &PR, current_user: &str, opts: &BlockerOptions<'_>) 
         return BlockerResult {
             blocker: reviewer.to_owned(),
             tier,
-            reason: format!("{n} thread{} awaiting {reviewer}", plural(n)),
+            reason: waiting_on_reviewer_reason(n, reviewer, current_user),
         };
     }
 
-    // 8. Current user is a requested reviewer -> me-blocking.
-    if pr.requested_reviewers.iter().any(|r| r == current_user) {
+    // 9. Current user is a requested reviewer -> me-blocking.
+    if !current_user.is_empty() && pr.requested_reviewers.iter().any(|r| r == current_user) {
         return BlockerResult {
             blocker: current_user.to_owned(),
             tier: Tier::MeBlocking,
-            reason: "You are a requested reviewer".to_owned(),
+            reason: "Review requested from you".to_owned(),
         };
     }
 
-    // 9. Default — needs review (whether a specific reviewer is requested or
+    // 10. Default — needs review (whether a specific reviewer is requested or
     //    not).
     let other_reviewer = pr.requested_reviewers.iter().find(|r| *r != current_user);
     BlockerResult {
         blocker: other_reviewer.cloned().unwrap_or_default(),
         tier: Tier::NeedsReview,
-        reason: if other_reviewer.is_some() {
-            "Awaiting reviewer".to_owned()
+        reason: if let Some(reviewer) = other_reviewer {
+            format!("Review requested from {reviewer}")
         } else {
             "Awaiting review".to_owned()
         },
@@ -390,9 +406,85 @@ fn waiting(blocker: &str, reason: &str) -> BlockerResult {
     }
 }
 
-/// Pluralise English nouns: `""` for one, `"s"` for any other count.
-fn plural(n: usize) -> &'static str {
-    if n == 1 { "" } else { "s" }
+fn thread_noun(n: usize) -> &'static str {
+    if n == 1 { "thread" } else { "threads" }
+}
+
+fn need_verb(n: usize) -> &'static str {
+    if n == 1 { "needs" } else { "need" }
+}
+
+fn author_reply_needed_reason(n: usize, effective_author: &str, current_user: &str) -> String {
+    let owner = if !current_user.is_empty() && effective_author == current_user {
+        "your"
+    } else {
+        "author"
+    };
+    format!("{n} {} {} {owner} reply", thread_noun(n), need_verb(n))
+}
+
+fn waiting_on_reviewer_reason(n: usize, reviewer: &str, current_user: &str) -> String {
+    let who = if !current_user.is_empty() && reviewer == current_user {
+        "you"
+    } else {
+        reviewer
+    };
+    format!("{n} {} waiting on {who}", thread_noun(n))
+}
+
+fn ready_to_merge_reason(effective_author: &str, current_user: &str) -> String {
+    if !current_user.is_empty() && effective_author == current_user {
+        "Ready for you to merge".to_owned()
+    } else {
+        "Ready to merge".to_owned()
+    }
+}
+
+/// Compact list-cell form of the full Next Action stored in `BlockerResult`.
+pub fn compact_next_action(result: &BlockerResult) -> String {
+    let reason = result.reason.as_str();
+    match reason {
+        "CI is failing" => "CI failing".to_owned(),
+        "Check action required" => "check action required".to_owned(),
+        "Draft - not ready for review" => "draft".to_owned(),
+        "Resolve merge conflict" => "conflict".to_owned(),
+        "Respond to requested changes" => "changes requested".to_owned(),
+        "Ready for you to merge" | "Ready to merge" => "ready to merge".to_owned(),
+        "Awaiting review" => "awaiting review".to_owned(),
+        "Review requested from you" => "review from you".to_owned(),
+        _ => compact_patterned_next_action(reason).unwrap_or_else(|| reason.to_owned()),
+    }
+}
+
+fn compact_patterned_next_action(reason: &str) -> Option<String> {
+    if let Some(reviewer) = reason.strip_prefix("Review requested from ") {
+        return Some(format!("review from {reviewer}"));
+    }
+    if let Some(n) = reason.strip_suffix(" thread needs your reply") {
+        return Some(format!("{n} needs your reply"));
+    }
+    if let Some(n) = reason.strip_suffix(" threads need your reply") {
+        return Some(format!("{n} need your reply"));
+    }
+    if let Some(n) = reason.strip_suffix(" thread needs author reply") {
+        return Some(format!("{n} needs reply"));
+    }
+    if let Some(n) = reason.strip_suffix(" threads need author reply") {
+        return Some(format!("{n} need reply"));
+    }
+    if let Some(rest) = reason.strip_suffix(" thread waiting on you") {
+        return Some(format!("{rest} waiting on you"));
+    }
+    if let Some(rest) = reason.strip_suffix(" threads waiting on you") {
+        return Some(format!("{rest} waiting on you"));
+    }
+    if let Some((n, reviewer)) = reason.split_once(" thread waiting on ") {
+        return Some(format!("{n} waiting on {reviewer}"));
+    }
+    if let Some((n, reviewer)) = reason.split_once(" threads waiting on ") {
+        return Some(format!("{n} waiting on {reviewer}"));
+    }
+    None
 }
 
 #[cfg(test)]

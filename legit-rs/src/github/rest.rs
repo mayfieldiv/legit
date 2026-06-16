@@ -27,7 +27,9 @@ pub enum PRState {
 /// REST list responses don't include enrichment fields (`review_decision`,
 /// `mergeable`, `last_commit_date`, `head_commit_sha`, `additions`,
 /// `deletions`); those land via the GraphQL enrichment step in a later
-/// milestone. Until then they take the same defaults the TS port uses.
+/// milestone. Until then they take the same defaults the TS port uses, and
+/// `review_status_loaded` stays false so the view can distinguish unknown size
+/// from a real zero-line PR.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PR {
     pub number: u64,
@@ -50,6 +52,7 @@ pub struct PR {
     pub mergeable: String,
     pub last_commit_date: Option<DateTime<Utc>>,
     pub head_commit_sha: Option<String>,
+    pub review_status_loaded: bool,
     pub head_ref: String,
     pub base_ref: String,
     pub head_repository_owner: String,
@@ -200,6 +203,7 @@ fn parse_pr(raw: RawRestPR, repo_slug: &str) -> PR {
         mergeable: "UNKNOWN".to_owned(),
         last_commit_date: None,
         head_commit_sha: None,
+        review_status_loaded: false,
         head_ref,
         base_ref: raw.base.map(|b| b.ref_field).unwrap_or_default(),
         head_repository_owner,
@@ -592,6 +596,7 @@ mod tests {
                 mergeable: "UNKNOWN".to_owned(),
                 last_commit_date: None,
                 head_commit_sha: None,
+                review_status_loaded: false,
                 head_ref: "issue-43-pr-list".to_owned(),
                 base_ref: "main".to_owned(),
                 head_repository_owner: "mayfieldiv".to_owned(),

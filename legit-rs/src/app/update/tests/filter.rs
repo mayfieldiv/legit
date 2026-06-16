@@ -155,11 +155,15 @@ fn filter_chip_row_shrinks_the_viewport_and_clearing_restores_it() {
         &mut model,
         Msg::TerminalEvent(ratatui::crossterm::event::Event::Resize(80, 10)),
     );
-    assert_eq!(model.list.viewport_height(), 8, "tab bar + status bar");
+    assert_eq!(
+        model.list.viewport_height(),
+        6,
+        "app header + tab bar + table header + status bar"
+    );
 
     update(&mut model, key_event(KeyCode::Char('/')));
-    assert_eq!(model.list.viewport_height(), 7, "chip row takes one");
+    assert_eq!(model.list.viewport_height(), 5, "chip row takes one");
 
     update(&mut model, key_event(KeyCode::Esc));
-    assert_eq!(model.list.viewport_height(), 8, "row returns on clear");
+    assert_eq!(model.list.viewport_height(), 6, "row returns on clear");
 }

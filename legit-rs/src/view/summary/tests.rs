@@ -32,6 +32,7 @@ fn sample_pr(number: u64, title: &str) -> PR {
         mergeable: "UNKNOWN".to_owned(),
         last_commit_date: None,
         head_commit_sha: None,
+        review_status_loaded: true,
         head_ref: "feat/x".to_owned(),
         base_ref: "main".to_owned(),
         head_repository_owner: "acme".to_owned(),
@@ -159,7 +160,7 @@ fn panel_rows(model: &Model, width: u16, height: u16) -> Vec<String> {
     let buf = terminal.backend().buffer().clone();
     let panel_w = panel_width(width).expect("panel should be visible at this width");
     let split_x = width - panel_w;
-    (1..height - 1)
+    (2..height - 1)
         .map(|y| {
             (split_x..width)
                 .map(|x| buf[(x, y)].symbol().to_owned())
@@ -196,6 +197,35 @@ fn renders_smart_status_reason_as_the_first_section() {
         rows.iter().any(|r| r.contains("You requested review")),
         "smart-status reason must render: {rows:?}"
     );
+}
+
+#[test]
+fn renders_identity_metadata_labels_assignees_and_requested_reviewers() {
+    let mut pr = sample_pr(42, "Add the thing");
+    pr.is_draft = true;
+    pr.labels = vec!["enhancement".to_owned(), "ready-for-agent".to_owned()];
+    pr.assignees = vec!["octocat".to_owned()];
+    pr.requested_reviewers = vec!["alice".to_owned(), "bob".to_owned()];
+    let model = model_with_selected(pr);
+
+    let rows = panel_rows(&model, 140, 24);
+    let joined = rows.join("\n");
+
+    assert!(joined.contains("Add the thing"), "title: {rows:?}");
+    assert!(joined.contains("octocat #42 draft"), "meta: {rows:?}");
+    assert!(
+        joined.contains("feat/x") && joined.contains("main"),
+        "branches: {rows:?}"
+    );
+    assert!(joined.contains("created 5h updated 2h"), "dates: {rows:?}");
+    assert!(
+        joined.contains("labels: enhancement, ready-for-agent"),
+        "labels: {rows:?}"
+    );
+    assert!(joined.contains("assignees: octocat"), "assignees: {rows:?}");
+    assert!(joined.contains("requested"), "requested header: {rows:?}");
+    assert!(joined.contains("alice pending"), "alice pending: {rows:?}");
+    assert!(joined.contains("bob pending"), "bob pending: {rows:?}");
 }
 
 #[test]

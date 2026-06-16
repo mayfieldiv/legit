@@ -4,7 +4,10 @@
 
 use chrono::{DateTime, TimeZone, Utc};
 
-use super::{BlockerOptions, ThreadKind, Tier, classify_thread, classify_threads, compute_blocker};
+use super::{
+    BlockerOptions, BlockerResult, ThreadKind, Tier, classify_thread, classify_threads,
+    compact_next_action, compute_blocker,
+};
 use crate::github::rest::{PR, PRState};
 use crate::github::types::{CheckRun, FullReviewThread, Review, ReviewComment};
 
@@ -30,6 +33,7 @@ fn make_pr(author: &str) -> PR {
         mergeable: "UNKNOWN".to_owned(),
         last_commit_date: None,
         head_commit_sha: None,
+        review_status_loaded: true,
         head_ref: "feature".to_owned(),
         base_ref: "main".to_owned(),
         head_repository_owner: "mayfieldiv".to_owned(),
@@ -176,7 +180,7 @@ fn review_decision_approved_is_waiting_on_author() {
     let result = compute_blocker(&pr, ME, &BlockerOptions::default());
     assert_eq!(result.tier, Tier::WaitingOnAuthor);
     assert_eq!(result.blocker, AUTHOR);
-    assert!(result.reason.to_lowercase().contains("approved"));
+    assert_eq!(result.reason, "Ready to merge");
 }
 
 // ── CI checks ────────────────────────────────────────────────────────────────
@@ -205,6 +209,17 @@ fn cancelled_check_is_waiting_on_author() {
     let checks = [check("build", "completed", Some("cancelled"))];
     let result = compute_blocker(&pr, ME, &opts(&checks, &[], None));
     assert_eq!(result.tier, Tier::WaitingOnAuthor);
+}
+
+#[test]
+fn action_required_check_is_next_action_before_draft() {
+    let mut pr = make_pr(AUTHOR);
+    pr.is_draft = true;
+    let checks = [check("deploy", "completed", Some("action_required"))];
+    let result = compute_blocker(&pr, ME, &opts(&checks, &[], None));
+    assert_eq!(result.tier, Tier::WaitingOnAuthor);
+    assert_eq!(result.blocker, AUTHOR);
+    assert_eq!(result.reason, "Check action required");
 }
 
 #[test]
@@ -525,7 +540,7 @@ fn current_users_approved_review_removes_from_queue() {
     let result = compute_blocker(&pr, ME, &opts(&[], &reviews, None));
     assert_eq!(result.tier, Tier::WaitingOnAuthor);
     assert_eq!(result.blocker, AUTHOR);
-    assert!(result.reason.contains("Approved"));
+    assert_eq!(result.reason, "Ready to merge");
 }
 
 #[test]
@@ -547,7 +562,7 @@ fn unreplied_threads_are_waiting_on_author() {
     let result = compute_blocker(&pr, ME, &opts(&[], &[], Some(&threads)));
     assert_eq!(result.tier, Tier::WaitingOnAuthor);
     assert_eq!(result.blocker, AUTHOR);
-    assert_eq!(result.reason, "2 unreplied threads");
+    assert_eq!(result.reason, "2 threads need author reply");
 }
 
 #[test]
@@ -593,7 +608,7 @@ fn singular_unreplied_thread_grammar() {
     let pr = make_pr(AUTHOR);
     let threads = [thread(vec![comment(OTHER)])];
     let result = compute_blocker(&pr, ME, &opts(&[], &[], Some(&threads)));
-    assert_eq!(result.reason, "1 unreplied thread");
+    assert_eq!(result.reason, "1 thread needs author reply");
 }
 
 #[test]
@@ -601,7 +616,7 @@ fn plural_unreplied_threads_grammar() {
     let pr = make_pr(AUTHOR);
     let threads = [thread(vec![comment(OTHER)]), thread(vec![comment(OTHER)])];
     let result = compute_blocker(&pr, ME, &opts(&[], &[], Some(&threads)));
-    assert_eq!(result.reason, "2 unreplied threads");
+    assert_eq!(result.reason, "2 threads need author reply");
 }
 
 // ── Edge cases ───────────────────────────────────────────────────────────────
@@ -952,7 +967,7 @@ fn unreplied_threads_singular_via_compute() {
     let result = compute_blocker(&pr, ME, &opts(&[], &[], Some(&threads)));
     assert_eq!(result.tier, Tier::WaitingOnAuthor);
     assert_eq!(result.blocker, AUTHOR);
-    assert_eq!(result.reason, "1 unreplied thread");
+    assert_eq!(result.reason, "1 thread needs author reply");
 }
 
 #[test]
@@ -960,7 +975,7 @@ fn plural_unreplied_threads_via_compute() {
     let pr = make_pr(AUTHOR);
     let threads = [thread(vec![comment(OTHER)]), thread(vec![comment("dave")])];
     let result = compute_blocker(&pr, ME, &opts(&[], &[], Some(&threads)));
-    assert_eq!(result.reason, "2 unreplied threads");
+    assert_eq!(result.reason, "2 threads need author reply");
 }
 
 #[test]
@@ -970,7 +985,7 @@ fn all_awaiting_reviewer_is_needs_review_with_reviewer_blocker() {
     let result = compute_blocker(&pr, ME, &opts(&[], &[], Some(&threads)));
     assert_eq!(result.tier, Tier::NeedsReview);
     assert_eq!(result.blocker, OTHER);
-    assert_eq!(result.reason, format!("1 thread awaiting {OTHER}"));
+    assert_eq!(result.reason, format!("1 thread waiting on {OTHER}"));
 }
 
 #[test]
@@ -980,7 +995,7 @@ fn awaiting_reviewer_with_current_user_is_me_blocking() {
     let result = compute_blocker(&pr, ME, &opts(&[], &[], Some(&threads)));
     assert_eq!(result.tier, Tier::MeBlocking);
     assert_eq!(result.blocker, ME);
-    assert_eq!(result.reason, format!("1 thread awaiting {ME}"));
+    assert_eq!(result.reason, "1 thread waiting on you");
 }
 
 #[test]
@@ -993,7 +1008,7 @@ fn mixed_unreplied_and_awaiting_is_waiting_on_author() {
     let result = compute_blocker(&pr, ME, &opts(&[], &[], Some(&threads)));
     assert_eq!(result.tier, Tier::WaitingOnAuthor);
     assert_eq!(result.blocker, AUTHOR);
-    assert_eq!(result.reason, "1 unreplied thread");
+    assert_eq!(result.reason, "1 thread needs author reply");
 }
 
 #[test]
@@ -1004,7 +1019,7 @@ fn approved_beats_awaiting_reviewer() {
     let result = compute_blocker(&pr, ME, &opts(&[], &[], Some(&threads)));
     assert_eq!(result.tier, Tier::WaitingOnAuthor);
     assert_eq!(result.blocker, AUTHOR);
-    assert!(result.reason.contains("Approved"));
+    assert_eq!(result.reason, "Ready to merge");
 }
 
 #[test]
@@ -1014,7 +1029,7 @@ fn unreplied_threads_beat_approved_via_compute() {
     let threads = [thread(vec![comment(OTHER)])];
     let result = compute_blocker(&pr, ME, &opts(&[], &[], Some(&threads)));
     assert_eq!(result.tier, Tier::WaitingOnAuthor);
-    assert!(result.reason.contains("unreplied"));
+    assert!(result.reason.contains("reply"));
 }
 
 #[test]
@@ -1024,7 +1039,7 @@ fn changes_requested_beats_unreplied_threads_via_compute() {
     let threads = [thread(vec![comment(OTHER)])];
     let result = compute_blocker(&pr, ME, &opts(&[], &[], Some(&threads)));
     assert_eq!(result.tier, Tier::WaitingOnAuthor);
-    assert!(result.reason.contains("Changes"));
+    assert_eq!(result.reason, "Respond to requested changes");
 }
 
 #[test]
@@ -1063,7 +1078,7 @@ fn reviewer_with_most_awaiting_threads_is_blocker() {
     ];
     let result = compute_blocker(&pr, ME, &opts(&[], &[], Some(&threads)));
     assert_eq!(result.blocker, OTHER);
-    assert_eq!(result.reason, format!("3 threads awaiting {OTHER}"));
+    assert_eq!(result.reason, format!("3 threads waiting on {OTHER}"));
 }
 
 #[test]
@@ -1108,7 +1123,7 @@ fn pr_568_one_unreplied_thread_still_waiting_on_author() {
     let result = compute_blocker(&pr, "someuser", &opts(&[], &[], Some(&threads)));
     assert_eq!(result.tier, Tier::WaitingOnAuthor);
     assert_eq!(result.blocker, "mayfieldiv");
-    assert_eq!(result.reason, "1 unreplied thread");
+    assert_eq!(result.reason, "1 thread needs author reply");
 }
 
 #[test]
@@ -1125,7 +1140,7 @@ fn pr_568_all_replied_is_awaiting_reviewer() {
     let result = compute_blocker(&pr, "someuser", &opts(&[], &[], Some(&threads)));
     assert_eq!(result.tier, Tier::NeedsReview);
     assert_eq!(result.blocker, "cmbankester");
-    assert_eq!(result.reason, "2 threads awaiting cmbankester");
+    assert_eq!(result.reason, "2 threads waiting on cmbankester");
 }
 
 // ── Tier metadata ──────────────────────────────────────────────────────────────
@@ -1141,4 +1156,79 @@ fn tier_labels_are_headings() {
 fn tier_order_is_me_blocking_then_needs_review_then_waiting() {
     assert!(Tier::MeBlocking.order() < Tier::NeedsReview.order());
     assert!(Tier::NeedsReview.order() < Tier::WaitingOnAuthor.order());
+}
+
+// ── Next Action display ───────────────────────────────────────────────────────
+
+fn blocker_result(tier: Tier, reason: &str) -> BlockerResult {
+    BlockerResult {
+        blocker: String::new(),
+        tier,
+        reason: reason.to_owned(),
+    }
+}
+
+#[test]
+fn compact_next_action_shortens_requested_review() {
+    assert_eq!(
+        compact_next_action(&blocker_result(
+            Tier::MeBlocking,
+            "Review requested from you"
+        )),
+        "review from you"
+    );
+    assert_eq!(
+        compact_next_action(&blocker_result(
+            Tier::NeedsReview,
+            "Review requested from alice"
+        )),
+        "review from alice"
+    );
+}
+
+#[test]
+fn compact_next_action_shortens_thread_actions() {
+    assert_eq!(
+        compact_next_action(&blocker_result(
+            Tier::MeBlocking,
+            "2 threads need your reply"
+        )),
+        "2 need your reply"
+    );
+    assert_eq!(
+        compact_next_action(&blocker_result(
+            Tier::WaitingOnAuthor,
+            "1 thread needs author reply"
+        )),
+        "1 needs reply"
+    );
+    assert_eq!(
+        compact_next_action(&blocker_result(
+            Tier::NeedsReview,
+            "3 threads waiting on bob"
+        )),
+        "3 waiting on bob"
+    );
+}
+
+#[test]
+fn compact_next_action_shortens_state_actions() {
+    assert_eq!(
+        compact_next_action(&blocker_result(
+            Tier::WaitingOnAuthor,
+            "Respond to requested changes"
+        )),
+        "changes requested"
+    );
+    assert_eq!(
+        compact_next_action(&blocker_result(Tier::WaitingOnAuthor, "Ready to merge")),
+        "ready to merge"
+    );
+    assert_eq!(
+        compact_next_action(&blocker_result(
+            Tier::WaitingOnAuthor,
+            "Check action required"
+        )),
+        "check action required"
+    );
 }
