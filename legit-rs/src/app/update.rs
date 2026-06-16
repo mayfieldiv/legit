@@ -294,12 +294,9 @@ fn create_worktree_cmds(model: &mut Model, pr: crate::github::rest::PR) -> Vec<C
 }
 
 fn copy_worktree_path_cmds(model: &mut Model, path: String) -> Vec<Cmd> {
-    let mut cmds = set_status(
-        model,
-        StatusKind::Info,
-        format!("Copying {}", abbreviate_home(&path)),
-    );
-    cmds.push(Cmd::CopyToClipboard { text: path });
+    let copied_path = abbreviate_home(&path);
+    let mut cmds = set_status(model, StatusKind::Info, format!("Copying {copied_path}"));
+    cmds.push(Cmd::CopyToClipboard { text: copied_path });
     cmds
 }
 

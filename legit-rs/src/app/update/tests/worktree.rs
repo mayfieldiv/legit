@@ -5,6 +5,7 @@ use ratatui::crossterm::event::KeyCode;
 use super::*;
 use crate::{
     config::{LegitConfig, RepoConfig},
+    format::abbreviate_home,
     worktree::WorktreeEntry,
 };
 
@@ -171,6 +172,35 @@ fn w_when_worktree_already_matches_reports_existing_path() {
 }
 
 #[test]
+fn w_copies_home_worktree_path_with_tilde() {
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
+    let home = home.to_string_lossy();
+    if home.is_empty() {
+        return;
+    }
+    let path = format!("{home}/legit-1");
+    let mut model = model_with_selected_pr(config_with_source_clone());
+    model.worktrees_by_repo.insert(
+        "mayfieldiv/legit".to_owned(),
+        vec![worktree_entry(&path, Some("feature/1"))],
+    );
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('w')));
+
+    let status = model.status.as_ref().expect("status set");
+    assert_eq!(status.kind, StatusKind::Info);
+    assert_eq!(status.text, "Copying ~/legit-1");
+    assert_eq!(
+        cmds,
+        vec![Cmd::CopyToClipboard {
+            text: "~/legit-1".to_owned()
+        }]
+    );
+}
+
+#[test]
 fn worktree_created_seeds_cache_and_re_lists_source_clones() {
     let mut model = model_with_selected_pr(config_with_source_clone());
     let path =
@@ -195,9 +225,10 @@ fn worktree_created_seeds_cache_and_re_lists_source_clones() {
     let status = model.status.as_ref().expect("status set");
     assert_eq!(status.kind, StatusKind::Info);
     assert!(status.text.contains("Copying "));
+    let copied_path = abbreviate_home(&path);
     assert!(
         cmds.iter()
-            .any(|cmd| matches!(cmd, Cmd::CopyToClipboard { text } if text == &path)),
+            .any(|cmd| matches!(cmd, Cmd::CopyToClipboard { text } if text == &copied_path)),
         "create success should copy the worktree path: {cmds:?}"
     );
     assert!(
