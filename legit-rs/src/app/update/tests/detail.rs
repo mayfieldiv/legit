@@ -311,12 +311,12 @@ fn r_in_detail_dispatches_refetch_and_clears_detail() {
 }
 
 #[test]
-fn r_in_detail_enqueues_a_refresh_and_refetches_the_conversation() {
-    // `r` routes the open PR's review-status / threads / reviews / checks /
-    // files refresh through the Refresh Priority Queue (one `Cmd::RefreshPr`),
-    // and additionally refetches the body + issue comments the detail view
-    // shows on top of that. Enrichment otherwise fetches once per list load, so
-    // this doubles as the retry path when an initial fetch left a section stuck.
+fn r_in_detail_dispatches_a_refresh_and_refetches_the_conversation() {
+    // `r` dispatches the open PR's review-status / threads / reviews / files
+    // refresh as one `Cmd::RefreshPr`, and additionally refetches the body +
+    // issue comments the detail view shows on top of that. Enrichment otherwise
+    // fetches once per list load, so this doubles as the retry path when an
+    // initial fetch left a section stuck.
     let mut model = model_with_one_pr();
     update(&mut model, key_event(KeyCode::Enter));
 
@@ -343,10 +343,7 @@ fn r_in_detail_enqueues_a_refresh_and_refetches_the_conversation() {
         "r must refetch the open PR's issue comments: {cmds:?}"
     );
     // The selected PR is now marked refreshing for the list-row indicator.
-    assert_eq!(
-        model.refresh_phase_for(&model.list.prs()[0]),
-        Some(crate::app::refresh_queue::RefreshPhase::Refreshing),
-    );
+    assert!(model.is_refreshing(&model.list.prs()[0]));
 }
 
 #[test]

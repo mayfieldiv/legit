@@ -1,8 +1,7 @@
-// ── refresh queue: priority, indicator, drain, mergeable UNKNOWN retry ──────
+// ── refresh: direct dispatch, tier order, indicator, drain, checks, retry ───
 
 use super::*;
 use crate::{
-    app::refresh_queue::RefreshPhase,
     blocker::{BlockerResult, Tier},
     github::types::ReviewStatus,
 };
@@ -20,7 +19,17 @@ fn unknown_status(head_sha: Option<&str>) -> ReviewStatus {
     }
 }
 
-/// Cache a smart-status tier for a PR so `R` derives its refresh priority.
+/// A settled review-status (mergeable known, so it triggers no UNKNOWN retry)
+/// carrying a head SHA — used to drive the checks fan-out on arrival.
+fn mergeable_status(head_sha: &str) -> ReviewStatus {
+    ReviewStatus {
+        mergeable: "MERGEABLE".to_owned(),
+        head_commit_sha: Some(head_sha.to_owned()),
+        ..unknown_status(None)
+    }
+}
+
+/// Cache a smart-status tier for a PR so `R` derives its dispatch order.
 fn set_tier(model: &mut Model, number: u64, tier: Tier) {
     model.blockers.insert(
         key(number),
@@ -29,6 +38,21 @@ fn set_tier(model: &mut Model, number: u64, tier: Tier) {
             tier,
             reason: String::new(),
         },
+    );
+}
+
+/// Seed cached check runs for `number`'s head commit, so a later
+/// `maybe_fetch_checks` would suppress the fetch as already-present unless the
+/// entry is evicted first.
+fn seed_checks(model: &mut Model, number: u64, head_sha: &str) {
+    model
+        .list
+        .pr_mut(&key(number))
+        .expect("seeded PR exists")
+        .head_commit_sha = Some(head_sha.to_owned());
+    model.enrichment.checks.insert(
+        ("mayfieldiv/legit".to_owned(), head_sha.to_owned()),
+        Vec::new(),
     );
 }
 
@@ -51,8 +75,16 @@ fn list_model(numbers: &[u64]) -> Model {
     model
 }
 
+/// Flatten grouping so the visible order is insertion order — distinct from any
+/// tier ordering, which lets a test prove dispatch reorders by tier.
+fn flatten(model: &mut Model) {
+    model.list.cycle_grouping(); // SmartStatus -> Repo
+    model.list.cycle_grouping(); // Repo -> None
+    model.relayout();
+}
+
 #[test]
-fn r_enqueues_the_selected_pr_at_priority_zero_with_files() {
+fn r_refreshes_the_selected_pr_with_files() {
     let mut model = list_model(&[1, 2, 3]);
     assert_eq!(model.list.selected_pr().unwrap().number, 1);
 
@@ -69,9 +101,8 @@ fn r_enqueues_the_selected_pr_at_priority_zero_with_files() {
         }
         other => panic!("expected a RefreshPr, got {other:?}"),
     }
-    assert_eq!(
-        model.refresh_phase_for(&model.list.prs()[0]),
-        Some(RefreshPhase::Refreshing),
+    assert!(
+        model.is_refreshing(&model.list.prs()[0]),
         "the selected PR shows the in-flight indicator",
     );
     assert!(
@@ -81,15 +112,12 @@ fn r_enqueues_the_selected_pr_at_priority_zero_with_files() {
 }
 
 #[test]
-fn shift_r_enqueues_visible_prs_by_tier_and_reloads_config() {
+fn shift_r_refreshes_visible_prs_in_tier_order_and_reloads_config() {
     let mut model = list_model(&[1, 2, 3]);
-    // Flat (no grouping) so the visible order is insertion order — distinct
-    // from the priority order, proving the queue reorders by tier.
-    model.list.cycle_grouping(); // SmartStatus -> Repo
-    model.list.cycle_grouping(); // Repo -> None
-    set_tier(&mut model, 1, Tier::WaitingOnAuthor); // priority 3
-    set_tier(&mut model, 2, Tier::MeBlocking); // priority 1
-    set_tier(&mut model, 3, Tier::NeedsReview); // priority 2
+    flatten(&mut model);
+    set_tier(&mut model, 1, Tier::WaitingOnAuthor); // rank 2
+    set_tier(&mut model, 2, Tier::MeBlocking); // rank 0
+    set_tier(&mut model, 3, Tier::NeedsReview); // rank 1
     model.relayout();
 
     let cmds = update(&mut model, key_event(KeyCode::Char('R')));
@@ -101,7 +129,7 @@ fn shift_r_enqueues_visible_prs_by_tier_and_reloads_config() {
     assert_eq!(
         refreshed_keys(&cmds),
         [key(2), key(3), key(1)],
-        "me-blocking refreshes first, then needs-review, then waiting-on-author",
+        "me-blocking dispatches first, then needs-review, then waiting-on-author",
     );
     for cmd in &cmds {
         if let Cmd::RefreshPr { include_files, .. } = cmd {
@@ -112,12 +140,30 @@ fn shift_r_enqueues_visible_prs_by_tier_and_reloads_config() {
     assert_eq!(status.kind, StatusKind::Info);
     assert_eq!(status.text, "Refreshing 3 PRs…");
     for n in 1..=3 {
-        assert_eq!(
-            model.refresh_phase_for(&model.list.prs()[(n - 1) as usize]),
-            Some(RefreshPhase::Refreshing),
+        assert!(
+            model.is_refreshing(&model.list.prs()[(n - 1) as usize]),
             "every visible PR shows the refresh indicator",
         );
     }
+}
+
+#[test]
+fn shift_r_dispatches_every_visible_pr_without_a_cap() {
+    // The old design capped concurrent PR refreshes; dispatch now goes straight
+    // to the limiter, so every visible PR refreshes at once (the limiter, not a
+    // refresh cap, bounds in-flight HTTP).
+    let mut model = list_model(&[1, 2, 3, 4, 5]);
+    flatten(&mut model);
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('R')));
+
+    assert_eq!(
+        refreshed_keys(&cmds),
+        [key(1), key(2), key(3), key(4), key(5)],
+        "all five dispatch immediately — no cap holds any back",
+    );
+    let status = model.status.as_ref().expect("R posts an info status");
+    assert_eq!(status.text, "Refreshing 5 PRs…");
 }
 
 #[test]
@@ -139,51 +185,29 @@ fn shift_r_with_no_visible_prs_posts_no_status() {
 }
 
 #[test]
-fn active_cap_holds_excess_prs_queued_until_a_slot_frees() {
-    // Five PRs, all the same (un-derived) priority, so they queue FIFO. With the
-    // active cap at 4, the fifth waits as Queued until one completes.
-    let mut model = list_model(&[1, 2, 3, 4, 5]);
-    model.list.cycle_grouping();
-    model.list.cycle_grouping(); // flat: visible order == insertion order
-    model.relayout();
+fn re_pressing_r_while_refreshing_is_deduped() {
+    let mut model = list_model(&[1]);
+    let first = update(&mut model, key_event(KeyCode::Char('r')));
+    assert_eq!(refreshed_keys(&first), [key(1)], "first press dispatches");
 
-    let cmds = update(&mut model, key_event(KeyCode::Char('R')));
-
-    assert_eq!(
-        refreshed_keys(&cmds),
-        [key(1), key(2), key(3), key(4)],
-        "only the first four dispatch; the cap holds the rest",
-    );
-    assert_eq!(
-        model.refresh_phase_for(&model.list.prs()[4]),
-        Some(RefreshPhase::Queued),
-        "PR #5 waits in the queue",
-    );
-
-    // Completing PR #1 frees a slot; the queued PR #5 dispatches next.
-    let cmds = update(&mut model, Msg::RefreshComplete { pr: key(1) });
-
-    assert_eq!(refreshed_keys(&cmds), [key(5)], "the queued PR drains next");
-    assert_eq!(
-        model.refresh_phase_for(&model.list.prs()[0]),
-        None,
-        "the completed PR clears its indicator",
-    );
-    assert_eq!(
-        model.refresh_phase_for(&model.list.prs()[4]),
-        Some(RefreshPhase::Refreshing),
+    // The PR is still in flight (no RefreshComplete yet), so a second press is
+    // a no-op rather than a duplicate fan-out.
+    let second = update(&mut model, key_event(KeyCode::Char('r')));
+    assert!(
+        refreshed_keys(&second).is_empty(),
+        "re-pressing r while refreshing dispatches nothing: {second:?}",
     );
 }
 
 #[test]
-fn draining_the_queue_posts_a_success_summary() {
+fn draining_all_refreshes_posts_a_success_summary() {
     let mut model = list_model(&[1]);
     update(&mut model, key_event(KeyCode::Char('r')));
     assert!(model.status.is_none(), "r posts no status while in flight");
 
     let cmds = update(&mut model, Msg::RefreshComplete { pr: key(1) });
 
-    assert!(model.refresh_queue.is_idle(), "the queue fully drained");
+    assert!(model.refreshing.is_empty(), "every refresh drained");
     let status = model.status.as_ref().expect("drain posts a success status");
     assert_eq!(status.kind, StatusKind::Success);
     assert_eq!(status.text, "Refreshed 1 PR");
@@ -195,15 +219,82 @@ fn draining_the_queue_posts_a_success_summary() {
 }
 
 #[test]
+fn completing_a_refresh_all_run_reports_the_count_then_resets() {
+    let mut model = list_model(&[1, 2, 3]);
+    flatten(&mut model);
+    update(&mut model, key_event(KeyCode::Char('R')));
+
+    // Complete two of three: still in flight, no summary yet.
+    update(&mut model, Msg::RefreshComplete { pr: key(1) });
+    update(&mut model, Msg::RefreshComplete { pr: key(2) });
+    assert!(!model.refreshing.is_empty(), "one refresh still in flight");
+
+    // The last completion drains the run and reports the plural count.
+    update(&mut model, Msg::RefreshComplete { pr: key(3) });
+    let status = model.status.as_ref().expect("drain posts a success status");
+    assert_eq!(status.text, "Refreshed 3 PRs");
+    assert_eq!(
+        model.refresh_completed, 0,
+        "the run count resets after it is reported",
+    );
+}
+
+#[test]
 fn refresh_complete_on_an_unknown_pr_is_harmless() {
     let mut model = list_model(&[1]);
 
-    // No refresh was ever enqueued, so completing one is a no-op: no panic, no
-    // spurious success message (nothing was refreshed in this run).
+    // No refresh was ever dispatched, so completing one is a no-op: no panic,
+    // no spurious success message (nothing was refreshed in this run).
     let cmds = update(&mut model, Msg::RefreshComplete { pr: key(1) });
 
-    assert!(cmds.is_empty(), "nothing to pump or report: {cmds:?}");
+    assert!(cmds.is_empty(), "nothing to report: {cmds:?}");
     assert!(model.status.is_none());
+}
+
+#[test]
+fn refresh_refetches_checks_even_when_head_sha_is_unchanged() {
+    // The prime refresh case: CI re-ran on the same commit. Evicting the cached
+    // checks on refresh lets the canonical `maybe_fetch_checks` re-fetch them
+    // when review-status arrives with the unchanged SHA.
+    let mut model = list_model(&[1]);
+    seed_checks(&mut model, 1, "abc123");
+
+    update(&mut model, key_event(KeyCode::Char('r')));
+    let cmds = update(
+        &mut model,
+        Msg::ReviewStatusArrived {
+            pr: key(1),
+            status: mergeable_status("abc123"),
+        },
+    );
+
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Cmd::FetchChecks { head_sha, .. } if head_sha == "abc123")),
+        "a refresh re-fetches checks for the unchanged head commit: {cmds:?}",
+    );
+}
+
+#[test]
+fn review_status_arrival_without_a_refresh_keeps_present_checks() {
+    // The converse: outside a refresh, a review-status arrival for a head SHA
+    // whose checks are already cached must NOT re-fetch — that would double the
+    // work on every list refresh.
+    let mut model = list_model(&[1]);
+    seed_checks(&mut model, 1, "abc123");
+
+    let cmds = update(
+        &mut model,
+        Msg::ReviewStatusArrived {
+            pr: key(1),
+            status: mergeable_status("abc123"),
+        },
+    );
+
+    assert!(
+        !cmds.iter().any(|c| matches!(c, Cmd::FetchChecks { .. })),
+        "present checks are not re-fetched without a refresh: {cmds:?}",
+    );
 }
 
 #[test]

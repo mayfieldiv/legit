@@ -7,5 +7,4 @@ pub mod list_layout;
 pub mod model;
 pub mod msg;
 pub mod pr_list;
-pub mod refresh_queue;
 pub mod update;

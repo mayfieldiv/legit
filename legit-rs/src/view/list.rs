@@ -10,7 +10,6 @@ use ratatui::{
 use crate::{
     app::grouping::DisplayRow,
     app::model::Model,
-    app::refresh_queue::RefreshPhase,
     blocker::{BlockerResult, Tier, compact_next_action},
     format::{
         CheckOutcome, comment_counts, format_age, format_repo_short, format_review_state, outcome,
@@ -384,18 +383,16 @@ fn row_line(
 }
 
 /// The leading one-column glyph for a PR row, with its colour: the refresh
-/// indicator while the PR is in the Refresh Priority Queue (cyan in flight, dim
-/// while only queued), the worktree glyph when one is attached, else empty. The
-/// refresh indicator wins so a pending refresh is visible even on a PR that
-/// also has a worktree.
+/// indicator while the PR's `r`/`R` refresh is in flight, the worktree glyph
+/// when one is attached, else empty. The refresh indicator wins so an in-flight
+/// refresh is visible even on a PR that also has a worktree.
 fn leading_glyph(pr: &PR, model: &Model) -> (&'static str, Style) {
-    match model.refresh_phase_for(pr) {
-        Some(RefreshPhase::Refreshing) => (super::REFRESH_GLYPH, Style::default().fg(Color::Cyan)),
-        Some(RefreshPhase::Queued) => (super::REFRESH_GLYPH, Style::default().fg(Color::DarkGray)),
-        None if model.worktree_for_pr(pr).is_some() => {
-            (super::WORKTREE_GLYPH, Style::default().fg(Color::Cyan))
-        }
-        None => ("", Style::default()),
+    if model.is_refreshing(pr) {
+        (super::REFRESH_GLYPH, Style::default().fg(Color::Cyan))
+    } else if model.worktree_for_pr(pr).is_some() {
+        (super::WORKTREE_GLYPH, Style::default().fg(Color::Cyan))
+    } else {
+        ("", Style::default())
     }
 }
 

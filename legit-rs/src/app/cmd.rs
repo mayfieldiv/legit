@@ -77,11 +77,12 @@ pub enum Cmd {
     },
     /// Fetch a single PR's body (markdown). Dispatched when the user enters
     /// the detail view (`Enter` on the list); result comes back as
-    /// `Msg::PRDetailArrived`. Also dispatched on `r` to refresh the current
-    /// PR's detail without going through the refresh-queue (#11). The PR
-    /// number is extracted from `key`; `key` is also echoed back in
-    /// `PRDetailArrived`'s `pr` field so `update` can check whether the view is
-    /// still open for this PR before storing the body.
+    /// `Msg::PRDetailArrived`. Also dispatched by the detail view's `r` (via
+    /// `detail_refresh_extra_cmds`) to refresh the body, on top of the
+    /// `Cmd::RefreshPr` that refreshes the shared enrichment. The PR number is
+    /// extracted from `key`; `key` is also echoed back in `PRDetailArrived`'s
+    /// `pr` field so `update` can check whether the view is still open for this
+    /// PR before storing the body.
     FetchPRDetail {
         ctx: Arc<RequestContext>,
         key: PrKey,
@@ -107,14 +108,15 @@ pub enum Cmd {
     CopyToClipboard {
         text: String,
     },
-    /// Refresh one PR's enrichment as a single unit of refresh-queue work:
-    /// review-status (which carries the head SHA), review threads, reviews,
-    /// the head commit's check runs, and — when `include_files` is set — its
-    /// changed files. Each sub-fetch acquires its own limiter permit (so the
-    /// `Semaphore` still bounds HTTP) and emits the same arrival `Msg` the
-    /// initial enrichment does; the command always finishes with one
-    /// `Msg::RefreshComplete` so the queue frees the PR's active slot even when
-    /// some sub-fetches failed.
+    /// Refresh one PR's enrichment as a single unit: review-status, review
+    /// threads, reviews, and — when `include_files` is set — its changed files,
+    /// all concurrently. Check runs are *not* fetched here: emitting
+    /// `ReviewStatusArrived` drives them through `update`'s `maybe_fetch_checks`
+    /// (the canonical owner). Each sub-fetch acquires its own limiter permit (so
+    /// the limiter still bounds HTTP and orders by focus) and emits the same
+    /// arrival `Msg` the initial enrichment does; the command always finishes
+    /// with one `Msg::RefreshComplete` so the PR's refresh indicator clears even
+    /// when some sub-fetches failed.
     RefreshPr {
         ctx: Arc<RequestContext>,
         key: PrKey,
@@ -220,47 +222,18 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             .await;
         }
         Cmd::FetchThreads { ctx, number } => {
-            let pr = PrKey {
+            let key = PrKey {
                 repo_slug: ctx.repo.slug(),
                 number,
             };
-            request(
-                &tx,
-                &limiter,
-                Some(pr.clone()),
-                "fetch review threads",
-                async move {
-                    GraphQlClient::new(&ctx.token)?
-                        .fetch_review_threads(
-                            &ctx.repo.owner,
-                            &ctx.repo.repo,
-                            number,
-                            &ctx.bot_logins,
-                        )
-                        .await
-                },
-                move |threads| vec![Msg::ThreadsArrived { pr, threads }],
-            )
-            .await;
+            fetch_threads(&ctx, &key, &tx, &limiter).await;
         }
         Cmd::FetchReviews { ctx, number } => {
-            let pr = PrKey {
+            let key = PrKey {
                 repo_slug: ctx.repo.slug(),
                 number,
             };
-            request(
-                &tx,
-                &limiter,
-                Some(pr.clone()),
-                "fetch reviews",
-                async move {
-                    OctocrabRest::new(&ctx.token)?
-                        .list_reviews(&ctx.repo.owner, &ctx.repo.repo, number)
-                        .await
-                },
-                move |reviews| vec![Msg::ReviewsArrived { pr, reviews }],
-            )
-            .await;
+            fetch_reviews(&ctx, &key, &tx, &limiter).await;
         }
         Cmd::FetchIssueComments { ctx, number } => {
             let pr = PrKey {
@@ -310,30 +283,16 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             .await;
         }
         Cmd::FetchFiles { ctx, number } => {
-            let pr = PrKey {
+            let key = PrKey {
                 repo_slug: ctx.repo.slug(),
                 number,
             };
             // Dispatching this command set the PR's `Enrichment::files` entry to
             // `Requested`; a failure must roll that back so re-selecting the PR
-            // retries. `request` sends `CommandFailed` first, then we send
+            // retries. `fetch_files` sends `CommandFailed` first, then we send
             // `FilesFetchFailed` to clear the in-flight guard.
-            let failed_pr = pr.clone();
-            let ok = request(
-                &tx,
-                &limiter,
-                Some(pr.clone()),
-                "fetch files",
-                async move {
-                    OctocrabRest::new(&ctx.token)?
-                        .list_files(&ctx.repo.owner, &ctx.repo.repo, number)
-                        .await
-                },
-                move |files| vec![Msg::FilesArrived { pr, files }],
-            )
-            .await;
-            if !ok {
-                let _ = tx.send(Msg::FilesFetchFailed { pr: failed_pr });
+            if !fetch_files(&ctx, &key, &tx, &limiter).await {
+                let _ = tx.send(Msg::FilesFetchFailed { pr: key });
             }
         }
         Cmd::ScheduleStatusClear { token, delay_ms } => {
@@ -416,11 +375,12 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
     }
 }
 
-/// Refresh one PR end-to-end for the refresh queue. Review-status goes first
-/// because it surfaces the head SHA the checks fetch needs; the remaining
-/// sub-fetches then run concurrently. Whatever fails surfaces its own
-/// `CommandFailed`; the trailing `Msg::RefreshComplete` always fires so the
-/// queue frees the PR's active slot.
+/// Refresh one PR end-to-end. The four sub-fetches are independent and run
+/// concurrently — checks are *not* among them: emitting `ReviewStatusArrived`
+/// drives the checks fetch through `update`'s canonical `maybe_fetch_checks`
+/// path (the same as initial enrichment), the single owner of post-status
+/// checks. Whatever fails surfaces its own `CommandFailed`; the trailing
+/// `Msg::RefreshComplete` always fires so the PR's refresh indicator clears.
 async fn run_refresh_pr(
     ctx: Arc<RequestContext>,
     key: PrKey,
@@ -428,146 +388,146 @@ async fn run_refresh_pr(
     tx: mpsc::UnboundedSender<Msg>,
     limiter: Arc<NetworkLimiter>,
 ) {
-    let number = key.number;
-    let head_sha = refresh_review_status(&ctx, &key, &tx, &limiter).await;
+    tokio::join!(
+        fetch_review_status(&ctx, &key, &tx, &limiter),
+        fetch_threads(&ctx, &key, &tx, &limiter),
+        fetch_reviews(&ctx, &key, &tx, &limiter),
+        async {
+            // A failure leaves any previously-loaded categorisation in place
+            // (best-effort) — the refresh path sets no `Requested` guard to roll
+            // back, unlike the on-selection `FetchFiles`.
+            if include_files {
+                fetch_files(&ctx, &key, &tx, &limiter).await;
+            }
+        },
+    );
+    let _ = tx.send(Msg::RefreshComplete { pr: key });
+}
 
-    let threads = request(
-        &tx,
-        &limiter,
+/// Fetch one PR's review-status and emit `ReviewStatusArrived`. Shared by the
+/// refresh fan-out (carrying the PR key so the limiter can focus-promote it);
+/// the repo-wide batch `Cmd::FetchReviewStatus` stays separate as it serves
+/// many PRs with no single affinity.
+async fn fetch_review_status(
+    ctx: &Arc<RequestContext>,
+    key: &PrKey,
+    tx: &mpsc::UnboundedSender<Msg>,
+    limiter: &Arc<NetworkLimiter>,
+) -> bool {
+    let number = key.number;
+    let repo_slug = ctx.repo.slug();
+    request(
+        tx,
+        limiter,
+        Some(key.clone()),
+        "fetch review status",
+        {
+            let ctx = Arc::clone(ctx);
+            async move {
+                GraphQlClient::new(&ctx.token)?
+                    .fetch_review_status(&ctx.repo.owner, &ctx.repo.repo, &[number])
+                    .await
+            }
+        },
+        move |results| {
+            results
+                .into_iter()
+                .map(|(number, status)| Msg::ReviewStatusArrived {
+                    pr: PrKey {
+                        repo_slug: repo_slug.clone(),
+                        number,
+                    },
+                    status,
+                })
+                .collect()
+        },
+    )
+    .await
+}
+
+/// Fetch one PR's review threads and emit `ThreadsArrived`. Shared by
+/// `Cmd::FetchThreads` and the refresh fan-out.
+async fn fetch_threads(
+    ctx: &Arc<RequestContext>,
+    key: &PrKey,
+    tx: &mpsc::UnboundedSender<Msg>,
+    limiter: &Arc<NetworkLimiter>,
+) -> bool {
+    let number = key.number;
+    let pr = key.clone();
+    request(
+        tx,
+        limiter,
         Some(key.clone()),
         "fetch review threads",
         {
-            let ctx = Arc::clone(&ctx);
+            let ctx = Arc::clone(ctx);
             async move {
                 GraphQlClient::new(&ctx.token)?
                     .fetch_review_threads(&ctx.repo.owner, &ctx.repo.repo, number, &ctx.bot_logins)
                     .await
             }
         },
-        {
-            let pr = key.clone();
-            move |threads| vec![Msg::ThreadsArrived { pr, threads }]
-        },
-    );
-    let reviews = request(
-        &tx,
-        &limiter,
+        move |threads| vec![Msg::ThreadsArrived { pr, threads }],
+    )
+    .await
+}
+
+/// Fetch one PR's reviews and emit `ReviewsArrived`. Shared by
+/// `Cmd::FetchReviews` and the refresh fan-out.
+async fn fetch_reviews(
+    ctx: &Arc<RequestContext>,
+    key: &PrKey,
+    tx: &mpsc::UnboundedSender<Msg>,
+    limiter: &Arc<NetworkLimiter>,
+) -> bool {
+    let number = key.number;
+    let pr = key.clone();
+    request(
+        tx,
+        limiter,
         Some(key.clone()),
         "fetch reviews",
         {
-            let ctx = Arc::clone(&ctx);
+            let ctx = Arc::clone(ctx);
             async move {
                 OctocrabRest::new(&ctx.token)?
                     .list_reviews(&ctx.repo.owner, &ctx.repo.repo, number)
                     .await
             }
         },
-        {
-            let pr = key.clone();
-            move |reviews| vec![Msg::ReviewsArrived { pr, reviews }]
-        },
-    );
-    let checks = async {
-        let Some(head_sha) = head_sha else {
-            return;
-        };
-        let repo_slug = ctx.repo.slug();
-        request(
-            &tx,
-            &limiter,
-            Some(key.clone()),
-            "fetch check runs",
-            {
-                let ctx = Arc::clone(&ctx);
-                let head_sha = head_sha.clone();
-                async move {
-                    let checks = OctocrabRest::new(&ctx.token)?
-                        .list_check_runs(&ctx.repo.owner, &ctx.repo.repo, &head_sha)
-                        .await?;
-                    Ok((head_sha, checks))
-                }
-            },
-            move |(head_sha, checks)| {
-                vec![Msg::ChecksArrived {
-                    repo_slug,
-                    head_sha,
-                    checks,
-                }]
-            },
-        )
-        .await;
-    };
-    let files = async {
-        if !include_files {
-            return;
-        }
-        request(
-            &tx,
-            &limiter,
-            Some(key.clone()),
-            "fetch files",
-            {
-                let ctx = Arc::clone(&ctx);
-                async move {
-                    OctocrabRest::new(&ctx.token)?
-                        .list_files(&ctx.repo.owner, &ctx.repo.repo, number)
-                        .await
-                }
-            },
-            {
-                let pr = key.clone();
-                move |files| vec![Msg::FilesArrived { pr, files }]
-            },
-        )
-        .await;
-        // A failure leaves any previously-loaded categorisation in place
-        // (best-effort) — the refresh path sets no `Requested` guard to roll
-        // back, unlike the on-selection `FetchFiles`.
-    };
-
-    tokio::join!(threads, reviews, checks, files);
-    let _ = tx.send(Msg::RefreshComplete { pr: key });
+        move |reviews| vec![Msg::ReviewsArrived { pr, reviews }],
+    )
+    .await
 }
 
-/// Refresh just one PR's review-status, emit its arrival `Msg`, and return the
-/// head SHA so the caller can fetch that commit's checks. A failure surfaces a
-/// `CommandFailed` and yields `None` (no checks fetch, the rest of the refresh
-/// still runs).
-async fn refresh_review_status(
+/// Fetch one PR's changed files and emit `FilesArrived`. Returns whether it
+/// succeeded so `Cmd::FetchFiles` can roll back its `Requested` guard on
+/// failure; the refresh fan-out ignores the result (it sets no guard).
+async fn fetch_files(
     ctx: &Arc<RequestContext>,
     key: &PrKey,
     tx: &mpsc::UnboundedSender<Msg>,
     limiter: &Arc<NetworkLimiter>,
-) -> Option<String> {
-    let _permit = limiter.acquire(Some(key.clone())).await;
-    let result = async {
-        GraphQlClient::new(&ctx.token)?
-            .fetch_review_status(&ctx.repo.owner, &ctx.repo.repo, &[key.number])
-            .await
-    }
-    .await;
-    match result {
-        Ok(results) => {
-            let mut head_sha = None;
-            for (number, status) in results {
-                if number == key.number {
-                    head_sha = status.head_commit_sha.clone();
-                }
-                let _ = tx.send(Msg::ReviewStatusArrived {
-                    pr: PrKey {
-                        repo_slug: ctx.repo.slug(),
-                        number,
-                    },
-                    status,
-                });
+) -> bool {
+    let number = key.number;
+    let pr = key.clone();
+    request(
+        tx,
+        limiter,
+        Some(key.clone()),
+        "fetch files",
+        {
+            let ctx = Arc::clone(ctx);
+            async move {
+                OctocrabRest::new(&ctx.token)?
+                    .list_files(&ctx.repo.owner, &ctx.repo.repo, number)
+                    .await
             }
-            head_sha
-        }
-        Err(error) => {
-            let _ = tx.send(command_failed("fetch review status", error));
-            None
-        }
-    }
+        },
+        move |files| vec![Msg::FilesArrived { pr, files }],
+    )
+    .await
 }
 
 async fn run_fetch_open_prs(

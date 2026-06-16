@@ -19,16 +19,7 @@ use super::{
     detail_items, detail_layout, list_layout,
     model::{DetailState, FilesState, Model, RepoDetection, StatusKind, StatusMessage, ViewMode},
     msg::Msg,
-    refresh_queue::QueueItem,
 };
-
-/// Maximum PRs refreshing concurrently. The transport's `Semaphore` already
-/// bounds raw HTTP requests; this bounds the *PR* fan-out so the priority
-/// ordering is observable — `me-blocking` PRs drain before `waiting-on-author`
-/// ones rather than every refresh being dispatched at once and ordered only by
-/// the limiter. Kept small enough that a `R` over a long list visibly works
-/// the queue, large enough to keep the network busy.
-const MAX_ACTIVE_REFRESHES: usize = 4;
 
 /// Delay before the one-shot re-fetch of a PR whose `OPEN` mergeable came back
 /// `UNKNOWN`, giving GitHub time to finish its lazy mergeability computation.
@@ -152,8 +143,8 @@ fn enrichment_cmds(model: &Model, repo_slug: &str) -> Vec<Cmd> {
 
 /// The per-PR enrichment trio — threads, reviews, issue comments — for one PR.
 /// The shared definition of "enrich this PR": `enrichment_cmds` fans it out
-/// across a repo's whole list, and the detail view's `r` re-dispatches it for
-/// the open PR.
+/// across a repo's whole list on the initial load. (A refresh re-fetches the
+/// same data via `Cmd::RefreshPr` plus `detail_refresh_extra_cmds`, not this.)
 fn pr_enrichment_cmds(ctx: &Arc<RequestContext>, number: u64) -> [Cmd; 3] {
     [
         Cmd::FetchThreads {
@@ -349,55 +340,58 @@ fn detail_refresh_extra_cmds(model: &Model, key: &PrKey) -> Vec<Cmd> {
     ]
 }
 
-/// The refresh command for one taken queue item, or `None` when auth isn't
-/// ready or the PR's repo is no longer tracked (the pump then frees the slot).
-fn refresh_pr_cmd(model: &Model, item: &QueueItem) -> Option<Cmd> {
-    let token = model.auth_token.as_ref()?;
-    let repo = model.tracked_repo(&item.key.repo_slug)?;
-    let ctx = request_context(&repo, token, &model.config.bot_logins);
-    Some(Cmd::RefreshPr {
-        ctx,
-        key: item.key.clone(),
-        include_files: item.include_files,
-    })
-}
-
-/// Drain the Refresh Priority Queue up to the active cap, turning each taken PR
-/// into a `Cmd::RefreshPr`. A PR that can't be dispatched (no auth / untracked
-/// repo — rare) is completed straight away so the queue never stalls.
-fn pump_refresh(model: &mut Model) -> Vec<Cmd> {
-    let mut cmds = Vec::new();
-    while model.refresh_queue.active_len() < MAX_ACTIVE_REFRESHES {
-        let Some(item) = model.refresh_queue.take_next() else {
-            break;
-        };
-        match refresh_pr_cmd(model, &item) {
-            Some(cmd) => cmds.push(cmd),
-            None => model.refresh_queue.complete(&item.key),
-        }
+/// Begin a refresh of `key`, returning its `Cmd::RefreshPr` — or `None` when
+/// the PR is already refreshing (the dedupe no-op), or auth isn't ready / the
+/// repo isn't tracked (no command, so the PR is *not* marked refreshing and
+/// can't get stuck showing the indicator). Marking and command-building are one
+/// step so the `refreshing` set never disagrees with what was dispatched.
+///
+/// Clears the PR's mergeable-retry guard so a refresh that still sees `UNKNOWN`
+/// can schedule a fresh one-shot retry, and evicts its cached check runs so the
+/// refresh re-fetches them even on an unchanged head SHA (see `evict_checks`).
+fn begin_refresh(model: &mut Model, key: PrKey, include_files: bool) -> Option<Cmd> {
+    if model.refreshing.contains(&key) {
+        return None;
     }
-    cmds
-}
-
-/// Enqueue a refresh for `key` and pump the queue. Clears the PR's
-/// mergeable-retry guard so a manual refresh that still sees `UNKNOWN` can
-/// schedule a fresh one-shot retry.
-fn enqueue_refresh(model: &mut Model, key: PrKey, priority: u8, include_files: bool) -> Vec<Cmd> {
+    let token = model.auth_token.as_ref()?;
+    let repo = model.tracked_repo(&key.repo_slug)?;
+    let ctx = request_context(&repo, token, &model.config.bot_logins);
+    let cmd = Cmd::RefreshPr {
+        ctx,
+        key: key.clone(),
+        include_files,
+    };
     model.mergeable_retried.remove(&key);
-    model.refresh_queue.enqueue(key, priority, include_files);
-    pump_refresh(model)
+    evict_checks(model, &key);
+    model.refreshing.insert(key);
+    Some(cmd)
 }
 
-/// The refresh priority for a PR by its cached smart-status tier: `me-blocking`
-/// (1) refreshes ahead of `needs-review` (2) ahead of `waiting-on-author` (3);
-/// an un-derived PR is last (4). Priority 0 is reserved for the explicitly
-/// selected PR (`r`), so it always leads a tier-based `R` batch.
-fn refresh_priority_for(model: &Model, key: &PrKey) -> u8 {
+/// Drop the cached check runs for `key`'s current head commit, so the refresh's
+/// `ReviewStatusArrived` re-fetches them through the canonical
+/// `maybe_fetch_checks` path even when the head SHA is unchanged (CI re-run on
+/// the same commit — the prime "did it pass yet?" case). Without the eviction
+/// `maybe_fetch_checks` would suppress that fetch as already-present.
+fn evict_checks(model: &mut Model, key: &PrKey) {
+    if let Some(sha) = model.list.pr(key).and_then(|pr| pr.head_commit_sha.clone()) {
+        model
+            .enrichment
+            .checks
+            .remove(&(key.repo_slug.clone(), sha));
+    }
+}
+
+/// `R`'s dispatch rank for a PR by its cached smart-status tier: `me-blocking`
+/// (0) before `needs-review` (1) before `waiting-on-author` (2), an un-derived
+/// PR last (3). Dispatch order becomes the limiter's FIFO background order, so a
+/// higher-tier PR refreshes first. The selected/open PR needs no rank — the
+/// limiter promotes it via focus.
+fn refresh_tier_rank(model: &Model, key: &PrKey) -> u8 {
     match model.blockers.get(key).map(|blocker| blocker.tier) {
-        Some(Tier::MeBlocking) => 1,
-        Some(Tier::NeedsReview) => 2,
-        Some(Tier::WaitingOnAuthor) => 3,
-        None => 4,
+        Some(Tier::MeBlocking) => 0,
+        Some(Tier::NeedsReview) => 1,
+        Some(Tier::WaitingOnAuthor) => 2,
+        None => 3,
     }
 }
 
@@ -689,20 +683,23 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
             model.view_mode = ViewMode::List;
         }
         KeyCode::Char('r') => {
-            // Refresh the open PR: enqueue a full refresh at priority 0 (ahead
-            // of any tier batch) including files, and refetch the body + issue
-            // comments the detail view shows on top of that. The cached body
-            // clears so the view shows the loading placeholder, consistent with
-            // the initial enter-and-fetch flow; threads/comments keep rendering
-            // their current data until the fresh lists overwrite it. Preserves
-            // the scroll position so the user stays put after a quick re-fetch.
+            // Refresh the open PR: dispatch a full refresh (with files), and
+            // refetch the body + issue comments the detail view shows on top of
+            // that. The limiter promotes it (it's the focused PR), so it leads.
+            // The cached body clears so the view shows the loading placeholder,
+            // consistent with the initial enter-and-fetch flow; threads/comments
+            // keep rendering their current data until the fresh lists overwrite
+            // it. Preserves the scroll position so the user stays put after a
+            // quick re-fetch.
             //
             // Clone the key so the borrow of model.view_mode ends before the
             // body is reassigned below (which needs a unique borrow of the
-            // model via the enqueue/fetch helpers).
+            // model via the refresh/fetch helpers).
             if let ViewMode::Detail(detail) = &model.view_mode {
                 let key = detail.key.clone();
-                let mut cmds = enqueue_refresh(model, key.clone(), 0, true);
+                let mut cmds: Vec<Cmd> = begin_refresh(model, key.clone(), true)
+                    .into_iter()
+                    .collect();
                 cmds.extend(detail_refresh_extra_cmds(model, &key));
                 if !cmds.is_empty()
                     && let ViewMode::Detail(detail) = &mut model.view_mode
@@ -1174,30 +1171,34 @@ fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             Vec::new()
         }
         Msg::RefreshSelected => {
-            // `r`: refresh the selected PR ahead of any tier batch, with files
-            // (the summary panel shows its File Category breakdown).
-            let key = match model.list.selected_pr() {
-                Some(pr) => pr.key(),
-                None => return Vec::new(),
+            // `r`: refresh the selected PR, with files (the summary panel shows
+            // its File Category breakdown). The limiter promotes it via focus,
+            // so it leads regardless of tier.
+            let Some(key) = model.list.selected_pr().map(PR::key) else {
+                return Vec::new();
             };
-            enqueue_refresh(model, key, 0, true)
+            begin_refresh(model, key, true).into_iter().collect()
         }
         Msg::RefreshAll => {
-            // `R`: enqueue every visible PR by smart-status tier, and re-read
-            // the config so repos added since launch are picked up.
-            let keys: Vec<PrKey> = model
+            // `R`: refresh every visible PR, dispatched in smart-status tier
+            // order so the limiter's FIFO background lane drains `me-blocking`
+            // first; re-read the config so repos added since launch are picked
+            // up. `count` is the PRs actually dispatched — already-refreshing
+            // ones dedupe to no-ops.
+            let mut keys: Vec<PrKey> = model
                 .list
                 .visible_pr_indices()
                 .filter_map(|index| model.list.prs().get(index).map(PR::key))
                 .collect();
-            let count = keys.len();
-            for key in keys {
-                let priority = refresh_priority_for(model, &key);
-                model.mergeable_retried.remove(&key);
-                model.refresh_queue.enqueue(key, priority, false);
-            }
+            keys.sort_by_key(|key| refresh_tier_rank(model, key));
             let mut cmds = vec![Cmd::LoadConfig];
-            cmds.extend(pump_refresh(model));
+            let mut count = 0;
+            for key in keys {
+                if let Some(cmd) = begin_refresh(model, key, false) {
+                    cmds.push(cmd);
+                    count += 1;
+                }
+            }
             if count > 0 {
                 cmds.extend(set_status(
                     model,
@@ -1208,22 +1209,21 @@ fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             cmds
         }
         Msg::RefreshComplete { pr } => {
-            // One PR's fan-out finished; free its slot, pump the next, and once
-            // the queue fully drains post the run's success summary.
-            model.refresh_queue.complete(&pr);
-            let mut cmds = pump_refresh(model);
-            if model.refresh_queue.is_idle() {
-                let count = model.refresh_queue.take_completed_run();
-                if count > 0 {
-                    let plural = if count == 1 { "" } else { "s" };
-                    cmds.extend(set_status(
-                        model,
-                        StatusKind::Success,
-                        format!("Refreshed {count} PR{plural}"),
-                    ));
-                }
+            // One PR's fan-out finished; clear its indicator and, once every
+            // in-flight refresh has drained, post the run's success summary.
+            if model.refreshing.remove(&pr) {
+                model.refresh_completed += 1;
             }
-            cmds
+            if model.refreshing.is_empty() && model.refresh_completed > 0 {
+                let count = std::mem::take(&mut model.refresh_completed);
+                let plural = if count == 1 { "" } else { "s" };
+                return set_status(
+                    model,
+                    StatusKind::Success,
+                    format!("Refreshed {count} PR{plural}"),
+                );
+            }
+            Vec::new()
         }
         Msg::MergeableRetryDue { pr } => {
             // Re-fetch review-status only for this PR. The arrival re-runs the

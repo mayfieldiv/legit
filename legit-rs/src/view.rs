@@ -31,9 +31,9 @@ fn tier_color(tier: Tier) -> Color {
 
 pub(crate) const WORKTREE_GLYPH: &str = "\u{e725}";
 
-/// Per-row indicator for a PR in the Refresh Priority Queue (queued or in
-/// flight). Shares the leading one-column glyph slot with `WORKTREE_GLYPH`,
-/// taking precedence while a refresh is pending so the activity is visible.
+/// Per-row indicator for a PR whose `r`/`R` refresh is in flight. Shares the
+/// leading one-column glyph slot with `WORKTREE_GLYPH`, taking precedence while
+/// a refresh is in flight so the activity is visible.
 pub(crate) const REFRESH_GLYPH: &str = "\u{21bb}";
 
 pub(crate) fn worktree_line(path: &str, max_path_width: usize) -> Line<'static> {

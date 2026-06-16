@@ -143,17 +143,19 @@ pub enum Msg {
         pr: PrKey,
         body: String,
     },
-    /// `r` in the list view: enqueue a refresh of the selected PR at priority 0
-    /// (ahead of every tier), including its files. No-op when nothing is
-    /// selected.
+    /// `r` in the list view: refresh the selected PR, including its files. The
+    /// network limiter promotes it via focus, so it leads. No-op when nothing
+    /// is selected.
     RefreshSelected,
     /// `R` (Shift-r) in the list view: re-read the config (to pick up newly
-    /// tracked repos) and enqueue every visible PR with a priority derived from
-    /// its smart-status tier.
+    /// tracked repos) and refresh every visible PR, dispatched in smart-status
+    /// tier order so the limiter's FIFO background lane drains `me-blocking`
+    /// first.
     RefreshAll,
     /// One PR's `Cmd::RefreshPr` fan-out finished (success or failure — the
-    /// individual fetch failures surface their own `CommandFailed`). Frees the
-    /// PR's active refresh slot so the pump can dispatch the next queued PR.
+    /// individual fetch failures surface their own `CommandFailed`). Clears the
+    /// PR's refresh indicator; once every in-flight refresh has drained, the
+    /// run's "Refreshed N" summary posts.
     RefreshComplete {
         pr: PrKey,
     },
