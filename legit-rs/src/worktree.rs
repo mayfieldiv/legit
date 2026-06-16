@@ -218,7 +218,9 @@ fn home_dir() -> anyhow::Result<PathBuf> {
 }
 
 fn home_dir_from(home: Option<OsString>) -> anyhow::Result<PathBuf> {
-    home.map(PathBuf::from).context("HOME is not set")
+    home.filter(|home| !home.as_os_str().is_empty())
+        .map(PathBuf::from)
+        .context("HOME is not set")
 }
 
 fn resolve_config_path(path: &str) -> anyhow::Result<PathBuf> {
@@ -556,6 +558,13 @@ mod tests {
     #[test]
     fn home_expansion_requires_home() {
         let error = home_dir_from(None).expect_err("missing HOME should fail");
+
+        assert_eq!(error.to_string(), "HOME is not set");
+    }
+
+    #[test]
+    fn empty_home_is_treated_as_missing() {
+        let error = home_dir_from(Some(OsString::new())).expect_err("empty HOME should fail");
 
         assert_eq!(error.to_string(), "HOME is not set");
     }
