@@ -160,11 +160,13 @@ fn w_when_worktree_already_matches_reports_existing_path() {
         "existing worktree should suppress create: {cmds:?}"
     );
     let status = model.status.as_ref().expect("status set");
-    assert_eq!(status.kind, StatusKind::Success);
-    assert!(
-        status
-            .text
-            .contains("Worktree already exists at /tmp/legit-1")
+    assert_eq!(status.kind, StatusKind::Info);
+    assert_eq!(status.text, "Copying /tmp/legit-1");
+    assert_eq!(
+        cmds,
+        vec![Cmd::CopyToClipboard {
+            text: "/tmp/legit-1".to_owned()
+        }]
     );
 }
 
@@ -191,16 +193,59 @@ fn worktree_created_seeds_cache_and_re_lists_source_clones() {
         .expect("created path should match by deterministic path");
     assert_eq!(worktree.path, path);
     let status = model.status.as_ref().expect("status set");
-    assert_eq!(status.kind, StatusKind::Success);
-    assert!(status.text.contains("Worktree created at "));
+    assert_eq!(status.kind, StatusKind::Info);
+    assert!(status.text.contains("Copying "));
     assert!(
         cmds.iter()
-            .any(|cmd| matches!(cmd, Cmd::ScheduleStatusClear { .. })),
-        "success status should schedule a clear: {cmds:?}"
+            .any(|cmd| matches!(cmd, Cmd::CopyToClipboard { text } if text == &path)),
+        "create success should copy the worktree path: {cmds:?}"
     );
     assert!(
         cmds.iter()
             .any(|cmd| matches!(cmd, Cmd::ListWorktrees { repo_slug, .. } if repo_slug == "mayfieldiv/legit")),
         "create success should refresh worktree detection: {cmds:?}"
     );
+}
+
+#[test]
+fn clipboard_copied_sets_success_status() {
+    let (mut model, _) = Model::new();
+
+    let cmds = update(
+        &mut model,
+        Msg::ClipboardCopied {
+            text: "/tmp/legit-1".to_owned(),
+        },
+    );
+
+    assert!(
+        cmds.iter()
+            .any(|cmd| matches!(cmd, Cmd::ScheduleStatusClear { .. })),
+        "success status should schedule a clear: {cmds:?}"
+    );
+    let status = model.status.as_ref().expect("status set");
+    assert_eq!(status.kind, StatusKind::Success);
+    assert_eq!(status.text, "Copied /tmp/legit-1");
+}
+
+#[test]
+fn clipboard_failure_sets_error_status() {
+    let (mut model, _) = Model::new();
+
+    let cmds = update(
+        &mut model,
+        Msg::ClipboardCopyFailed {
+            text: "/tmp/legit-1".to_owned(),
+            error: "write failed".to_owned(),
+        },
+    );
+
+    assert!(
+        cmds.iter()
+            .any(|cmd| matches!(cmd, Cmd::ScheduleStatusClear { .. })),
+        "error status should schedule a clear: {cmds:?}"
+    );
+    let status = model.status.as_ref().expect("status set");
+    assert_eq!(status.kind, StatusKind::Error);
+    assert_eq!(status.text, "Failed to copy /tmp/legit-1: write failed");
 }

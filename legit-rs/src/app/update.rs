@@ -240,11 +240,7 @@ fn fetch_pr_detail_cmd(model: &Model, key: &PrKey) -> Vec<Cmd> {
 fn create_worktree_cmds(model: &mut Model, pr: crate::github::rest::PR) -> Vec<Cmd> {
     if let Some(existing) = model.worktree_for_pr(&pr) {
         let path = existing.path.clone();
-        return set_status(
-            model,
-            StatusKind::Success,
-            format!("Worktree already exists at {}", abbreviate_home(&path)),
-        );
+        return copy_worktree_path_cmds(model, path);
     }
 
     let source_clone = match worktree::resolve_source_clone(&model.config, &pr.repo_slug) {
@@ -294,6 +290,16 @@ fn create_worktree_cmds(model: &mut Model, pr: crate::github::rest::PR) -> Vec<C
         source_clone,
         target_path,
     });
+    cmds
+}
+
+fn copy_worktree_path_cmds(model: &mut Model, path: String) -> Vec<Cmd> {
+    let mut cmds = set_status(
+        model,
+        StatusKind::Info,
+        format!("Copying {}", abbreviate_home(&path)),
+    );
+    cmds.push(Cmd::CopyToClipboard { text: path });
     cmds
 }
 
@@ -1014,14 +1020,20 @@ fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
                 locked: None,
                 prunable: None,
             });
-            let mut cmds = set_status(
-                model,
-                StatusKind::Success,
-                format!("Worktree created at {}", abbreviate_home(&path)),
-            );
+            let mut cmds = copy_worktree_path_cmds(model, path);
             cmds.extend(list_worktree_cmds(model));
             cmds
         }
+        Msg::ClipboardCopied { text } => set_status(
+            model,
+            StatusKind::Success,
+            format!("Copied {}", abbreviate_home(&text)),
+        ),
+        Msg::ClipboardCopyFailed { text, error } => set_status(
+            model,
+            StatusKind::Error,
+            format!("Failed to copy {}: {error}", abbreviate_home(&text)),
+        ),
         Msg::ConfigLoadFailed { error } => {
             // Config is a hard prerequisite (current user + bot logins drive
             // smart-status), so a malformed config is an app-level fatal that

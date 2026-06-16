@@ -108,6 +108,15 @@ pub enum Msg {
         pr: PrKey,
         path: String,
     },
+    /// The terminal accepted the OSC 52 clipboard sequence.
+    ClipboardCopied {
+        text: String,
+    },
+    /// Writing the OSC 52 clipboard sequence failed.
+    ClipboardCopyFailed {
+        text: String,
+        error: String,
+    },
     /// Config load failed validation (a malformed `~/.legit/config.json`).
     /// Config is a hard prerequisite for fetching PRs — it supplies the current
     /// user and bot logins that drive smart-status — so this halts the list with

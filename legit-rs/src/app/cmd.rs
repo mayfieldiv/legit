@@ -4,7 +4,7 @@ use tokio::sync::mpsc;
 
 use crate::{
     app::{browser, msg::Msg},
-    auth, config, git_remote,
+    auth, clipboard, config, git_remote,
     git_remote::RepoInfo,
     github::graphql::GraphQlClient,
     github::limiter::NetworkLimiter,
@@ -102,6 +102,10 @@ pub enum Cmd {
         pr: PrKey,
         source_clone: PathBuf,
         target_path: PathBuf,
+    },
+    /// Copy text to the user's terminal clipboard via OSC 52.
+    CopyToClipboard {
+        text: String,
     },
 }
 
@@ -364,6 +368,16 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             {
                 Ok(()) => Msg::WorktreeCreated { pr, path },
                 Err(error) => command_failed("create worktree", error),
+            };
+            let _ = tx.send(msg);
+        }
+        Cmd::CopyToClipboard { text } => {
+            let msg = match clipboard::copy_to_clipboard(&text) {
+                Ok(()) => Msg::ClipboardCopied { text },
+                Err(error) => Msg::ClipboardCopyFailed {
+                    text,
+                    error: format!("{error:#}"),
+                },
             };
             let _ = tx.send(msg);
         }

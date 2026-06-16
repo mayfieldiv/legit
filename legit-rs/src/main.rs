@@ -1,6 +1,7 @@
 mod app;
 mod auth;
 mod blocker;
+mod clipboard;
 mod config;
 mod file_category;
 mod format;
