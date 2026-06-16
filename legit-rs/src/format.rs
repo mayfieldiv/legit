@@ -150,7 +150,11 @@ pub fn pad_to_width(s: &str, width: usize) -> String {
 
 /// Replace a leading `$HOME` with `~` for compact path display.
 pub fn abbreviate_home(absolute_path: &str) -> String {
-    let Some(home) = std::env::var_os("HOME") else {
+    abbreviate_home_with(absolute_path, std::env::var_os("HOME"))
+}
+
+fn abbreviate_home_with(absolute_path: &str, home: Option<std::ffi::OsString>) -> String {
+    let Some(home) = home.filter(|home| !home.as_os_str().is_empty()) else {
         return absolute_path.to_owned();
     };
     let home = home.to_string_lossy();
@@ -388,16 +392,18 @@ pub fn reviews_summary(reviews: &[Review]) -> ReviewsSummary {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
+
     use chrono::TimeZone;
     use ratatui::style::Color;
 
     use unicode_width::UnicodeWidthStr;
 
     use super::{
-        CheckOutcome, ChecksSummary, CommentCounts, ReviewsSummary, abbreviate_home, check_icon,
-        check_row, check_sort_group, checks_summary, comment_counts, format_age, format_repo_short,
-        format_review_state, format_size, outcome, pad_to_width, review_icon, reviews_summary,
-        sort_check_runs, truncate, truncate_middle,
+        CheckOutcome, ChecksSummary, CommentCounts, ReviewsSummary, abbreviate_home,
+        abbreviate_home_with, check_icon, check_row, check_sort_group, checks_summary,
+        comment_counts, format_age, format_repo_short, format_review_state, format_size, outcome,
+        pad_to_width, review_icon, reviews_summary, sort_check_runs, truncate, truncate_middle,
     };
     use crate::github::types::{CheckRun, FullReviewThread, Review, ReviewComment};
 
@@ -531,6 +537,14 @@ mod tests {
         );
         assert_eq!(
             abbreviate_home("/srv/worktrees/widgets"),
+            "/srv/worktrees/widgets"
+        );
+    }
+
+    #[test]
+    fn abbreviate_home_ignores_empty_home() {
+        assert_eq!(
+            abbreviate_home_with("/srv/worktrees/widgets", Some(OsString::new())),
             "/srv/worktrees/widgets"
         );
     }
