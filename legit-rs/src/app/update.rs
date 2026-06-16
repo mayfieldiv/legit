@@ -846,6 +846,9 @@ fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
                 Some(repo) => RepoDetection::Detected(repo),
                 None => RepoDetection::Failed,
             };
+            // Worktree listing stays config-driven: only configured repos can
+            // declare a sourceClone, so ConfigLoaded is the event that has
+            // enough information to list them.
             maybe_fetch_open_prs(model)
         }
         Msg::PrArrived(pr) => {
