@@ -28,7 +28,7 @@ use ratatui::{
 use crate::{
     app::detail_layout::{HEADER_HEIGHT, detail_content},
     app::model::{DetailState, Model},
-    format::{format_age, format_mergeable, format_size},
+    format::{abbreviate_home, format_age, format_mergeable, format_size, truncate_middle},
     github::rest::PR,
 };
 
@@ -119,42 +119,38 @@ fn render_header(model: &Model, pr: &PR, frame: &mut Frame<'_>, area: Rect, now:
         Style::default().fg(Color::Cyan),
     ));
 
-    // Row 3: head → base  ·  mergeable state
+    // Row 3: head → base  ·  optional worktree path  ·  mergeable state
     let (merge_text, merge_color) = format_mergeable(&pr.mergeable);
-    let branch_line = Line::from(vec![
+    let mut branch_spans = vec![
         Span::styled(pr.head_ref.clone(), Style::default().fg(Color::Cyan)),
         Span::styled(" → ", Style::default().fg(Color::DarkGray)),
         Span::styled(pr.base_ref.clone(), Style::default().fg(Color::Cyan)),
+    ];
+    if let Some(entry) = model.worktree_for_pr(pr) {
+        let path = truncate_middle(
+            &abbreviate_home(&entry.path),
+            usize::from(area.width).saturating_sub(24).max(1),
+        );
+        branch_spans.extend([
+            Span::styled(" · ", Style::default().fg(Color::DarkGray)),
+            Span::styled(super::WORKTREE_GLYPH, Style::default().fg(Color::Cyan)),
+            Span::styled(" worktree: ", Style::default().fg(Color::Gray)),
+            Span::raw(path),
+        ]);
+    }
+    branch_spans.extend([
         Span::styled(" · ", Style::default().fg(Color::DarkGray)),
         Span::styled(merge_text, Style::default().fg(merge_color)),
     ]);
+    let branch_line = Line::from(branch_spans);
 
-    // Row 4: worktree path when detected; blank otherwise so the divider stays
-    // pinned to the final header row.
-    let worktree_line = model
-        .worktree_for_pr(pr)
-        .map(|entry| {
-            super::worktree_line(
-                &entry.path,
-                usize::from(area.width).saturating_sub(" worktree: ".len() + 1),
-            )
-        })
-        .unwrap_or_else(|| Line::from(""));
-
-    // Row 5: divider
+    // Row 4: divider
     let divider_line = Line::from(Span::styled(
         "─".repeat(area.width as usize),
         Style::default().fg(Color::DarkGray),
     ));
 
-    let lines = vec![
-        title_line,
-        meta_line,
-        url_line,
-        branch_line,
-        worktree_line,
-        divider_line,
-    ];
+    let lines = vec![title_line, meta_line, url_line, branch_line, divider_line];
     frame.render_widget(Paragraph::new(lines), area);
 }
 

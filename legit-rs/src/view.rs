@@ -29,7 +29,7 @@ fn tier_color(tier: Tier) -> Color {
     }
 }
 
-const WORKTREE_GLYPH: &str = "\u{e725}";
+pub(crate) const WORKTREE_GLYPH: &str = "\u{e725}";
 
 pub(crate) fn worktree_line(path: &str, max_path_width: usize) -> Line<'static> {
     Line::from(vec![
