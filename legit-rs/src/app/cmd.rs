@@ -10,6 +10,7 @@ use crate::{
     github::limiter::NetworkLimiter,
     github::rest::OctocrabRest,
     github::rest::PrKey,
+    github::types::ReviewStatus,
     secret::Secret,
     worktree,
 };
@@ -206,18 +207,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                         .fetch_review_status(&ctx.repo.owner, &ctx.repo.repo, &pr_numbers)
                         .await
                 },
-                move |results| {
-                    results
-                        .into_iter()
-                        .map(|(number, status)| Msg::ReviewStatusArrived {
-                            pr: PrKey {
-                                repo_slug: repo_slug.clone(),
-                                number,
-                            },
-                            status,
-                        })
-                        .collect()
-                },
+                move |results| review_status_msgs(repo_slug, results),
             )
             .await;
         }
@@ -429,20 +419,26 @@ async fn fetch_review_status(
                     .await
             }
         },
-        move |results| {
-            results
-                .into_iter()
-                .map(|(number, status)| Msg::ReviewStatusArrived {
-                    pr: PrKey {
-                        repo_slug: repo_slug.clone(),
-                        number,
-                    },
-                    status,
-                })
-                .collect()
-        },
+        move |results| review_status_msgs(repo_slug, results),
     )
     .await
+}
+
+/// Map a batched review-status result into one `ReviewStatusArrived` per PR,
+/// stamping each with `repo_slug`. Shared by the repo-wide `FetchReviewStatus`
+/// and the single-PR `fetch_review_status`, which both receive the same
+/// `(number, status)` shape from the GraphQL batch query.
+fn review_status_msgs(repo_slug: String, results: Vec<(u64, ReviewStatus)>) -> Vec<Msg> {
+    results
+        .into_iter()
+        .map(|(number, status)| Msg::ReviewStatusArrived {
+            pr: PrKey {
+                repo_slug: repo_slug.clone(),
+                number,
+            },
+            status,
+        })
+        .collect()
 }
 
 /// Fetch one PR's review threads and emit `ThreadsArrived`. Shared by
