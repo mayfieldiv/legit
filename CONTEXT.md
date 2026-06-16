@@ -114,10 +114,10 @@ The local branch name `gh pr checkout` would produce for a PR. Same-repo PRs kee
 ### Refresh
 
 **Refresh**:
-Re-fetching one PR (`r`) or every visible PR (`R`). A refresh updates the PR list entry plus all enrichment queries (threads, checks, reviews, files).
+Re-fetching one PR (`r` — the selected or open PR) or every visible PR (`R`). A refresh updates the PR list entry plus all enrichment queries (threads, checks, reviews, files). Each PR's refresh is one `Cmd::RefreshPr` dispatched straight through the [[Priority Queue]]: the focused PR is promoted, and `R` dispatches in **Smart-status** tier order so `me-blocking` PRs refresh first (ADR 0004). An in-flight refresh shows a per-row indicator; re-pressing while it is in flight is a no-op.
 
 **Priority Queue**:
-The shared network limiter's queue of pending fetches. Requests are granted highest-priority-first: interactive-effective ones (see [[Fetch Priority]]) ahead of background ones, FIFO within a lane. Smart-status tier does not influence the order today; tier-ordering among background requests (so `me-blocking` PRs refresh ahead of `waiting-on-author` ones) is a possible future tiebreaker (ADR 0003).
+The shared network limiter's queue of pending fetches. Requests are granted highest-priority-first: interactive-effective ones (see [[Fetch Priority]]) ahead of background ones, FIFO within a lane. Smart-status tier does not influence the limiter's internal order; instead a tier-ordered **Refresh** (`R`) dispatches its requests in tier order so the background FIFO lane drains `me-blocking` first (ADR 0004), rather than the limiter sorting by tier (ADR 0003).
 
 **Fetch Priority**:
 Which lane a network request takes through the shared concurrency limiter — fully derived from focus, never declared at dispatch. A request carries the PR it serves (or none, for repo-wide work like the open-PR listing) and is:
