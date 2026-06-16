@@ -8,6 +8,7 @@ use crate::{
     git_remote::RepoInfo,
     github::rest::{PR, PRState},
     view,
+    worktree::WorktreeEntry,
 };
 
 fn fixed_now() -> DateTime<Utc> {
@@ -146,6 +147,22 @@ fn with_files(model: &mut Model, paths: &[(&str, u64, u64)]) {
         .enrichment
         .files
         .insert(key, crate::app::model::FilesState::Loaded(categorization));
+}
+
+fn with_worktree(model: &mut Model, path: &str, branch: &str) {
+    model.worktrees_by_repo.insert(
+        "acme/web".to_owned(),
+        vec![WorktreeEntry {
+            path: path.to_owned(),
+            head: "a".repeat(40),
+            branch_ref: Some(format!("refs/heads/{branch}")),
+            branch_name: Some(branch.to_owned()),
+            detached: false,
+            bare: false,
+            locked: None,
+            prunable: None,
+        }],
+    );
 }
 
 /// Render the whole frame at `width`x`height` and return the panel's columns
@@ -435,6 +452,33 @@ fn renders_github_url_footer_line() {
         rows.iter()
             .any(|r| r.contains("https://github.com/acme/web/pull/42")),
         "footer GitHub URL must render: {rows:?}"
+    );
+}
+
+#[test]
+fn renders_worktree_path_when_present() {
+    let mut model = model_with_selected(sample_pr(42, "Add the thing"));
+    with_worktree(&mut model, "/tmp/worktrees/42-feat-x", "feat/x");
+
+    let rows = panel_rows(&model, 140, 34);
+    let joined = rows.join("\n");
+
+    assert!(joined.contains("worktree:"), "worktree label: {rows:?}");
+    assert!(
+        joined.contains("/tmp/worktrees/42-feat-x"),
+        "worktree path: {rows:?}"
+    );
+}
+
+#[test]
+fn omits_worktree_line_when_absent() {
+    let model = model_with_selected(sample_pr(42, "Add the thing"));
+
+    let rows = panel_rows(&model, 140, 34);
+
+    assert!(
+        !rows.join("\n").contains("worktree:"),
+        "absent worktree should not render a placeholder: {rows:?}"
     );
 }
 

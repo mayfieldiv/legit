@@ -2,7 +2,7 @@
 //! PR identity metadata -> Next Action (coloured by smart-status tier) ->
 //! mergeable state -> threads summary -> reviews/requested reviewers -> CI
 //! checks summary -> file-category size breakdown -> contextual metadata ->
-//! worktree path placeholder -> footer GitHub URL. Sections whose enrichment
+//! optional worktree path -> footer GitHub URL. Sections whose enrichment
 //! hasn't arrived render a "Loading…" placeholder so the panel fills in
 //! reactively as the per-PR fan-out lands.
 //!
@@ -62,7 +62,9 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, now: DateTime<Ut
     lines.extend(files_lines(model, pr));
     lines.extend(labels_lines(pr, usize::from(area.width)));
     lines.extend(assignees_lines(pr, usize::from(area.width)));
-    lines.push(worktree_line(pr));
+    if let Some(line) = worktree_line(model, pr, usize::from(area.width)) {
+        lines.push(line);
+    }
     lines.push(url_footer_line(pr));
 
     frame.render_widget(Paragraph::new(lines), area);
@@ -311,11 +313,13 @@ fn files_lines(model: &Model, pr: &PR) -> Vec<Line<'static>> {
     lines
 }
 
-/// The worktree path line. Worktree detection lands in #50, so for now this is
-/// a blank placeholder line — the section keeps its slot in the layout so the
-/// footer URL sits where it will once worktrees arrive.
-fn worktree_line(_pr: &PR) -> Line<'static> {
-    Line::from("")
+/// The worktree path line, shown only when detection matched this PR.
+fn worktree_line(model: &Model, pr: &PR, width: usize) -> Option<Line<'static>> {
+    let worktree = model.worktree_for_pr(pr)?;
+    Some(super::worktree_line(
+        &worktree.path,
+        width.saturating_sub(" worktree: ".len() + 1),
+    ))
 }
 
 /// The footer line: the PR's full GitHub URL. Mirrors the TS `prUrl`.

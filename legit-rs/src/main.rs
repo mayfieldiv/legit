@@ -13,6 +13,7 @@ mod secret;
 mod test_fixtures;
 mod tracing_setup;
 mod view;
+mod worktree;
 mod wrap;
 
 use anyhow::Result;

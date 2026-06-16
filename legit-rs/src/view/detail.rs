@@ -68,7 +68,7 @@ pub fn render(
     // here, so draw it immediately — matching the TS reference, which shows the
     // header at once and only the body waits on the fetch. The loading
     // placeholder occupies just the body area until the body arrives.
-    render_header(pr, frame, header_area, now);
+    render_header(model, pr, frame, header_area, now);
     render_status_bar(model, frame, status_area);
 
     match &detail.body {
@@ -88,7 +88,7 @@ fn render_loading(frame: &mut Frame<'_>, area: Rect) {
 
 // ── Header ────────────────────────────────────────────────────────────────────
 
-fn render_header(pr: &PR, frame: &mut Frame<'_>, area: Rect, now: DateTime<Utc>) {
+fn render_header(model: &Model, pr: &PR, frame: &mut Frame<'_>, area: Rect, now: DateTime<Utc>) {
     // Row 0: #number title (bold)
     let title_text = format!("#{} {}", pr.number, pr.title);
     let title_line = Line::from(Span::styled(
@@ -129,13 +129,32 @@ fn render_header(pr: &PR, frame: &mut Frame<'_>, area: Rect, now: DateTime<Utc>)
         Span::styled(merge_text, Style::default().fg(merge_color)),
     ]);
 
-    // Row 4: divider
+    // Row 4: worktree path when detected; blank otherwise so the divider stays
+    // pinned to the final header row.
+    let worktree_line = model
+        .worktree_for_pr(pr)
+        .map(|entry| {
+            super::worktree_line(
+                &entry.path,
+                usize::from(area.width).saturating_sub(" worktree: ".len() + 1),
+            )
+        })
+        .unwrap_or_else(|| Line::from(""));
+
+    // Row 5: divider
     let divider_line = Line::from(Span::styled(
         "─".repeat(area.width as usize),
         Style::default().fg(Color::DarkGray),
     ));
 
-    let lines = vec![title_line, meta_line, url_line, branch_line, divider_line];
+    let lines = vec![
+        title_line,
+        meta_line,
+        url_line,
+        branch_line,
+        worktree_line,
+        divider_line,
+    ];
     frame.render_widget(Paragraph::new(lines), area);
 }
 
@@ -192,7 +211,9 @@ fn render_status_bar(model: &Model, frame: &mut Frame<'_>, area: Rect) {
         Span::styled("b", bold),
         Span::raw(bots_hint),
         Span::styled("r", bold),
-        Span::raw(" refresh"),
+        Span::raw(" refresh  "),
+        Span::styled("w", bold),
+        Span::raw(" worktree"),
     ]);
     frame.render_widget(Paragraph::new(hints), area);
     super::render_status_overlay(model, frame, area);

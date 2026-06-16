@@ -148,6 +148,21 @@ pub fn pad_to_width(s: &str, width: usize) -> String {
     format!("{s}{}", " ".repeat(width - used))
 }
 
+/// Replace a leading `$HOME` with `~` for compact path display.
+pub fn abbreviate_home(absolute_path: &str) -> String {
+    let Some(home) = std::env::var_os("HOME") else {
+        return absolute_path.to_owned();
+    };
+    let home = home.to_string_lossy();
+    if absolute_path == home {
+        "~".to_owned()
+    } else if let Some(rest) = absolute_path.strip_prefix(&format!("{home}/")) {
+        format!("~/{rest}")
+    } else {
+        absolute_path.to_owned()
+    }
+}
+
 // ── Check & review display helpers ──────────────────────────────────────────
 
 /// Human label for a review state. Mirrors the TS `formatReviewState`.
@@ -379,8 +394,8 @@ mod tests {
     use unicode_width::UnicodeWidthStr;
 
     use super::{
-        CheckOutcome, ChecksSummary, CommentCounts, ReviewsSummary, check_icon, check_row,
-        check_sort_group, checks_summary, comment_counts, format_age, format_repo_short,
+        CheckOutcome, ChecksSummary, CommentCounts, ReviewsSummary, abbreviate_home, check_icon,
+        check_row, check_sort_group, checks_summary, comment_counts, format_age, format_repo_short,
         format_review_state, format_size, outcome, pad_to_width, review_icon, reviews_summary,
         sort_check_runs, truncate, truncate_middle,
     };
@@ -500,6 +515,24 @@ mod tests {
         assert_eq!(pad_to_width("一二", 6), "一二  ");
         assert_eq!(pad_to_width("ab", 5), "ab   ");
         assert_eq!(pad_to_width("already wide", 4), "already wide");
+    }
+
+    #[test]
+    fn abbreviate_home_replaces_home_prefix() {
+        let Some(home) = std::env::var_os("HOME") else {
+            return;
+        };
+        let home = home.to_string_lossy();
+
+        assert_eq!(abbreviate_home(&home), "~");
+        assert_eq!(
+            abbreviate_home(&format!("{home}/src/widgets")),
+            "~/src/widgets"
+        );
+        assert_eq!(
+            abbreviate_home("/srv/worktrees/widgets"),
+            "/srv/worktrees/widgets"
+        );
     }
 
     #[test]

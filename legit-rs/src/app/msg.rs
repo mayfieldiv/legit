@@ -8,6 +8,7 @@ use crate::{
     github::rest::{PR, PrKey},
     github::types::{CheckRun, FullReviewThread, IssueComment, Review, ReviewStatus},
     secret::Secret,
+    worktree::WorktreeEntry,
 };
 
 #[derive(Debug)]
@@ -95,6 +96,17 @@ pub enum Msg {
     OpenUrlFailed {
         url: String,
         error: String,
+    },
+    /// Parsed `git worktree list --porcelain` entries arrived for one Tracked
+    /// Repo's configured source clone.
+    WorktreesArrived {
+        repo_slug: String,
+        entries: Vec<WorktreeEntry>,
+    },
+    /// `git worktree add -d` + `gh pr checkout` completed.
+    WorktreeCreated {
+        pr: PrKey,
+        path: String,
     },
     /// Config load failed validation (a malformed `~/.legit/config.json`).
     /// Config is a hard prerequisite for fetching PRs — it supplies the current

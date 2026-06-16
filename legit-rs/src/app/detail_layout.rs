@@ -28,10 +28,10 @@ use super::{
 };
 
 /// Number of rows in the detail view's pinned header: title, meta, URL,
-/// branch+mergeable, divider. Constant — the header draws from the list PR,
-/// which is always available, so it shows even while the body fetch is in
-/// flight.
-pub(crate) const HEADER_HEIGHT: u16 = 5;
+/// branch+mergeable, optional worktree slot, divider. Constant — the header
+/// draws from the list PR, which is always available, so it shows even while
+/// the body fetch is in flight.
+pub(crate) const HEADER_HEIGHT: u16 = 6;
 
 /// Fixed chrome rows the detail view reserves around the scrollable body: the
 /// pinned `HEADER_HEIGHT` plus the 1-row status bar (the
