@@ -2,7 +2,8 @@
 //! `ViewMode::Detail(DetailState)`. Layout:
 //!
 //! - Pinned header (number + title, author + repo + created/updated/size +
-//!   draft marker, full GitHub URL, head→base branch + mergeable, divider)
+//!   draft marker, head→base branch + optional worktree + mergeable, full
+//!   GitHub URL, divider)
 //! - Scrollable body (offset by `DetailState::scroll`): the lines derived by
 //!   `app::detail_layout::detail_content` — markdown-rendered PR description,
 //!   the CI checks section, then the Review Threads and Conversation sections
@@ -28,9 +29,10 @@ use ratatui::{
 use crate::{
     app::detail_layout::{HEADER_HEIGHT, detail_content},
     app::model::{DetailState, Model},
-    format::{abbreviate_home, format_age, format_mergeable, format_size, truncate_middle},
+    format::{format_age, format_mergeable, format_size},
     github::rest::PR,
 };
+use unicode_width::UnicodeWidthStr;
 
 #[cfg(test)]
 mod tests;
@@ -113,13 +115,7 @@ fn render_header(model: &Model, pr: &PR, frame: &mut Frame<'_>, area: Rect, now:
     }
     let meta_line = Line::from(meta_spans);
 
-    // Row 2: full GitHub URL
-    let url_line = Line::from(Span::styled(
-        pr.key().html_url(),
-        Style::default().fg(Color::Cyan),
-    ));
-
-    // Row 3: head → base  ·  optional worktree path  ·  mergeable state
+    // Row 2: head → base  ·  optional worktree path  ·  mergeable state
     let (merge_text, merge_color) = format_mergeable(&pr.mergeable);
     let mut branch_spans = vec![
         Span::styled(pr.head_ref.clone(), Style::default().fg(Color::Cyan)),
@@ -127,16 +123,17 @@ fn render_header(model: &Model, pr: &PR, frame: &mut Frame<'_>, area: Rect, now:
         Span::styled(pr.base_ref.clone(), Style::default().fg(Color::Cyan)),
     ];
     if let Some(entry) = model.worktree_for_pr(pr) {
-        let path = truncate_middle(
-            &abbreviate_home(&entry.path),
-            usize::from(area.width).saturating_sub(24).max(1),
+        branch_spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
+        let reserved_width = spans_display_width(&branch_spans)
+            + super::WORKTREE_GLYPH.width()
+            + " worktree: ".width()
+            + " · ".width()
+            + merge_text.width();
+        let mut worktree_line = super::worktree_line(
+            &entry.path,
+            usize::from(area.width).saturating_sub(reserved_width),
         );
-        branch_spans.extend([
-            Span::styled(" · ", Style::default().fg(Color::DarkGray)),
-            Span::styled(super::WORKTREE_GLYPH, Style::default().fg(Color::Cyan)),
-            Span::styled(" worktree: ", Style::default().fg(Color::Gray)),
-            Span::raw(path),
-        ]);
+        branch_spans.append(&mut worktree_line.spans);
     }
     branch_spans.extend([
         Span::styled(" · ", Style::default().fg(Color::DarkGray)),
@@ -144,14 +141,24 @@ fn render_header(model: &Model, pr: &PR, frame: &mut Frame<'_>, area: Rect, now:
     ]);
     let branch_line = Line::from(branch_spans);
 
+    // Row 3: full GitHub URL
+    let url_line = Line::from(Span::styled(
+        pr.key().html_url(),
+        Style::default().fg(Color::Cyan),
+    ));
+
     // Row 4: divider
     let divider_line = Line::from(Span::styled(
         "─".repeat(area.width as usize),
         Style::default().fg(Color::DarkGray),
     ));
 
-    let lines = vec![title_line, meta_line, url_line, branch_line, divider_line];
+    let lines = vec![title_line, meta_line, branch_line, url_line, divider_line];
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn spans_display_width(spans: &[Span<'_>]) -> usize {
+    spans.iter().map(|span| span.content.as_ref().width()).sum()
 }
 
 // ── Body (scrollable description + checks + cards) ───────────────────────────

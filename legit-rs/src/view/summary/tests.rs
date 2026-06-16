@@ -258,7 +258,7 @@ fn smart_status_reason_shows_loading_until_blocker_derived() {
 }
 
 #[test]
-fn renders_mergeable_state_after_smart_status() {
+fn renders_mergeable_state_on_checkout_status_line() {
     let mut pr = sample_pr(42, "Add the thing");
     pr.mergeable = "MERGEABLE".to_owned();
     let mut model = model_with_selected(pr);
@@ -266,17 +266,21 @@ fn renders_mergeable_state_after_smart_status() {
 
     let rows = panel_rows(&model, 140, 20);
 
+    let checkout_idx = rows
+        .iter()
+        .position(|r| r.contains("feat/x") && r.contains("main"))
+        .expect("checkout status line present");
     let reason_idx = rows
         .iter()
         .position(|r| r.contains("Awaiting review"))
         .expect("smart-status line present");
-    let merge_idx = rows
-        .iter()
-        .position(|r| r.contains("mergeable"))
-        .expect("mergeable line present");
     assert!(
-        merge_idx > reason_idx,
-        "mergeable must come after smart-status: {rows:?}"
+        rows[checkout_idx].contains("mergeable"),
+        "mergeable must share the checkout status row: {rows:?}"
+    );
+    assert!(
+        checkout_idx < reason_idx,
+        "checkout status metadata must come before smart-status: {rows:?}"
     );
 }
 
@@ -457,16 +461,63 @@ fn renders_github_url_footer_line() {
 
 #[test]
 fn renders_worktree_path_when_present() {
-    let mut model = model_with_selected(sample_pr(42, "Add the thing"));
-    with_worktree(&mut model, "/tmp/worktrees/42-feat-x", "feat/x");
+    let mut pr = sample_pr(42, "Add the thing");
+    pr.mergeable = "MERGEABLE".to_owned();
+    let mut model = model_with_selected(pr);
+    with_worktree(&mut model, "/w/42", "feat/x");
 
     let rows = panel_rows(&model, 140, 34);
-    let joined = rows.join("\n");
+    let checkout_row = rows
+        .iter()
+        .find(|r| r.contains("feat/x") && r.contains("main"))
+        .unwrap_or_else(|| panic!("checkout row: {rows:?}"));
 
-    assert!(joined.contains("worktree:"), "worktree label: {rows:?}");
     assert!(
-        joined.contains("/tmp/worktrees/42-feat-x"),
-        "worktree path: {rows:?}"
+        checkout_row.contains("worktree:"),
+        "worktree label: {rows:?}"
+    );
+    assert!(checkout_row.contains("/w/42"), "worktree path: {rows:?}");
+    assert!(
+        checkout_row.contains("mergeable"),
+        "mergeability stays grouped with checkout status: {rows:?}"
+    );
+}
+
+#[test]
+fn long_checkout_status_splits_worktree_next_to_branch() {
+    let mut pr = sample_pr(42, "Add the thing");
+    pr.head_ref = "feature/very-long-branch-name-that-will-not-fit".to_owned();
+    pr.base_ref = "master".to_owned();
+    pr.mergeable = "MERGEABLE".to_owned();
+    let mut model = model_with_selected(pr);
+    with_worktree(
+        &mut model,
+        "~/dev/immytrees/8887",
+        "feature/very-long-branch-name-that-will-not-fit",
+    );
+
+    let rows = panel_rows(&model, 140, 34);
+    let branch_idx = rows
+        .iter()
+        .position(|r| r.contains("feature/very-long"))
+        .unwrap_or_else(|| panic!("branch row: {rows:?}"));
+    let worktree_idx = rows
+        .iter()
+        .position(|r| r.contains("worktree:"))
+        .unwrap_or_else(|| panic!("worktree row: {rows:?}"));
+
+    assert_eq!(
+        worktree_idx,
+        branch_idx + 1,
+        "worktree must stay adjacent to a long branch row: {rows:?}"
+    );
+    assert!(
+        rows[worktree_idx].contains("~/dev/immytrees/8887"),
+        "worktree path stays visible: {rows:?}"
+    );
+    assert!(
+        rows[worktree_idx].contains("mergeable"),
+        "mergeability stays grouped with worktree status: {rows:?}"
     );
 }
 
