@@ -183,6 +183,15 @@ pub fn create_worktree_for_pr(
     target_path: &Path,
     pr_number: u64,
 ) -> anyhow::Result<()> {
+    create_worktree_for_pr_with_checkout(source_clone, target_path, pr_number, checkout_pr)
+}
+
+fn create_worktree_for_pr_with_checkout(
+    source_clone: &Path,
+    target_path: &Path,
+    pr_number: u64,
+    checkout: impl FnOnce(&Path, u64) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
     ensure_source_clone(source_clone)?;
     if let Some(parent) = target_path.parent() {
         fs::create_dir_all(parent)
@@ -196,14 +205,36 @@ pub fn create_worktree_for_pr(
         .arg(target_path);
     run_command("git worktree add", &mut git)?;
 
+    checkout(target_path, pr_number).map_err(|checkout_error| {
+        match remove_worktree(source_clone, target_path) {
+            Ok(()) => checkout_error,
+            Err(cleanup_error) => checkout_error.context(format!(
+                "failed to clean up partial worktree {}: {cleanup_error:#}",
+                target_path.display()
+            )),
+        }
+    })?;
+
+    Ok(())
+}
+
+fn checkout_pr(target_path: &Path, pr_number: u64) -> anyhow::Result<()> {
     let mut gh = Command::new("gh");
     gh.args(["pr", "checkout", &pr_number.to_string()])
         .current_dir(target_path)
         .env_remove("GITHUB_TOKEN")
         .env_remove("GH_TOKEN");
-    run_command("gh pr checkout", &mut gh)?;
+    run_command("gh pr checkout", &mut gh).map(|_| ())
+}
 
-    Ok(())
+fn remove_worktree(source_clone: &Path, target_path: &Path) -> anyhow::Result<()> {
+    let mut command = Command::new("git");
+    command
+        .arg("-C")
+        .arg(source_clone)
+        .args(["worktree", "remove", "--force"])
+        .arg(target_path);
+    run_command("git worktree remove", &mut command).map(|_| ())
 }
 
 fn repo_config<'a>(config: &'a LegitConfig, slug: &str) -> Option<&'a RepoConfig> {
@@ -302,6 +333,11 @@ fn stderr_tail(stderr: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        path::Path,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
     use chrono::TimeZone;
 
     use super::*;
@@ -334,6 +370,29 @@ mod tests {
             head_repository_owner: head_owner.to_owned(),
             state: PRState::Open,
         }
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock before unix epoch")
+            .as_nanos();
+        env::temp_dir().join(format!("legit-rs-{name}-{nanos}"))
+    }
+
+    fn run_git(args: &[&str], cwd: &Path) -> String {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).expect("git stdout")
     }
 
     #[test]
@@ -595,6 +654,50 @@ mod tests {
                 .to_string()
                 .contains("failed to resolve current directory")
         );
+    }
+
+    #[test]
+    fn checkout_failure_removes_partial_worktree() {
+        let root = temp_dir("checkout-cleanup");
+        let source = root.join("source");
+        let target = root.join("worktree");
+        fs::create_dir_all(&source).expect("create source repo");
+        run_git(&["init"], &source);
+        run_git(
+            &[
+                "-c",
+                "user.name=Legit Test",
+                "-c",
+                "user.email=legit@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "initial",
+            ],
+            &source,
+        );
+
+        let error =
+            create_worktree_for_pr_with_checkout(&source, &target, 42, |_target, _number| {
+                anyhow::bail!("checkout failed")
+            })
+            .expect_err("checkout failure should be returned");
+
+        assert!(
+            format!("{error:#}").contains("checkout failed"),
+            "original checkout error should be preserved: {error:#}"
+        );
+        assert!(
+            !target.exists(),
+            "partial worktree directory should be removed"
+        );
+        let worktrees = run_git(&["worktree", "list", "--porcelain"], &source);
+        assert!(
+            !worktrees.contains(&target.to_string_lossy().to_string()),
+            "partial worktree should be unregistered: {worktrees}"
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
