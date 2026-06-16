@@ -1,8 +1,8 @@
 //! The right-side summary panel for the selected PR. Renders, top to bottom:
-//! PR identity metadata -> branch/worktree/mergeability -> Next Action
-//! (coloured by smart-status tier) -> threads summary -> reviews/requested
-//! reviewers -> CI checks summary -> file-category size breakdown -> contextual
-//! metadata -> footer GitHub URL. Sections whose enrichment hasn't arrived
+//! PR identity metadata + GitHub URL -> branch/worktree/mergeability -> Next
+//! Action (coloured by smart-status tier) -> threads summary ->
+//! reviews/requested reviewers -> CI checks summary -> file-category size
+//! breakdown -> contextual metadata. Sections whose enrichment hasn't arrived
 //! render a "Loading…" placeholder so the panel fills in reactively as the
 //! per-PR fan-out lands.
 //!
@@ -28,7 +28,6 @@ use crate::format::{
 };
 use crate::github::rest::PR;
 use crate::github::types::CheckRun;
-use unicode_width::UnicodeWidthStr;
 
 /// Placeholder text for a section whose enrichment hasn't arrived yet.
 const LOADING: &str = "Loading…";
@@ -62,7 +61,6 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, now: DateTime<Ut
     lines.extend(files_lines(model, pr));
     lines.extend(labels_lines(pr, usize::from(area.width)));
     lines.extend(assignees_lines(pr, usize::from(area.width)));
-    lines.push(url_footer_line(pr));
 
     frame.render_widget(Paragraph::new(lines), area);
 }
@@ -83,6 +81,7 @@ fn identity_lines(model: &Model, pr: &PR, now: DateTime<Utc>, width: usize) -> V
     }
     lines.push(Line::from(meta));
 
+    lines.push(url_line(pr, width));
     lines.extend(checkout_status_lines(model, pr, width));
 
     lines.push(Line::from(vec![
@@ -96,50 +95,22 @@ fn identity_lines(model: &Model, pr: &PR, now: DateTime<Utc>, width: usize) -> V
 }
 
 fn checkout_status_lines(model: &Model, pr: &PR, width: usize) -> Vec<Line<'static>> {
-    let (merge_text, merge_color) = format_mergeable(&pr.mergeable);
+    let mut lines = Vec::new();
+
     let branch_spans = branch_spans(pr);
-
-    if let Some(worktree) = model.worktree_for_pr(pr) {
-        let combined_min_width = spans_display_width(&branch_spans)
-            + if branch_spans.is_empty() {
-                0
-            } else {
-                " · ".width()
-            }
-            + worktree_label_width()
-            + " · ".width()
-            + merge_text.width();
-
-        if combined_min_width <= width {
-            let mut spans = branch_spans;
-            push_separator_if_needed(&mut spans);
-            let reserved_width = spans_display_width(&spans)
-                + worktree_label_width()
-                + " · ".width()
-                + merge_text.width();
-            let mut worktree_line =
-                super::worktree_line(&worktree.path, width.saturating_sub(reserved_width));
-            spans.append(&mut worktree_line.spans);
-            push_mergeability(&mut spans, merge_text, merge_color);
-            return vec![Line::from(spans)];
-        }
-
-        let mut lines = if branch_spans.is_empty() {
-            Vec::new()
-        } else {
-            vec![Line::from(branch_spans)]
-        };
-        let reserved_width = worktree_label_width() + " · ".width() + merge_text.width();
-        let mut worktree_line =
-            super::worktree_line(&worktree.path, width.saturating_sub(reserved_width));
-        push_mergeability(&mut worktree_line.spans, merge_text, merge_color);
-        lines.push(worktree_line);
-        return lines;
+    if !branch_spans.is_empty() {
+        lines.push(Line::from(branch_spans));
     }
 
-    let mut spans = branch_spans;
-    push_mergeability(&mut spans, merge_text, merge_color);
-    vec![Line::from(spans)]
+    if let Some(worktree) = model.worktree_for_pr(pr) {
+        lines.push(super::worktree_line(
+            &worktree.path,
+            width.saturating_sub(worktree_label_width()),
+        ));
+    }
+
+    lines.push(mergeability_line(pr));
+    lines
 }
 
 fn branch_spans(pr: &PR) -> Vec<Span<'static>> {
@@ -154,23 +125,15 @@ fn branch_spans(pr: &PR) -> Vec<Span<'static>> {
     ]
 }
 
-fn push_mergeability(spans: &mut Vec<Span<'static>>, text: &'static str, color: Color) {
-    push_separator_if_needed(spans);
-    spans.push(Span::styled(text, Style::default().fg(color)));
-}
-
 fn worktree_label_width() -> usize {
-    super::WORKTREE_GLYPH.width() + " worktree: ".width()
+    1 + " worktree: ".len()
 }
 
-fn push_separator_if_needed(spans: &mut Vec<Span<'static>>) {
-    if !spans.is_empty() {
-        spans.push(Span::styled(" · ", Style::default().fg(Color::Gray)));
-    }
-}
-
-fn spans_display_width(spans: &[Span<'_>]) -> usize {
-    spans.iter().map(|span| span.content.as_ref().width()).sum()
+/// The mergeable-state line. Delegates to `format::format_mergeable` — the
+/// canonical display helper shared with the detail view.
+fn mergeability_line(pr: &PR) -> Line<'static> {
+    let (text, color) = format_mergeable(&pr.mergeable);
+    Line::from(Span::styled(text, Style::default().fg(color)))
 }
 
 fn labels_lines(pr: &PR, width: usize) -> Vec<Line<'static>> {
@@ -375,10 +338,13 @@ fn files_lines(model: &Model, pr: &PR) -> Vec<Line<'static>> {
     lines
 }
 
-/// The footer line: the PR's full GitHub URL. Mirrors the TS `prUrl`.
-fn url_footer_line(pr: &PR) -> Line<'static> {
+/// The PR's full GitHub URL. Mirrors the TS `prUrl`.
+fn url_line(pr: &PR, width: usize) -> Line<'static> {
     let url = format!("https://github.com/{}/pull/{}", pr.repo_slug, pr.number);
-    Line::from(Span::styled(url, Style::default().fg(Color::Cyan)))
+    Line::from(Span::styled(
+        truncate(&url, width.max(1)),
+        Style::default().fg(Color::Cyan),
+    ))
 }
 
 /// One indented breakdown row: `  <label>: +A/-D (N)`.

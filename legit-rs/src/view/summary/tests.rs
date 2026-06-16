@@ -258,7 +258,7 @@ fn smart_status_reason_shows_loading_until_blocker_derived() {
 }
 
 #[test]
-fn renders_mergeable_state_on_checkout_status_line() {
+fn renders_mergeable_state_as_visible_checkout_line() {
     let mut pr = sample_pr(42, "Add the thing");
     pr.mergeable = "MERGEABLE".to_owned();
     let mut model = model_with_selected(pr);
@@ -270,16 +270,25 @@ fn renders_mergeable_state_on_checkout_status_line() {
         .iter()
         .position(|r| r.contains("feat/x") && r.contains("main"))
         .expect("checkout status line present");
+    let merge_idx = rows
+        .iter()
+        .position(|r| r.contains("mergeable"))
+        .expect("mergeable line present");
     let reason_idx = rows
         .iter()
         .position(|r| r.contains("Awaiting review"))
         .expect("smart-status line present");
     assert!(
-        rows[checkout_idx].contains("mergeable"),
-        "mergeable must share the checkout status row: {rows:?}"
+        !rows[checkout_idx].contains("mergeable"),
+        "branch row must not hide mergeability offscreen: {rows:?}"
+    );
+    assert_eq!(
+        merge_idx,
+        checkout_idx + 1,
+        "mergeability must stay adjacent to checkout status: {rows:?}"
     );
     assert!(
-        checkout_idx < reason_idx,
+        merge_idx < reason_idx,
         "checkout status metadata must come before smart-status: {rows:?}"
     );
 }
@@ -447,15 +456,27 @@ fn files_show_loading_until_arrived() {
 }
 
 #[test]
-fn renders_github_url_footer_line() {
+fn renders_github_url_near_top() {
     let model = model_with_selected(sample_pr(42, "Add the thing"));
 
     let rows = panel_rows(&model, 140, 34);
 
+    let url_idx = rows
+        .iter()
+        .position(|r| r.contains("https://github.com/acme/web/pull/42"))
+        .unwrap_or_else(|| panic!("GitHub URL must render near top: {rows:?}"));
+    let branch_idx = rows
+        .iter()
+        .position(|r| r.contains("feat/x") && r.contains("main"))
+        .unwrap_or_else(|| panic!("branch row: {rows:?}"));
+
     assert!(
-        rows.iter()
-            .any(|r| r.contains("https://github.com/acme/web/pull/42")),
-        "footer GitHub URL must render: {rows:?}"
+        url_idx <= 2,
+        "URL should be part of identity block: {rows:?}"
+    );
+    assert!(
+        url_idx < branch_idx,
+        "URL should render before checkout metadata: {rows:?}"
     );
 }
 
@@ -467,19 +488,32 @@ fn renders_worktree_path_when_present() {
     with_worktree(&mut model, "/w/42", "feat/x");
 
     let rows = panel_rows(&model, 140, 34);
-    let checkout_row = rows
+    let branch_idx = rows
         .iter()
-        .find(|r| r.contains("feat/x") && r.contains("main"))
+        .position(|r| r.contains("feat/x") && r.contains("main"))
         .unwrap_or_else(|| panic!("checkout row: {rows:?}"));
+    let worktree_idx = rows
+        .iter()
+        .position(|r| r.contains("worktree:"))
+        .unwrap_or_else(|| panic!("worktree row: {rows:?}"));
+    let merge_idx = rows
+        .iter()
+        .position(|r| r.contains("mergeable"))
+        .unwrap_or_else(|| panic!("mergeability row: {rows:?}"));
 
-    assert!(
-        checkout_row.contains("worktree:"),
-        "worktree label: {rows:?}"
+    assert_eq!(
+        worktree_idx,
+        branch_idx + 1,
+        "worktree path stays adjacent to branch: {rows:?}"
     );
-    assert!(checkout_row.contains("/w/42"), "worktree path: {rows:?}");
     assert!(
-        checkout_row.contains("mergeable"),
-        "mergeability stays grouped with checkout status: {rows:?}"
+        rows[worktree_idx].contains("/w/42"),
+        "worktree path: {rows:?}"
+    );
+    assert_eq!(
+        merge_idx,
+        worktree_idx + 1,
+        "mergeability stays grouped below worktree status: {rows:?}"
     );
 }
 
@@ -515,9 +549,18 @@ fn long_checkout_status_splits_worktree_next_to_branch() {
         rows[worktree_idx].contains("~/dev/immytrees/8887"),
         "worktree path stays visible: {rows:?}"
     );
+    let merge_idx = rows
+        .iter()
+        .position(|r| r.contains("mergeable"))
+        .unwrap_or_else(|| panic!("mergeability row: {rows:?}"));
+    assert_eq!(
+        merge_idx,
+        worktree_idx + 1,
+        "mergeability must stay visible below worktree status: {rows:?}"
+    );
     assert!(
-        rows[worktree_idx].contains("mergeable"),
-        "mergeability stays grouped with worktree status: {rows:?}"
+        !rows[branch_idx].contains("mergeable"),
+        "long branch row must not carry mergeability offscreen: {rows:?}"
     );
 }
 
