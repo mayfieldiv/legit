@@ -11,6 +11,7 @@ use crate::app::grouping::Grouping;
 use crate::app::list_layout;
 use crate::app::model::{Model, StatusKind, ViewMode};
 use crate::blocker::Tier;
+use crate::format::{abbreviate_home, truncate_middle};
 use crate::git_remote::RepoInfo;
 
 pub mod detail;
@@ -26,6 +27,19 @@ fn tier_color(tier: Tier) -> Color {
         Tier::WaitingOnAuthor => Color::Yellow,
         Tier::NeedsReview => Color::Gray,
     }
+}
+
+pub(crate) const WORKTREE_GLYPH: &str = "\u{e725}";
+
+pub(crate) fn worktree_line(path: &str, max_path_width: usize) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(WORKTREE_GLYPH, Style::default().fg(Color::Cyan)),
+        Span::styled(" worktree: ", Style::default().fg(Color::Gray)),
+        Span::raw(truncate_middle(
+            &abbreviate_home(path),
+            max_path_width.max(1),
+        )),
+    ])
 }
 
 /// Short label for the active grouping mode, shown in the status-bar `g` hint.
@@ -196,7 +210,9 @@ fn render_status(model: &Model, frame: &mut Frame<'_>, area: Rect) {
         left.push(Span::styled("h/l", bold));
         left.push(Span::raw(" tabs  "));
         left.push(Span::styled("/", bold));
-        left.push(Span::raw(" filter"));
+        left.push(Span::raw(" filter  "));
+        left.push(Span::styled("w", bold));
+        left.push(Span::raw(" worktree"));
     }
     frame.render_widget(Paragraph::new(Line::from(left)), area);
     let network_width = network_indicator_width(model, area.width);

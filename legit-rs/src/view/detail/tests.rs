@@ -9,6 +9,7 @@ use crate::{
     github::types::{CheckRun, FullReviewThread, IssueComment, ReviewComment},
     test_fixtures::{self, review_comment},
     view,
+    worktree::WorktreeEntry,
 };
 
 fn fixed_now() -> DateTime<Utc> {
@@ -93,6 +94,22 @@ fn model_in_detail(pr: PR, body: &str) -> Model {
         expanded: std::collections::HashSet::new(),
     });
     model
+}
+
+fn seed_worktree(model: &mut Model, path: &str, branch: &str) {
+    model.worktrees_by_repo.insert(
+        "acme/web".to_owned(),
+        vec![WorktreeEntry {
+            path: path.to_owned(),
+            head: "a".repeat(40),
+            branch_ref: Some(format!("refs/heads/{branch}")),
+            branch_name: Some(branch.to_owned()),
+            detached: false,
+            bare: false,
+            locked: None,
+            prunable: None,
+        }],
+    );
 }
 
 /// Build a model in Detail mode for `pr`, with checks seeded in enrichment.
@@ -254,6 +271,37 @@ fn detail_header_shows_branch_and_mergeable() {
     assert!(
         rows.iter().any(|r| r.contains("mergeable")),
         "mergeable state must appear: {rows:?}"
+    );
+}
+
+#[test]
+fn detail_header_shows_worktree_path_when_present() {
+    let mut model = model_in_detail(sample_pr(), "");
+    seed_worktree(&mut model, "/tmp/worktrees/42-feat-stream", "feat/stream");
+
+    let terminal = render_snapshot(&model, 80, 10);
+    let rows = buffer_text(&terminal);
+
+    assert!(
+        rows.iter().any(|r| r.contains("worktree:")),
+        "worktree label must appear: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|r| r.contains("/tmp/worktrees/42")),
+        "worktree path must appear: {rows:?}"
+    );
+}
+
+#[test]
+fn detail_header_omits_worktree_label_when_absent() {
+    let model = model_in_detail(sample_pr(), "");
+
+    let terminal = render_snapshot(&model, 80, 10);
+    let rows = buffer_text(&terminal);
+
+    assert!(
+        !rows.iter().any(|r| r.contains("worktree:")),
+        "absent worktree must not render a label: {rows:?}"
     );
 }
 

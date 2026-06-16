@@ -78,6 +78,7 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, now: DateTime<Ut
 }
 
 const PR_NUM_COL_MIN: usize = 7;
+const WORKTREE_COL: usize = 1;
 const TITLE_MIN: usize = 30;
 const AUTHOR_COL: usize = 14;
 const REPO_COL: usize = 14;
@@ -159,7 +160,10 @@ fn centered_ellipsis(width: usize) -> String {
 /// A group header row: `── <label> ` in the accent colour, padded to the row
 /// width. Visually distinct from PR rows (the leading rule and colour).
 fn header_line(label: &str, width: u16) -> Line<'static> {
-    let text = pad_to_width(&format!("── {label} "), width as usize);
+    let text = pad_to_width(
+        &format!("{}── {label} ", " ".repeat(WORKTREE_COL + GAP)),
+        width as usize,
+    );
     Line::from(Span::styled(
         text,
         Style::default()
@@ -197,7 +201,12 @@ fn compute_visible_columns(
     pr_num_col: usize,
     size_col: usize,
 ) -> VisibleColumns {
-    let base = pr_num_col + GAP + TITLE_MIN + usize::from(show_repo) * (REPO_COL + GAP);
+    let base = WORKTREE_COL
+        + GAP
+        + pr_num_col
+        + GAP
+        + TITLE_MIN
+        + usize::from(show_repo) * (REPO_COL + GAP);
     let mut budget = width.saturating_sub(base);
     let mut columns = VisibleColumns {
         age: false,
@@ -247,7 +256,7 @@ struct Cell {
 /// cannot drift apart.
 fn header_row_line(layout: &RowLayout) -> Line<'static> {
     let bold = Style::default().add_modifier(Modifier::BOLD);
-    let mut cells = base_cells("PR", layout, bold);
+    let mut cells = base_cells("", "PR", layout, bold);
     if layout.show_repo {
         cells.push(Cell {
             text: "Repo".to_owned(),
@@ -305,6 +314,11 @@ fn row_line(
     selected: bool,
 ) -> Line<'static> {
     let mut cells = base_cells(
+        if model.worktree_for_pr(pr).is_some() {
+            super::WORKTREE_GLYPH
+        } else {
+            ""
+        },
         &format!("#{}", pr.number),
         layout,
         Style::default()
@@ -370,12 +384,19 @@ fn row_line(
     render_cells(cells, selected)
 }
 
-fn base_cells(text: &str, layout: &RowLayout, style: Style) -> Vec<Cell> {
-    vec![Cell {
-        text: text.to_owned(),
-        width: layout.pr_num_col,
-        style,
-    }]
+fn base_cells(worktree: &str, pr_number: &str, layout: &RowLayout, style: Style) -> Vec<Cell> {
+    vec![
+        Cell {
+            text: worktree.to_owned(),
+            width: WORKTREE_COL,
+            style: Style::default().fg(Color::Cyan),
+        },
+        Cell {
+            text: pr_number.to_owned(),
+            width: layout.pr_num_col,
+            style,
+        },
+    ]
 }
 
 fn insert_title_cell(

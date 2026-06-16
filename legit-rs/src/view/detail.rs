@@ -2,7 +2,8 @@
 //! `ViewMode::Detail(DetailState)`. Layout:
 //!
 //! - Pinned header (number + title, author + repo + created/updated/size +
-//!   draft marker, full GitHub URL, head→base branch + mergeable, divider)
+//!   draft marker, head→base branch + optional worktree + mergeable, full
+//!   GitHub URL, divider)
 //! - Scrollable body (offset by `DetailState::scroll`): the lines derived by
 //!   `app::detail_layout::detail_content` — markdown-rendered PR description,
 //!   the CI checks section, then the Review Threads and Conversation sections
@@ -31,6 +32,7 @@ use crate::{
     format::{format_age, format_mergeable, format_size},
     github::rest::PR,
 };
+use unicode_width::UnicodeWidthStr;
 
 #[cfg(test)]
 mod tests;
@@ -68,7 +70,7 @@ pub fn render(
     // here, so draw it immediately — matching the TS reference, which shows the
     // header at once and only the body waits on the fetch. The loading
     // placeholder occupies just the body area until the body arrives.
-    render_header(pr, frame, header_area, now);
+    render_header(model, pr, frame, header_area, now);
     render_status_bar(model, frame, status_area);
 
     match &detail.body {
@@ -88,7 +90,7 @@ fn render_loading(frame: &mut Frame<'_>, area: Rect) {
 
 // ── Header ────────────────────────────────────────────────────────────────────
 
-fn render_header(pr: &PR, frame: &mut Frame<'_>, area: Rect, now: DateTime<Utc>) {
+fn render_header(model: &Model, pr: &PR, frame: &mut Frame<'_>, area: Rect, now: DateTime<Utc>) {
     // Row 0: #number title (bold)
     let title_text = format!("#{} {}", pr.number, pr.title);
     let title_line = Line::from(Span::styled(
@@ -113,21 +115,37 @@ fn render_header(pr: &PR, frame: &mut Frame<'_>, area: Rect, now: DateTime<Utc>)
     }
     let meta_line = Line::from(meta_spans);
 
-    // Row 2: full GitHub URL
+    // Row 2: head → base  ·  optional worktree path  ·  mergeable state
+    let (merge_text, merge_color) = format_mergeable(&pr.mergeable);
+    let mut branch_spans = vec![
+        Span::styled(pr.head_ref.clone(), Style::default().fg(Color::Cyan)),
+        Span::styled(" → ", Style::default().fg(Color::DarkGray)),
+        Span::styled(pr.base_ref.clone(), Style::default().fg(Color::Cyan)),
+    ];
+    if let Some(entry) = model.worktree_for_pr(pr) {
+        branch_spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
+        let reserved_width = spans_display_width(&branch_spans)
+            + super::WORKTREE_GLYPH.width()
+            + " worktree: ".width()
+            + " · ".width()
+            + merge_text.width();
+        let mut worktree_line = super::worktree_line(
+            &entry.path,
+            usize::from(area.width).saturating_sub(reserved_width),
+        );
+        branch_spans.append(&mut worktree_line.spans);
+    }
+    branch_spans.extend([
+        Span::styled(" · ", Style::default().fg(Color::DarkGray)),
+        Span::styled(merge_text, Style::default().fg(merge_color)),
+    ]);
+    let branch_line = Line::from(branch_spans);
+
+    // Row 3: full GitHub URL
     let url_line = Line::from(Span::styled(
         pr.key().html_url(),
         Style::default().fg(Color::Cyan),
     ));
-
-    // Row 3: head → base  ·  mergeable state
-    let (merge_text, merge_color) = format_mergeable(&pr.mergeable);
-    let branch_line = Line::from(vec![
-        Span::styled(pr.head_ref.clone(), Style::default().fg(Color::Cyan)),
-        Span::styled(" → ", Style::default().fg(Color::DarkGray)),
-        Span::styled(pr.base_ref.clone(), Style::default().fg(Color::Cyan)),
-        Span::styled(" · ", Style::default().fg(Color::DarkGray)),
-        Span::styled(merge_text, Style::default().fg(merge_color)),
-    ]);
 
     // Row 4: divider
     let divider_line = Line::from(Span::styled(
@@ -135,8 +153,12 @@ fn render_header(pr: &PR, frame: &mut Frame<'_>, area: Rect, now: DateTime<Utc>)
         Style::default().fg(Color::DarkGray),
     ));
 
-    let lines = vec![title_line, meta_line, url_line, branch_line, divider_line];
+    let lines = vec![title_line, meta_line, branch_line, url_line, divider_line];
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn spans_display_width(spans: &[Span<'_>]) -> usize {
+    spans.iter().map(|span| span.content.as_ref().width()).sum()
 }
 
 // ── Body (scrollable description + checks + cards) ───────────────────────────
@@ -192,7 +214,9 @@ fn render_status_bar(model: &Model, frame: &mut Frame<'_>, area: Rect) {
         Span::styled("b", bold),
         Span::raw(bots_hint),
         Span::styled("r", bold),
-        Span::raw(" refresh"),
+        Span::raw(" refresh  "),
+        Span::styled("w", bold),
+        Span::raw(" worktree"),
     ]);
     frame.render_widget(Paragraph::new(hints), area);
     super::render_status_overlay(model, frame, area);

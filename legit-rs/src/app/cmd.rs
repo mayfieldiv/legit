@@ -1,16 +1,17 @@
-use std::{future::Future, sync::Arc};
+use std::{future::Future, path::PathBuf, sync::Arc};
 
 use tokio::sync::mpsc;
 
 use crate::{
     app::{browser, msg::Msg},
-    auth, config, git_remote,
+    auth, clipboard, config, git_remote,
     git_remote::RepoInfo,
     github::graphql::GraphQlClient,
     github::limiter::NetworkLimiter,
     github::rest::OctocrabRest,
     github::rest::PrKey,
     secret::Secret,
+    worktree,
 };
 
 /// The inputs every per-PR enrichment request shares: which repo, the auth
@@ -90,6 +91,21 @@ pub enum Cmd {
     /// status message.
     OpenUrl {
         url: String,
+    },
+    /// List worktrees for a repo's configured source clone.
+    ListWorktrees {
+        repo_slug: String,
+        source_clone: PathBuf,
+    },
+    /// Create the deterministic worktree for one PR.
+    CreateWorktree {
+        pr: PrKey,
+        source_clone: PathBuf,
+        target_path: PathBuf,
+    },
+    /// Copy text to the user's terminal clipboard via OSC 52.
+    CopyToClipboard {
+        text: String,
     },
 }
 
@@ -328,6 +344,42 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                 move |body| vec![Msg::PRDetailArrived { pr: key, body }],
             )
             .await;
+        }
+        Cmd::ListWorktrees {
+            repo_slug,
+            source_clone,
+        } => {
+            let msg = match blocking(move || worktree::list_worktrees(&source_clone)).await {
+                Ok(entries) => Msg::WorktreesArrived { repo_slug, entries },
+                Err(error) => command_failed("list worktrees", error),
+            };
+            let _ = tx.send(msg);
+        }
+        Cmd::CreateWorktree {
+            pr,
+            source_clone,
+            target_path,
+        } => {
+            let path = target_path.to_string_lossy().to_string();
+            let msg = match blocking(move || {
+                worktree::create_worktree_for_pr(&source_clone, &target_path, pr.number)
+            })
+            .await
+            {
+                Ok(()) => Msg::WorktreeCreated { pr, path },
+                Err(error) => command_failed("create worktree", error),
+            };
+            let _ = tx.send(msg);
+        }
+        Cmd::CopyToClipboard { text } => {
+            let msg = match clipboard::copy_to_clipboard(&text) {
+                Ok(()) => Msg::ClipboardCopied { text },
+                Err(error) => Msg::ClipboardCopyFailed {
+                    text,
+                    error: format!("{error:#}"),
+                },
+            };
+            let _ = tx.send(msg);
         }
     }
 }

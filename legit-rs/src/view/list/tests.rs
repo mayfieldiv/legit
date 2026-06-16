@@ -12,6 +12,7 @@ use crate::{
     github::rest::{PR, PRState},
     github::types::{CheckRun, FullReviewThread, Review, ReviewComment},
     view,
+    worktree::{self, WorktreeEntry},
 };
 
 fn fixed_now() -> DateTime<Utc> {
@@ -126,11 +127,11 @@ fn buffer_text(terminal: &Terminal<TestBackend>) -> Vec<String> {
         .collect()
 }
 
-/// Rows of the list region only: excluding the tab bar (first row), the status
-/// bar (last row), app header, optional filter chip, column header, and — at
-/// >=80 columns — the summary panel that splits off the right of the row.
-/// Slicing to the list columns keeps these list-layout assertions about the
-/// list alone, independent of the panel beside it.
+// Rows of the list region only: excluding the tab bar (first row), the status
+// bar (last row), app header, optional filter chip, column header, and — at
+// >=80 columns — the summary panel that splits off the right of the row.
+// Slicing to the list columns keeps these list-layout assertions about the
+// list alone, independent of the panel beside it.
 fn list_rows(terminal: &Terminal<TestBackend>) -> Vec<String> {
     let width = terminal.backend().buffer().area().width;
     let list_width = crate::app::list_layout::list_width(width);
@@ -232,11 +233,48 @@ fn flat_list_renders_one_row_per_pull_request() {
     assert_eq!(
         list_rows(&terminal),
         vec![
-            "#42     Add streaming PR list               octocat            +5/-3     3h    ",
-            "#43     Wire FetchOpenPRs cmd               alice              +5/-3     1d    ",
-            "#44     Render list view                    bob                +5/-3     7d    ",
+            "  #42     Add streaming PR list             octocat            +5/-3     3h    ",
+            "  #43     Wire FetchOpenPRs cmd             alice              +5/-3     1d    ",
+            "  #44     Render list view                  bob                +5/-3     7d    ",
         ]
     );
+}
+
+#[test]
+fn worktree_gutter_shows_branch_glyph_for_matched_pr() {
+    let pr = pr(42, "Add streaming PR list", "octocat", 3);
+    let path = worktree::resolve_worktree_path(
+        &crate::config::LegitConfig::default(),
+        &pr.repo_slug,
+        pr.number,
+        &pr.head_ref,
+    )
+    .expect("worktree path")
+    .to_string_lossy()
+    .to_string();
+    let mut model = model_with(vec![pr], Grouping::None, |_| Some(Tier::NeedsReview));
+    model.worktrees_by_repo.insert(
+        "acme/web".to_owned(),
+        vec![WorktreeEntry {
+            path,
+            head: "a".repeat(40),
+            branch_ref: None,
+            branch_name: None,
+            detached: true,
+            bare: false,
+            locked: None,
+            prunable: None,
+        }],
+    );
+
+    let terminal = render_snapshot(&model, 116, 5);
+    let rows = list_rows(&terminal);
+
+    assert!(
+        rows[0].starts_with(super::super::WORKTREE_GLYPH),
+        "matched worktree should render the glyph in the gutter: {rows:?}"
+    );
+    assert!(rows[0].contains("#42"), "{rows:?}");
 }
 
 #[test]
@@ -466,12 +504,12 @@ fn smart_status_grouping_renders_a_header_per_tier_in_order() {
     let rows = list_rows(&terminal);
 
     // Headers appear in tier order, each above its PRs; needs-review groups two.
-    assert!(rows[0].starts_with("── Me blocking "), "{rows:?}");
+    assert!(rows[0].starts_with("  ── Me blocking "), "{rows:?}");
     assert!(rows[1].contains("#3"), "{rows:?}");
-    assert!(rows[2].starts_with("── Needs review "), "{rows:?}");
+    assert!(rows[2].starts_with("  ── Needs review "), "{rows:?}");
     assert!(rows[3].contains("#2"), "{rows:?}");
     assert!(rows[4].contains("#4"), "{rows:?}");
-    assert!(rows[5].starts_with("── Waiting on author "), "{rows:?}");
+    assert!(rows[5].starts_with("  ── Waiting on author "), "{rows:?}");
     assert!(rows[6].contains("#1"), "{rows:?}");
 }
 
@@ -487,10 +525,13 @@ fn smart_status_grouping_omits_empty_tiers_single_tier_list() {
     let terminal = render_snapshot(&model, 200, 8);
     let rows = list_rows(&terminal);
 
-    assert!(rows[0].starts_with("── Needs review "), "{rows:?}");
+    assert!(rows[0].starts_with("  ── Needs review "), "{rows:?}");
     assert!(rows[1].contains("#1"), "{rows:?}");
     assert!(rows[2].contains("#2"), "{rows:?}");
-    let headers = rows.iter().filter(|r| r.starts_with("──")).count();
+    let headers = rows
+        .iter()
+        .filter(|r| r.trim_start().starts_with("──"))
+        .count();
     assert_eq!(
         headers, 1,
         "only the populated tier gets a header: {rows:?}"
@@ -508,9 +549,9 @@ fn smart_status_undelivered_blockers_render_under_loading_details() {
     let terminal = render_snapshot(&model, 200, 8);
     let rows = list_rows(&terminal);
 
-    assert!(rows[0].starts_with("── Needs review "), "{rows:?}");
+    assert!(rows[0].starts_with("  ── Needs review "), "{rows:?}");
     assert!(rows[1].contains("#1"), "{rows:?}");
-    assert!(rows[2].starts_with("── Loading details… "), "{rows:?}");
+    assert!(rows[2].starts_with("  ── Loading details… "), "{rows:?}");
     assert!(rows[3].contains("#2"), "{rows:?}");
     // The pending PR shows "…" placeholders in the enrichment-backed columns.
     assert!(rows[3].trim_end().ends_with('…'), "{rows:?}");
@@ -527,7 +568,7 @@ fn repo_grouping_renders_one_header_for_the_detected_repo() {
     let terminal = render_snapshot(&model, 80, 8);
     let rows = list_rows(&terminal);
 
-    assert!(rows[0].starts_with("── acme/web "), "{rows:?}");
+    assert!(rows[0].starts_with("  ── acme/web "), "{rows:?}");
     assert!(rows[1].contains("#1"), "{rows:?}");
     assert!(rows[2].contains("#2"), "{rows:?}");
 }
@@ -545,9 +586,9 @@ fn all_tab_grouped_by_repo_shows_one_header_per_repo() {
     let terminal = render_snapshot(&model, 80, 9);
     let rows = list_rows(&terminal);
 
-    assert!(rows[0].starts_with("── acme/web "), "{rows:?}");
+    assert!(rows[0].starts_with("  ── acme/web "), "{rows:?}");
     assert!(rows[1].contains("#1"), "{rows:?}");
-    assert!(rows[2].starts_with("── zeta/api "), "{rows:?}");
+    assert!(rows[2].starts_with("  ── zeta/api "), "{rows:?}");
     assert!(rows[3].contains("#2"), "{rows:?}");
 }
 
@@ -808,7 +849,7 @@ fn no_grouping_renders_no_headers() {
     let rows = list_rows(&terminal);
 
     assert!(
-        !rows.iter().any(|r| r.starts_with("──")),
+        !rows.iter().any(|r| r.trim_start().starts_with("──")),
         "no grouping must not emit headers: {rows:?}"
     );
     assert!(rows[0].contains("#1"), "{rows:?}");
@@ -1154,9 +1195,10 @@ fn narrow_width_clamps_title_rather_than_overflowing_the_row() {
     // its 1-column floor — a row must never render wider than its width.
     let pr_num_col = 6;
     let size_col = 8;
-    let column_count = 7;
+    let column_count = 8;
     let gaps = column_count - 1;
-    let width = pr_num_col
+    let width = super::WORKTREE_COL
+        + pr_num_col
         + super::AUTHOR_COL
         + size_col
         + super::AGE_COL

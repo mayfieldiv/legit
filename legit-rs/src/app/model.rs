@@ -11,6 +11,7 @@ use crate::{
     github::rest::{PR, PrKey},
     github::types::{CheckRun, FullReviewThread, IssueComment, Review},
     secret::Secret,
+    worktree::{self, WorktreeEntry},
 };
 
 use super::{
@@ -293,6 +294,10 @@ pub struct Model {
     pub status_gen: u64,
     pub network_stats: NetworkStats,
     pub enrichment: Enrichment,
+    /// Latest `git worktree list --porcelain` entries per Tracked Repo whose
+    /// config has a source clone. Filled at startup and after worktree
+    /// creation; summary/detail views derive per-PR matches from this cache.
+    pub worktrees_by_repo: HashMap<String, Vec<WorktreeEntry>>,
     /// Per-PR Smart-status, derived from `enrichment` + the current user and
     /// cached so the list view and grouping read it without recomputing on
     /// every frame. Keyed by `PrKey`; recomputed by `refresh_blockers`
@@ -331,6 +336,7 @@ impl Model {
                 status_gen: 0,
                 network_stats: NetworkStats::default(),
                 enrichment: Enrichment::default(),
+                worktrees_by_repo: HashMap::new(),
                 blockers: HashMap::new(),
                 view_mode: ViewMode::List,
                 show_resolved: false,
@@ -407,6 +413,19 @@ impl Model {
             ViewMode::Detail(detail) => Some(detail.key.clone()),
             ViewMode::List => self.list.selected_pr().map(PR::key),
         }
+    }
+
+    /// The worktree currently attached to `pr`, matched by expected branch
+    /// first and deterministic legit path second.
+    pub fn worktree_for_pr(&self, pr: &PR) -> Option<&WorktreeEntry> {
+        let repo = self.tracked_repo(&pr.repo_slug)?;
+        let entries = self.worktrees_by_repo.get(&pr.repo_slug)?;
+        let expected_branch = worktree::expected_branch_for_pr(pr, &repo.owner);
+        let expected_path =
+            worktree::resolve_worktree_path(&self.config, &pr.repo_slug, pr.number, &pr.head_ref)
+                .ok()?;
+        let expected_path = expected_path.to_string_lossy();
+        worktree::match_worktree(entries, &expected_branch, &expected_path)
     }
 
     /// The repo slug the active tab narrows the list to, or `None` for the All

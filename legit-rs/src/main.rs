@@ -1,6 +1,7 @@
 mod app;
 mod auth;
 mod blocker;
+mod clipboard;
 mod config;
 mod file_category;
 mod format;
@@ -13,6 +14,7 @@ mod secret;
 mod test_fixtures;
 mod tracing_setup;
 mod view;
+mod worktree;
 mod wrap;
 
 use anyhow::Result;

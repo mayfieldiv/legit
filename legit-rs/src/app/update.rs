@@ -4,7 +4,9 @@ use ratatui::crossterm::event::{
     Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 
-use crate::{git_remote::RepoInfo, github::rest::PrKey, secret::Secret};
+use crate::{
+    format::abbreviate_home, git_remote::RepoInfo, github::rest::PrKey, secret::Secret, worktree,
+};
 
 use super::{
     browser,
@@ -66,6 +68,28 @@ fn maybe_fetch_open_prs(model: &mut Model) -> Vec<Cmd> {
         });
     }
     cmds
+}
+
+/// List worktrees for every configured Tracked Repo that has a source clone.
+fn list_worktree_cmds(model: &Model) -> Vec<Cmd> {
+    model
+        .tracked_repos()
+        .into_iter()
+        .filter_map(|repo| {
+            let repo_slug = repo.slug();
+            match worktree::resolve_source_clone(&model.config, &repo_slug) {
+                Ok(Some(source_clone)) => Some(Cmd::ListWorktrees {
+                    repo_slug,
+                    source_clone,
+                }),
+                Ok(None) => None,
+                Err(error) => {
+                    tracing::warn!(%repo_slug, %error, "failed to resolve worktree source clone");
+                    None
+                }
+            }
+        })
+        .collect()
 }
 
 /// Fan out per-PR enrichment for one Tracked Repo after its REST list
@@ -212,6 +236,70 @@ fn fetch_pr_detail_cmd(model: &Model, key: &PrKey) -> Vec<Cmd> {
     }]
 }
 
+/// Start the `w` worktree flow for a PR, or surface the missing-config error.
+fn create_worktree_cmds(model: &mut Model, pr: crate::github::rest::PR) -> Vec<Cmd> {
+    if let Some(existing) = model.worktree_for_pr(&pr) {
+        let path = existing.path.clone();
+        return copy_worktree_path_cmds(model, path);
+    }
+
+    let source_clone = match worktree::resolve_source_clone(&model.config, &pr.repo_slug) {
+        Ok(Some(source_clone)) => source_clone,
+        Ok(None) => {
+            return set_status(
+                model,
+                StatusKind::Error,
+                format!(
+                    "No sourceClone configured for {}; edit ~/.legit/config.json",
+                    pr.repo_slug
+                ),
+            );
+        }
+        Err(error) => {
+            return set_status(
+                model,
+                StatusKind::Error,
+                format!(
+                    "Failed to resolve sourceClone for {}: {error:#}",
+                    pr.repo_slug
+                ),
+            );
+        }
+    };
+    let target_path = match worktree::resolve_worktree_path(
+        &model.config,
+        &pr.repo_slug,
+        pr.number,
+        &pr.head_ref,
+    ) {
+        Ok(path) => path,
+        Err(error) => {
+            return set_status(
+                model,
+                StatusKind::Error,
+                format!(
+                    "Failed to resolve worktree path for {}: {error:#}",
+                    pr.repo_slug
+                ),
+            );
+        }
+    };
+    let mut cmds = set_status(model, StatusKind::Info, "Creating worktree…".to_owned());
+    cmds.push(Cmd::CreateWorktree {
+        pr: pr.key(),
+        source_clone,
+        target_path,
+    });
+    cmds
+}
+
+fn copy_worktree_path_cmds(model: &mut Model, path: String) -> Vec<Cmd> {
+    let copied_path = abbreviate_home(&path);
+    let mut cmds = set_status(model, StatusKind::Info, format!("Copying {copied_path}"));
+    cmds.push(Cmd::CopyToClipboard { text: copied_path });
+    cmds
+}
+
 /// Every fetch the detail view's `r` refresh re-dispatches for the open PR:
 /// the body plus the per-PR enrichment trio whose results the Review Threads
 /// and Conversation sections render. Enrichment otherwise fetches exactly once
@@ -307,6 +395,11 @@ fn handle_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
         KeyCode::Char('d') => {
             if let Some(pr) = model.list.selected_pr().cloned() {
                 return apply(model, Msg::OpenInDevin(pr));
+            }
+        }
+        KeyCode::Char('w') => {
+            if let Some(pr) = model.list.selected_pr().cloned() {
+                return create_worktree_cmds(model, pr);
             }
         }
         KeyCode::Char('/') => {
@@ -540,6 +633,13 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
                 return apply(model, Msg::OpenUrl(url));
             }
         }
+        KeyCode::Char('w') => {
+            if let ViewMode::Detail(detail) = &model.view_mode
+                && let Some(pr) = model.list.pr(&detail.key).cloned()
+            {
+                return create_worktree_cmds(model, pr);
+            }
+        }
         // Toggle the focused card's long-body expansion (collapsed by
         // default; see `detail_layout::collapse_body`). Keyed by the comment's
         // URL, so the state survives filter toggles moving the indices. The
@@ -766,7 +866,9 @@ fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             // already landed — config (a local file read) usually wins the
             // startup race, but when it arrives last it must kick off the fetch.
             model.config_loaded = true;
-            maybe_fetch_open_prs(model)
+            let mut cmds = maybe_fetch_open_prs(model);
+            cmds.extend(list_worktree_cmds(model));
+            cmds
         }
         Msg::AuthTokenResolved(token) => {
             model.auth_token = Some(token);
@@ -781,6 +883,9 @@ fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
                 Some(repo) => RepoDetection::Detected(repo),
                 None => RepoDetection::Failed,
             };
+            // Worktree listing stays config-driven: only configured repos can
+            // declare a sourceClone, so ConfigLoaded is the event that has
+            // enough information to list them.
             maybe_fetch_open_prs(model)
         }
         Msg::PrArrived(pr) => {
@@ -891,6 +996,40 @@ fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             model,
             StatusKind::Error,
             format!("Failed to open {}: {error}", browser::open_label(&url)),
+        ),
+        Msg::WorktreesArrived { repo_slug, entries } => {
+            model.worktrees_by_repo.insert(repo_slug, entries);
+            Vec::new()
+        }
+        Msg::WorktreeCreated { pr, path } => {
+            let entries = model
+                .worktrees_by_repo
+                .entry(pr.repo_slug.clone())
+                .or_default();
+            entries.retain(|entry| entry.path != path);
+            entries.push(worktree::WorktreeEntry {
+                path: path.clone(),
+                head: String::new(),
+                branch_ref: None,
+                branch_name: None,
+                detached: true,
+                bare: false,
+                locked: None,
+                prunable: None,
+            });
+            let mut cmds = copy_worktree_path_cmds(model, path);
+            cmds.extend(list_worktree_cmds(model));
+            cmds
+        }
+        Msg::ClipboardCopied { text } => set_status(
+            model,
+            StatusKind::Success,
+            format!("Copied {}", abbreviate_home(&text)),
+        ),
+        Msg::ClipboardCopyFailed { text, error } => set_status(
+            model,
+            StatusKind::Error,
+            format!("Failed to copy {}: {error}", abbreviate_home(&text)),
         ),
         Msg::ConfigLoadFailed { error } => {
             // Config is a hard prerequisite (current user + bot logins drive

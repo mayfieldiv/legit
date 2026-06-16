@@ -20,6 +20,7 @@ mod files;
 mod filter;
 mod multi_repo;
 mod tabs;
+mod worktree;
 
 /// The `PrKey` of `sample_pr(number, ..)` — every sample PR is stamped with
 /// the same Tracked Repo slug.
