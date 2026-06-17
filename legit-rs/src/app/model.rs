@@ -10,6 +10,7 @@ use crate::{
     github::limiter::NetworkStats,
     github::rest::{PR, PrKey},
     github::types::{CheckRun, FullReviewThread, IssueComment, Review},
+    markdown::Block,
     secret::Secret,
     worktree::{self, WorktreeEntry},
 };
@@ -44,13 +45,15 @@ pub struct DetailState {
     /// sourced from the enriched `model.list` via this key so mergeable,
     /// head_commit_sha, etc. are always current.
     pub key: PrKey,
-    /// The fetched PR description, rendered to display lines exactly once on
+    /// The fetched PR description, parsed to markdown blocks exactly once on
     /// arrival (`Msg::PRDetailArrived`) rather than re-parsed every frame.
-    /// `None` while `Cmd::FetchPRDetail` is in flight — the detail view shows a
-    /// loading placeholder in that state. Holds only the description lines; the
-    /// CI checks section is appended per-frame so late-arriving checks still
-    /// show without a re-fetch.
-    pub body: Option<Vec<Line<'static>>>,
+    /// Blocks (not flat lines) so the description's `<details>` groups fold and
+    /// unfold per the body's expansion state without re-parsing; the layout
+    /// flattens them per frame. `None` while `Cmd::FetchPRDetail` is in flight —
+    /// the detail view shows a loading placeholder in that state. Holds only the
+    /// description; the CI checks section is appended per-frame so late-arriving
+    /// checks still show without a re-fetch.
+    pub body: Option<Vec<Block>>,
     /// Vertical scroll offset for the body (lines scrolled past the top). Starts
     /// at zero on entry; `update` mutates it on PageUp/PageDown (and to keep the
     /// focused item visible) and clamps it so it can never sit past the last
@@ -74,11 +77,15 @@ pub struct DetailState {
     /// PageUp/PageDown scrolling (which changes neither) never does. Enter
     /// clears it to force a follow after expanding the focused card in place.
     pub followed: Option<(DetailFocus, usize)>,
-    /// Cards whose long bodies the user expanded with Enter, keyed by the
-    /// comment's URL (unique per review/issue comment, and stable across
-    /// filter toggles — unlike a focus index). Lives in `DetailState` so
-    /// closing the view structurally resets every card to collapsed, mirroring
-    /// the TS details-store being dropped per PR.
+    /// Cards whose `<details>` groups the user expanded with Enter (toggle-all
+    /// per card), keyed by the comment's URL — and by `detail_layout`'s
+    /// `BODY_DETAILS_KEY` sentinel for the description, which has no URL. URLs
+    /// are unique per review/issue comment and stable across filter toggles
+    /// (unlike a focus index). Lives in `DetailState` so closing the view
+    /// structurally resets every card to collapsed, mirroring the TS
+    /// details-store being dropped per PR. The long-body line cap is a separate,
+    /// unconditional backstop (`detail_layout::COLLAPSED_CARD_BODY_ROWS`), not
+    /// driven by this set.
     pub expanded: HashSet<String>,
 }
 
@@ -95,16 +102,18 @@ pub struct Enrichment {
     pub reviews: HashMap<PrKey, Vec<Review>>,
     pub issue_comments: HashMap<PrKey, Vec<IssueComment>>,
     pub checks: HashMap<(String, String), Vec<CheckRun>>,
-    /// Comment bodies rendered to display lines once on arrival, keyed by the
-    /// comment's URL (the same stable key `DetailState::expanded` uses).
-    /// Private: written only by `store_threads`/`store_issue_comments`, so the
-    /// cache stays adjacent to the raw maps and can't drift from them. Read by
-    /// `detail_layout` via `rendered_body`, which would otherwise re-parse
-    /// every comment's markdown each frame — the same rationale as caching the
-    /// rendered description in `DetailState::body`. Entries for comments that
-    /// vanish on a refresh linger (bounded by the session) and are overwritten
-    /// whenever their URL re-arrives.
-    rendered_bodies: HashMap<String, Vec<Line<'static>>>,
+    /// Comment bodies parsed to markdown blocks once on arrival, keyed by the
+    /// comment's URL (the same stable key `DetailState::expanded` uses). Blocks
+    /// rather than flat lines so each comment's `<details>` groups fold per the
+    /// card's expansion state without re-parsing (the layout flattens them per
+    /// frame). Private: written only by `store_threads`/`store_issue_comments`,
+    /// so the cache stays adjacent to the raw maps and can't drift from them.
+    /// Read by `detail_layout` via `rendered_body`/`blocks_for`, which would
+    /// otherwise re-parse every comment's markdown each frame — the same
+    /// rationale as caching the parsed description in `DetailState::body`.
+    /// Entries for comments that vanish on a refresh linger (bounded by the
+    /// session) and are overwritten whenever their URL re-arrives.
+    rendered_bodies: HashMap<String, Vec<Block>>,
     /// Per-PR changed-files fetch state, fetched just-in-time on selection
     /// change. Keyed by `PrKey`; absent until the PR's files are first
     /// requested. This one map IS the files fetch's whole state machine
@@ -115,35 +124,49 @@ pub struct Enrichment {
 }
 
 impl Enrichment {
-    /// Store an arrived thread list, rendering each comment's markdown body to
-    /// display lines exactly once. The one write path for `review_threads`, so
-    /// the rendered cache always covers what the maps hold.
+    /// Store an arrived thread list, parsing each comment's markdown body to
+    /// blocks exactly once. The one write path for `review_threads`, so the
+    /// parsed cache always covers what the maps hold.
     pub fn store_threads(&mut self, pr: PrKey, threads: Vec<FullReviewThread>) {
         for comment in threads.iter().flat_map(|thread| &thread.comments) {
-            self.rendered_bodies
-                .insert(comment.url.clone(), crate::markdown::render(&comment.body));
+            self.rendered_bodies.insert(
+                comment.url.clone(),
+                crate::markdown::render_blocks(&comment.body),
+            );
         }
         self.review_threads.insert(pr, threads);
     }
 
-    /// Store an arrived issue-comment list; same render-once contract as
+    /// Store an arrived issue-comment list; same parse-once contract as
     /// `store_threads`.
     pub fn store_issue_comments(&mut self, pr: PrKey, comments: Vec<IssueComment>) {
         for comment in &comments {
-            self.rendered_bodies
-                .insert(comment.url.clone(), crate::markdown::render(&comment.body));
+            self.rendered_bodies.insert(
+                comment.url.clone(),
+                crate::markdown::render_blocks(&comment.body),
+            );
         }
         self.issue_comments.insert(pr, comments);
     }
 
-    /// The display lines for a comment's body, cloned from the render-once
-    /// cache. Falls back to rendering fresh for a comment that bypassed the
-    /// `store_*` writers — behaviourally identical, just uncached.
-    pub fn rendered_body(&self, url: &str, body: &str) -> Vec<Line<'static>> {
-        self.rendered_bodies
-            .get(url)
-            .cloned()
-            .unwrap_or_else(|| crate::markdown::render(body))
+    /// The display lines for a comment's body, flattened from the parse-once
+    /// cache for the card's `<details>` expansion state. Falls back to parsing
+    /// fresh for a comment that bypassed the `store_*` writers — behaviourally
+    /// identical, just uncached.
+    pub fn rendered_body(&self, url: &str, body: &str, expanded: bool) -> Vec<Line<'static>> {
+        match self.rendered_bodies.get(url) {
+            Some(blocks) => crate::markdown::flatten_blocks(blocks, expanded),
+            None => {
+                crate::markdown::flatten_blocks(&crate::markdown::render_blocks(body), expanded)
+            }
+        }
+    }
+
+    /// The parsed blocks for a comment's body, if cached. The Enter handler
+    /// reads this to decide whether the focused card has any `<details>` to
+    /// toggle (an uncached comment reports `None` — nothing to toggle).
+    pub fn blocks_for(&self, url: &str) -> Option<&[Block]> {
+        self.rendered_bodies.get(url).map(Vec::as_slice)
     }
 
     /// The review threads fetched for `pr`, or `None` until `ThreadsArrived`.

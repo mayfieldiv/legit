@@ -31,6 +31,7 @@ use crate::{
     app::model::{DetailState, Model},
     format::{format_age, format_mergeable, format_size},
     github::rest::PR,
+    markdown::Block,
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -171,7 +172,7 @@ fn spans_display_width(spans: &[Span<'_>]) -> usize {
 fn render_body(
     model: &Model,
     pr: &PR,
-    description: &[Line<'static>],
+    description: &[Block],
     detail: &DetailState,
     frame: &mut Frame<'_>,
     area: Rect,

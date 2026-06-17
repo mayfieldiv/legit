@@ -598,6 +598,29 @@ fn detail_viewport_rows(model: &Model) -> usize {
     usize::from(model.terminal_height).saturating_sub(usize::from(detail_layout::CHROME_ROWS))
 }
 
+/// The `detail.expanded` key Enter should toggle for the focused card, or
+/// `None` when the focused card has no `<details>` to toggle (so Enter no-ops,
+/// matching the TS `toggleAll` early-return). The body resolves to the
+/// `BODY_DETAILS_KEY` sentinel and reads its blocks from `detail.body`; a
+/// thread/reply/comment resolves to its URL and reads the parse-once cache.
+fn focused_details_key(model: &Model) -> Option<String> {
+    let ViewMode::Detail(detail) = &model.view_mode else {
+        return None;
+    };
+    match detail.focus.url() {
+        None => detail
+            .body
+            .as_deref()
+            .filter(|blocks| crate::markdown::has_details(blocks))
+            .map(|_| detail_layout::BODY_DETAILS_KEY.to_owned()),
+        Some(url) => model
+            .enrichment
+            .blocks_for(url)
+            .filter(|blocks| crate::markdown::has_details(blocks))
+            .map(|_| url.to_owned()),
+    }
+}
+
 /// Handle one keypress while the detail view is open. The caller guarantees
 /// `model.view_mode` is `ViewMode::Detail`, so the scroll/refresh arms match
 /// the inner `DetailState` directly.
@@ -668,19 +691,20 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
                 return create_worktree_cmds(model, pr);
             }
         }
-        // Toggle the focused card's long-body expansion (collapsed by
-        // default; see `detail_layout::collapse_body`). Keyed by the comment's
-        // URL, so the state survives filter toggles moving the indices. The
-        // body (no URL) has nothing to toggle. Expansion grows the card in
-        // place — identity and start line unchanged — so the follow anchor is
-        // cleared explicitly to make `normalize_detail` pull the grown card
-        // back into view.
+        // Toggle the focused card's `<details>` groups (toggle-all per card,
+        // collapsed by default — the TS `toggleAll` port). Keyed by the
+        // comment's URL (or `BODY_DETAILS_KEY` for the description, which has
+        // none), so the state survives filter toggles moving the indices. No-op
+        // when the focused card has no `<details>` to toggle, mirroring the TS
+        // controller's early-return. Expanding grows the card in place —
+        // identity and start line unchanged — so the follow anchor is cleared
+        // explicitly to make `normalize_detail` pull the grown card into view.
         KeyCode::Enter => {
-            if let ViewMode::Detail(detail) = &mut model.view_mode
-                && let Some(url) = detail.focus.url().map(str::to_owned)
+            if let Some(key) = focused_details_key(model)
+                && let ViewMode::Detail(detail) = &mut model.view_mode
             {
-                if !detail.expanded.remove(&url) {
-                    detail.expanded.insert(url);
+                if !detail.expanded.remove(&key) {
+                    detail.expanded.insert(key);
                 }
                 detail.followed = None;
             }
@@ -1085,15 +1109,16 @@ fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             Vec::new()
         }
         Msg::PRDetailArrived { pr, body } => {
-            // Render the markdown description to display lines exactly once,
-            // here on arrival, and cache the result — the view then reuses it
-            // every frame instead of re-parsing. Store it only when the view is
-            // still open for this PR; discard it if the user already navigated
-            // back to the list or entered a different PR's detail.
+            // Parse the markdown description to blocks exactly once, here on
+            // arrival, and cache the result — the view then flattens it (per the
+            // body's `<details>` expansion) every frame instead of re-parsing.
+            // Store it only when the view is still open for this PR; discard it
+            // if the user already navigated back to the list or entered a
+            // different PR's detail.
             if let ViewMode::Detail(detail) = &mut model.view_mode
                 && detail.key == pr
             {
-                detail.body = Some(detail_layout::render_description_lines(&body));
+                detail.body = Some(detail_layout::render_description_blocks(&body));
             }
             Vec::new()
         }

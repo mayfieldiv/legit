@@ -19,7 +19,7 @@ use crate::{
     format::{check_row, checks_summary, format_age, sort_check_runs},
     github::rest::PR,
     github::types::{CheckRun, FullReviewThread},
-    markdown,
+    markdown::{self, Block},
 };
 
 use super::{
@@ -42,19 +42,26 @@ pub(crate) const HEADER_HEIGHT: u16 = 5;
 /// `sync_viewport` and `view::view`.
 pub(crate) const CHROME_ROWS: u16 = HEADER_HEIGHT + 1;
 
-/// Render the PR description to display lines: the markdown body, or a muted
-/// "No description." placeholder when the body is blank. Pure (no model/area):
-/// called once on `Msg::PRDetailArrived` so the markdown is parsed a single
-/// time and the result cached in `DetailState::body`, not re-parsed per frame.
-pub(crate) fn render_description_lines(body: &str) -> Vec<Line<'static>> {
+/// Sentinel key under which the PR description's `<details>` expansion state
+/// lives in `DetailState::expanded`. The description has no comment URL, and
+/// every real key is a non-empty GitHub comment URL, so the empty string can't
+/// collide with one.
+pub(crate) const BODY_DETAILS_KEY: &str = "";
+
+/// Parse the PR description to markdown blocks: the body's blocks, or a single
+/// muted "No description." line when blank. Pure (no model/area): called once
+/// on `Msg::PRDetailArrived` so the markdown is parsed a single time and the
+/// blocks cached in `DetailState::body`, then flattened (per the body's
+/// `<details>` expansion) per frame rather than re-parsed.
+pub(crate) fn render_description_blocks(body: &str) -> Vec<Block> {
     let trimmed = body.trim();
     if trimmed.is_empty() {
-        vec![Line::from(Span::styled(
+        vec![Block::Lines(vec![Line::from(Span::styled(
             "No description.",
             Style::default().fg(Color::DarkGray),
-        ))]
+        ))])]
     } else {
-        markdown::render(trimmed)
+        markdown::render_blocks(trimmed)
     }
 }
 
@@ -272,12 +279,14 @@ impl DetailContent {
 /// checks section, then the Review Threads and Conversation sections as
 /// focusable cards filtered by `Model::detail_filters`. Sections whose fetch
 /// hasn't landed render a loading placeholder; arrived-empty sections render
-/// nothing. Card bodies longer than `COLLAPSED_CARD_BODY_ROWS` collapse unless
-/// their URL is in `detail.expanded` (Enter toggles).
+/// nothing. Each card's `<details>` groups fold or unfold per its entry in
+/// `detail.expanded` (Enter toggles); a card body longer than
+/// `COLLAPSED_CARD_BODY_ROWS` is additionally capped as an unconditional
+/// backstop for pathological bodies.
 pub(crate) fn detail_content(
     model: &Model,
     pr: &PR,
-    description: &[Line<'static>],
+    description: &[Block],
     detail: &DetailState,
     width: u16,
     now: DateTime<Utc>,
@@ -295,11 +304,15 @@ pub(crate) fn detail_content(
         last_card_bottom: None,
     };
 
-    // Item 0: the body, wrapped to the terminal width here at derivation time
-    // (the cached render is width-independent). Unstyled — no border even
+    // Item 0: the body. Its `<details>` groups fold per the body's own
+    // expansion entry (keyed by the URL-less `BODY_DETAILS_KEY` sentinel), then
+    // the flattened lines wrap to the terminal width here at derivation time
+    // (the parsed blocks are width-independent). Unstyled — no border even
     // focused, matching the TS DetailView where only thread/reply/comment
     // cards are framed.
-    let description = crate::wrap::wrap_lines(description.to_vec(), width as usize);
+    let body_expanded = detail.expanded.contains(BODY_DETAILS_KEY);
+    let description = markdown::flatten_blocks(description, body_expanded);
+    let description = crate::wrap::wrap_lines(description, width as usize);
     content.item_ranges.push(0..description.len());
     content.lines.extend(description);
 
@@ -388,20 +401,22 @@ pub(crate) fn detail_content(
     content
 }
 
-/// Rows of a card's markdown body shown while collapsed. A backstop for
-/// pathological bodies (multi-thousand-line bot dumps, pasted logs), not an
-/// everyday fold — ordinary long comments render in full, and Enter expands
-/// the focused card past the cap (the TUI stand-in for the TS `details-store`
-/// toggle until `<details>`/`<summary>` rendering lands).
+/// Hard cap on a card's body rows. An unconditional backstop for pathological
+/// bodies (multi-thousand-line bot dumps, pasted logs), not an everyday fold —
+/// ordinary long comments render in full. Enter toggles the card's `<details>`
+/// groups (the TS `details-store` port), not this cap, so a body past the cap
+/// stays truncated; the cap only guards against a single comment swamping the
+/// scroll height.
 const COLLAPSED_CARD_BODY_ROWS: usize = 100;
 
-/// One card's body lines: the render-once cached markdown, capped at
-/// `COLLAPSED_CARD_BODY_ROWS` while collapsed, then wrapped to the card's
-/// content width — the full width minus the indent and the 2-column gutter
-/// `push_card` prepends. Wrapping happens here at derivation time (the cached
-/// render is width-independent), so the scroll clamp and card ranges measure
-/// exactly the rows the view paints. Bylines and section headers deliberately
-/// don't wrap — they clip, like the TS `truncate` rows.
+/// One card's body lines: the parse-once cached markdown flattened for the
+/// card's `<details>` expansion state, capped at `COLLAPSED_CARD_BODY_ROWS` as a
+/// backstop, then wrapped to the card's content width — the full width minus the
+/// indent and the 2-column gutter `push_card` prepends. Wrapping happens here at
+/// derivation time (the parsed blocks are width-independent), so the scroll
+/// clamp and card ranges measure exactly the rows the view paints. Bylines and
+/// section headers deliberately don't wrap — they clip, like the TS `truncate`
+/// rows.
 fn card_body(
     model: &Model,
     detail: &DetailState,
@@ -410,24 +425,27 @@ fn card_body(
     indent: usize,
     width: u16,
 ) -> Vec<Line<'static>> {
+    let expanded = detail.expanded.contains(comment_url);
     let body = collapse_body(
-        model.enrichment.rendered_body(comment_url, comment_body),
-        detail.expanded.contains(comment_url),
+        model
+            .enrichment
+            .rendered_body(comment_url, comment_body, expanded),
     );
     crate::wrap::wrap_lines(body, (width as usize).saturating_sub(indent + 2))
 }
 
-/// Cap a card's body at `COLLAPSED_CARD_BODY_ROWS` lines unless expanded,
-/// appending a muted marker advertising the hidden tail.
-fn collapse_body(body: Vec<Line<'static>>, expanded: bool) -> Vec<Line<'static>> {
-    if expanded || body.len() <= COLLAPSED_CARD_BODY_ROWS {
+/// Cap a card's body at `COLLAPSED_CARD_BODY_ROWS` lines, appending a muted
+/// marker advertising the hidden tail. An unconditional backstop — see
+/// `COLLAPSED_CARD_BODY_ROWS`.
+fn collapse_body(body: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    if body.len() <= COLLAPSED_CARD_BODY_ROWS {
         return body;
     }
     let hidden = body.len() - COLLAPSED_CARD_BODY_ROWS;
     let mut out = body;
     out.truncate(COLLAPSED_CARD_BODY_ROWS);
     out.push(Line::from(Span::styled(
-        format!("… +{hidden} more lines — enter expands"),
+        format!("… +{hidden} more lines (truncated)"),
         Style::default().fg(Color::DarkGray),
     )));
     out

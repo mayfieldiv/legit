@@ -2,9 +2,15 @@
 //! `pulldown-cmark` events to ratatui `Line`/`Span` with the same feature set
 //! as the TS implementation.
 //!
-//! The public entry point is `render(source: &str) -> Vec<Line<'static>>`.
-//! Each call to `render` allocates owned strings (via `CowStr::into_string`),
-//! so the caller has no lifetime dependency on the source string.
+//! Rendering is two-staged so `<details>` groups can fold without re-parsing.
+//! `render_blocks(source)` parses to a `Vec<Block>` — runs of display lines,
+//! with each `<details>...</details>` captured as a collapsible `Details`
+//! block (port of the TS `groupDetailsBlocks`). `flatten_blocks(blocks,
+//! expanded)` then resolves that to `Vec<Line<'static>>` for a given card-wide
+//! expansion state. A body with no `<details>` yields exactly one `Lines`
+//! block, so its flattened output is identical to the old flat renderer.
+//! Each `Line` owns its spans (all strings are `'static`), so callers have no
+//! lifetime dependency on the source string.
 //!
 //! Supported block types: headings (h1–h3+ with decreasing visual weight),
 //! paragraphs, fenced code blocks (language tag + visual delineation),
@@ -29,27 +35,317 @@ const CODE: Color = Color::LightCyan;
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-/// Render a markdown string to a list of ratatui lines ready to be passed to
-/// a `Paragraph` or collected into a `Text`. Each `Line` owns its spans
-/// (all strings are `'static`), so the returned `Vec` is independent of the
-/// source lifetime. The output ends at its last content line: the block
-/// handlers emit a blank separator after every block, which would leave one
-/// trailing blank on the whole document — but spacing *around* a rendered
-/// body is the consumer's concern (detail cards must end at their content so
-/// adjacent cards sit one shared separator row apart).
-pub fn render(source: &str) -> Vec<Line<'static>> {
-    let parser = Parser::new_ext(source, Options::empty());
-    let mut ctx = RenderCtx::default();
-    ctx.process(parser);
-    while ctx.lines.last().is_some_and(line_is_blank) {
-        ctx.lines.pop();
+/// A rendered markdown body as a sequence of blocks. Most content is a single
+/// `Lines` run; a `<details>...</details>` group becomes a `Details` block so
+/// the detail view can fold and unfold it without re-parsing. The renderer
+/// ignores every other HTML construct (as the prior flat renderer did), so a
+/// body with no `<details>` yields exactly one `Lines` block.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Block {
+    /// A run of fully-rendered display lines (no toggle).
+    Lines(Vec<Line<'static>>),
+    /// A collapsible `<details>` group: its `<summary>` text plus the inner
+    /// content as nested blocks (which may hold further `Details` groups).
+    Details {
+        summary: String,
+        children: Vec<Block>,
+    },
+}
+
+/// Parse markdown into blocks, grouping each `<details>...</details>` run into a
+/// `Details` block (port of the TS `groupDetailsBlocks`). The content between a
+/// `<details>` open and its matching `</details>` is rendered as its own block
+/// sequence, so it keeps full markdown formatting. An unclosed `<details>`
+/// folds the rest of the document into the group, and a stray `</details>` is
+/// ignored — matching the TS reference. Non-details HTML is dropped, exactly as
+/// the prior flat renderer dropped all HTML.
+pub fn render_blocks(source: &str) -> Vec<Block> {
+    // A stack of open frames: index 0 is the document, each deeper entry an
+    // open `<details>`. Non-HTML events feed the innermost frame's render
+    // context; a `<details>` open/close pushes/pops a frame.
+    let mut frames: Vec<Frame> = vec![Frame::document()];
+    let mut html = String::new();
+    let mut in_html_block = false;
+    for event in Parser::new_ext(source, Options::empty()) {
+        match event {
+            // HTML arrives one block at a time (`Start`/`End(HtmlBlock)` with
+            // one or more `Html` events between); accumulate the whole block so
+            // a `<details>` and its `<summary>` on separate lines are seen as
+            // one string before tokenising.
+            Event::Start(Tag::HtmlBlock) => {
+                in_html_block = true;
+                html.clear();
+            }
+            Event::End(TagEnd::HtmlBlock) => {
+                in_html_block = false;
+                apply_html_tokens(&html, &mut frames);
+            }
+            Event::Html(text) if in_html_block => html.push_str(&text),
+            other => frames
+                .last_mut()
+                .expect("frame stack always has the document frame")
+                .ctx
+                .handle(other),
+        }
     }
-    ctx.lines
+    // Fold any unclosed `<details>` into their parents (malformed input — the TS
+    // grouping likewise runs to the document end), then finish the document.
+    while frames.len() > 1 {
+        let child = frames.pop().expect("len > 1");
+        let block = child.into_details();
+        frames
+            .last_mut()
+            .expect("a parent frame for every child")
+            .push_block(block);
+    }
+    frames.pop().expect("the document frame").finish()
+}
+
+/// Flatten rendered blocks to display lines. Each `Details` group renders one
+/// summary line — `▶ summary` collapsed, `▼ summary` expanded — and, when
+/// `expanded`, its children indented two columns beneath it. `expanded` is the
+/// card-wide toggle-all state Enter drives (the TS `toggleAll`): one boolean
+/// per card, so every group in a card folds and unfolds together. Trailing
+/// blank lines are trimmed so a card ends at its last content row (the layout
+/// owns spacing between cards); internal blank separators between blocks are
+/// preserved.
+pub fn flatten_blocks(blocks: &[Block], expanded: bool) -> Vec<Line<'static>> {
+    let mut out = Vec::new();
+    flatten_into(blocks, expanded, 0, &mut out);
+    while out.last().is_some_and(line_is_blank) {
+        out.pop();
+    }
+    out
+}
+
+/// Whether any block in the sequence is a `<details>` group — the test the
+/// Enter handler uses to no-op on a card with nothing to toggle (matching the
+/// TS `toggleAll` early-return). A nested group always sits inside a top-level
+/// one, so a shallow scan suffices.
+pub fn has_details(blocks: &[Block]) -> bool {
+    blocks.iter().any(|b| matches!(b, Block::Details { .. }))
+}
+
+fn flatten_into(blocks: &[Block], expanded: bool, depth: usize, out: &mut Vec<Line<'static>>) {
+    for block in blocks {
+        match block {
+            Block::Lines(lines) => out.extend(lines.iter().map(|line| indent_line(line, depth))),
+            Block::Details { summary, children } => {
+                out.push(summary_line(summary, expanded, depth));
+                if expanded {
+                    flatten_into(children, expanded, depth + 1, out);
+                }
+            }
+        }
+    }
+}
+
+/// The `▶`/`▼ summary` line for a `<details>` group, indented for nesting. The
+/// marker takes the accent colour; the summary text is bold (mirrors the TS
+/// `MdDetails` styling).
+fn summary_line(summary: &str, expanded: bool, depth: usize) -> Line<'static> {
+    let marker = if expanded { "▼ " } else { "▶ " };
+    let indent = "  ".repeat(depth);
+    Line::from(vec![
+        Span::styled(format!("{indent}{marker}"), Style::default().fg(ACCENT)),
+        Span::styled(
+            summary.to_owned(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+    ])
+}
+
+/// Clone a rendered line, prepending `depth` levels of two-space indent (the TS
+/// `paddingLeft={2}` per nesting level). Zero depth returns the line unchanged.
+fn indent_line(line: &Line<'static>, depth: usize) -> Line<'static> {
+    if depth == 0 {
+        return line.clone();
+    }
+    let mut cloned = line.clone();
+    cloned.spans.insert(0, Span::raw("  ".repeat(depth)));
+    cloned
 }
 
 /// True when the line renders as visually empty (no non-whitespace content).
 fn line_is_blank(line: &Line<'_>) -> bool {
     line.spans.iter().all(|span| span.content.trim().is_empty())
+}
+
+// ── `<details>` grouping ────────────────────────────────────────────────────────
+
+/// One open frame in `render_blocks`: the document, or an open `<details>`.
+/// Holds the blocks finished so far plus a render context accumulating the
+/// current run of plain lines (flushed to a `Lines` block at each boundary).
+struct Frame {
+    /// The `<summary>` text for a `<details>` frame; `None` for the document.
+    summary: Option<String>,
+    blocks: Vec<Block>,
+    ctx: RenderCtx,
+}
+
+impl Frame {
+    fn document() -> Self {
+        Self {
+            summary: None,
+            blocks: Vec::new(),
+            ctx: RenderCtx::default(),
+        }
+    }
+
+    fn details(summary: Option<String>) -> Self {
+        Self {
+            summary,
+            blocks: Vec::new(),
+            ctx: RenderCtx::default(),
+        }
+    }
+
+    /// Move the render context's accumulated lines into a `Lines` block
+    /// (trailing blank separators trimmed, as the old flat renderer trimmed the
+    /// whole document) and reset the context. An empty run adds no block.
+    fn flush(&mut self) {
+        let mut lines = std::mem::take(&mut self.ctx).lines;
+        while lines.last().is_some_and(line_is_blank) {
+            lines.pop();
+        }
+        if !lines.is_empty() {
+            self.blocks.push(Block::Lines(lines));
+        }
+    }
+
+    /// Flush pending lines, then append `block` after them so ordering holds.
+    fn push_block(&mut self, block: Block) {
+        self.flush();
+        self.blocks.push(block);
+    }
+
+    /// Finish a `<details>` frame into its `Details` block, defaulting the
+    /// summary to "Details" when the markup carried none.
+    fn into_details(mut self) -> Block {
+        self.flush();
+        Block::Details {
+            summary: self.summary.unwrap_or_else(|| "Details".to_owned()),
+            children: self.blocks,
+        }
+    }
+
+    /// Finish the document frame into its block list.
+    fn finish(mut self) -> Vec<Block> {
+        self.flush();
+        self.blocks
+    }
+}
+
+/// A `<details>` boundary found in an accumulated HTML block.
+enum DetailsToken {
+    /// `<details ...>` plus its `<summary>` text, if present.
+    Open(Option<String>),
+    /// `</details>`.
+    Close,
+}
+
+/// Apply one accumulated HTML block's `<details>` tokens to the frame stack:
+/// each open flushes the current frame's pending lines and pushes a new
+/// `<details>` frame; each close finalises the top frame into its parent. A
+/// stray close (none open) is ignored. Other HTML in the block adds nothing.
+fn apply_html_tokens(html: &str, frames: &mut Vec<Frame>) {
+    for token in tokenize_details(html) {
+        match token {
+            DetailsToken::Open(summary) => {
+                frames
+                    .last_mut()
+                    .expect("frame stack always has the document frame")
+                    .flush();
+                frames.push(Frame::details(summary));
+            }
+            DetailsToken::Close if frames.len() > 1 => {
+                let child = frames.pop().expect("len > 1");
+                let block = child.into_details();
+                frames
+                    .last_mut()
+                    .expect("a parent frame for every child")
+                    .push_block(block);
+            }
+            DetailsToken::Close => {}
+        }
+    }
+}
+
+/// Scan one accumulated HTML block for `<details>` opens and `</details>`
+/// closes in document order. For each open, the immediately-following
+/// `<summary>...</summary>` text (up to the next details boundary) becomes the
+/// group's summary. Case-insensitive on tag names; all other markup is ignored.
+fn tokenize_details(html: &str) -> Vec<DetailsToken> {
+    let lower = html.to_ascii_lowercase();
+    let mut tokens = Vec::new();
+    let mut i = 0usize;
+    while i < html.len() {
+        let open = lower[i..].find("<details").map(|p| i + p);
+        let close = lower[i..].find("</details").map(|p| i + p);
+        let (is_open, at) = match (open, close) {
+            (Some(o), Some(c)) => (o <= c, o.min(c)),
+            (Some(o), None) => (true, o),
+            (None, Some(c)) => (false, c),
+            (None, None) => break,
+        };
+        // Advance past this tag's '>' (or to the end if it is unterminated).
+        let tag_end = lower[at..].find('>').map_or(html.len(), |p| at + p + 1);
+        if is_open {
+            // The summary lives between this tag and the next details boundary.
+            let next = next_details_boundary(&lower, tag_end);
+            let summary = extract_summary(&html[tag_end..next], &lower[tag_end..next]);
+            tokens.push(DetailsToken::Open(summary));
+        } else {
+            tokens.push(DetailsToken::Close);
+        }
+        i = tag_end;
+    }
+    tokens
+}
+
+/// The byte offset of the next `<details`/`</details` at or after `from`, or
+/// the string length when there is none.
+fn next_details_boundary(lower: &str, from: usize) -> usize {
+    let open = lower[from..].find("<details").map(|p| from + p);
+    let close = lower[from..].find("</details").map(|p| from + p);
+    open.into_iter().chain(close).min().unwrap_or(lower.len())
+}
+
+/// Extract and clean the `<summary>` text from an HTML segment, or `None` when
+/// there is no summary (the caller defaults to "Details"). `segment` is the raw
+/// slice; `lower` is its lowercased twin for case-insensitive tag matching.
+fn extract_summary(segment: &str, lower: &str) -> Option<String> {
+    let open = lower.find("<summary")?;
+    let content = lower[open..].find('>').map(|p| open + p + 1)?;
+    let end = lower[content..]
+        .find("</summary>")
+        .map_or(segment.len(), |p| content + p);
+    let text = clean_summary_text(&segment[content..end]);
+    (!text.is_empty()).then_some(text)
+}
+
+/// Reduce a `<summary>`'s inner HTML to plain text: strip tags, decode the
+/// handful of entities GitHub emits, and collapse whitespace (mirrors the TS
+/// `collectHastText`, which keeps text nodes and drops element formatting).
+fn clean_summary_text(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut in_tag = false;
+    for ch in raw.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    // Decode `&amp;` last so an already-escaped entity isn't double-decoded.
+    let decoded = out
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&");
+    decoded.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Return a `Span` that renders `text` as a heading at `depth`, prepending the
@@ -177,13 +473,6 @@ impl RenderCtx {
     /// `<box>`).
     fn blank_line(&mut self) {
         self.lines.push(Line::default());
-    }
-
-    /// Drive all parser events through the state machine.
-    fn process<'a>(&mut self, parser: impl Iterator<Item = Event<'a>>) {
-        for event in parser {
-            self.handle(event);
-        }
     }
 
     fn handle<'a>(&mut self, event: Event<'a>) {
