@@ -185,6 +185,89 @@ fn shift_r_with_no_visible_prs_posts_no_status() {
 }
 
 #[test]
+fn r_on_an_empty_repo_tab_relists_that_repo() {
+    // The reported bug: pressing r on a Repo Tab with no PRs did nothing
+    // because there was no selected PR to refresh. It should re-fetch the
+    // repo's listing to check GitHub for newly-opened PRs.
+    let mut model = list_model(&[]); // mayfieldiv/legit, Loaded, zero PRs
+    update(&mut model, key_event(KeyCode::Char('1'))); // select the repo tab
+    assert_eq!(model.active_tab, 1, "precondition: a Repo Tab is active");
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('r')));
+
+    assert_eq!(
+        fetched_slugs(&cmds),
+        ["mayfieldiv/legit"],
+        "r on an empty repo tab re-fetches its listing: {cmds:?}",
+    );
+    assert!(
+        model.list.is_loading(Some("mayfieldiv/legit")),
+        "the repo enters Loading so the view shows the loading placeholder",
+    );
+}
+
+#[test]
+fn shift_r_on_an_empty_repo_tab_relists_that_repo() {
+    let mut model = list_model(&[]);
+    update(&mut model, key_event(KeyCode::Char('1')));
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('R')));
+
+    assert!(
+        cmds.iter().any(|c| matches!(c, Cmd::LoadConfig)),
+        "R still reloads config: {cmds:?}",
+    );
+    assert!(
+        cmds.iter().any(
+            |c| matches!(c, Cmd::FetchOpenPRs { repo, .. } if repo.slug() == "mayfieldiv/legit")
+        ),
+        "R on an empty repo tab also re-fetches its listing: {cmds:?}",
+    );
+    assert!(model.list.is_loading(Some("mayfieldiv/legit")));
+}
+
+#[test]
+fn refresh_on_an_empty_repo_tab_already_loading_does_not_redispatch() {
+    // The repo's initial listing is still in flight (no PRs yet): refresh must
+    // not dispatch a duplicate listing on top of it.
+    let mut model = enriched_model(&[]); // begin_fetch'd, still Loading
+    model.relayout();
+    update(&mut model, key_event(KeyCode::Char('1')));
+    assert!(model.list.is_loading(Some("mayfieldiv/legit")));
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('r')));
+
+    assert!(
+        !cmds.iter().any(|c| matches!(c, Cmd::FetchOpenPRs { .. })),
+        "an in-flight listing must not be re-dispatched: {cmds:?}",
+    );
+}
+
+#[test]
+fn r_on_a_repo_tab_whose_prs_are_all_filtered_out_does_not_relist() {
+    // The PRs exist but a filter hid every one, so there is no selected PR.
+    // Re-listing would clear and re-stream PRs that are merely filtered, so
+    // refresh must leave them alone.
+    let mut model = list_model(&[1, 2]);
+    update(&mut model, key_event(KeyCode::Char('1'))); // repo tab
+    update(&mut model, key_event(KeyCode::Char('/')));
+    update(&mut model, key_event(KeyCode::Char('z')));
+    update(&mut model, key_event(KeyCode::Char('z')));
+    update(&mut model, key_event(KeyCode::Enter));
+    assert!(
+        model.list.selected_pr().is_none(),
+        "precondition: the filter hid every PR"
+    );
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('r')));
+
+    assert!(
+        !cmds.iter().any(|c| matches!(c, Cmd::FetchOpenPRs { .. })),
+        "a filter hiding all PRs must not trigger a re-list: {cmds:?}",
+    );
+}
+
+#[test]
 fn re_pressing_r_while_refreshing_is_deduped() {
     let mut model = list_model(&[1]);
     let first = update(&mut model, key_event(KeyCode::Char('r')));

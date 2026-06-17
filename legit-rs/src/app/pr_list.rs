@@ -197,8 +197,10 @@ impl PrList {
 
     /// Whether `scope` (a Repo Tab's slug, or `None` for the All tab) admits any
     /// pooled PR, ignoring the filter. Stateless — recomputed from `prs` rather
-    /// than cached — so it can't drift from the current PRs.
-    fn any_in_scope(&self, scope: Option<&str>) -> bool {
+    /// than cached — so it can't drift from the current PRs. Read by refresh to
+    /// tell a genuinely-empty repo (re-list it) from one whose PRs a filter just
+    /// hid (leave them be).
+    pub fn any_in_scope(&self, scope: Option<&str>) -> bool {
         self.prs
             .iter()
             .any(|pr| scope.is_none_or(|s| pr.repo_slug == s))
