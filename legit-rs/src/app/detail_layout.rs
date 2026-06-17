@@ -341,7 +341,7 @@ pub(crate) fn detail_content(
             ]),
             comment_byline(&root.author, root.is_bot, root.created_at, now),
         ];
-        card.extend(card_body(model, detail, &root.url, &root.body, 0, width));
+        card.extend(card_body(model, detail, &root.url, 0, width));
         content.push_card(card, focused_index, 0, width);
 
         // Replies: each visible comment after the root is its own indented
@@ -353,14 +353,7 @@ pub(crate) fn detail_content(
                 .spans
                 .insert(0, Span::styled("↳ ", Style::default().fg(Color::DarkGray)));
             let mut card = vec![byline];
-            card.extend(card_body(
-                model,
-                detail,
-                &comment.url,
-                &comment.body,
-                2,
-                width,
-            ));
+            card.extend(card_body(model, detail, &comment.url, 2, width));
             content.push_card(card, focused_index, 2, width);
         }
     }
@@ -382,14 +375,7 @@ pub(crate) fn detail_content(
             comment.created_at,
             now,
         )];
-        card.extend(card_body(
-            model,
-            detail,
-            &comment.url,
-            &comment.body,
-            0,
-            width,
-        ));
+        card.extend(card_body(model, detail, &comment.url, 0, width));
         content.push_card(card, focused_index, 0, width);
     }
 
@@ -421,16 +407,11 @@ fn card_body(
     model: &Model,
     detail: &DetailState,
     comment_url: &str,
-    comment_body: &str,
     indent: usize,
     width: u16,
 ) -> Vec<Line<'static>> {
     let expanded = detail.expanded.contains(comment_url);
-    let body = collapse_body(
-        model
-            .enrichment
-            .rendered_body(comment_url, comment_body, expanded),
-    );
+    let body = collapse_body(model.enrichment.rendered_body(comment_url, expanded));
     crate::wrap::wrap_lines(body, (width as usize).saturating_sub(indent + 2))
 }
 

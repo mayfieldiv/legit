@@ -23,6 +23,9 @@ use ratatui::text::{Line, Span};
 
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
+mod details_html;
+use details_html::{DetailsToken, tokenize_details};
+
 // ── Colour constants ──────────────────────────────────────────────────────────
 
 /// Accent colour (TS `theme.accent` #61AFEF): headings, section labels.
@@ -91,12 +94,7 @@ pub fn render_blocks(source: &str) -> Vec<Block> {
     // Fold any unclosed `<details>` into their parents (malformed input — the TS
     // grouping likewise runs to the document end), then finish the document.
     while frames.len() > 1 {
-        let child = frames.pop().expect("len > 1");
-        let block = child.into_details();
-        frames
-            .last_mut()
-            .expect("a parent frame for every child")
-            .push_block(block);
+        close_top_frame(&mut frames);
     }
     frames.pop().expect("the document frame").finish()
 }
@@ -236,12 +234,16 @@ impl Frame {
     }
 }
 
-/// A `<details>` boundary found in an accumulated HTML block.
-enum DetailsToken {
-    /// `<details ...>` plus its `<summary>` text, if present.
-    Open(Option<String>),
-    /// `</details>`.
-    Close,
+/// Pop the innermost open `<details>` frame, finish it into a `Details` block,
+/// and append it to its parent. Caller guarantees `frames.len() > 1` (an open
+/// `<details>` always sits above the document frame).
+fn close_top_frame(frames: &mut Vec<Frame>) {
+    let child = frames.pop().expect("a frame to close above the document");
+    let block = child.into_details();
+    frames
+        .last_mut()
+        .expect("a parent frame for every child")
+        .push_block(block);
 }
 
 /// Apply one accumulated HTML block's `<details>` tokens to the frame stack:
@@ -258,94 +260,10 @@ fn apply_html_tokens(html: &str, frames: &mut Vec<Frame>) {
                     .flush();
                 frames.push(Frame::details(summary));
             }
-            DetailsToken::Close if frames.len() > 1 => {
-                let child = frames.pop().expect("len > 1");
-                let block = child.into_details();
-                frames
-                    .last_mut()
-                    .expect("a parent frame for every child")
-                    .push_block(block);
-            }
+            DetailsToken::Close if frames.len() > 1 => close_top_frame(frames),
             DetailsToken::Close => {}
         }
     }
-}
-
-/// Scan one accumulated HTML block for `<details>` opens and `</details>`
-/// closes in document order. For each open, the immediately-following
-/// `<summary>...</summary>` text (up to the next details boundary) becomes the
-/// group's summary. Case-insensitive on tag names; all other markup is ignored.
-fn tokenize_details(html: &str) -> Vec<DetailsToken> {
-    let lower = html.to_ascii_lowercase();
-    let mut tokens = Vec::new();
-    let mut i = 0usize;
-    while i < html.len() {
-        let open = lower[i..].find("<details").map(|p| i + p);
-        let close = lower[i..].find("</details").map(|p| i + p);
-        let (is_open, at) = match (open, close) {
-            (Some(o), Some(c)) => (o <= c, o.min(c)),
-            (Some(o), None) => (true, o),
-            (None, Some(c)) => (false, c),
-            (None, None) => break,
-        };
-        // Advance past this tag's '>' (or to the end if it is unterminated).
-        let tag_end = lower[at..].find('>').map_or(html.len(), |p| at + p + 1);
-        if is_open {
-            // The summary lives between this tag and the next details boundary.
-            let next = next_details_boundary(&lower, tag_end);
-            let summary = extract_summary(&html[tag_end..next], &lower[tag_end..next]);
-            tokens.push(DetailsToken::Open(summary));
-        } else {
-            tokens.push(DetailsToken::Close);
-        }
-        i = tag_end;
-    }
-    tokens
-}
-
-/// The byte offset of the next `<details`/`</details` at or after `from`, or
-/// the string length when there is none.
-fn next_details_boundary(lower: &str, from: usize) -> usize {
-    let open = lower[from..].find("<details").map(|p| from + p);
-    let close = lower[from..].find("</details").map(|p| from + p);
-    open.into_iter().chain(close).min().unwrap_or(lower.len())
-}
-
-/// Extract and clean the `<summary>` text from an HTML segment, or `None` when
-/// there is no summary (the caller defaults to "Details"). `segment` is the raw
-/// slice; `lower` is its lowercased twin for case-insensitive tag matching.
-fn extract_summary(segment: &str, lower: &str) -> Option<String> {
-    let open = lower.find("<summary")?;
-    let content = lower[open..].find('>').map(|p| open + p + 1)?;
-    let end = lower[content..]
-        .find("</summary>")
-        .map_or(segment.len(), |p| content + p);
-    let text = clean_summary_text(&segment[content..end]);
-    (!text.is_empty()).then_some(text)
-}
-
-/// Reduce a `<summary>`'s inner HTML to plain text: strip tags, decode the
-/// handful of entities GitHub emits, and collapse whitespace (mirrors the TS
-/// `collectHastText`, which keeps text nodes and drops element formatting).
-fn clean_summary_text(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
-    let mut in_tag = false;
-    for ch in raw.chars() {
-        match ch {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            _ if !in_tag => out.push(ch),
-            _ => {}
-        }
-    }
-    // Decode `&amp;` last so an already-escaped entity isn't double-decoded.
-    let decoded = out
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&amp;", "&");
-    decoded.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Return a `Span` that renders `text` as a heading at `depth`, prepending the

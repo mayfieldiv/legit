@@ -613,11 +613,17 @@ fn focused_details_key(model: &Model) -> Option<String> {
             .as_deref()
             .filter(|blocks| crate::markdown::has_details(blocks))
             .map(|_| detail_layout::BODY_DETAILS_KEY.to_owned()),
-        Some(url) => model
-            .enrichment
-            .blocks_for(url)
-            .filter(|blocks| crate::markdown::has_details(blocks))
-            .map(|_| url.to_owned()),
+        Some(url) => {
+            debug_assert!(
+                !url.is_empty(),
+                "comment URLs must be non-empty so they never collide with BODY_DETAILS_KEY"
+            );
+            model
+                .enrichment
+                .blocks_for(url)
+                .filter(|blocks| crate::markdown::has_details(blocks))
+                .map(|_| url.to_owned())
+        }
     }
 }
 

@@ -150,21 +150,27 @@ impl Enrichment {
     }
 
     /// The display lines for a comment's body, flattened from the parse-once
-    /// cache for the card's `<details>` expansion state. Falls back to parsing
-    /// fresh for a comment that bypassed the `store_*` writers — behaviourally
-    /// identical, just uncached.
-    pub fn rendered_body(&self, url: &str, body: &str, expanded: bool) -> Vec<Line<'static>> {
+    /// cache for the card's `<details>` expansion state. The cache is the single
+    /// source of truth: every displayed comment enters it through
+    /// `store_threads`/`store_issue_comments`, the only writers of the
+    /// thread/comment maps, so a miss means the URL was never stored. Both this
+    /// and `blocks_for` treat a miss identically (no content / nothing to
+    /// toggle), so the render path and the Enter toggle path can never disagree
+    /// about a card.
+    pub fn rendered_body(&self, url: &str, expanded: bool) -> Vec<Line<'static>> {
         match self.rendered_bodies.get(url) {
             Some(blocks) => crate::markdown::flatten_blocks(blocks, expanded),
             None => {
-                crate::markdown::flatten_blocks(&crate::markdown::render_blocks(body), expanded)
+                debug_assert!(false, "rendered_body for an uncached comment URL: {url}");
+                Vec::new()
             }
         }
     }
 
     /// The parsed blocks for a comment's body, if cached. The Enter handler
     /// reads this to decide whether the focused card has any `<details>` to
-    /// toggle (an uncached comment reports `None` — nothing to toggle).
+    /// toggle. A miss reports `None` (nothing to toggle) — the same "not really
+    /// present" verdict `rendered_body` reaches for an uncached URL.
     pub fn blocks_for(&self, url: &str) -> Option<&[Block]> {
         self.rendered_bodies.get(url).map(Vec::as_slice)
     }
