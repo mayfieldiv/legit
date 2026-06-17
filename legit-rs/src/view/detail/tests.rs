@@ -80,14 +80,14 @@ fn model_with_pr_in_list(pr: PR) -> Model {
 
 /// Build a model in Detail mode for `pr`, with the body already arrived.
 /// The PR is held in the list (enriched source of truth); the `DetailState`
-/// carries the description pre-rendered to lines, matching how
+/// carries the description pre-parsed to markdown blocks, matching how
 /// `Msg::PRDetailArrived` caches it.
 fn model_in_detail(pr: PR, body: &str) -> Model {
     let key = pr.key();
     let mut model = model_with_pr_in_list(pr);
     model.view_mode = ViewMode::Detail(DetailState {
         key,
-        body: Some(crate::app::detail_layout::render_description_lines(body)),
+        body: Some(crate::app::detail_layout::render_description_blocks(body)),
         scroll: 0,
         focus: DetailFocus::Body,
         followed: None,
@@ -127,7 +127,7 @@ fn model_in_detail_with_checks(pr: PR, body: &str, checks: Vec<CheckRun>) -> Mod
     let mut model = model_with_pr_in_list(pr);
     model.view_mode = ViewMode::Detail(DetailState {
         key,
-        body: Some(crate::app::detail_layout::render_description_lines(body)),
+        body: Some(crate::app::detail_layout::render_description_blocks(body)),
         scroll: 0,
         focus: DetailFocus::Body,
         followed: None,
@@ -163,7 +163,7 @@ fn thread(
 
 /// Seed the enrichment maps for the detail PR: threads and issue comments
 /// arrived, through the same `store_*` writers `Msg::ThreadsArrived` /
-/// `Msg::IssueCommentsArrived` use (so the render-once markdown cache is
+/// `Msg::IssueCommentsArrived` use (so the parse-once markdown block cache is
 /// populated exactly like the real data path).
 fn seed_threads(model: &mut Model, threads: Vec<FullReviewThread>) {
     let ViewMode::Detail(detail) = &model.view_mode else {
@@ -824,13 +824,53 @@ fn detail_conversation_only_shows_no_threads_section() {
     );
 }
 
-// ── Long-body collapse (enter expands) ──────────────────────────────────────
+// ── <details> rendering ──────────────────────────────────────────────────────
 
 #[test]
-fn detail_long_card_bodies_collapse_with_a_more_marker_until_expanded() {
-    // The collapse threshold is a backstop for pathological bodies (100+
-    // rendered lines), so the fixture body must clear it: 60 paragraphs
-    // render to 120 lines.
+fn detail_comment_details_block_renders_collapsed_then_expands() {
+    // Acceptance for #65: a bot comment carrying a <details>/<summary> renders
+    // one collapsed `▶ summary` line hiding the body; expanding the card (what
+    // Enter toggles, keyed by the comment URL) shows `▼ summary` plus the body.
+    let body = "<details>\n<summary>AI Prompt</summary>\n\nsecret instructions\n\n</details>";
+    let mut model = model_in_detail(sample_pr(), "The description.");
+    seed_comments(&mut model, vec![issue_comment(10, "bot", body, true)]);
+
+    let rows = buffer_text(&render_snapshot(&model, 80, 40));
+    assert!(
+        rows.iter()
+            .any(|r| r.contains("▶") && r.contains("AI Prompt")),
+        "a details block renders a collapsed summary line: {rows:?}"
+    );
+    assert!(
+        !rows.iter().any(|r| r.contains("secret instructions")),
+        "collapsed details must hide the body: {rows:?}"
+    );
+
+    if let ViewMode::Detail(detail) = &mut model.view_mode {
+        detail
+            .expanded
+            .insert("https://example.test/c/10".to_owned());
+    }
+    let rows = buffer_text(&render_snapshot(&model, 80, 40));
+    assert!(
+        rows.iter()
+            .any(|r| r.contains("▼") && r.contains("AI Prompt")),
+        "expanded details shows the open marker: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|r| r.contains("secret instructions")),
+        "expanded details reveals the body: {rows:?}"
+    );
+}
+
+// ── Long-body cap (unconditional backstop) ──────────────────────────────────
+
+#[test]
+fn detail_pathological_card_bodies_are_capped_as_an_unconditional_backstop() {
+    // The 100-line cap is a backstop for pathological bodies, independent of the
+    // <details> toggle: a 120-line plain body truncates with a marker, and
+    // marking its URL expanded (which now toggles <details>, not the cap) does
+    // not reveal the hidden tail.
     let long_body: String = (1..=60).map(|n| format!("Para {n}\n\n")).collect();
     let mut model = model_in_detail(sample_pr(), "The description.");
     seed_comments(
@@ -841,38 +881,40 @@ fn detail_long_card_bodies_collapse_with_a_more_marker_until_expanded() {
     let rows = buffer_text(&render_snapshot(&model, 80, 40));
     assert!(
         rows.iter().any(|r| r.contains("Para 1")),
-        "the collapsed card must show the body's first lines: {rows:?}"
+        "the capped card must show the body's first lines: {rows:?}"
     );
 
-    // Scroll to the bottom (the render backstop clamps the huge offset) so
-    // the card's tail is in the viewport.
+    // Scroll to the bottom (the render backstop clamps the huge offset) so the
+    // card's tail would be in the viewport if it were not capped.
     if let ViewMode::Detail(detail) = &mut model.view_mode {
         detail.scroll = 10_000;
     }
     let rows = buffer_text(&render_snapshot(&model, 80, 40));
     assert!(
         !rows.iter().any(|r| r.contains("Para 60")),
-        "the collapsed card must hide the body's tail: {rows:?}"
+        "the cap must hide the body's tail: {rows:?}"
     );
     assert!(
         rows.iter().any(|r| r.contains("more line")),
-        "a collapsed card must advertise its hidden lines: {rows:?}"
+        "a capped card must advertise its hidden lines: {rows:?}"
     );
 
-    // Expanding (what Enter toggles) reveals the full body.
+    // Marking the URL expanded toggles <details> (there are none here), so the
+    // cap still truncates: the tail and marker are unchanged.
     if let ViewMode::Detail(detail) = &mut model.view_mode {
+        detail.scroll = 10_000;
         detail
             .expanded
             .insert("https://example.test/c/10".to_owned());
     }
     let rows = buffer_text(&render_snapshot(&model, 80, 40));
     assert!(
-        rows.iter().any(|r| r.contains("Para 60")),
-        "an expanded card must show the full body: {rows:?}"
+        !rows.iter().any(|r| r.contains("Para 60")),
+        "the cap is unconditional: expansion must not reveal the tail: {rows:?}"
     );
     assert!(
-        !rows.iter().any(|r| r.contains("more line")),
-        "an expanded card needs no truncation marker: {rows:?}"
+        rows.iter().any(|r| r.contains("more line")),
+        "the truncation marker remains: {rows:?}"
     );
 }
 

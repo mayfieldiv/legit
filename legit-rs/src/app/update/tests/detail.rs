@@ -17,17 +17,23 @@ fn detail_has_body(model: &crate::app::model::Model) -> bool {
     matches!(&model.view_mode, ViewMode::Detail(detail) if detail.body.is_some())
 }
 
-/// The concatenated text of the open detail view's rendered body lines; panics
-/// if not in Detail mode or the body hasn't arrived.
+/// The concatenated text of the open detail view's rendered body, flattened
+/// with `<details>` collapsed (the default the view shows); panics if not in
+/// Detail mode or the body hasn't arrived.
 fn detail_body_text(model: &crate::app::model::Model) -> String {
     match &model.view_mode {
-        ViewMode::Detail(detail) => detail
-            .body
-            .as_ref()
-            .expect("body arrived")
-            .iter()
-            .flat_map(|line| line.spans.iter().map(|s| s.content.as_ref()))
-            .collect(),
+        ViewMode::Detail(detail) => {
+            let blocks = detail.body.as_ref().expect("body arrived");
+            crate::markdown::flatten_blocks(blocks, false)
+                .iter()
+                .flat_map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|s| s.content.as_ref().to_owned())
+                        .collect::<Vec<_>>()
+                })
+                .collect()
+        }
         ViewMode::List => panic!("expected Detail mode"),
     }
 }
@@ -765,7 +771,7 @@ fn filter_toggles_persist_across_detail_views() {
     assert!(!model.show_bot_comments, "b survives re-entering detail");
 }
 
-// ── Enter toggles card expansion ────────────────────────────────────────────
+// ── Enter toggles card <details> ────────────────────────────────────────────
 
 /// The expansion set of the open detail view; panics if not in Detail mode.
 fn detail_expanded(model: &crate::app::model::Model) -> &std::collections::HashSet<String> {
@@ -775,15 +781,37 @@ fn detail_expanded(model: &crate::app::model::Model) -> &std::collections::HashS
     }
 }
 
+/// A markdown body that is a single `<details>` group, so the card holding it
+/// has something for Enter to toggle.
+const DETAILS_BODY: &str = "<details>\n<summary>AI Prompt</summary>\n\nhidden body\n\n</details>";
+
+/// A model in Detail with one issue comment whose body is a `<details>` group,
+/// focused on that comment (focus index 1: the body is 0, no threads seeded).
+fn detail_model_focused_on_details_comment() -> crate::app::model::Model {
+    let mut model = model_with_one_pr();
+    model.terminal_height = 30;
+    update(&mut model, key_event(KeyCode::Enter));
+    set_detail_body(&mut model, "The description.");
+    update(
+        &mut model,
+        Msg::IssueCommentsArrived {
+            pr: pr_key_42(),
+            comments: vec![test_fixtures::issue_comment(10, "carol", DETAILS_BODY)],
+        },
+    );
+    update(&mut model, key_event(KeyCode::Char('j')));
+    model
+}
+
 #[test]
-fn enter_toggles_the_focused_cards_expansion() {
-    let mut model = focusable_detail_model();
-    update(&mut model, key_event(KeyCode::Char('j'))); // thread root (c1)
+fn enter_toggles_the_focused_cards_details() {
+    let mut model = detail_model_focused_on_details_comment();
+    assert_eq!(detail_focus(&model), 1, "focused on the details comment");
 
     update(&mut model, key_event(KeyCode::Enter));
     assert!(
-        detail_expanded(&model).contains("https://example.test/r/c1"),
-        "enter must mark the focused card expanded"
+        detail_expanded(&model).contains("https://example.test/c/10"),
+        "enter must expand the focused card's <details>"
     );
 
     update(&mut model, key_event(KeyCode::Enter));
@@ -794,7 +822,46 @@ fn enter_toggles_the_focused_cards_expansion() {
 }
 
 #[test]
-fn enter_on_the_body_does_not_touch_expansion_state() {
+fn enter_on_a_card_without_details_is_a_no_op() {
+    // c1's body is plain text; with nothing to toggle, Enter must leave the
+    // expansion set untouched (mirroring the TS toggleAll early-return).
+    let mut model = focusable_detail_model();
+    update(&mut model, key_event(KeyCode::Char('j'))); // thread root (c1)
+
+    let cmds = update(&mut model, key_event(KeyCode::Enter));
+
+    assert!(cmds.is_empty(), "enter dispatches nothing");
+    assert!(
+        detail_expanded(&model).is_empty(),
+        "a detail-less card has nothing to toggle"
+    );
+}
+
+#[test]
+fn enter_on_the_body_toggles_its_details_via_the_sentinel_key() {
+    // The description has no URL, so its <details> expansion is keyed by the
+    // BODY_DETAILS_KEY sentinel.
+    let mut model = model_with_one_pr();
+    model.terminal_height = 30;
+    update(&mut model, key_event(KeyCode::Enter));
+    set_detail_body(&mut model, DETAILS_BODY);
+    assert_eq!(detail_focus(&model), 0, "the body is focused");
+
+    update(&mut model, key_event(KeyCode::Enter));
+    assert!(
+        detail_expanded(&model).contains(crate::app::detail_layout::BODY_DETAILS_KEY),
+        "enter must expand the body's <details> under the sentinel key"
+    );
+
+    update(&mut model, key_event(KeyCode::Enter));
+    assert!(
+        detail_expanded(&model).is_empty(),
+        "a second enter collapses the body's <details>"
+    );
+}
+
+#[test]
+fn enter_on_a_detail_less_body_is_a_no_op() {
     let mut model = focusable_detail_model();
     assert_eq!(detail_focus(&model), 0);
 
@@ -803,7 +870,7 @@ fn enter_on_the_body_does_not_touch_expansion_state() {
     assert!(cmds.is_empty(), "enter on the body dispatches nothing");
     assert!(
         detail_expanded(&model).is_empty(),
-        "the body has no expansion state to toggle"
+        "a detail-less body has nothing to toggle"
     );
 }
 
@@ -1040,18 +1107,18 @@ fn body_arrival_scrolls_the_already_focused_card_into_view() {
 
 #[test]
 fn expanding_the_focused_card_brings_its_grown_tail_into_view() {
-    // Expansion grows the focused card in place (same identity, same first
-    // line), so it is the one change the follow anchor can't see — Enter
-    // forces the follow, which scrolls down to the expanded card's tail
-    // (capped at its first line for cards taller than the viewport). The body
-    // must clear the 100-line collapse backstop to truncate at all.
+    // Expanding a card's <details> grows it in place (same identity, same first
+    // line), so it is the one change the follow anchor can't see — Enter forces
+    // the follow, which scrolls down to the expanded card's tail (capped at its
+    // first line for cards taller than the viewport).
     let mut model = tall_focusable_detail_model();
-    let long_body: String = (1..=60).map(|n| format!("Para {n}\n\n")).collect();
+    let inner: String = (1..=40).map(|n| format!("Inner {n}\n\n")).collect();
+    let details_body = format!("<details>\n<summary>More</summary>\n\n{inner}</details>");
     update(
         &mut model,
         Msg::IssueCommentsArrived {
             pr: pr_key_42(),
-            comments: vec![issue_comment(10, "carol", &long_body)],
+            comments: vec![issue_comment(10, "carol", &details_body)],
         },
     );
     for _ in 0..3 {
@@ -1064,7 +1131,7 @@ fn expanding_the_focused_card_brings_its_grown_tail_into_view() {
     let range = focused_item_range(&model);
     assert!(
         range.end > collapsed_range.end,
-        "precondition: expansion must grow the focused card"
+        "precondition: expanding the card's <details> must grow it"
     );
     let viewport = (model.terminal_height - crate::app::detail_layout::CHROME_ROWS) as usize;
     let scroll = detail_scroll(&model);

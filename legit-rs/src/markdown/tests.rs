@@ -1,7 +1,15 @@
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
-use super::{ACCENT, CODE, MUTED, render};
+use super::{ACCENT, Block, CODE, MUTED, flatten_blocks, has_details, render_blocks};
+
+/// Render markdown to flat lines with every `<details>` collapsed — the default
+/// the detail view shows before any Enter toggle. Most tests assert on this
+/// flat output, so they go through the public block API the renderer now
+/// exposes exactly as the detail layout does.
+fn render(source: &str) -> Vec<Line<'static>> {
+    flatten_blocks(&render_blocks(source), false)
+}
 
 /// Collect all span contents from all lines as a flat string (for
 /// substring-searching assertions that don't care about span boundaries).
@@ -496,5 +504,241 @@ fn image_nested_in_link_preserves_outer_link_url() {
     assert!(
         text.contains("[image: alt]"),
         "image placeholder missing: {text:?}"
+    );
+}
+
+// ── <details> grouping ─────────────────────────────────────────────────────
+
+/// The summary text of a top-level `Details` block, or `None` when the block at
+/// `index` isn't a details group.
+fn details_summary(blocks: &[Block], index: usize) -> Option<&str> {
+    match blocks.get(index)? {
+        Block::Details { summary, .. } => Some(summary),
+        Block::Lines(_) => None,
+    }
+}
+
+#[test]
+fn details_block_groups_into_a_details_node_with_its_summary() {
+    let blocks =
+        render_blocks("<details>\n<summary>AI Prompt</summary>\n\ninner body\n\n</details>");
+    assert_eq!(
+        blocks.len(),
+        1,
+        "the whole thing is one details group: {blocks:?}"
+    );
+    assert_eq!(details_summary(&blocks, 0), Some("AI Prompt"));
+    assert!(has_details(&blocks), "has_details must see the group");
+}
+
+#[test]
+fn details_collapsed_shows_only_the_summary_with_a_collapsed_marker() {
+    let lines = render("<details>\n<summary>AI Prompt</summary>\n\ninner body text\n\n</details>");
+    let text = all_text(&lines);
+    assert!(text.contains("▶ "), "collapsed marker missing: {text:?}");
+    assert!(text.contains("AI Prompt"), "summary missing: {text:?}");
+    assert!(
+        !text.contains("inner body text"),
+        "collapsed details must hide its body: {text:?}"
+    );
+}
+
+#[test]
+fn details_expanded_shows_the_summary_and_body_with_an_expanded_marker() {
+    let blocks =
+        render_blocks("<details>\n<summary>AI Prompt</summary>\n\ninner body text\n\n</details>");
+    let lines = flatten_blocks(&blocks, true);
+    let text = all_text(&lines);
+    assert!(text.contains("▼ "), "expanded marker missing: {text:?}");
+    assert!(text.contains("AI Prompt"), "summary missing: {text:?}");
+    assert!(
+        text.contains("inner body text"),
+        "expanded details must reveal its body: {text:?}"
+    );
+}
+
+#[test]
+fn details_summary_marker_is_accent_and_text_is_bold() {
+    let lines = render("<details>\n<summary>AI Prompt</summary>\n\nx\n\n</details>");
+    let marker = find_span(&lines, "▶").expect("marker span");
+    assert_eq!(marker.style.fg, Some(ACCENT), "marker should be accent");
+    let summary = find_span(&lines, "AI Prompt").expect("summary span");
+    assert!(
+        summary.style.add_modifier.contains(Modifier::BOLD),
+        "summary should be bold"
+    );
+}
+
+#[test]
+fn details_inner_markdown_is_rendered_when_expanded() {
+    // The body between the tags keeps full markdown formatting (a code colour
+    // span proves it was parsed, not dumped as raw text).
+    let blocks =
+        render_blocks("<details>\n<summary>S</summary>\n\nuse `cargo test` now\n\n</details>");
+    let lines = flatten_blocks(&blocks, true);
+    let code = find_span(&lines, "cargo test").expect("inline code span");
+    assert_eq!(code.style.fg, Some(CODE), "inner markdown must be rendered");
+}
+
+#[test]
+fn details_inline_summary_form_is_grouped() {
+    // `<details><summary>Title</summary>` on one line is one HTML block.
+    let blocks = render_blocks("<details><summary>Title</summary>\n\nbody\n\n</details>");
+    assert_eq!(details_summary(&blocks, 0), Some("Title"));
+}
+
+#[test]
+fn details_without_a_summary_defaults_to_details_label() {
+    let blocks = render_blocks("<details>\n\nbody\n\n</details>");
+    assert_eq!(details_summary(&blocks, 0), Some("Details"));
+}
+
+#[test]
+fn summary_keeps_a_literal_greater_than_in_text() {
+    // A bare '>' is valid in HTML text and must survive tag-stripping rather
+    // than being mistaken for a tag close.
+    let blocks = render_blocks("<details>\n<summary>a > b</summary>\n\nx\n\n</details>");
+    assert_eq!(details_summary(&blocks, 0), Some("a > b"));
+}
+
+#[test]
+fn detailslike_prefixes_are_not_treated_as_details_tags() {
+    use super::details_html::{DetailsToken, tokenize_details};
+    // `<detailsFoo>` / `</details-bar>` share a prefix with the real tags but
+    // are distinct element names; exact tag-name matching must skip them.
+    assert!(
+        tokenize_details("<detailsFoo>x</details-bar>").is_empty(),
+        "look-alike prefixes must yield no tokens"
+    );
+    // A real `<details>` carrying attributes (boundary is whitespace) still
+    // tokenizes, summary and all.
+    assert_eq!(
+        tokenize_details("<details open>\n<summary>S</summary>\n</details>"),
+        vec![
+            DetailsToken::Open(Some("S".to_owned())),
+            DetailsToken::Close
+        ],
+    );
+}
+
+#[test]
+fn content_around_details_stays_outside_the_group() {
+    // before -> details group -> after: three top-level blocks, the middle one
+    // the group. The surrounding paragraphs are never swallowed.
+    let blocks =
+        render_blocks("before\n\n<details>\n<summary>S</summary>\n\nx\n\n</details>\n\nafter");
+    assert_eq!(blocks.len(), 3, "before, group, after: {blocks:?}");
+    assert!(
+        matches!(blocks[0], Block::Lines(_)),
+        "before is plain lines"
+    );
+    assert_eq!(details_summary(&blocks, 1), Some("S"));
+    assert!(matches!(blocks[2], Block::Lines(_)), "after is plain lines");
+
+    // Collapsed, the surrounding text shows but the group body doesn't.
+    let collapsed = all_text(&flatten_blocks(&blocks, false));
+    assert!(collapsed.contains("before") && collapsed.contains("after"));
+    assert!(
+        !collapsed.contains("\nx"),
+        "group body hidden collapsed: {collapsed:?}"
+    );
+}
+
+#[test]
+fn details_group_is_blank_separated_from_surrounding_blocks() {
+    // A `<details>` group gets the same single blank-line separation as any
+    // other block; the seam must not render flush against its neighbours.
+    let lines = line_texts(&render(
+        "before\n\n<details>\n<summary>S</summary>\n\nx\n\n</details>\n\nafter",
+    ));
+    assert_eq!(
+        lines,
+        vec!["before", "", "▶ S", "", "after"],
+        "group must be blank-separated from before/after: {lines:?}"
+    );
+}
+
+#[test]
+fn nested_details_indent_and_toggle_together() {
+    let src = "<details>\n<summary>Outer</summary>\n\n<details>\n<summary>Inner</summary>\n\ndeep\n\n</details>\n\n</details>";
+    let blocks = render_blocks(src);
+    assert_eq!(details_summary(&blocks, 0), Some("Outer"));
+
+    // Collapsed: only the outer summary.
+    let collapsed = line_texts(&flatten_blocks(&blocks, false));
+    assert!(
+        collapsed.iter().any(|l| l.contains("Outer")),
+        "{collapsed:?}"
+    );
+    assert!(
+        !collapsed.iter().any(|l| l.contains("Inner")),
+        "{collapsed:?}"
+    );
+
+    // Expanded (toggle-all): both summaries show, the inner one indented under
+    // the outer, and the deepest body indented further still.
+    let expanded = line_texts(&flatten_blocks(&blocks, true));
+    let inner = expanded
+        .iter()
+        .find(|l| l.contains("Inner"))
+        .expect("inner summary");
+    assert!(
+        inner.starts_with("  "),
+        "inner summary must be indented: {inner:?}"
+    );
+    let deep = expanded
+        .iter()
+        .find(|l| l.contains("deep"))
+        .expect("deep body");
+    assert!(
+        deep.starts_with("    "),
+        "deepest body indented twice: {deep:?}"
+    );
+}
+
+#[test]
+fn no_details_yields_a_single_lines_block_identical_to_flat_render() {
+    // The critical invariant: a body without <details> renders one Lines block
+    // whose flattened output equals the lines it holds — so ordinary markdown
+    // is byte-for-byte unchanged by the block machinery.
+    let blocks = render_blocks("# Title\n\nA paragraph.\n\n- one\n- two");
+    assert_eq!(blocks.len(), 1, "no details -> one Lines block: {blocks:?}");
+    let Block::Lines(lines) = &blocks[0] else {
+        panic!("expected a single Lines block, got {blocks:?}");
+    };
+    assert_eq!(
+        line_texts(lines),
+        line_texts(&flatten_blocks(&blocks, false))
+    );
+    assert!(!has_details(&blocks), "no details to report");
+}
+
+#[test]
+fn stray_close_details_is_ignored() {
+    // A `</details>` with no matching open must not panic or eat content.
+    let blocks = render_blocks("text\n\n</details>\n\nmore");
+    assert!(
+        !has_details(&blocks),
+        "no group from a stray close: {blocks:?}"
+    );
+    let text = all_text(&flatten_blocks(&blocks, false));
+    assert!(text.contains("text") && text.contains("more"));
+}
+
+#[test]
+fn unclosed_details_folds_the_rest_of_the_document() {
+    // An open with no close folds the remainder into the group (matches the TS
+    // grouping that runs to the end).
+    let blocks = render_blocks("<details>\n<summary>S</summary>\n\ntail body\n");
+    assert_eq!(details_summary(&blocks, 0), Some("S"));
+    let collapsed = all_text(&flatten_blocks(&blocks, false));
+    assert!(
+        !collapsed.contains("tail body"),
+        "tail hidden collapsed: {collapsed:?}"
+    );
+    let expanded = all_text(&flatten_blocks(&blocks, true));
+    assert!(
+        expanded.contains("tail body"),
+        "tail revealed expanded: {expanded:?}"
     );
 }
