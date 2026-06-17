@@ -125,7 +125,17 @@ pub fn has_details(blocks: &[Block]) -> bool {
 }
 
 fn flatten_into(blocks: &[Block], expanded: bool, depth: usize, out: &mut Vec<Line<'static>>) {
-    for block in blocks {
+    for (i, block) in blocks.iter().enumerate() {
+        // One blank row separates adjacent sibling blocks, the same single
+        // separator the renderer puts between every other block. `Frame::flush`
+        // strips each block's own trailing blank, so this is the sole separator
+        // at a `<details>` seam — without it a group would render flush against
+        // its neighbours while plain blocks keep their breathing room. (Two
+        // `Lines` blocks are never adjacent — a flush only ever precedes a
+        // `Details` push — so this never doubles an existing internal blank.)
+        if i > 0 {
+            out.push(Line::default());
+        }
         match block {
             Block::Lines(lines) => out.extend(lines.iter().map(|line| indent_line(line, depth))),
             Block::Details { summary, children } => {

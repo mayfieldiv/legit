@@ -645,6 +645,20 @@ fn content_around_details_stays_outside_the_group() {
 }
 
 #[test]
+fn details_group_is_blank_separated_from_surrounding_blocks() {
+    // A `<details>` group gets the same single blank-line separation as any
+    // other block; the seam must not render flush against its neighbours.
+    let lines = line_texts(&render(
+        "before\n\n<details>\n<summary>S</summary>\n\nx\n\n</details>\n\nafter",
+    ));
+    assert_eq!(
+        lines,
+        vec!["before", "", "▶ S", "", "after"],
+        "group must be blank-separated from before/after: {lines:?}"
+    );
+}
+
+#[test]
 fn nested_details_indent_and_toggle_together() {
     let src = "<details>\n<summary>Outer</summary>\n\n<details>\n<summary>Inner</summary>\n\ndeep\n\n</details>\n\n</details>";
     let blocks = render_blocks(src);
