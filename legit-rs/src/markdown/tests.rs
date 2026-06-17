@@ -594,6 +594,14 @@ fn details_without_a_summary_defaults_to_details_label() {
 }
 
 #[test]
+fn summary_keeps_a_literal_greater_than_in_text() {
+    // A bare '>' is valid in HTML text and must survive tag-stripping rather
+    // than being mistaken for a tag close.
+    let blocks = render_blocks("<details>\n<summary>a > b</summary>\n\nx\n\n</details>");
+    assert_eq!(details_summary(&blocks, 0), Some("a > b"));
+}
+
+#[test]
 fn content_around_details_stays_outside_the_group() {
     // before -> details group -> after: three top-level blocks, the middle one
     // the group. The surrounding paragraphs are never swallowed.

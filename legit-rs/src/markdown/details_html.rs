@@ -78,7 +78,9 @@ fn clean_summary_text(raw: &str) -> String {
     for ch in raw.chars() {
         match ch {
             '<' => in_tag = true,
-            '>' => in_tag = false,
+            // Only a '>' inside a tag closes it; a literal '>' in text content
+            // (e.g. a summary reading "a > b") is preserved, not consumed.
+            '>' if in_tag => in_tag = false,
             _ if !in_tag => out.push(ch),
             _ => {}
         }
