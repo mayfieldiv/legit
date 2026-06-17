@@ -9,6 +9,7 @@
 //! is hand-rolled, kept here behind a small surface and exercised in isolation.
 
 /// A `<details>` boundary found in an accumulated HTML block.
+#[derive(Debug, PartialEq)]
 pub(super) enum DetailsToken {
     /// `<details ...>` plus its `<summary>` text, if present.
     Open(Option<String>),
@@ -25,8 +26,8 @@ pub(super) fn tokenize_details(html: &str) -> Vec<DetailsToken> {
     let mut tokens = Vec::new();
     let mut i = 0usize;
     while i < html.len() {
-        let open = lower[i..].find("<details").map(|p| i + p);
-        let close = lower[i..].find("</details").map(|p| i + p);
+        let open = find_tag(&lower, i, "<details");
+        let close = find_tag(&lower, i, "</details");
         let (is_open, at) = match (open, close) {
             (Some(o), Some(c)) => (o <= c, o.min(c)),
             (Some(o), None) => (true, o),
@@ -51,9 +52,31 @@ pub(super) fn tokenize_details(html: &str) -> Vec<DetailsToken> {
 /// The byte offset of the next `<details`/`</details` at or after `from`, or
 /// the string length when there is none.
 fn next_details_boundary(lower: &str, from: usize) -> usize {
-    let open = lower[from..].find("<details").map(|p| from + p);
-    let close = lower[from..].find("</details").map(|p| from + p);
+    let open = find_tag(lower, from, "<details");
+    let close = find_tag(lower, from, "</details");
     open.into_iter().chain(close).min().unwrap_or(lower.len())
+}
+
+/// The byte offset of the next `needle` (a tag prefix such as `"<details"` or
+/// `"</details"`) at or after `from` in `lower` whose following character is a
+/// tag-name boundary (`>`, `/`, whitespace, or end of input). This rejects
+/// look-alike element names like `<detailsFoo>` or `</details-bar>`, matching
+/// the TS reference's exact tag-name matching. `lower` must already be
+/// ASCII-lowercased so the lowercase `needle` compares case-insensitively;
+/// `needle` is ASCII, so `at + needle.len()` lands on a char boundary.
+fn find_tag(lower: &str, from: usize, needle: &str) -> Option<usize> {
+    let mut search = from;
+    while let Some(rel) = lower[search..].find(needle) {
+        let at = search + rel;
+        let after = at + needle.len();
+        match lower[after..].chars().next() {
+            None => return Some(at),
+            Some(c) if c == '>' || c == '/' || c.is_whitespace() => return Some(at),
+            // A look-alike prefix (e.g. `<detailsfoo`); keep scanning past it.
+            _ => search = after,
+        }
+    }
+    None
 }
 
 /// Extract and clean the `<summary>` text from an HTML segment, or `None` when

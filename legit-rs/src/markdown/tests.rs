@@ -602,6 +602,26 @@ fn summary_keeps_a_literal_greater_than_in_text() {
 }
 
 #[test]
+fn detailslike_prefixes_are_not_treated_as_details_tags() {
+    use super::details_html::{DetailsToken, tokenize_details};
+    // `<detailsFoo>` / `</details-bar>` share a prefix with the real tags but
+    // are distinct element names; exact tag-name matching must skip them.
+    assert!(
+        tokenize_details("<detailsFoo>x</details-bar>").is_empty(),
+        "look-alike prefixes must yield no tokens"
+    );
+    // A real `<details>` carrying attributes (boundary is whitespace) still
+    // tokenizes, summary and all.
+    assert_eq!(
+        tokenize_details("<details open>\n<summary>S</summary>\n</details>"),
+        vec![
+            DetailsToken::Open(Some("S".to_owned())),
+            DetailsToken::Close
+        ],
+    );
+}
+
+#[test]
 fn content_around_details_stays_outside_the_group() {
     // before -> details group -> after: three top-level blocks, the middle one
     // the group. The surrounding paragraphs are never swallowed.
