@@ -143,6 +143,29 @@ pub enum Msg {
         pr: PrKey,
         body: String,
     },
+    /// `r` in the list view: refresh the selected PR, including its files. The
+    /// network limiter promotes it via focus, so it leads. No-op when nothing
+    /// is selected.
+    RefreshSelected,
+    /// `R` (Shift-r) in the list view: re-read the config (to pick up newly
+    /// tracked repos) and refresh every visible PR, dispatched in smart-status
+    /// tier order so the limiter's FIFO background lane drains `me-blocking`
+    /// first.
+    RefreshAll,
+    /// One PR's `Cmd::RefreshPr` fan-out finished (success or failure — the
+    /// individual fetch failures surface their own `CommandFailed`). Clears the
+    /// PR's refresh indicator; once every in-flight refresh has drained, the
+    /// run's "Refreshed N" summary posts.
+    RefreshComplete {
+        pr: PrKey,
+    },
+    /// A scheduled mergeable re-fetch is due: re-run review-status for one PR
+    /// whose `OPEN` mergeable came back `UNKNOWN`. Carries only the identity;
+    /// `update` rebuilds the request context. Mirrors the TS settled-index
+    /// `UNKNOWN` retry.
+    MergeableRetryDue {
+        pr: PrKey,
+    },
     Quit,
 }
 

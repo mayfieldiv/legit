@@ -19,6 +19,7 @@ mod enrichment;
 mod files;
 mod filter;
 mod multi_repo;
+mod refresh;
 mod tabs;
 mod worktree;
 

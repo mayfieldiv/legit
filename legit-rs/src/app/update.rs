@@ -16,6 +16,8 @@ use super::{
     msg::Msg,
 };
 
+mod refresh;
+
 /// How long a transient status message lingers before its scheduled clear.
 const STATUS_SUCCESS_CLEAR_MS: u64 = 4_000;
 const STATUS_ERROR_CLEAR_MS: u64 = 8_000;
@@ -60,12 +62,29 @@ fn maybe_fetch_open_prs(model: &mut Model) -> Vec<Cmd> {
     }
     let token = token.clone();
     let mut cmds = Vec::new();
+    let mut cleared = false;
     for repo in model.tracked_repos() {
-        model.list.begin_fetch(&repo.slug());
+        let slug = repo.slug();
+        // (Re)fetch only repos that have never been listed or whose last
+        // listing failed; skip ones in flight or already loaded so a `R`-driven
+        // config reload doesn't re-stream — and duplicate — PRs already pooled.
+        // On first run none have a phase, so every repo fetches.
+        if !model.list.needs_listing(&slug) {
+            continue;
+        }
+        // A failed listing may have streamed some PRs before erroring, and a
+        // re-stream appends; drop them first so the retry doesn't duplicate the
+        // survivors. Relayout once afterward to rebuild rows off the now-stale
+        // PR indices before the next render.
+        cleared |= model.list.clear_repo(&slug);
+        model.list.begin_fetch(&slug);
         cmds.push(Cmd::FetchOpenPRs {
             repo,
             token: token.clone(),
         });
+    }
+    if cleared {
+        model.relayout();
     }
     cmds
 }
@@ -128,8 +147,8 @@ fn enrichment_cmds(model: &Model, repo_slug: &str) -> Vec<Cmd> {
 
 /// The per-PR enrichment trio — threads, reviews, issue comments — for one PR.
 /// The shared definition of "enrich this PR": `enrichment_cmds` fans it out
-/// across a repo's whole list, and the detail view's `r` re-dispatches it for
-/// the open PR.
+/// across a repo's whole list on the initial load. (A refresh re-fetches the
+/// same data via `Cmd::RefreshPr` plus `detail_refresh_extra_cmds`, not this.)
 fn pr_enrichment_cmds(ctx: &Arc<RequestContext>, number: u64) -> [Cmd; 3] {
     [
         Cmd::FetchThreads {
@@ -300,13 +319,12 @@ fn copy_worktree_path_cmds(model: &mut Model, path: String) -> Vec<Cmd> {
     cmds
 }
 
-/// Every fetch the detail view's `r` refresh re-dispatches for the open PR:
-/// the body plus the per-PR enrichment trio whose results the Review Threads
-/// and Conversation sections render. Enrichment otherwise fetches exactly once
-/// per list load, so this is also the retry path when an initial fetch failed
-/// and left a section stuck on its loading placeholder. Yields nothing when
-/// auth isn't ready or the PR's repo isn't tracked, like `fetch_pr_detail_cmd`.
-fn refresh_detail_cmds(model: &Model, key: &PrKey) -> Vec<Cmd> {
+/// The detail-specific fetches a refresh adds on top of the queued
+/// `Cmd::RefreshPr` (which covers review-status / threads / reviews / checks /
+/// files): the PR body and the issue comments behind the Conversation section,
+/// neither of which the list/summary refresh needs. Yields nothing when auth
+/// isn't ready or the PR's repo isn't tracked, like `fetch_pr_detail_cmd`.
+fn detail_refresh_extra_cmds(model: &Model, key: &PrKey) -> Vec<Cmd> {
     let Some(token) = model.auth_token.as_ref() else {
         return Vec::new();
     };
@@ -314,12 +332,16 @@ fn refresh_detail_cmds(model: &Model, key: &PrKey) -> Vec<Cmd> {
         return Vec::new();
     };
     let ctx = request_context(&repo, token, &model.config.bot_logins);
-    let mut cmds = vec![Cmd::FetchPRDetail {
-        ctx: Arc::clone(&ctx),
-        key: key.clone(),
-    }];
-    cmds.extend(pr_enrichment_cmds(&ctx, key.number));
-    cmds
+    vec![
+        Cmd::FetchPRDetail {
+            ctx: Arc::clone(&ctx),
+            key: key.clone(),
+        },
+        Cmd::FetchIssueComments {
+            ctx,
+            number: key.number,
+        },
+    ]
 }
 
 /// Switch to the Repo Tab at `index` (0 = All): re-derive the visible list
@@ -402,6 +424,8 @@ fn handle_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
                 return create_worktree_cmds(model, pr);
             }
         }
+        KeyCode::Char('r') => return apply(model, Msg::RefreshSelected),
+        KeyCode::Char('R') => return apply(model, Msg::RefreshAll),
         KeyCode::Char('/') => {
             model.list.filter_open();
             model.sync_viewport();
@@ -586,20 +610,24 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
             model.view_mode = ViewMode::List;
         }
         KeyCode::Char('r') => {
-            // Refresh the open PR: refetch the body plus the threads / reviews
-            // / issue comments behind the Review Threads and Conversation
-            // sections. The cached body clears so the view shows the loading
-            // placeholder, consistent with the initial enter-and-fetch flow;
-            // threads/comments keep rendering their current data until the
-            // fresh lists overwrite it. Preserves the scroll position so the
-            // user stays at the same place after a quick re-fetch.
+            // Refresh the open PR: dispatch a full refresh (with files), and
+            // refetch the body + issue comments the detail view shows on top of
+            // that. The limiter promotes it (it's the focused PR), so it leads.
+            // The cached body clears so the view shows the loading placeholder,
+            // consistent with the initial enter-and-fetch flow; threads/comments
+            // keep rendering their current data until the fresh lists overwrite
+            // it. Preserves the scroll position so the user stays put after a
+            // quick re-fetch.
             //
             // Clone the key so the borrow of model.view_mode ends before the
             // body is reassigned below (which needs a unique borrow of the
-            // model via `refresh_detail_cmds`).
+            // model via the refresh/fetch helpers).
             if let ViewMode::Detail(detail) = &model.view_mode {
                 let key = detail.key.clone();
-                let cmds = refresh_detail_cmds(model, &key);
+                let mut cmds: Vec<Cmd> = refresh::begin_refresh(model, key.clone(), true)
+                    .into_iter()
+                    .collect();
+                cmds.extend(detail_refresh_extra_cmds(model, &key));
                 if !cmds.is_empty()
                     && let ViewMode::Detail(detail) = &mut model.view_mode
                 {
@@ -926,7 +954,11 @@ fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             }
             // review_decision/mergeable feed the blocker rules, so re-derive.
             model.refresh_blockers();
-            maybe_fetch_checks(model, head_sha, &pr)
+            let mut cmds = maybe_fetch_checks(model, head_sha, &pr);
+            // An OPEN PR still reporting UNKNOWN mergeability gets one delayed
+            // re-fetch (GitHub computes it lazily after the first read).
+            cmds.extend(refresh::maybe_retry_mergeable(model, &pr));
+            cmds
         }
         Msg::ThreadsArrived { pr, threads } => {
             model.enrichment.store_threads(pr, threads);
@@ -1065,6 +1097,10 @@ fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             }
             Vec::new()
         }
+        Msg::RefreshSelected => refresh::refresh_selected_cmds(model),
+        Msg::RefreshAll => refresh::refresh_all_cmds(model),
+        Msg::RefreshComplete { pr } => refresh::complete_refresh(model, pr),
+        Msg::MergeableRetryDue { pr } => refresh::mergeable_retry_due_cmds(model, &pr),
         Msg::Quit => {
             model.should_quit = true;
             Vec::new()

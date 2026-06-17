@@ -316,6 +316,22 @@ pub struct Model {
     /// Detail-view filter: show bot comments (`b` toggles; default true).
     /// Model-level for the same reason as `show_resolved`.
     pub show_bot_comments: bool,
+    /// PRs whose `r`/`R` refresh is in flight (its `Cmd::RefreshPr` fan-out has
+    /// been dispatched and no `Msg::RefreshComplete` has cleared it yet).
+    /// Doubles as the dedupe guard — a re-press while a PR is here is a no-op —
+    /// and the source the list view reads via `is_refreshing` to draw the
+    /// per-row indicator. The network limiter, not this set, orders the work:
+    /// the focused PR is promoted, and `R` dispatches in tier order so the
+    /// limiter's FIFO background lane drains `me-blocking` first.
+    pub refreshing: HashSet<PrKey>,
+    /// PRs whose refresh completed since `refreshing` was last empty. Sizes the
+    /// drain-complete "Refreshed N" summary, then resets to 0 once reported.
+    pub refresh_completed: usize,
+    /// PRs whose `UNKNOWN` mergeable status has already triggered a one-shot
+    /// delayed re-fetch this session, so the retry fires at most once per PR.
+    /// A manual refresh of a PR clears its entry so a fresh `UNKNOWN` can retry
+    /// again (mirrors the TS `notePrRefreshed`).
+    pub mergeable_retried: HashSet<PrKey>,
 }
 
 impl Model {
@@ -341,6 +357,9 @@ impl Model {
                 view_mode: ViewMode::List,
                 show_resolved: false,
                 show_bot_comments: true,
+                refreshing: HashSet::new(),
+                refresh_completed: 0,
+                mergeable_retried: HashSet::new(),
             },
             vec![Cmd::LoadConfig, Cmd::ResolveAuthToken, Cmd::DetectRepo],
         )
@@ -426,6 +445,12 @@ impl Model {
                 .ok()?;
         let expected_path = expected_path.to_string_lossy();
         worktree::match_worktree(entries, &expected_branch, &expected_path)
+    }
+
+    /// Whether `pr`'s `r`/`R` refresh is currently in flight. The list view
+    /// reads this to draw the per-row refresh indicator.
+    pub fn is_refreshing(&self, pr: &PR) -> bool {
+        self.refreshing.contains(&pr.key())
     }
 
     /// The repo slug the active tab narrows the list to, or `None` for the All

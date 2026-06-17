@@ -31,6 +31,11 @@ fn tier_color(tier: Tier) -> Color {
 
 pub(crate) const WORKTREE_GLYPH: &str = "\u{e725}";
 
+/// Per-row indicator for a PR whose `r`/`R` refresh is in flight. Shares the
+/// leading one-column glyph slot with `WORKTREE_GLYPH`, taking precedence while
+/// a refresh is in flight so the activity is visible.
+pub(crate) const REFRESH_GLYPH: &str = "\u{21bb}";
+
 pub(crate) fn worktree_line(path: &str, max_path_width: usize) -> Line<'static> {
     Line::from(vec![
         Span::styled(WORKTREE_GLYPH, Style::default().fg(Color::Cyan)),
@@ -212,7 +217,9 @@ fn render_status(model: &Model, frame: &mut Frame<'_>, area: Rect) {
         left.push(Span::styled("/", bold));
         left.push(Span::raw(" filter  "));
         left.push(Span::styled("w", bold));
-        left.push(Span::raw(" worktree"));
+        left.push(Span::raw(" worktree  "));
+        left.push(Span::styled("r/R", bold));
+        left.push(Span::raw(" refresh"));
     }
     frame.render_widget(Paragraph::new(Line::from(left)), area);
     let network_width = network_indicator_width(model, area.width);
