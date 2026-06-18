@@ -109,12 +109,13 @@ fn relist_for_discovery(model: &mut Model) -> Vec<Cmd> {
 /// `r` on a Repo Tab whose repo has no pooled PRs: re-fetch that repo's open-PR
 /// listing so newly-opened PRs surface — the "check GitHub for new PRs" path.
 /// `r` otherwise just refreshes the selected PR, so an empty repo tab (nothing
-/// selected) would never re-check GitHub. A no-op on the All tab (no single repo
-/// to target), when the repo already has PRs (a filter merely hid them — `r`
-/// leaves those alone), when auth isn't ready / the repo isn't tracked, or when
-/// its listing is already in flight (`dispatch_relist` guards that last one).
-/// (`R` uses the broader `relist_for_discovery`, which re-lists even non-empty
-/// repos.)
+/// selected) would never re-check GitHub. This is `relist_for_discovery`
+/// restricted to an empty Repo Tab: a no-op on the All tab (no single repo to
+/// target) and when the repo already has PRs (a filter merely hid them — `r`
+/// leaves those alone). Past those guards the active scope is exactly this repo,
+/// so the shared helper re-lists it alone (and handles auth / the in-flight
+/// guard). (`R` calls `relist_for_discovery` unguarded, so it re-lists even
+/// non-empty repos.)
 fn relist_empty_repo_cmds(model: &mut Model) -> Vec<Cmd> {
     let Some(slug) = model.active_scope() else {
         return Vec::new();
@@ -122,13 +123,7 @@ fn relist_empty_repo_cmds(model: &mut Model) -> Vec<Cmd> {
     if model.list.any_in_scope(Some(&slug)) {
         return Vec::new();
     }
-    let Some(repo) = model.tracked_repo(&slug) else {
-        return Vec::new();
-    };
-    let Some(token) = model.auth_token.as_ref().cloned() else {
-        return Vec::new();
-    };
-    dispatch_relist(model, repo, &token).into_iter().collect()
+    relist_for_discovery(model)
 }
 
 /// One PR's `Cmd::RefreshPr` fan-out finished: clear its indicator and, once

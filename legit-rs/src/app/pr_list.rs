@@ -165,6 +165,12 @@ impl PrList {
         }
         let key = pr.key();
         if self.prs.iter().any(|p| p.key() == key) {
+            // Survivor: keep the pooled copy and discard this re-streamed listing
+            // object. That preserves the enrichment, but also drops any
+            // listing-level change (title, labels, draft, mergeable). Safe only
+            // because every re-list with survivors (`R`) also dispatches a per-PR
+            // `RefreshPr` that re-fetches those fields; the `r`-empty re-list has
+            // no survivors. A standalone re-list would have to update them here.
             return false;
         }
         self.push(pr);
