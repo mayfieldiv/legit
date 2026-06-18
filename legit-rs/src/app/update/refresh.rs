@@ -10,7 +10,9 @@ use crate::{
         model::{Model, StatusKind},
     },
     blocker::Tier,
+    git_remote::RepoInfo,
     github::rest::{PR, PRState, PrKey},
+    secret::Secret,
 };
 
 use super::{request_context, set_status};
@@ -21,10 +23,11 @@ const MERGEABLE_RETRY_MS: u64 = 3_000;
 
 /// `r`: refresh the selected PR, with files (the summary panel shows its File
 /// Category breakdown). The limiter promotes it via focus, so it leads
-/// regardless of tier. A no-op when nothing is selected.
+/// regardless of tier. With nothing selected because the active Repo Tab has no
+/// PRs, re-list that repo instead — "check GitHub for new PRs".
 pub(super) fn refresh_selected_cmds(model: &mut Model) -> Vec<Cmd> {
     let Some(key) = model.list.selected_pr().map(PR::key) else {
-        return Vec::new();
+        return relist_empty_repo_cmds(model);
     };
     begin_refresh(model, key, true).into_iter().collect()
 }
@@ -32,7 +35,9 @@ pub(super) fn refresh_selected_cmds(model: &mut Model) -> Vec<Cmd> {
 /// `R`: refresh every visible PR, dispatched in smart-status tier order so the
 /// limiter's FIFO background lane drains `me-blocking` first; re-read the config
 /// so repos added since launch are picked up. `count` is the PRs actually
-/// dispatched — already-refreshing ones dedupe to no-ops.
+/// dispatched — already-refreshing ones dedupe to no-ops. Then re-list (for
+/// discovery) the in-scope repos so newly-opened PRs surface and closed ones
+/// are pruned — always, not only when nothing was re-enriched.
 pub(super) fn refresh_all_cmds(model: &mut Model) -> Vec<Cmd> {
     let mut keys: Vec<PrKey> = model
         .list
@@ -55,7 +60,70 @@ pub(super) fn refresh_all_cmds(model: &mut Model) -> Vec<Cmd> {
             format!("Refreshing {count} PRs…"),
         ));
     }
+    // Re-list to discover newly-opened PRs (and prune ones closed since) — on
+    // top of re-enriching what is already pooled, regardless of how many PRs
+    // that was. The config reload above only re-lists never-fetched or failed
+    // repos, never an already-loaded one, so it can't surface new PRs in a repo
+    // already listed.
+    cmds.extend(relist_for_discovery(model));
     cmds
+}
+
+/// Dispatch one repo's open-PR listing as a re-list (`r`/`R` discovery), marking
+/// it Loading so the view shows the "Loading pull requests…" placeholder.
+/// `None` when a listing is already in flight for it — re-dispatching then would
+/// re-stream and duplicate the pooled PRs. The pooled PRs are left in place:
+/// `merge_listed` dedupes the re-stream (preserving each PR's enrichment) and
+/// `finish_listing` prunes the ones that didn't reappear.
+fn dispatch_relist(model: &mut Model, repo: RepoInfo, token: &Secret<String>) -> Option<Cmd> {
+    let slug = repo.slug();
+    if model.list.is_loading(Some(&slug)) {
+        return None;
+    }
+    model.list.begin_fetch(&slug);
+    Some(Cmd::FetchOpenPRs {
+        repo,
+        token: token.clone(),
+    })
+}
+
+/// Re-fetch open-PR listings so `R` discovers newly-opened PRs and prunes ones
+/// closed since: every tracked repo on the All tab, or just the active repo on
+/// a Repo Tab, matching the tab's scope. Pooled PRs are reconciled, not cleared
+/// (see `dispatch_relist`). A no-op without auth.
+fn relist_for_discovery(model: &mut Model) -> Vec<Cmd> {
+    let Some(token) = model.auth_token.as_ref().cloned() else {
+        return Vec::new();
+    };
+    let scope = model.active_scope();
+    let mut cmds = Vec::new();
+    for repo in model.tracked_repos() {
+        if scope.as_deref().is_some_and(|active| active != repo.slug()) {
+            continue;
+        }
+        cmds.extend(dispatch_relist(model, repo, &token));
+    }
+    cmds
+}
+
+/// `r` on a Repo Tab whose repo has no pooled PRs: re-fetch that repo's open-PR
+/// listing so newly-opened PRs surface — the "check GitHub for new PRs" path.
+/// `r` otherwise just refreshes the selected PR, so an empty repo tab (nothing
+/// selected) would never re-check GitHub. This is `relist_for_discovery`
+/// restricted to an empty Repo Tab: a no-op on the All tab (no single repo to
+/// target) and when the repo already has PRs (a filter merely hid them — `r`
+/// leaves those alone). Past those guards the active scope is exactly this repo,
+/// so the shared helper re-lists it alone (and handles auth / the in-flight
+/// guard). (`R` calls `relist_for_discovery` unguarded, so it re-lists even
+/// non-empty repos.)
+fn relist_empty_repo_cmds(model: &mut Model) -> Vec<Cmd> {
+    let Some(slug) = model.active_scope() else {
+        return Vec::new();
+    };
+    if model.list.any_in_scope(Some(&slug)) {
+        return Vec::new();
+    }
+    relist_for_discovery(model)
 }
 
 /// One PR's `Cmd::RefreshPr` fan-out finished: clear its indicator and, once

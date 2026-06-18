@@ -278,7 +278,10 @@ pub(super) fn enriched_model(numbers: &[u64]) -> Model {
     });
     model.list.begin_fetch("mayfieldiv/legit");
     for n in numbers {
-        model.list.push(sample_pr(*n, "p"));
+        // Stream through the listing-merge path so each PR is recorded as seen
+        // — matching how PrArrived pools them, so a later PrListLoaded reconcile
+        // keeps rather than prunes them.
+        model.list.merge_listed(sample_pr(*n, "p"));
     }
     model
 }

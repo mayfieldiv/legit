@@ -62,7 +62,6 @@ fn maybe_fetch_open_prs(model: &mut Model) -> Vec<Cmd> {
     }
     let token = token.clone();
     let mut cmds = Vec::new();
-    let mut cleared = false;
     for repo in model.tracked_repos() {
         let slug = repo.slug();
         // (Re)fetch only repos that have never been listed or whose last
@@ -72,19 +71,15 @@ fn maybe_fetch_open_prs(model: &mut Model) -> Vec<Cmd> {
         if !model.list.needs_listing(&slug) {
             continue;
         }
-        // A failed listing may have streamed some PRs before erroring, and a
-        // re-stream appends; drop them first so the retry doesn't duplicate the
-        // survivors. Relayout once afterward to rebuild rows off the now-stale
-        // PR indices before the next render.
-        cleared |= model.list.clear_repo(&slug);
+        // A failed listing may have streamed some PRs before erroring, but the
+        // retry needs no up-front clear: `merge_listed` dedupes the re-stream
+        // (keeping each survivor) and `finish_listing` prunes any now-closed
+        // ones once `PrListLoaded` settles.
         model.list.begin_fetch(&slug);
         cmds.push(Cmd::FetchOpenPRs {
             repo,
             token: token.clone(),
         });
-    }
-    if cleared {
-        model.relayout();
     }
     cmds
 }
@@ -947,17 +942,27 @@ fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             maybe_fetch_open_prs(model)
         }
         Msg::PrArrived(pr) => {
-            model.list.push(pr);
-            // The new PR has no enrichment yet, so it joins "Loading details…";
-            // rebuild the layout so it renders immediately.
-            model.relayout();
-            // The first PR to arrive becomes selected; fetch its files for the
-            // summary panel (deduped, so later arrivals that don't move the
-            // selection cost nothing).
-            maybe_fetch_selected_files(model)
+            if model.list.merge_listed(pr) {
+                // A newly-discovered PR has no enrichment yet, so it joins
+                // "Loading details…"; rebuild the layout so it renders
+                // immediately. The first PR to arrive becomes selected; fetch
+                // its files for the summary panel (deduped, so later arrivals
+                // that don't move the selection cost nothing).
+                model.relayout();
+                maybe_fetch_selected_files(model)
+            } else {
+                // A re-list re-streamed a PR already pooled: keep the enriched
+                // copy as-is — no duplicate row, no relayout or file re-fetch.
+                Vec::new()
+            }
         }
         Msg::PrListLoaded { repo_slug } => {
-            model.list.complete_fetch(&repo_slug);
+            // Settle the listing and reconcile membership: a re-list prunes PRs
+            // that closed since (the initial listing prunes nothing). Relayout
+            // when something was dropped so the rows don't dangle.
+            if model.list.finish_listing(&repo_slug) {
+                model.relayout();
+            }
             // This repo's REST stream has settled — fan out enrichment for its
             // PRs now, without waiting on slower repos.
             enrichment_cmds(model, &repo_slug)
