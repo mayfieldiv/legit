@@ -635,19 +635,19 @@ fn config_reload_fetches_only_newly_tracked_repos() {
 }
 
 #[test]
-fn config_reload_retries_a_failed_repo_and_clears_its_partial_prs() {
+fn config_reload_retries_a_failed_repo_reconciling_its_partial_prs() {
     // A listing that failed may have streamed some PRs before erroring. A reload
-    // must retry the repo — `R` means "refresh everything" — and drop those
-    // partial PRs first, since the re-stream appends and would otherwise
-    // duplicate them.
-    let mut model = enriched_model(&[1]); // mayfieldiv/legit, one PR streamed
+    // must retry the repo — `R` means "refresh everything". The partials are not
+    // cleared up front: the retry re-streams, `merge_listed` dedupes the
+    // survivors (no duplicates), and `finish_listing` prunes any that closed.
+    let mut model = enriched_model(&[1, 2]); // two partial PRs streamed
     model
         .list
         .fail_fetch("mayfieldiv/legit", "list open PRs: boom".to_owned());
     assert_eq!(
         model.list.prs().len(),
-        1,
-        "precondition: a partial PR pooled"
+        2,
+        "precondition: two partial PRs pooled"
     );
 
     let cmds = update(&mut model, Msg::ConfigLoaded(config_with_repos(&[])));
@@ -657,8 +657,25 @@ fn config_reload_retries_a_failed_repo_and_clears_its_partial_prs() {
         ["mayfieldiv/legit"],
         "the failed repo re-fetches on reload",
     );
-    assert!(
-        model.list.prs().is_empty(),
-        "the failed attempt's partial PRs are cleared before the retry re-streams",
+    assert_eq!(
+        model.list.prs().len(),
+        2,
+        "partials stay pooled until the retry settles — not cleared up front",
+    );
+
+    // The retry re-streams #1 (still open) only, then settles.
+    update(&mut model, Msg::PrArrived(sample_pr(1, "still open")));
+    update(
+        &mut model,
+        Msg::PrListLoaded {
+            repo_slug: "mayfieldiv/legit".to_owned(),
+        },
+    );
+
+    let numbers: Vec<u64> = model.list.prs().iter().map(|p| p.number).collect();
+    assert_eq!(
+        numbers,
+        [1],
+        "the re-stream dedupes #1 (no duplicate) and prunes the closed #2: {numbers:?}",
     );
 }

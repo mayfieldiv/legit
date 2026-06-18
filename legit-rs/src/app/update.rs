@@ -62,7 +62,6 @@ fn maybe_fetch_open_prs(model: &mut Model) -> Vec<Cmd> {
     }
     let token = token.clone();
     let mut cmds = Vec::new();
-    let mut cleared = false;
     for repo in model.tracked_repos() {
         let slug = repo.slug();
         // (Re)fetch only repos that have never been listed or whose last
@@ -72,19 +71,15 @@ fn maybe_fetch_open_prs(model: &mut Model) -> Vec<Cmd> {
         if !model.list.needs_listing(&slug) {
             continue;
         }
-        // A failed listing may have streamed some PRs before erroring, and a
-        // re-stream appends; drop them first so the retry doesn't duplicate the
-        // survivors. Relayout once afterward to rebuild rows off the now-stale
-        // PR indices before the next render.
-        cleared |= model.list.clear_repo(&slug);
+        // A failed listing may have streamed some PRs before erroring, but the
+        // retry needs no up-front clear: `merge_listed` dedupes the re-stream
+        // (keeping each survivor) and `finish_listing` prunes any now-closed
+        // ones once `PrListLoaded` settles.
         model.list.begin_fetch(&slug);
         cmds.push(Cmd::FetchOpenPRs {
             repo,
             token: token.clone(),
         });
-    }
-    if cleared {
-        model.relayout();
     }
     cmds
 }

@@ -68,8 +68,14 @@ fn filter_matches(pr: &PR, lowercase_needle: &str) -> bool {
 /// holds per repo, so the view never has to ask "are we loading AND failed?".
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Phase {
-    /// Fetch in flight.
-    Loading,
+    /// Fetch in flight. The set holds the PR numbers streamed since this repo's
+    /// `begin_fetch`, used to reconcile membership when the listing settles:
+    /// `finish_listing` prunes pooled PRs whose number didn't reappear
+    /// (closed/merged since). Numbers, not full keys — the slug is already this
+    /// phase's map key. Living inside `Loading` ties the seen-set's lifetime to
+    /// the in-flight listing: completing or failing the fetch replaces the
+    /// variant and drops it, so a settled repo can never carry a stale set.
+    Loading(HashSet<u64>),
     /// Fetch completed (rows may still be 0).
     Loaded,
     /// Fetch returned an error; the message is what the status bar surfaces.
@@ -80,13 +86,10 @@ pub enum Phase {
 pub struct PrList {
     prs: Vec<PR>,
     /// Per-Tracked-Repo fetch lifecycle, keyed by slug. BTreeMap so `failure`
-    /// reports deterministically (alphabetical) when several repos fail.
+    /// reports deterministically (alphabetical) when several repos fail. The
+    /// `Loading` phase also carries the cycle's seen-set for membership
+    /// reconciliation (see `Phase`).
     phases: BTreeMap<String, Phase>,
-    /// The PR keys streamed for each repo since its current `begin_fetch`, used
-    /// to reconcile membership when the listing settles: `finish_listing` prunes
-    /// pooled PRs whose key didn't reappear (closed/merged since). Reset per
-    /// fetch cycle so each `R`-driven re-list reflects the repo's current PRs.
-    listing_seen: BTreeMap<String, HashSet<PrKey>>,
     /// The substring filter narrowing the visible set (with the active tab).
     filter: Filter,
     grouping: Grouping,
@@ -126,11 +129,12 @@ impl PrList {
     }
 
     pub fn begin_fetch(&mut self, repo_slug: &str) {
-        self.phases.insert(repo_slug.to_owned(), Phase::Loading);
-        // Start a fresh seen-set: this cycle's arrivals define which PRs the
-        // repo still has when `finish_listing` reconciles.
-        self.listing_seen
-            .insert(repo_slug.to_owned(), HashSet::new());
+        // A fresh `Loading` phase starts with an empty seen-set; this cycle's
+        // arrivals populate it, defining which PRs the repo still has when
+        // `finish_listing` reconciles. Replacing any prior phase drops a
+        // previous cycle's set.
+        self.phases
+            .insert(repo_slug.to_owned(), Phase::Loading(HashSet::new()));
     }
 
     pub fn complete_fetch(&mut self, repo_slug: &str) {
@@ -153,13 +157,13 @@ impl PrList {
     /// (`R`) re-streams the pooled ones, which this dedupes so they neither
     /// duplicate nor lose their enrichment.
     pub fn merge_listed(&mut self, pr: PR) -> bool {
+        // Record the PR as present in this fetch cycle so `finish_listing` keeps
+        // it, whether or not it was already pooled. Arrivals only occur while
+        // the repo's listing is in flight, so its phase is always `Loading`.
+        if let Some(Phase::Loading(seen)) = self.phases.get_mut(&pr.repo_slug) {
+            seen.insert(pr.number);
+        }
         let key = pr.key();
-        // Remember the PR as present in this fetch cycle so `finish_listing`
-        // keeps it; this holds whether or not it was already pooled.
-        self.listing_seen
-            .entry(key.repo_slug.clone())
-            .or_default()
-            .insert(key.clone());
         if self.prs.iter().any(|p| p.key() == key) {
             return false;
         }
@@ -167,28 +171,24 @@ impl PrList {
         true
     }
 
-    /// Settle `repo_slug`'s listing: drop pooled PRs whose key didn't arrive in
-    /// this fetch cycle (closed/merged since), mark the repo `Loaded`, and clear
-    /// its seen-set. Returns whether any PR was pruned, so the caller can
-    /// `relayout` the now-stale rows. The initial listing sees every pooled PR,
-    /// so it prunes nothing; an `R`-driven re-list prunes what's gone.
+    /// Settle `repo_slug`'s listing: drop pooled PRs whose number didn't arrive
+    /// in this fetch cycle (closed/merged since) and mark the repo `Loaded`
+    /// (which drops the seen-set with the `Loading` phase). Returns whether any
+    /// PR was pruned, so the caller can `relayout` the now-stale rows. The
+    /// initial listing sees every pooled PR, so it prunes nothing; an `R`-driven
+    /// re-list prunes what's gone.
     pub fn finish_listing(&mut self, repo_slug: &str) -> bool {
-        let seen = self.listing_seen.remove(repo_slug).unwrap_or_default();
+        // Take the seen-set out of the `Loading` phase before pruning; the
+        // `complete_fetch` below replaces the phase anyway. Owning it releases
+        // the borrow on `self.phases` so we can mutate `self.prs`.
+        let seen = match self.phases.get_mut(repo_slug) {
+            Some(Phase::Loading(seen)) => std::mem::take(seen),
+            _ => HashSet::new(),
+        };
         let before = self.prs.len();
         self.prs
-            .retain(|pr| pr.repo_slug != repo_slug || seen.contains(&pr.key()));
+            .retain(|pr| pr.repo_slug != repo_slug || seen.contains(&pr.number));
         self.complete_fetch(repo_slug);
-        self.prs.len() != before
-    }
-
-    /// Drop every pooled PR for `repo_slug`, returning whether any were removed.
-    /// A retry of a failed listing calls this first: the failed attempt may have
-    /// streamed some PRs before erroring, and a re-stream *appends*, so without
-    /// the reset the survivors would duplicate. Leaves `rows` referencing the
-    /// now-shrunk `prs`, so the caller must `relayout` before the next render.
-    pub fn clear_repo(&mut self, repo_slug: &str) -> bool {
-        let before = self.prs.len();
-        self.prs.retain(|pr| pr.repo_slug != repo_slug);
         self.prs.len() != before
     }
 
@@ -525,7 +525,7 @@ impl PrList {
     pub fn needs_listing(&self, repo_slug: &str) -> bool {
         match self.phases.get(repo_slug) {
             None | Some(Phase::Failed(_)) => true,
-            Some(Phase::Loading | Phase::Loaded) => false,
+            Some(Phase::Loading(_) | Phase::Loaded) => false,
         }
     }
 
@@ -533,8 +533,8 @@ impl PrList {
     /// or `None` meaning "any Tracked Repo" (the All tab).
     pub fn is_loading(&self, scope: Option<&str>) -> bool {
         match scope {
-            Some(slug) => self.phases.get(slug) == Some(&Phase::Loading),
-            None => self.phases.values().any(|p| *p == Phase::Loading),
+            Some(slug) => matches!(self.phases.get(slug), Some(Phase::Loading(_))),
+            None => self.phases.values().any(|p| matches!(p, Phase::Loading(_))),
         }
     }
 
