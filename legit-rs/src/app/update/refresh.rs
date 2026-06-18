@@ -33,8 +33,9 @@ pub(super) fn refresh_selected_cmds(model: &mut Model) -> Vec<Cmd> {
 /// `R`: refresh every visible PR, dispatched in smart-status tier order so the
 /// limiter's FIFO background lane drains `me-blocking` first; re-read the config
 /// so repos added since launch are picked up. `count` is the PRs actually
-/// dispatched — already-refreshing ones dedupe to no-ops. With no PR to
-/// dispatch because the active Repo Tab is empty, re-list that repo instead.
+/// dispatched — already-refreshing ones dedupe to no-ops. Then re-list (for
+/// discovery) the in-scope repos so newly-opened PRs surface and closed ones
+/// are pruned — always, not only when nothing was re-enriched.
 pub(super) fn refresh_all_cmds(model: &mut Model) -> Vec<Cmd> {
     let mut keys: Vec<PrKey> = model
         .list
@@ -56,25 +57,59 @@ pub(super) fn refresh_all_cmds(model: &mut Model) -> Vec<Cmd> {
             StatusKind::Info,
             format!("Refreshing {count} PRs…"),
         ));
-    } else {
-        // Nothing to re-enrich: if the active Repo Tab is empty, re-list it so
-        // newly-opened PRs can appear (config reload above only re-lists
-        // never-fetched or failed repos, not an already-loaded empty one).
-        cmds.extend(relist_empty_repo_cmds(model));
+    }
+    // Re-list to discover newly-opened PRs (and prune ones closed since) — on
+    // top of re-enriching what is already pooled, regardless of how many PRs
+    // that was. The config reload above only re-lists never-fetched or failed
+    // repos, never an already-loaded one, so it can't surface new PRs in a repo
+    // already listed.
+    cmds.extend(relist_for_discovery(model));
+    cmds
+}
+
+/// Re-fetch open-PR listings so `R` discovers newly-opened PRs and prunes ones
+/// closed since: every tracked repo on the All tab, or just the active repo on
+/// a Repo Tab. Unlike a failed-listing retry, pooled PRs are NOT cleared — the
+/// streaming merge dedupes by key (preserving each PR's enrichment) and the
+/// reconcile at `PrListLoaded` drops the ones that didn't reappear. A no-op
+/// without auth.
+fn relist_for_discovery(model: &mut Model) -> Vec<Cmd> {
+    let Some(token) = model.auth_token.as_ref().cloned() else {
+        return Vec::new();
+    };
+    // The All tab (`None`) re-lists every tracked repo; a Repo Tab re-lists only
+    // its own repo, matching the tab's scope.
+    let scope = model.active_scope();
+    let mut cmds = Vec::new();
+    for repo in model.tracked_repos() {
+        let slug = repo.slug();
+        if scope.as_deref().is_some_and(|active| active != slug) {
+            continue;
+        }
+        // Don't stack a second listing on one already streaming.
+        if model.list.is_loading(Some(&slug)) {
+            continue;
+        }
+        model.list.begin_fetch(&slug);
+        cmds.push(Cmd::FetchOpenPRs {
+            repo,
+            token: token.clone(),
+        });
     }
     cmds
 }
 
-/// `r`/`R` on a Repo Tab whose repo has no pooled PRs: re-fetch that repo's
-/// open-PR listing so newly-opened PRs surface — the "check GitHub for new PRs"
-/// path. Refresh otherwise only re-enriches PRs already in the list, so an
-/// empty repo tab would never re-check GitHub. A no-op on the All tab (no
-/// single repo to target), when the repo already has PRs (a filter merely hid
-/// them — refresh leaves those alone) or its listing is already in flight, or
-/// when auth isn't ready / the repo isn't tracked. Marks the repo Loading so
-/// the view swaps to the "Loading pull requests…" placeholder until results
-/// land. There are no pooled PRs to clear first (the empty-scope guard), unlike
-/// the failed-listing retry in `maybe_fetch_open_prs`.
+/// `r` on a Repo Tab whose repo has no pooled PRs: re-fetch that repo's open-PR
+/// listing so newly-opened PRs surface — the "check GitHub for new PRs" path.
+/// `r` otherwise just refreshes the selected PR, so an empty repo tab (nothing
+/// selected) would never re-check GitHub. A no-op on the All tab (no single
+/// repo to target), when the repo already has PRs (a filter merely hid them —
+/// `r` leaves those alone) or its listing is already in flight, or when auth
+/// isn't ready / the repo isn't tracked. Marks the repo Loading so the view
+/// swaps to the "Loading pull requests…" placeholder until results land. There
+/// are no pooled PRs to clear first (the empty-scope guard), unlike the
+/// failed-listing retry in `maybe_fetch_open_prs`. (`R` uses the broader
+/// `relist_for_discovery`, which re-lists even non-empty repos.)
 fn relist_empty_repo_cmds(model: &mut Model) -> Vec<Cmd> {
     let Some(slug) = model.active_scope() else {
         return Vec::new();

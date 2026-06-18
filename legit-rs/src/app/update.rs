@@ -947,17 +947,27 @@ fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             maybe_fetch_open_prs(model)
         }
         Msg::PrArrived(pr) => {
-            model.list.push(pr);
-            // The new PR has no enrichment yet, so it joins "Loading details…";
-            // rebuild the layout so it renders immediately.
-            model.relayout();
-            // The first PR to arrive becomes selected; fetch its files for the
-            // summary panel (deduped, so later arrivals that don't move the
-            // selection cost nothing).
-            maybe_fetch_selected_files(model)
+            if model.list.merge_listed(pr) {
+                // A newly-discovered PR has no enrichment yet, so it joins
+                // "Loading details…"; rebuild the layout so it renders
+                // immediately. The first PR to arrive becomes selected; fetch
+                // its files for the summary panel (deduped, so later arrivals
+                // that don't move the selection cost nothing).
+                model.relayout();
+                maybe_fetch_selected_files(model)
+            } else {
+                // A re-list re-streamed a PR already pooled: keep the enriched
+                // copy as-is — no duplicate row, no relayout or file re-fetch.
+                Vec::new()
+            }
         }
         Msg::PrListLoaded { repo_slug } => {
-            model.list.complete_fetch(&repo_slug);
+            // Settle the listing and reconcile membership: a re-list prunes PRs
+            // that closed since (the initial listing prunes nothing). Relayout
+            // when something was dropped so the rows don't dangle.
+            if model.list.finish_listing(&repo_slug) {
+                model.relayout();
+            }
             // This repo's REST stream has settled — fan out enrichment for its
             // PRs now, without waiting on slower repos.
             enrichment_cmds(model, &repo_slug)

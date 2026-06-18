@@ -147,6 +147,139 @@ fn shift_r_refreshes_visible_prs_in_tier_order_and_reloads_config() {
     }
 }
 
+/// Two Tracked Repos — acme/web (config) + mayfieldiv/legit (CWD) — each with
+/// one pooled PR and its listing Loaded, auth ready. Tabs: 0 All, 1 acme/web,
+/// 2 mayfieldiv/legit.
+fn two_repo_model() -> Model {
+    let (mut model, _) = Model::new();
+    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.config = config_with_repos(&["acme/web"]);
+    model.repo = RepoDetection::Detected(RepoInfo {
+        owner: "mayfieldiv".to_owned(),
+        repo: "legit".to_owned(),
+    });
+    for (slug, number) in [("acme/web", 10u64), ("mayfieldiv/legit", 1)] {
+        model.list.begin_fetch(slug);
+        model.list.push(sample_pr_in(slug, number, "p"));
+        model.list.complete_fetch(slug);
+    }
+    model.relayout();
+    model
+}
+
+/// The repo slugs of every `FetchOpenPRs` in `cmds`, in dispatch order.
+fn fetched_open_pr_slugs(cmds: &[Cmd]) -> Vec<String> {
+    cmds.iter()
+        .filter_map(|c| match c {
+            Cmd::FetchOpenPRs { repo, .. } => Some(repo.slug()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn shift_r_on_a_repo_tab_relists_only_the_active_repo() {
+    let mut model = two_repo_model();
+    update(&mut model, key_event(KeyCode::Char('2'))); // mayfieldiv/legit tab
+    assert_eq!(model.active_scope().as_deref(), Some("mayfieldiv/legit"));
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('R')));
+
+    assert_eq!(
+        fetched_open_pr_slugs(&cmds),
+        ["mayfieldiv/legit"],
+        "R on a repo tab re-lists only that repo, not other tracked repos: {cmds:?}",
+    );
+}
+
+#[test]
+fn shift_r_on_the_all_tab_relists_every_tracked_repo() {
+    let mut model = two_repo_model();
+    assert_eq!(model.active_tab, 0, "precondition: All tab");
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('R')));
+
+    let mut slugs = fetched_open_pr_slugs(&cmds);
+    slugs.sort();
+    assert_eq!(
+        slugs,
+        ["acme/web", "mayfieldiv/legit"],
+        "R on the All tab re-lists every tracked repo: {cmds:?}",
+    );
+}
+
+#[test]
+fn shift_r_discovers_new_prs_and_prunes_closed_ones_while_keeping_enrichment() {
+    // End-to-end: a repo loaded with #1 (enriched) and #2. Pressing R re-lists
+    // the repo; the fresh listing re-streams #1 and a newly-opened #3 but not
+    // #2 (closed since). #3 appears, #2 is pruned, and #1 keeps its enrichment.
+    let mut model = list_model(&[1, 2]);
+    model.list.pr_mut(&key(1)).unwrap().review_status_loaded = true;
+    model.relayout();
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('R')));
+    assert_eq!(
+        fetched_open_pr_slugs(&cmds),
+        ["mayfieldiv/legit"],
+        "R re-lists the repo to discover new PRs: {cmds:?}",
+    );
+
+    // The re-list streams #1 (unchanged) and #3 (new), then settles.
+    update(&mut model, Msg::PrArrived(sample_pr(1, "still open")));
+    update(&mut model, Msg::PrArrived(sample_pr(3, "newly opened")));
+    update(
+        &mut model,
+        Msg::PrListLoaded {
+            repo_slug: "mayfieldiv/legit".to_owned(),
+        },
+    );
+
+    let mut numbers: Vec<u64> = model.list.prs().iter().map(|p| p.number).collect();
+    numbers.sort();
+    assert_eq!(
+        numbers,
+        [1, 3],
+        "the re-list discovered #3 and pruned the closed #2: {numbers:?}",
+    );
+    assert!(
+        model.list.pr(&key(1)).unwrap().review_status_loaded,
+        "the surviving PR keeps the enrichment it had before the re-list",
+    );
+}
+
+#[test]
+fn shift_r_does_not_relist_a_repo_whose_listing_is_already_in_flight() {
+    // The repo's listing is still streaming (Loading); R must not dispatch a
+    // duplicate listing on top of it.
+    let mut model = enriched_model(&[1]); // begin_fetch'd, still Loading
+    model.relayout();
+    assert!(model.list.is_loading(Some("mayfieldiv/legit")));
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('R')));
+
+    assert!(
+        fetched_open_pr_slugs(&cmds).is_empty(),
+        "an in-flight listing must not be re-dispatched by R: {cmds:?}",
+    );
+}
+
+#[test]
+fn shift_r_on_the_all_tab_relists_repos_to_discover_new_prs() {
+    // R re-lists tracked repos so newly-opened PRs surface — even a repo that
+    // already has PRs, not just an empty one. The listing re-fetches and the
+    // repo enters Loading; its pooled PRs are preserved (the merge dedupes).
+    let mut model = list_model(&[1, 2, 3]); // All tab, mayfieldiv/legit Loaded with PRs
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('R')));
+
+    assert!(
+        cmds.iter().any(
+            |c| matches!(c, Cmd::FetchOpenPRs { repo, .. } if repo.slug() == "mayfieldiv/legit")
+        ),
+        "R re-lists the repo to discover new PRs: {cmds:?}",
+    );
+}
+
 #[test]
 fn shift_r_dispatches_every_visible_pr_without_a_cap() {
     // The old design capped concurrent PR refreshes; dispatch now goes straight

@@ -10,7 +10,7 @@
 //! header rows; keyboard navigation keeps the selected PR's row on-screen,
 //! while wheel scrolling can move the viewport independently of selection.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 
 use crate::app::grouping::{DisplayRow, Grouping, display_rows};
@@ -82,6 +82,11 @@ pub struct PrList {
     /// Per-Tracked-Repo fetch lifecycle, keyed by slug. BTreeMap so `failure`
     /// reports deterministically (alphabetical) when several repos fail.
     phases: BTreeMap<String, Phase>,
+    /// The PR keys streamed for each repo since its current `begin_fetch`, used
+    /// to reconcile membership when the listing settles: `finish_listing` prunes
+    /// pooled PRs whose key didn't reappear (closed/merged since). Reset per
+    /// fetch cycle so each `R`-driven re-list reflects the repo's current PRs.
+    listing_seen: BTreeMap<String, HashSet<PrKey>>,
     /// The substring filter narrowing the visible set (with the active tab).
     filter: Filter,
     grouping: Grouping,
@@ -122,6 +127,10 @@ impl PrList {
 
     pub fn begin_fetch(&mut self, repo_slug: &str) {
         self.phases.insert(repo_slug.to_owned(), Phase::Loading);
+        // Start a fresh seen-set: this cycle's arrivals define which PRs the
+        // repo still has when `finish_listing` reconciles.
+        self.listing_seen
+            .insert(repo_slug.to_owned(), HashSet::new());
     }
 
     pub fn complete_fetch(&mut self, repo_slug: &str) {
@@ -135,6 +144,41 @@ impl PrList {
 
     pub fn push(&mut self, pr: PR) {
         self.prs.push(pr);
+    }
+
+    /// Pool a PR streamed from a listing, deduping by key: an already-pooled PR
+    /// is left untouched — keeping the enrichment fetched for it — and `false`
+    /// is returned; a genuinely-new PR is appended and `true` returned. The
+    /// initial listing has no pooled PRs so every arrival is new; a re-list
+    /// (`R`) re-streams the pooled ones, which this dedupes so they neither
+    /// duplicate nor lose their enrichment.
+    pub fn merge_listed(&mut self, pr: PR) -> bool {
+        let key = pr.key();
+        // Remember the PR as present in this fetch cycle so `finish_listing`
+        // keeps it; this holds whether or not it was already pooled.
+        self.listing_seen
+            .entry(key.repo_slug.clone())
+            .or_default()
+            .insert(key.clone());
+        if self.prs.iter().any(|p| p.key() == key) {
+            return false;
+        }
+        self.push(pr);
+        true
+    }
+
+    /// Settle `repo_slug`'s listing: drop pooled PRs whose key didn't arrive in
+    /// this fetch cycle (closed/merged since), mark the repo `Loaded`, and clear
+    /// its seen-set. Returns whether any PR was pruned, so the caller can
+    /// `relayout` the now-stale rows. The initial listing sees every pooled PR,
+    /// so it prunes nothing; an `R`-driven re-list prunes what's gone.
+    pub fn finish_listing(&mut self, repo_slug: &str) -> bool {
+        let seen = self.listing_seen.remove(repo_slug).unwrap_or_default();
+        let before = self.prs.len();
+        self.prs
+            .retain(|pr| pr.repo_slug != repo_slug || seen.contains(&pr.key()));
+        self.complete_fetch(repo_slug);
+        self.prs.len() != before
     }
 
     /// Drop every pooled PR for `repo_slug`, returning whether any were removed.

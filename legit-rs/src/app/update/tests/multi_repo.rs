@@ -57,8 +57,12 @@ fn pr_list_loaded_fans_out_enrichment_only_for_that_repo() {
     });
     model.list.begin_fetch("acme/web");
     model.list.begin_fetch("mayfieldiv/legit");
-    model.list.push(sample_pr_in("acme/web", 7, "other repo"));
-    model.list.push(sample_pr(1, "this repo"));
+    // Stream through the merge path so the PRs are recorded as seen this fetch
+    // cycle; otherwise PrListLoaded's reconcile would prune them as absent.
+    model
+        .list
+        .merge_listed(sample_pr_in("acme/web", 7, "other repo"));
+    model.list.merge_listed(sample_pr(1, "this repo"));
 
     let cmds = update(
         &mut model,
@@ -112,5 +116,57 @@ fn same_pr_number_in_two_repos_does_not_collide() {
     assert!(
         !model.blockers.contains_key(&key(7)),
         "mayfieldiv/legit#7 must still be loading — its enrichment never arrived"
+    );
+}
+
+// ── re-listing: dedupe arrivals, reconcile membership ───────────────────────
+
+#[test]
+fn relisting_a_pooled_pr_keeps_one_copy_and_its_enrichment() {
+    // A re-list re-streams PRs that are already pooled. They must not duplicate,
+    // and the enrichment fetched earlier must survive (the merge keeps the
+    // pooled entry rather than replacing it with the bare listing object).
+    let mut model = enriched_model(&[1]);
+    model.list.complete_fetch("mayfieldiv/legit");
+    model.list.pr_mut(&key(1)).unwrap().review_status_loaded = true;
+    model.relayout();
+
+    update(&mut model, Msg::PrArrived(sample_pr(1, "re-listed")));
+
+    assert_eq!(
+        model.list.prs().iter().filter(|p| p.number == 1).count(),
+        1,
+        "the re-streamed PR must not duplicate the pooled one",
+    );
+    assert!(
+        model.list.pr(&key(1)).unwrap().review_status_loaded,
+        "the pooled PR keeps the enrichment fetched before the re-list",
+    );
+}
+
+#[test]
+fn relisting_prunes_a_pr_that_closed_since_the_last_listing() {
+    // Pool #1 and #2, listing Loaded. A re-list re-streams only #1 (still open);
+    // #2 closed since, so it must drop out when the fresh listing settles.
+    let mut model = enriched_model(&[1, 2]);
+    model.list.complete_fetch("mayfieldiv/legit");
+    model.relayout();
+
+    // The R-driven re-list: begin_fetch resets the seen-set, the fresh listing
+    // streams #1 only, then settles.
+    model.list.begin_fetch("mayfieldiv/legit");
+    update(&mut model, Msg::PrArrived(sample_pr(1, "still open")));
+    update(
+        &mut model,
+        Msg::PrListLoaded {
+            repo_slug: "mayfieldiv/legit".to_owned(),
+        },
+    );
+
+    let numbers: Vec<u64> = model.list.prs().iter().map(|p| p.number).collect();
+    assert_eq!(
+        numbers,
+        [1],
+        "a PR absent from the fresh listing is pruned: {numbers:?}",
     );
 }
