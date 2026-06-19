@@ -16,8 +16,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::{
-    github::rest::PRState,
-    github::types::{FullReviewThread, ReviewComment, ReviewStatus, is_bot},
+    github::types::{FullReviewThread, PRState, ReviewComment, ReviewStatus, is_bot},
     secret::Secret,
 };
 
@@ -457,7 +456,7 @@ mod tests {
         ReviewStatusResponse, ThreadsResponse, ensure_no_errors, parse_review_status,
         parse_review_threads,
     };
-    use crate::github::rest::PRState;
+    use crate::github::types::PRState;
 
     #[test]
     fn parses_review_status_batch_with_latest_commit() {

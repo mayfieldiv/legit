@@ -8,8 +8,8 @@ use super::{
     BlockerOptions, BlockerResult, ThreadKind, Tier, classify_thread, classify_threads,
     compact_next_action, compute_blocker,
 };
-use crate::github::rest::{PR, PRState};
-use crate::github::types::{CheckRun, FullReviewThread, Review, ReviewComment};
+use crate::github::rest::PR;
+use crate::github::types::{CheckRun, FullReviewThread, PRState, Review, ReviewComment};
 
 // ── PR builder ───────────────────────────────────────────────────────────────
 

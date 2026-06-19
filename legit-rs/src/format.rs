@@ -15,8 +15,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::github::rest::PRState;
-use crate::github::types::{CheckRun, FullReviewThread, Review};
+use crate::github::types::{CheckRun, FullReviewThread, PRState, Review};
 
 /// Conclusions that count as a failing check for display. `action_required`
 /// is included here so a completed check that needs follow-up gets an
@@ -186,8 +185,9 @@ pub fn format_review_state(state: &str) -> &'static str {
 /// Text + colour for a PR's mergeable state. Mirrors the TS `formatMergeable`:
 /// `MERGEABLE` → "✓ mergeable" (green), `CONFLICTING` → "! conflict" (red),
 /// anything else (including `UNKNOWN`) → "? merge unknown" (gray).
-/// Single canonical source shared by the summary panel and the detail view.
-pub fn format_mergeable(mergeable: &str) -> (&'static str, Color) {
+/// The OPEN-state formatter underneath `format_merge_status` — not called
+/// directly by the views.
+fn format_mergeable(mergeable: &str) -> (&'static str, Color) {
     match mergeable {
         "MERGEABLE" => ("✓ mergeable", Color::Green),
         "CONFLICTING" => ("! conflict", Color::Red),
@@ -200,7 +200,7 @@ pub fn format_mergeable(mergeable: &str) -> (&'static str, Color) {
 /// detected the transition (see CONTEXT.md "Lifecycle State") the row shows the
 /// state itself — "merged" (magenta) or "closed" (red) — instead of a misleading
 /// "? merge unknown". An OPEN PR falls through to the plain mergeable flag. This
-/// is the lifecycle-aware wrapper the list/summary/detail views call; the bare
+/// is the lifecycle-aware wrapper the summary/detail views call; the bare
 /// `format_mergeable` stays the canonical OPEN-state formatter underneath. No TS
 /// counterpart — the reference UI shows "? merge unknown" for merged PRs too.
 pub fn format_merge_status(state: &PRState, mergeable: &str) -> (&'static str, Color) {
@@ -423,8 +423,7 @@ mod tests {
         format_review_state, format_size, outcome, pad_to_width, review_icon, reviews_summary,
         sort_check_runs, truncate, truncate_middle,
     };
-    use crate::github::rest::PRState;
-    use crate::github::types::{CheckRun, FullReviewThread, Review, ReviewComment};
+    use crate::github::types::{CheckRun, FullReviewThread, PRState, Review, ReviewComment};
 
     fn now() -> chrono::DateTime<chrono::Utc> {
         chrono::Utc.with_ymd_and_hms(2026, 5, 20, 12, 0, 0).unwrap()

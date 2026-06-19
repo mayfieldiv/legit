@@ -7,7 +7,14 @@
 
 use chrono::{DateTime, Utc};
 
-use crate::github::rest::PRState;
+/// Lifecycle state for a pull request. Mirrors the TS `PRState` discriminated
+/// type so the rest of the app can compare against the same values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PRState {
+    Open,
+    Merged,
+    Closed,
+}
 
 /// Enrichment fetched per-PR via the batched GraphQL review-status query. These
 /// are the fields the REST list endpoint omits; they overwrite the `PR`

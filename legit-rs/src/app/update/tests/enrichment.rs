@@ -1,8 +1,7 @@
 // ── enrichment ──────────────────────────────────────────────────────────
 
 use super::*;
-use crate::github::rest::PRState;
-use crate::github::types::ReviewStatus;
+use crate::github::types::{PRState, ReviewStatus};
 
 fn review_status(head_sha: Option<&str>) -> ReviewStatus {
     ReviewStatus {

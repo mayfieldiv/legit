@@ -11,7 +11,8 @@ use crate::{
     },
     blocker::Tier,
     git_remote::RepoInfo,
-    github::rest::{PR, PRState, PrKey},
+    github::rest::{PR, PrKey},
+    github::types::PRState,
     secret::Secret,
 };
 

@@ -3,8 +3,8 @@ use ratatui::crossterm::event::KeyCode;
 use crate::{
     app::{cmd::Cmd, model::ViewMode, msg::Msg, update::update},
     git_remote::RepoInfo,
-    github::rest::{PRState, PrKey},
-    github::types::{IssueComment, ReviewComment, ReviewStatus},
+    github::rest::PrKey,
+    github::types::{IssueComment, PRState, ReviewComment, ReviewStatus},
     secret::Secret,
     test_fixtures::{self, issue_comment, thread},
 };

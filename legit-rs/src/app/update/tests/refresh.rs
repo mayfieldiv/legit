@@ -3,8 +3,7 @@
 use super::*;
 use crate::{
     blocker::{BlockerResult, Tier},
-    github::rest::PRState,
-    github::types::ReviewStatus,
+    github::types::{PRState, ReviewStatus},
 };
 
 /// A review-status whose mergeable is `UNKNOWN` (the state GitHub returns until
