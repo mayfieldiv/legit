@@ -13,12 +13,12 @@ use super::model::Model;
 /// Below this terminal width the summary panel is hidden entirely — the list
 /// takes the whole row.
 const MIN_WIDTH_FOR_PANEL: u16 = 80;
-/// At this terminal width and above the panel widens from 36 to 50 columns.
+/// At this terminal width and above the panel widens from 40 to 60 columns.
 const WIDE_WIDTH: u16 = 140;
 /// Panel width in the narrow band (80-139 columns).
-const NARROW_PANEL_WIDTH: u16 = 36;
+const NARROW_PANEL_WIDTH: u16 = 40;
 /// Panel width at >=140 columns.
-const WIDE_PANEL_WIDTH: u16 = 50;
+const WIDE_PANEL_WIDTH: u16 = 60;
 
 /// Width of the `│` rule between the list and the summary panel.
 pub const DIVIDER_WIDTH: u16 = 1;
@@ -89,22 +89,22 @@ mod tests {
     }
 
     #[test]
-    fn panel_is_36_in_the_narrow_band() {
-        assert_eq!(panel_width(80), Some(36));
-        assert_eq!(panel_width(139), Some(36));
+    fn panel_is_40_in_the_narrow_band() {
+        assert_eq!(panel_width(80), Some(40));
+        assert_eq!(panel_width(139), Some(40));
     }
 
     #[test]
-    fn panel_is_50_at_wide_widths() {
-        assert_eq!(panel_width(140), Some(50));
-        assert_eq!(panel_width(200), Some(50));
+    fn panel_is_60_at_wide_widths() {
+        assert_eq!(panel_width(140), Some(60));
+        assert_eq!(panel_width(200), Some(60));
     }
 
     #[test]
     fn list_takes_whatever_the_panel_and_divider_leave() {
         assert_eq!(list_width(79), 79, "no panel below 80 columns");
-        assert_eq!(list_width(116), 116 - 36 - 1);
-        assert_eq!(list_width(140), 140 - 50 - 1);
+        assert_eq!(list_width(116), 116 - 40 - 1);
+        assert_eq!(list_width(140), 140 - 60 - 1);
     }
 
     #[test]

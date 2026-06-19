@@ -85,8 +85,8 @@ const REPO_COL: usize = 14;
 const SIZE_SIDE_COL_MIN: usize = 6;
 const SIZE_COL_MIN: usize = SIZE_SIDE_COL_MIN * 2 + 1;
 const AGE_COL: usize = 6;
-const REVIEW_COL: usize = 24;
-const ACTION_COL: usize = 20;
+const REVIEW_COL: usize = 18;
+const ACTION_COL: usize = 26;
 const GAP: usize = 1;
 
 /// Whether the All tab shows the repo column. Keys off the tracked-repo count

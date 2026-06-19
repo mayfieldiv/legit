@@ -225,10 +225,10 @@ fn flat_list_renders_one_row_per_pull_request() {
         |_| Some(Tier::NeedsReview),
     );
 
-    // Render at 116 so the list region is 79 columns wide (the panel takes the
-    // right 36 plus a 1-cell divider); the list-layout assertions stay about
+    // Render at 120 so the list region is 79 columns wide (the panel takes the
+    // right 40 plus a 1-cell divider); the list-layout assertions stay about
     // the list alone.
-    let terminal = render_snapshot(&model, 116, 7);
+    let terminal = render_snapshot(&model, 120, 7);
 
     assert_eq!(
         list_rows(&terminal),
@@ -386,7 +386,9 @@ fn list_size_cell_shows_loading_until_review_status_arrives() {
     loading.review_status_loaded = false;
     let model = model_with(vec![loading], Grouping::None, |_| Some(Tier::NeedsReview));
 
-    let terminal = render_snapshot(&model, 116, 5);
+    // 120 total -> 79-col list region (panel takes the right 40 plus divider),
+    // wide enough to keep the size column visible so its loading state shows.
+    let terminal = render_snapshot(&model, 120, 5);
     let rows = list_rows(&terminal);
 
     assert!(rows[0].contains('…'), "{rows:?}");
@@ -926,8 +928,8 @@ fn long_titles_truncate_with_ellipsis_to_fit_column() {
         |_| Some(Tier::NeedsReview),
     );
 
-    // 116 total -> 79-col list region (panel takes the right 36 plus divider).
-    let terminal = render_snapshot(&model, 116, 5);
+    // 120 total -> 79-col list region (panel takes the right 40 plus divider).
+    let terminal = render_snapshot(&model, 120, 5);
 
     let rows = list_rows(&terminal);
     assert!(
@@ -960,7 +962,7 @@ fn long_author_names_truncate_in_the_middle() {
         |_| Some(Tier::NeedsReview),
     );
 
-    // 116 total -> 80-col list region (panel takes the right 36).
+    // 116 total -> 75-col list region (panel takes the right 40).
     let terminal = render_snapshot(&model, 116, 5);
     let rows = list_rows(&terminal);
 
@@ -982,7 +984,7 @@ fn draft_pr_is_marked_in_the_review_column_not_the_title() {
     draft.is_draft = true;
     let model = model_with(vec![draft], Grouping::None, |_| Some(Tier::WaitingOnAuthor));
 
-    // 137 total -> 100-col list region, wide enough for the review column while
+    // 137 total -> 96-col list region, wide enough for the review column while
     // preserving the title minimum once inter-column gaps are counted.
     let terminal = render_snapshot(&model, 137, 5);
     let rows = list_rows(&terminal);
@@ -1004,8 +1006,8 @@ fn large_diff_size_widens_size_column_for_all_rows() {
         |_| Some(Tier::NeedsReview),
     );
 
-    // 126 total -> 89-col list region (panel takes the right 36 plus divider).
-    let terminal = render_snapshot(&model, 126, 6);
+    // 130 total -> 89-col list region (panel takes the right 40 plus divider).
+    let terminal = render_snapshot(&model, 130, 6);
     let rows = list_rows(&terminal);
 
     assert!(
@@ -1039,8 +1041,8 @@ fn wide_pr_number_widens_num_column_for_all_rows() {
         |_| Some(Tier::NeedsReview),
     );
 
-    // 126 total -> 89-col list region (panel takes the right 36 plus divider).
-    let terminal = render_snapshot(&model, 126, 6);
+    // 130 total -> 89-col list region (panel takes the right 40 plus divider).
+    let terminal = render_snapshot(&model, 130, 6);
     let rows = list_rows(&terminal);
 
     let title_start = rows[0]
