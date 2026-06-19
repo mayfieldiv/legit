@@ -16,6 +16,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::{
+    github::rest::PRState,
     github::types::{FullReviewThread, ReviewComment, ReviewStatus, is_bot},
     secret::Secret,
 };
@@ -90,6 +91,11 @@ struct RawReviewStatusNode {
     review_decision: Option<String>,
     #[serde(default)]
     mergeable: Option<String>,
+    /// GitHub's `PullRequestState` enum: `OPEN`, `CLOSED`, or `MERGED`. Unlike
+    /// the REST list (which reports a merged PR as `closed` + `mergedAt`), the
+    /// GraphQL enum is already split, so no `merged_at` cross-check is needed.
+    #[serde(default)]
+    state: Option<String>,
     #[serde(default)]
     commits: Option<RawCommitConnection>,
 }
@@ -112,6 +118,18 @@ struct RawCommit {
     committed_date: Option<DateTime<Utc>>,
     #[serde(default)]
     oid: Option<String>,
+}
+
+/// Map GitHub's GraphQL `PullRequestState` enum to the domain `PRState`. An
+/// absent or unrecognised value defaults to `Open` — the safe direction, since
+/// it keeps the PR in the Open PR List rather than silently treating a glitch
+/// as a merge. Mirrors `rest::parse_pr`'s `_ => Open` fallback.
+fn parse_pr_state(state: Option<&str>) -> PRState {
+    match state {
+        Some("MERGED") => PRState::Merged,
+        Some("CLOSED") => PRState::Closed,
+        _ => PRState::Open,
+    }
 }
 
 /// Parse a batched review-status response into `(pr_number, ReviewStatus)`
@@ -140,6 +158,7 @@ fn parse_review_status(response: ReviewStatusResponse) -> Vec<(u64, ReviewStatus
                     deletions: node.deletions,
                     review_decision: node.review_decision.unwrap_or_default(),
                     mergeable: node.mergeable.unwrap_or_else(|| "UNKNOWN".to_owned()),
+                    state: parse_pr_state(node.state.as_deref()),
                     last_commit_date,
                     head_commit_sha,
                 },
@@ -373,7 +392,7 @@ impl GraphQlClient {
                 .map(|(i, number)| {
                     format!(
                         "pr{i}: pullRequest(number: {number}) {{ number additions deletions \
-                         reviewDecision mergeable commits(last: 1) {{ nodes {{ commit {{ \
+                         reviewDecision mergeable state commits(last: 1) {{ nodes {{ commit {{ \
                          committedDate oid }} }} }} }}"
                     )
                 })
@@ -438,6 +457,7 @@ mod tests {
         ReviewStatusResponse, ThreadsResponse, ensure_no_errors, parse_review_status,
         parse_review_threads,
     };
+    use crate::github::rest::PRState;
 
     #[test]
     fn parses_review_status_batch_with_latest_commit() {
@@ -449,6 +469,7 @@ mod tests {
                     "deletions": 3,
                     "reviewDecision": "APPROVED",
                     "mergeable": "MERGEABLE",
+                    "state": "OPEN",
                     "commits": { "nodes": [ { "commit": {
                         "committedDate": "2026-05-10T12:00:00Z",
                         "oid": "deadbeef"
@@ -467,8 +488,27 @@ mod tests {
         assert_eq!(status.deletions, 3);
         assert_eq!(status.review_decision, "APPROVED");
         assert_eq!(status.mergeable, "MERGEABLE");
+        assert_eq!(status.state, PRState::Open);
         assert_eq!(status.head_commit_sha.as_deref(), Some("deadbeef"));
         assert!(status.last_commit_date.is_some());
+    }
+
+    #[test]
+    fn review_status_parses_merged_and_closed_lifecycle_state() {
+        // The whole point of fetching `state`: a refresh detects the MERGED or
+        // CLOSED transition the OPEN-only list endpoint can't, so the row can
+        // relabel off a merged PR's permanent UNKNOWN mergeable.
+        let raw = r#"{ "data": { "repository": {
+            "pr0": { "number": 1, "mergeable": "UNKNOWN", "state": "MERGED", "commits": { "nodes": [] } },
+            "pr1": { "number": 2, "mergeable": "UNKNOWN", "state": "CLOSED", "commits": { "nodes": [] } }
+        } } }"#;
+        let response: ReviewStatusResponse = serde_json::from_str(raw).expect("deserialize");
+
+        let mut parsed = parse_review_status(response);
+        parsed.sort_by_key(|(number, _)| *number);
+
+        assert_eq!(parsed[0].1.state, PRState::Merged);
+        assert_eq!(parsed[1].1.state, PRState::Closed);
     }
 
     #[test]
@@ -485,6 +525,9 @@ mod tests {
         assert_eq!(status.additions, 0);
         assert_eq!(status.review_decision, "");
         assert_eq!(status.mergeable, "UNKNOWN");
+        // An absent `state` defaults to Open — the safe direction (keep the PR
+        // listed rather than treat a glitch as a merge).
+        assert_eq!(status.state, PRState::Open);
         assert_eq!(status.last_commit_date, None);
         assert_eq!(status.head_commit_sha, None);
     }

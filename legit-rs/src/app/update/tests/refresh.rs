@@ -3,17 +3,20 @@
 use super::*;
 use crate::{
     blocker::{BlockerResult, Tier},
+    github::rest::PRState,
     github::types::ReviewStatus,
 };
 
 /// A review-status whose mergeable is `UNKNOWN` (the state GitHub returns until
-/// it finishes computing mergeability) carrying an optional head SHA.
+/// it finishes computing mergeability) carrying an optional head SHA. Open by
+/// default — UNKNOWN-mergeable only triggers a retry for an OPEN PR.
 fn unknown_status(head_sha: Option<&str>) -> ReviewStatus {
     ReviewStatus {
         additions: 0,
         deletions: 0,
         review_decision: String::new(),
         mergeable: "UNKNOWN".to_owned(),
+        state: PRState::Open,
         last_commit_date: None,
         head_commit_sha: head_sha.map(str::to_owned),
     }
@@ -551,13 +554,18 @@ fn unknown_mergeable_on_open_pr_schedules_one_shot_retry() {
 fn unknown_mergeable_on_merged_or_closed_pr_does_not_retry() {
     for state in [PRState::Merged, PRState::Closed] {
         let mut model = list_model(&[1]);
-        model.list.pr_mut(&key(1)).unwrap().state = state.clone();
 
+        // A refresh that finds the PR merged/closed carries that lifecycle state
+        // alongside GitHub's permanent UNKNOWN mergeable. Applying the state must
+        // suppress the one-shot retry, which only fires for an OPEN PR.
         let cmds = update(
             &mut model,
             Msg::ReviewStatusArrived {
                 pr: key(1),
-                status: unknown_status(None),
+                status: ReviewStatus {
+                    state: state.clone(),
+                    ..unknown_status(None)
+                },
             },
         );
 
@@ -566,6 +574,33 @@ fn unknown_mergeable_on_merged_or_closed_pr_does_not_retry() {
             "GitHub reports UNKNOWN permanently for {state:?}; do not retry: {cmds:?}",
         );
     }
+}
+
+#[test]
+fn refresh_applies_a_merged_state_without_pruning_the_pr() {
+    // The reported bug: a merged PR kept showing "? merge unknown" because the
+    // per-PR refresh never learned its lifecycle state. The refresh now applies
+    // the MERGED state (so the row can relabel), but leaves the PR pooled — the
+    // Open PR List prunes on the next re-list, not on a refresh.
+    let mut model = list_model(&[1]);
+    assert_eq!(model.list.pr(&key(1)).unwrap().state, PRState::Open);
+
+    update(
+        &mut model,
+        Msg::ReviewStatusArrived {
+            pr: key(1),
+            status: ReviewStatus {
+                state: PRState::Merged,
+                ..unknown_status(Some("abc123"))
+            },
+        },
+    );
+
+    let pr = model
+        .list
+        .pr(&key(1))
+        .expect("a refresh relabels the PR, it does not prune it");
+    assert_eq!(pr.state, PRState::Merged, "the refresh applied the merge");
 }
 
 #[test]

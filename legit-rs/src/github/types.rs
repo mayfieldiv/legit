@@ -7,6 +7,8 @@
 
 use chrono::{DateTime, Utc};
 
+use crate::github::rest::PRState;
+
 /// Enrichment fetched per-PR via the batched GraphQL review-status query. These
 /// are the fields the REST list endpoint omits; they overwrite the `PR`
 /// defaults once they arrive.
@@ -16,6 +18,11 @@ pub struct ReviewStatus {
     pub deletions: u64,
     pub review_decision: String,
     pub mergeable: String,
+    /// The PR's Lifecycle State as of this fetch. The REST list endpoint only
+    /// yields `OPEN`; this per-PR query is what detects a `MERGED`/`CLOSED`
+    /// transition since the list was fetched (CONTEXT.md "Lifecycle State"), so
+    /// the row can stop showing a merged PR's permanent `UNKNOWN` mergeable.
+    pub state: PRState,
     pub last_commit_date: Option<DateTime<Utc>>,
     pub head_commit_sha: Option<String>,
 }

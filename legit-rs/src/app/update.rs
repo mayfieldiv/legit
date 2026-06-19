@@ -980,6 +980,14 @@ fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
                 entry.deletions = status.deletions;
                 entry.review_decision = status.review_decision;
                 entry.mergeable = status.mergeable;
+                // A refresh is the only thing that detects a MERGED/CLOSED
+                // transition since the list was fetched (the list endpoint only
+                // yields OPEN). Applying it lets the row show the real lifecycle
+                // state instead of a merged PR's permanent UNKNOWN mergeable, and
+                // suppresses the one-shot mergeable retry below (which only fires
+                // for OPEN PRs). The Open PR List still prunes the PR on the next
+                // re-list, not here — refresh relabels, re-list reconciles.
+                entry.state = status.state;
                 entry.last_commit_date = status.last_commit_date;
                 entry.head_commit_sha = status.head_commit_sha;
                 entry.review_status_loaded = true;
