@@ -1,8 +1,0 @@
-[test]
-# Solid JSX transform — compiles .tsx at runtime via babel.
-# For non-test usage, cli.ts registers the plugin directly since
-# bunfig.toml is read from cwd, not the legit source directory.
-preload = ["@opentui/solid/preload"]
-
-[install]
-exact = true

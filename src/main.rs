@@ -22,7 +22,7 @@ use anyhow::Result;
 #[tokio::main]
 async fn main() -> Result<()> {
     let _tracing_guard = tracing_setup::init()?;
-    tracing::info!("starting legit-rs");
+    tracing::info!("starting legit");
 
     runtime::run().await
 }
