@@ -342,7 +342,7 @@ pub struct GraphQlClient {
 impl GraphQlClient {
     pub fn new(token: &Secret<String>) -> Result<Self> {
         let http = reqwest::Client::builder()
-            .user_agent("legit-rs")
+            .user_agent("legit")
             .build()
             .context("failed to build reqwest client")?;
         Ok(Self {

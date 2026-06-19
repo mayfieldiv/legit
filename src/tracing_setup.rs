@@ -9,7 +9,7 @@ pub fn init() -> Result<WorkerGuard> {
     fs::create_dir_all(&log_dir)
         .with_context(|| format!("failed to create {}", log_dir.display()))?;
 
-    let file_appender = tracing_appender::rolling::never(log_dir, "legit-rs.log");
+    let file_appender = tracing_appender::rolling::never(log_dir, "legit.log");
     let (writer, guard) = tracing_appender::non_blocking(file_appender);
     let filter = EnvFilter::try_new(env::var("LEGIT_LOG").unwrap_or_else(|_| "info".to_owned()))
         .context("invalid LEGIT_LOG filter")?;

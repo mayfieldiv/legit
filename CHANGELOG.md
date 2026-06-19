@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Cutover to the Rust + ratatui rewrite: the TUI is now a single Rust crate at the repo root (run with `cargo run`), and the TypeScript/SolidJS implementation has been deleted. `~/.legit/config.json` is unchanged; logs now write to `~/.legit/log/legit.log` instead of `legit-rs.log` (#53)
+
 ### Fixed
 
 - Typing digits or h/l keys into the list filter switched repo tabs instead of appending to the filter text; keyboard handling moved from AppShell to ListView so modal states (filter, group panel) consume keys first (#33)

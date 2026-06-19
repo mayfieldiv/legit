@@ -7,7 +7,7 @@
   tmux -S "$SOCKET" new-session -d -s legit-test -x 200 -y 40
   # Target the session by name (not legit-test:0.0) so it works regardless of
   # the user's base-index/pane-base-index.
-  tmux -S "$SOCKET" send-keys -t legit-test -- 'cd "$(git rev-parse --show-toplevel)/legit-rs" && cargo run' Enter
+  tmux -S "$SOCKET" send-keys -t legit-test -- 'cd "$(git rev-parse --show-toplevel)" && cargo run' Enter
   ```
   Always tell the user how to attach, resolving the path so it is copy-pasteable: `tmux -S "$(git rev-parse --show-toplevel)/.tmux/legit-test.sock" attach -t legit-test`
 - **Do not kill the tmux session.** Leave `legit-test` running so the user can stay attached. If the session already exists, reuse it — just capture the pane or send keys. When the user reports a bug, capture the current pane state to see what they see.
@@ -18,8 +18,7 @@
     -S "$SOCKET" -t legit-test -p "open PRs" -T 10
   ```
 - Prefer testing the real TUI in `tmux`, not only snapshot tests.
-- `legit` is on the shell `PATH` and resolves to the current repo state; prefer running `legit` directly.
-- For the Rust rewrite, start the dev TUI from the repo root with `cd legit-rs && cargo run`.
+- Start the dev TUI from the repo root with `cargo run`. To exercise an installed binary, `cargo install --path .` puts `legit` on `PATH`.
 - `~/immybot` can be used as a read-only dataset for TUI testing. Do not modify anything in that repo.
 - **Never post to GitHub without explicit user approval.** Do not create issues, file PRs, post PR comments, reply to review threads, or perform any write action on GitHub unless the user explicitly asks for it.
 
