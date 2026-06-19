@@ -29,7 +29,7 @@ use ratatui::{
 use crate::{
     app::detail_layout::{HEADER_HEIGHT, detail_content},
     app::model::{DetailState, Model},
-    format::{format_age, format_mergeable, format_size},
+    format::{format_age, format_merge_status, format_size},
     github::rest::PR,
     markdown::Block,
 };
@@ -116,8 +116,8 @@ fn render_header(model: &Model, pr: &PR, frame: &mut Frame<'_>, area: Rect, now:
     }
     let meta_line = Line::from(meta_spans);
 
-    // Row 2: head → base  ·  optional worktree path  ·  mergeable state
-    let (merge_text, merge_color) = format_mergeable(&pr.mergeable);
+    // Row 2: head → base  ·  optional worktree path  ·  merge/lifecycle state
+    let (merge_text, merge_color) = format_merge_status(&pr.state, &pr.mergeable);
     let mut branch_spans = vec![
         Span::styled(pr.head_ref.clone(), Style::default().fg(Color::Cyan)),
         Span::styled(" → ", Style::default().fg(Color::DarkGray)),

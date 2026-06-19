@@ -15,6 +15,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use crate::github::rest::PRState;
 use crate::github::types::{CheckRun, FullReviewThread, Review};
 
 /// Conclusions that count as a failing check for display. `action_required`
@@ -191,6 +192,22 @@ pub fn format_mergeable(mergeable: &str) -> (&'static str, Color) {
         "MERGEABLE" => ("✓ mergeable", Color::Green),
         "CONFLICTING" => ("! conflict", Color::Red),
         _ => ("? merge unknown", Color::Gray),
+    }
+}
+
+/// Text + colour for a PR's merge readiness, lifecycle-aware. A MERGED or CLOSED
+/// PR's `mergeable` is a permanent, meaningless `UNKNOWN`, so once a refresh has
+/// detected the transition (see CONTEXT.md "Lifecycle State") the row shows the
+/// state itself — "merged" (magenta) or "closed" (red) — instead of a misleading
+/// "? merge unknown". An OPEN PR falls through to the plain mergeable flag. This
+/// is the lifecycle-aware wrapper the list/summary/detail views call; the bare
+/// `format_mergeable` stays the canonical OPEN-state formatter underneath. No TS
+/// counterpart — the reference UI shows "? merge unknown" for merged PRs too.
+pub fn format_merge_status(state: &PRState, mergeable: &str) -> (&'static str, Color) {
+    match state {
+        PRState::Merged => ("✓ merged", Color::Magenta),
+        PRState::Closed => ("✗ closed", Color::Red),
+        PRState::Open => format_mergeable(mergeable),
     }
 }
 
@@ -402,9 +419,11 @@ mod tests {
     use super::{
         CheckOutcome, ChecksSummary, CommentCounts, ReviewsSummary, abbreviate_home,
         abbreviate_home_with, check_icon, check_row, check_sort_group, checks_summary,
-        comment_counts, format_age, format_repo_short, format_review_state, format_size, outcome,
-        pad_to_width, review_icon, reviews_summary, sort_check_runs, truncate, truncate_middle,
+        comment_counts, format_age, format_merge_status, format_mergeable, format_repo_short,
+        format_review_state, format_size, outcome, pad_to_width, review_icon, reviews_summary,
+        sort_check_runs, truncate, truncate_middle,
     };
+    use crate::github::rest::PRState;
     use crate::github::types::{CheckRun, FullReviewThread, Review, ReviewComment};
 
     fn now() -> chrono::DateTime<chrono::Utc> {
@@ -559,6 +578,29 @@ mod tests {
         assert_eq!(format_review_state("COMMENTED"), "commented");
         assert_eq!(format_review_state("DISMISSED"), "dismissed");
         assert_eq!(format_review_state("WAT"), "?");
+    }
+
+    #[test]
+    fn format_merge_status_shows_lifecycle_state_for_non_open_prs() {
+        // A merged/closed PR's mergeable is a permanent UNKNOWN; the lifecycle
+        // state takes over so the row never shows a misleading "? merge unknown".
+        assert_eq!(
+            format_merge_status(&PRState::Merged, "UNKNOWN"),
+            ("✓ merged", Color::Magenta),
+        );
+        assert_eq!(
+            format_merge_status(&PRState::Closed, "UNKNOWN"),
+            ("✗ closed", Color::Red),
+        );
+        // An OPEN PR falls through to the plain mergeable flag unchanged.
+        assert_eq!(
+            format_merge_status(&PRState::Open, "MERGEABLE"),
+            format_mergeable("MERGEABLE"),
+        );
+        assert_eq!(
+            format_merge_status(&PRState::Open, "UNKNOWN"),
+            ("? merge unknown", Color::Gray),
+        );
     }
 
     #[test]
