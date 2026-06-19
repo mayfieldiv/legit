@@ -1,7 +1,7 @@
 // ── enrichment ──────────────────────────────────────────────────────────
 
 use super::*;
-use crate::github::types::ReviewStatus;
+use crate::github::types::{PRState, ReviewStatus};
 
 fn review_status(head_sha: Option<&str>) -> ReviewStatus {
     ReviewStatus {
@@ -9,6 +9,7 @@ fn review_status(head_sha: Option<&str>) -> ReviewStatus {
         deletions: 4,
         review_decision: "APPROVED".to_owned(),
         mergeable: "MERGEABLE".to_owned(),
+        state: PRState::Open,
         last_commit_date: None,
         head_commit_sha: head_sha.map(str::to_owned),
     }

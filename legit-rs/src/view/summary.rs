@@ -22,7 +22,7 @@ use ratatui::{
 
 use crate::app::model::{FilesState, Model};
 use crate::format::{
-    CheckOutcome, check_row, checks_summary, comment_counts, format_age, format_mergeable,
+    CheckOutcome, check_row, checks_summary, comment_counts, format_age, format_merge_status,
     format_review_state, format_size, outcome, review_icon, reviews_summary, sort_check_runs,
     truncate,
 };
@@ -129,10 +129,11 @@ fn worktree_label_width() -> usize {
     1 + " worktree: ".len()
 }
 
-/// The mergeable-state line. Delegates to `format::format_mergeable` — the
-/// canonical display helper shared with the detail view.
+/// The merge/lifecycle-state line. Delegates to `format::format_merge_status` —
+/// the lifecycle-aware helper shared with the detail view, so a merged/closed
+/// PR shows its state rather than a permanent "? merge unknown".
 fn mergeability_line(pr: &PR) -> Line<'static> {
-    let (text, color) = format_mergeable(&pr.mergeable);
+    let (text, color) = format_merge_status(&pr.state, &pr.mergeable);
     Line::from(Span::styled(text, Style::default().fg(color)))
 }
 

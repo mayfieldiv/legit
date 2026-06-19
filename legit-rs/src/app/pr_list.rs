@@ -584,7 +584,8 @@ mod tests {
 
     use super::{DisplayRow, Grouping, PrList};
     use crate::blocker::Tier;
-    use crate::github::rest::{PR, PRState};
+    use crate::github::rest::PR;
+    use crate::github::types::PRState;
 
     fn sample_pr(number: u64) -> PR {
         PR {

@@ -10,7 +10,8 @@ use crate::{
         update::update,
     },
     git_remote::RepoInfo,
-    github::rest::{PR, PRState, PrKey},
+    github::rest::{PR, PrKey},
+    github::types::PRState,
     secret::Secret,
 };
 

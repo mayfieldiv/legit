@@ -4,7 +4,7 @@ use crate::{
     app::{cmd::Cmd, model::ViewMode, msg::Msg, update::update},
     git_remote::RepoInfo,
     github::rest::PrKey,
-    github::types::{IssueComment, ReviewComment},
+    github::types::{IssueComment, PRState, ReviewComment, ReviewStatus},
     secret::Secret,
     test_fixtures::{self, issue_comment, thread},
 };
@@ -350,6 +350,70 @@ fn r_in_detail_dispatches_a_refresh_and_refetches_the_conversation() {
     );
     // The selected PR is now marked refreshing for the list-row indicator.
     assert!(model.is_refreshing(&model.list.prs()[0]));
+}
+
+#[test]
+fn shift_r_in_detail_refreshes_the_open_pr_like_r() {
+    // `R` is no longer a no-op in the detail view: with a single focused PR it
+    // collapses to the same refresh as `r`, so it too picks up a MERGED/CLOSED
+    // transition. It must not exit the detail view (no re-list / prune here).
+    let mut model = model_with_one_pr();
+    update(&mut model, key_event(KeyCode::Enter));
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('R')));
+
+    assert!(
+        cmds.iter().any(|c| matches!(
+            c,
+            Cmd::RefreshPr {
+                key: PrKey { number: 42, .. },
+                include_files: true,
+                ..
+            }
+        )),
+        "R must enqueue a refresh of the open PR: {cmds:?}"
+    );
+    assert!(
+        matches!(model.view_mode, ViewMode::Detail(_)),
+        "R must not exit the detail view"
+    );
+}
+
+#[test]
+fn refresh_in_detail_relabels_a_merged_pr_without_leaving_the_view() {
+    // The header reads its merge-status slot off the pooled PR's lifecycle state.
+    // A refresh that finds the PR merged applies that state, so the slot relabels
+    // from "? merge unknown" to "merged" — and the detail view stays open (the
+    // PR is relabeled in place, not pruned), so the header actually shows it.
+    let mut model = model_with_one_pr();
+    update(&mut model, key_event(KeyCode::Enter));
+    update(&mut model, key_event(KeyCode::Char('R')));
+
+    update(
+        &mut model,
+        Msg::ReviewStatusArrived {
+            pr: pr_key_42(),
+            status: ReviewStatus {
+                additions: 0,
+                deletions: 0,
+                review_decision: String::new(),
+                mergeable: "UNKNOWN".to_owned(),
+                state: PRState::Merged,
+                last_commit_date: None,
+                head_commit_sha: Some("abc123".to_owned()),
+            },
+        },
+    );
+
+    assert_eq!(
+        model.list.pr(&pr_key_42()).expect("PR stays pooled").state,
+        PRState::Merged,
+        "the in-detail refresh applied the merged state for the header to show",
+    );
+    assert!(
+        matches!(model.view_mode, ViewMode::Detail(_)),
+        "the view stays on the relabeled PR rather than being pruned out",
+    );
 }
 
 #[test]

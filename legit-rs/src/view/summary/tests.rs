@@ -6,7 +6,8 @@ use crate::{
     app::model::{Model, RepoDetection},
     blocker::{BlockerResult, Tier},
     git_remote::RepoInfo,
-    github::rest::{PR, PRState},
+    github::rest::PR,
+    github::types::PRState,
     view,
     worktree::WorktreeEntry,
 };

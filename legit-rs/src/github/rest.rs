@@ -8,18 +8,9 @@ use tokio::sync::mpsc;
 
 use crate::{
     file_category::FileChange,
-    github::types::{CheckRun, IssueComment, Review, is_bot},
+    github::types::{CheckRun, IssueComment, PRState, Review, is_bot},
     secret::Secret,
 };
-
-/// Lifecycle state for a pull request. Mirrors the TS `PRState` discriminated
-/// type so the rest of the app can compare against the same values.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PRState {
-    Open,
-    Merged,
-    Closed,
-}
 
 /// Domain type for a pull request. Field set mirrors the TS `PR` interface so
 /// the views, blocker engine, and downstream consumers stay in lockstep.

@@ -633,7 +633,7 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
             // by hand — the next Enter builds a fresh one starting at the top.
             model.view_mode = ViewMode::List;
         }
-        KeyCode::Char('r') => {
+        KeyCode::Char('r') | KeyCode::Char('R') => {
             // Refresh the open PR: dispatch a full refresh (with files), and
             // refetch the body + issue comments the detail view shows on top of
             // that. The limiter promotes it (it's the focused PR), so it leads.
@@ -642,6 +642,14 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
             // keep rendering their current data until the fresh lists overwrite
             // it. Preserves the scroll position so the user stays put after a
             // quick re-fetch.
+            //
+            // `r` and `R` collapse to the same action here: the detail view has
+            // a single focused PR, so `R`'s list-view "refresh every visible PR"
+            // has nothing extra to act on. Both pick up a MERGED/CLOSED
+            // transition via the review-status fetch and relabel the header's
+            // merge-status slot. Deliberately not a re-list — that prunes the
+            // Open PR List, which would drop the very PR being read out from
+            // under the detail view; pruning stays the list view's `R` job.
             //
             // Clone the key so the borrow of model.view_mode ends before the
             // body is reassigned below (which needs a unique borrow of the
@@ -980,6 +988,14 @@ fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
                 entry.deletions = status.deletions;
                 entry.review_decision = status.review_decision;
                 entry.mergeable = status.mergeable;
+                // A refresh is the only thing that detects a MERGED/CLOSED
+                // transition since the list was fetched (the list endpoint only
+                // yields OPEN). Applying it lets the row show the real lifecycle
+                // state instead of a merged PR's permanent UNKNOWN mergeable, and
+                // suppresses the one-shot mergeable retry below (which only fires
+                // for OPEN PRs). The Open PR List still prunes the PR on the next
+                // re-list, not here — refresh relabels, re-list reconciles.
+                entry.state = status.state;
                 entry.last_commit_date = status.last_commit_date;
                 entry.head_commit_sha = status.head_commit_sha;
                 entry.review_status_loaded = true;

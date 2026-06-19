@@ -341,10 +341,7 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
-    use crate::{
-        config::RepoConfig,
-        github::rest::{PRState, PrKey},
-    };
+    use crate::{config::RepoConfig, github::rest::PrKey, github::types::PRState};
 
     fn sample_pr(head_ref: &str, head_owner: &str) -> PR {
         PR {

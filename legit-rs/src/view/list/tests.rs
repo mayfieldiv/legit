@@ -9,8 +9,8 @@ use crate::{
     blocker::{BlockerResult, Tier},
     git_remote::RepoInfo,
     github::limiter::NetworkStats,
-    github::rest::{PR, PRState},
-    github::types::{CheckRun, FullReviewThread, Review, ReviewComment},
+    github::rest::PR,
+    github::types::{CheckRun, FullReviewThread, PRState, Review, ReviewComment},
     view,
     worktree::{self, WorktreeEntry},
 };
