@@ -144,6 +144,27 @@ Re-ranking the **Priority Queue** when the **Focused PR** changes, so the focuse
 **File Category**:
 One of `code`, `test`, `generated`, `docs`, `config`. Assigned per file by pattern rules from `fileRules` in config. Drives the summary panel's per-category size breakdown.
 
+### Presentation
+
+**Selected Row**:
+The **Open PR List** row under the cursor, highlighted by a subtle full-width background fill with its title brightened — not inverted video. Every other cell keeps its semantic colour, so the row's colour-coding survives the highlight.
+_Avoid_: highlighted row, active row, reverse-video row.
+
+**Label Chip**:
+A PR label rendered as a filled badge — the label's own GitHub colour as background, a contrast-flipped foreground — shown in the summary panel and detail header (not the list). Pure presentation: chips assign no domain meaning and drive no sort, filter, or **Smart-status**; they are a cosmetic rendering of the same contextual metadata the labels are otherwise.
+_Avoid_: tag, badge (badge is the generic shape; chip is the legit term).
+
+**Repo Color**:
+A stable accent hue derived per repo by hashing its short name into a curated truecolor ramp. Applied wherever a repo's name appears as an identifier — the **Repo Tab** bar, the app-header scope, the All-tab repo cell, the repo group header, and the detail header — so a repo reads the same colour everywhere. The one exception is the PR's GitHub URL, where the slug stays on the link colour rather than recolouring a substring. Distinct from **Smart-status** tier colours, which never share a render site with a repo name.
+_Avoid_: repo accent, repo tint.
+
+**Check Duration**:
+A check run's wall-clock time (`completed_at − started_at`), read from the same check-runs fetch that yields name and conclusion — best-effort, so only completed runs have one (queued/in-progress runs, and older commit statuses outside the check-runs endpoint, do not). Surfaced beside each completed check row and used as the secondary sort key after outcome.
+
+**Fetch Age**:
+How long ago legit last received a given PR's data — its initial enrichment or a **Refresh** settling — shown per PR in the summary panel and detail header as a relative age ("fetched 2m ago"). A per-PR staleness signal, deliberately not global: PRs are fetched and refreshed independently (see [[Fetch Priority]], [[Refresh]]), so there is no single moment "the data" was loaded. Distinct from the PR's GitHub `updated_at` (its last activity, shown as "updated Y") and from the live network indicator's in-flight/waiting counts.
+_Avoid_: last updated, updated at (reserved for GitHub's activity time).
+
 ## Relationships
 
 - A **PR** belongs to exactly one **Tracked Repo** and has many **Review Threads** and **Issue Comments**.
@@ -157,7 +178,7 @@ One of `code`, `test`, `generated`, `docs`, `config`. Assigned per file by patte
 - **Draft Not Ready** and **Merge Conflict** use the **Effective Author** as the **Blocker**.
 - **Requested Changes Response** uses the **Effective Author** as the **Blocker** and takes precedence over pending review requests.
 - **Smart-status** and **Next Action** are authoritative only after the enrichment they depend on has arrived; raw PR facts such as draft, mergeability, and review decision may still be shown before then.
-- CI check summaries count all checks, but individual check rows are reserved for checks that are failed, pending, or action-required.
+- CI check summaries count all checks; individual check rows show up to eight checks of any outcome, ordered by outcome (failed/action-required, then pending, then passed) and within that by **Check Duration** descending so the slowest surfaces first. The detail view lays these rows out in two columns; the narrower summary panel uses one.
 - A check with GitHub's `action_required` conclusion is a **Next Action** after hard CI failures but before draft, conflict, and review rules.
 - The selected PR summary is action-first: identity, **Next Action**, mergeability, threads, reviews/requested reviewers, checks, files, contextual metadata, worktree, then URL.
 - Assignees are contextual metadata unless they make the current user the **Effective Author**; labels are contextual metadata until legit gives specific labels domain meaning.
@@ -176,3 +197,7 @@ One of `code`, `test`, `generated`, `docs`, `config`. Assigned per file by patte
 
 > **Dev:** "What if there are five unresolved **Review Threads**, all `awaiting-reviewer`, and one of them is awaiting me?"
 > **Domain expert:** "Pick the reviewer with the most awaiting threads as the **Blocker**. Ties go to the longest-waiting one. If that's me, the PR's **Smart-status** is `me-blocking`."
+
+## Flagged ambiguities
+
+- "updated" was overloaded — GitHub's PR activity time (`updated_at`, rendered "updated Y") versus how long ago legit last fetched the PR's data. Resolved: the local staleness signal is **Fetch Age** ("fetched Nm ago"); "updated" refers only to GitHub's activity time.
