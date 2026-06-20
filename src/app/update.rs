@@ -314,6 +314,15 @@ fn copy_worktree_path_cmds(model: &mut Model, path: String) -> Vec<Cmd> {
     cmds
 }
 
+/// Copy a PR's GitHub URL to the clipboard (the `y` action), mirroring the
+/// worktree-path copy's transient status. The URL comes from
+/// `PrKey::html_url` so list and detail share one construction.
+fn copy_pr_url_cmds(model: &mut Model, url: String) -> Vec<Cmd> {
+    let mut cmds = set_status(model, StatusKind::Info, format!("Copying {url}"));
+    cmds.push(Cmd::CopyToClipboard { text: url });
+    cmds
+}
+
 /// The detail-specific fetches a refresh adds on top of the queued
 /// `Cmd::RefreshPr` (which covers review-status / threads / reviews / checks /
 /// files): the PR body and the issue comments behind the Conversation section,
@@ -412,6 +421,12 @@ fn handle_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
         KeyCode::Char('d') => {
             if let Some(pr) = model.list.selected_pr().cloned() {
                 return apply(model, Msg::OpenInDevin(pr));
+            }
+        }
+        KeyCode::Char('y') => {
+            if let Some(pr) = model.list.selected_pr() {
+                let url = pr.key().html_url();
+                return copy_pr_url_cmds(model, url);
             }
         }
         KeyCode::Char('w') => {
@@ -691,6 +706,14 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
                     .url()
                     .map_or_else(|| detail.key.html_url(), str::to_owned);
                 return apply(model, Msg::OpenUrl(url));
+            }
+        }
+        // Copy the PR's URL — always the PR itself, never the focused item's
+        // deep link (unlike `o`), matching the list-view `y` action.
+        KeyCode::Char('y') => {
+            if let ViewMode::Detail(detail) = &model.view_mode {
+                let url = detail.key.html_url();
+                return copy_pr_url_cmds(model, url);
             }
         }
         KeyCode::Char('w') => {

@@ -210,6 +210,8 @@ fn render_status_bar(model: &Model, frame: &mut Frame<'_>, area: Rect) {
         Span::raw(" focus  "),
         Span::styled("o", bold),
         Span::raw(" open  "),
+        Span::styled("y", bold),
+        Span::raw(" copy  "),
         Span::styled("t", bold),
         Span::raw(resolved_hint),
         Span::styled("b", bold),

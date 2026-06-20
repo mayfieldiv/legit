@@ -1158,7 +1158,7 @@ fn detail_status_bar_shows_focus_filter_and_open_hints() {
     let rows = buffer_text(&render_snapshot(&model, 100, 10));
     let status = rows.last().expect("status row");
 
-    for hint in ["o", "t", "b"] {
+    for hint in ["o", "y", "t", "b"] {
         assert!(
             status.split_whitespace().any(|word| word == hint),
             "status bar must mention the {hint} key: {status:?}"
