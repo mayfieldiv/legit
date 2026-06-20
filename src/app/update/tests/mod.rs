@@ -374,6 +374,13 @@ fn only_open_url(cmds: &[Cmd]) -> &str {
     }
 }
 
+fn only_copy_to_clipboard(cmds: &[Cmd]) -> &str {
+    match cmds {
+        [Cmd::CopyToClipboard { text }] => text,
+        other => panic!("expected exactly one CopyToClipboard, got {other:?}"),
+    }
+}
+
 #[test]
 fn open_url_message_dispatches_generic_open_url_cmd() {
     let (mut model, _) = Model::new();
@@ -441,6 +448,39 @@ fn d_key_opens_selected_pr_in_devin() {
     assert_eq!(
         only_open_url(&cmds),
         "https://app.devin.ai/review/mayfieldiv/legit/pull/45"
+    );
+}
+
+#[test]
+fn y_key_copies_selected_pr_url_to_clipboard() {
+    let mut model = enriched_model(&[45]);
+    model.list.complete_fetch("mayfieldiv/legit");
+    model.relayout();
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('y')));
+
+    assert_eq!(
+        only_copy_to_clipboard(&cmds),
+        "https://github.com/mayfieldiv/legit/pull/45"
+    );
+    let status = model.status.as_ref().expect("info status set");
+    assert_eq!(status.kind, StatusKind::Info);
+    assert_eq!(
+        status.text,
+        "Copying https://github.com/mayfieldiv/legit/pull/45"
+    );
+}
+
+#[test]
+fn y_key_without_selected_pr_is_a_noop() {
+    let (mut model, _) = Model::new();
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('y')));
+
+    assert!(cmds.is_empty(), "empty list y: {cmds:?}");
+    assert!(
+        model.status.is_none(),
+        "no selection should not create a status message"
     );
 }
 

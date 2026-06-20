@@ -161,6 +161,24 @@ fn focusable_detail_model() -> crate::app::model::Model {
 }
 
 #[test]
+fn y_in_detail_copies_the_pr_url_not_the_focused_deep_link() {
+    let mut model = focusable_detail_model();
+    // Move focus off the body onto a thread root, which has its own deep link.
+    // `y` must still copy the PR URL (unlike `o`, which deep-links the focus).
+    update(&mut model, key_event(KeyCode::Char('j')));
+    assert!(detail_focus_url(&model).is_some(), "focus has a deep link");
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('y')));
+
+    match cmds.as_slice() {
+        [Cmd::CopyToClipboard { text }] => {
+            assert_eq!(text, "https://github.com/mayfieldiv/legit/pull/42");
+        }
+        other => panic!("expected one CopyToClipboard, got {other:?}"),
+    }
+}
+
+#[test]
 fn enter_on_selected_pr_transitions_to_detail_and_dispatches_fetch() {
     let mut model = model_with_one_pr();
     assert_eq!(model.view_mode, ViewMode::List);
