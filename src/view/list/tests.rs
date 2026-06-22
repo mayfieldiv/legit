@@ -11,6 +11,7 @@ use crate::{
     github::limiter::NetworkStats,
     github::rest::PR,
     github::types::{CheckRun, FullReviewThread, PRState, Review, ReviewComment},
+    palette::Palette,
     view,
     worktree::{self, WorktreeEntry},
 };
@@ -621,8 +622,8 @@ fn all_tab_shows_repo_column_whenever_multiple_repos_are_tracked() {
     let repo_x = rows[0].find("web").expect("repo cell rendered") as u16;
     assert_eq!(
         terminal.backend().buffer()[(repo_x, 3)].fg,
-        Color::Magenta,
-        "repo cells use the self-highlight colour (TS selfHighlight)"
+        Palette::dark().tier_me_blocking,
+        "repo cells reuse the me-blocking tier role (the port's TS selfHighlight)"
     );
 }
 
@@ -692,20 +693,20 @@ fn list_cells_use_distinct_ts_parity_colours() {
 
     assert_eq!(
         buffer[(pr_num_x, 4)].fg,
-        Color::Cyan,
-        "PR numbers should use the accent colour"
+        Palette::dark().count,
+        "PR numbers should use the count role"
     );
     assert_eq!(
         buffer[(author_x, 4)].fg,
-        Color::Green,
-        "author names should use the success colour"
+        Palette::dark().author,
+        "author names should use the author role"
     );
 
     let age_x = row.find("2h").expect("age rendered") as u16;
     assert_eq!(
         buffer[(age_x, 4)].fg,
         Color::Reset,
-        "age should use the default foreground like the TS list"
+        "age should use the default foreground (the text role) like the TS list"
     );
 }
 
@@ -1238,7 +1239,7 @@ fn narrow_width_clamps_title_rather_than_overflowing_the_row() {
         reason: "Review requested from someone".to_owned(),
     };
     model.blockers.insert(pr.key(), blocker);
-    let line = super::row_line(&pr, &model, &layout, fixed_now(), false);
+    let line = super::row_line(&pr, &model, &layout, fixed_now(), false, &Palette::dark());
 
     assert!(
         line.width() <= width,

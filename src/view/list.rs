@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
 };
@@ -17,6 +17,7 @@ use crate::{
     },
     github::rest::PR,
     github::types::Review,
+    palette::Palette,
 };
 
 #[cfg(test)]
@@ -25,7 +26,13 @@ mod tests;
 /// Render the PR list region. Renders the empty/loading placeholder, or a
 /// column header followed by the grouped display rows: a header per group
 /// (`── Me blocking `) followed by one PR row.
-pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, now: DateTime<Utc>) {
+pub fn render(
+    model: &Model,
+    frame: &mut Frame<'_>,
+    area: Rect,
+    now: DateTime<Utc>,
+    palette: &Palette,
+) {
     let pr_list = &model.list;
     if pr_list.visible_is_empty() {
         // A filter that hid everything beats the fetch-state placeholders;
@@ -66,10 +73,10 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, now: DateTime<Ut
     let lines: Vec<Line<'_>> = pr_list
         .visible_rows()
         .map(|(row, selected)| match row {
-            DisplayRow::Header(label) => header_line(label, width),
+            DisplayRow::Header(label) => header_line(label, width, palette),
             DisplayRow::Pr(index) => {
                 let pr = &prs[*index];
-                row_line(pr, model, &layout, now, selected)
+                row_line(pr, model, &layout, now, selected, palette)
             }
         })
         .collect();
@@ -159,7 +166,7 @@ fn centered_ellipsis(width: usize) -> String {
 
 /// A group header row: `── <label> ` in the accent colour, padded to the row
 /// width. Visually distinct from PR rows (the leading rule and colour).
-fn header_line(label: &str, width: u16) -> Line<'static> {
+fn header_line(label: &str, width: u16, palette: &Palette) -> Line<'static> {
     let text = pad_to_width(
         &format!("{}── {label} ", " ".repeat(WORKTREE_COL + GAP)),
         width as usize,
@@ -167,7 +174,7 @@ fn header_line(label: &str, width: u16) -> Line<'static> {
     Line::from(Span::styled(
         text,
         Style::default()
-            .fg(Color::Cyan)
+            .fg(palette.accent)
             .add_modifier(Modifier::BOLD),
     ))
 }
@@ -312,25 +319,27 @@ fn row_line(
     layout: &RowLayout,
     now: DateTime<Utc>,
     selected: bool,
+    palette: &Palette,
 ) -> Line<'static> {
-    let (glyph, glyph_style) = leading_glyph(pr, model);
+    let (glyph, glyph_style) = leading_glyph(pr, model, palette);
     let mut cells = base_cells(
         glyph,
         glyph_style,
         &format!("#{}", pr.number),
         layout,
         Style::default()
-            .fg(Color::Cyan)
+            .fg(palette.count)
             .add_modifier(Modifier::BOLD),
     );
     if layout.show_repo {
-        // Magenta is this port's mapping for the TS selfHighlight colour the
-        // repo cell uses (the same mapping as the me-blocking tier).
+        // The repo cell reuses the me-blocking tier role (the port's mapping for
+        // the TS selfHighlight colour). A dedicated stable per-repo hue lands
+        // with Repo Color (#83); until then this keeps the existing treatment.
         let repo = truncate_middle(format_repo_short(&pr.repo_slug), REPO_COL);
         cells.push(Cell {
             text: repo,
             width: REPO_COL,
-            style: Style::default().fg(Color::Magenta),
+            style: Style::default().fg(palette.tier(Tier::MeBlocking)),
         });
     }
     let title_slot = cells.len();
@@ -338,7 +347,7 @@ fn row_line(
         cells.push(Cell {
             text: truncate_middle(&pr.author, AUTHOR_COL),
             width: AUTHOR_COL,
-            style: Style::default().fg(Color::Green),
+            style: Style::default().fg(palette.author),
         });
     }
     if layout.visible.size {
@@ -356,7 +365,7 @@ fn row_line(
         });
     }
     if layout.visible.review {
-        let (text, style) = review_cell(pr, model);
+        let (text, style) = review_cell(pr, model, palette);
         cells.push(Cell {
             text,
             width: REVIEW_COL,
@@ -364,7 +373,7 @@ fn row_line(
         });
     }
     if layout.visible.action {
-        let (text, style) = action_cell(model.blockers.get(&pr.key()));
+        let (text, style) = action_cell(model.blockers.get(&pr.key()), palette);
         cells.push(Cell {
             text,
             width: ACTION_COL,
@@ -386,11 +395,11 @@ fn row_line(
 /// indicator while the PR's `r`/`R` refresh is in flight, the worktree glyph
 /// when one is attached, else empty. The refresh indicator wins so an in-flight
 /// refresh is visible even on a PR that also has a worktree.
-fn leading_glyph(pr: &PR, model: &Model) -> (&'static str, Style) {
+fn leading_glyph(pr: &PR, model: &Model, palette: &Palette) -> (&'static str, Style) {
     if model.is_refreshing(pr) {
-        (super::REFRESH_GLYPH, Style::default().fg(Color::Cyan))
+        (super::REFRESH_GLYPH, Style::default().fg(palette.accent))
     } else if model.worktree_for_pr(pr).is_some() {
-        (super::WORKTREE_GLYPH, Style::default().fg(Color::Cyan))
+        (super::WORKTREE_GLYPH, Style::default().fg(palette.accent))
     } else {
         ("", Style::default())
     }
@@ -454,7 +463,7 @@ fn render_cells(cells: Vec<Cell>, selected: bool) -> Line<'static> {
     }
 }
 
-fn review_cell(pr: &PR, model: &Model) -> (String, Style) {
+fn review_cell(pr: &PR, model: &Model, palette: &Palette) -> (String, Style) {
     let checks = model.enrichment.checks_for(pr).unwrap_or(&[]);
     let has_failing_checks = checks
         .iter()
@@ -483,13 +492,13 @@ fn review_cell(pr: &PR, model: &Model) -> (String, Style) {
     }
 
     let color = if pr.mergeable == "CONFLICTING" || has_failing_checks {
-        Color::Red
+        palette.failing
     } else if pr.is_draft || thread_label.unresolved_human {
-        Color::Yellow
+        palette.pending
     } else if !has_review_parts && thread_label.has_text {
-        Color::Gray
+        palette.muted
     } else {
-        Color::Reset
+        palette.text
     };
     (parts.join(" "), Style::default().fg(color))
 }
@@ -547,14 +556,12 @@ fn review_thread_label(pr: &PR, model: &Model) -> ReviewThreadLabel {
     }
 }
 
-fn action_cell(blocker: Option<&BlockerResult>) -> (String, Style) {
+fn action_cell(blocker: Option<&BlockerResult>, palette: &Palette) -> (String, Style) {
     let Some(blocker) = blocker else {
-        return ("…".to_owned(), Style::default().fg(Color::Gray));
+        return ("…".to_owned(), Style::default().fg(palette.muted));
     };
-    let color = match blocker.tier {
-        Tier::MeBlocking => Color::Magenta,
-        Tier::WaitingOnAuthor => Color::Yellow,
-        Tier::NeedsReview => Color::Gray,
-    };
-    (compact_next_action(blocker), Style::default().fg(color))
+    (
+        compact_next_action(blocker),
+        Style::default().fg(palette.tier(blocker.tier)),
+    )
 }

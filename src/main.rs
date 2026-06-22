@@ -2,12 +2,14 @@ mod app;
 mod auth;
 mod blocker;
 mod clipboard;
+mod color;
 mod config;
 mod file_category;
 mod format;
 mod git_remote;
 mod github;
 mod markdown;
+mod palette;
 mod runtime;
 mod secret;
 #[cfg(test)]

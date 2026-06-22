@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
@@ -10,24 +10,13 @@ use ratatui::{
 use crate::app::grouping::Grouping;
 use crate::app::list_layout;
 use crate::app::model::{Model, StatusKind, ViewMode};
-use crate::blocker::Tier;
 use crate::format::{abbreviate_home, truncate_middle};
 use crate::git_remote::RepoInfo;
+use crate::palette::Palette;
 
 pub mod detail;
 pub mod list;
 pub mod summary;
-
-/// Theme colour for a smart-status tier. Mirrors the TS `blockerTierColor`;
-/// the one tier-to-colour mapping, shared by the list's reason cell and the
-/// summary panel's smart-status line.
-fn tier_color(tier: Tier) -> Color {
-    match tier {
-        Tier::MeBlocking => Color::Magenta,
-        Tier::WaitingOnAuthor => Color::Yellow,
-        Tier::NeedsReview => Color::Gray,
-    }
-}
 
 pub(crate) const WORKTREE_GLYPH: &str = "\u{e725}";
 
@@ -36,10 +25,10 @@ pub(crate) const WORKTREE_GLYPH: &str = "\u{e725}";
 /// a refresh is in flight so the activity is visible.
 pub(crate) const REFRESH_GLYPH: &str = "\u{21bb}";
 
-pub(crate) fn worktree_line(path: &str, max_path_width: usize) -> Line<'static> {
+pub(crate) fn worktree_line(path: &str, max_path_width: usize, palette: &Palette) -> Line<'static> {
     Line::from(vec![
-        Span::styled(WORKTREE_GLYPH, Style::default().fg(Color::Cyan)),
-        Span::styled(" worktree: ", Style::default().fg(Color::Gray)),
+        Span::styled(WORKTREE_GLYPH, Style::default().fg(palette.accent)),
+        Span::styled(" worktree: ", Style::default().fg(palette.muted)),
         Span::raw(truncate_middle(
             &abbreviate_home(path),
             max_path_width.max(1),
@@ -57,11 +46,15 @@ fn grouping_label(model: &Model) -> &'static str {
 }
 
 pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
+    // The one curated palette, built once per frame and threaded through every
+    // render call (ADR 0005). It is the seam a future terminal-derived theme
+    // drops into — swap what is built here and every call site follows.
+    let palette = Palette::dark();
     let area = frame.area();
 
     // Detail view takes the whole frame and manages its own chrome (header + status bar).
     if let ViewMode::Detail(detail) = &model.view_mode {
-        detail::render(model, detail, frame, area, now);
+        detail::render(model, detail, frame, area, now, &palette);
         return;
     }
 
@@ -81,10 +74,10 @@ pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
     ])
     .areas(area);
 
-    render_app_header(model, frame, header);
-    render_tabs(model, frame, tabs);
+    render_app_header(model, frame, header, &palette);
+    render_tabs(model, frame, tabs, &palette);
     if filter_visible {
-        render_filter_chip(model, frame, chip);
+        render_filter_chip(model, frame, chip, &palette);
     }
     // Split the main region into the list and the summary panel when the
     // terminal is wide enough; below 80 columns the list takes the whole row.
@@ -98,16 +91,16 @@ pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
                 Constraint::Length(panel_width),
             ])
             .areas(main);
-            list::render(model, frame, list_area, now);
-            render_summary_divider(frame, divider_area);
-            summary::render(model, frame, summary_area, now);
+            list::render(model, frame, list_area, now, &palette);
+            render_summary_divider(frame, divider_area, &palette);
+            summary::render(model, frame, summary_area, now, &palette);
         }
-        None => list::render(model, frame, main, now),
+        None => list::render(model, frame, main, now, &palette),
     }
-    render_status(model, frame, status);
+    render_status(model, frame, status, &palette);
 }
 
-fn render_app_header(model: &Model, frame: &mut Frame<'_>, area: Rect) {
+fn render_app_header(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
     let scope = model
         .active_scope()
         .unwrap_or_else(|| "All repos".to_owned());
@@ -121,7 +114,7 @@ fn render_app_header(model: &Model, frame: &mut Frame<'_>, area: Rect) {
         Span::styled(
             "legit",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(palette.accent)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" — "),
@@ -131,8 +124,8 @@ fn render_app_header(model: &Model, frame: &mut Frame<'_>, area: Rect) {
     frame.render_widget(Paragraph::new(line), area);
 }
 
-fn render_summary_divider(frame: &mut Frame<'_>, area: Rect) {
-    let style = Style::default().fg(Color::Gray);
+fn render_summary_divider(frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
+    let style = Style::default().fg(palette.separator);
     let lines = (0..area.height)
         .map(|_| Line::from(Span::styled("│", style)))
         .collect::<Vec<_>>();
@@ -141,26 +134,26 @@ fn render_summary_divider(frame: &mut Frame<'_>, area: Rect) {
 
 /// The filter chip above the list: `/text` plus a block cursor while editing;
 /// just the accented text once applied, so it reads as a sticky chip.
-fn render_filter_chip(model: &Model, frame: &mut Frame<'_>, area: Rect) {
+fn render_filter_chip(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
     let filter = model.list.filter();
     let mut spans = vec![
         Span::styled(
             "/",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(palette.accent)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(filter.text().to_owned()),
     ];
     if filter.is_editing() {
-        spans.push(Span::styled("█", Style::default().fg(Color::Cyan)));
+        spans.push(Span::styled("█", Style::default().fg(palette.accent)));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 /// The Repo Tab bar: `All` plus one tab per Tracked Repo, the active tab
 /// bracketed and accented (`[All]  acme/web `), matching the TS tab bar.
-fn render_tabs(model: &Model, frame: &mut Frame<'_>, area: Rect) {
+fn render_tabs(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
     let repos = model.tracked_repos();
     // Highlight the active tab, falling back to the All tab (0) when `active_tab`
     // is out of range — the same All-fallback policy `active_scope` applies to the
@@ -179,7 +172,7 @@ fn render_tabs(model: &Model, frame: &mut Frame<'_>, area: Rect) {
             (
                 format!("[{label}]"),
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(palette.accent)
                     .add_modifier(Modifier::BOLD),
             )
         } else {
@@ -191,7 +184,7 @@ fn render_tabs(model: &Model, frame: &mut Frame<'_>, area: Rect) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn render_status(model: &Model, frame: &mut Frame<'_>, area: Rect) {
+fn render_status(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
     // Left: key hints — the filter editor's own hints while it is open, the
     // normal-mode hints otherwise. The network indicator is always rendered on
     // the right so the app's activity signal does not disappear when idle.
@@ -231,8 +224,9 @@ fn render_status(model: &Model, frame: &mut Frame<'_>, area: Rect) {
             width: overlay_width,
             ..area
         },
+        palette,
     );
-    render_network_indicator(model, frame, area, network_width);
+    render_network_indicator(model, frame, area, network_width, palette);
 }
 
 fn network_indicator_label(model: &Model) -> String {
@@ -244,14 +238,20 @@ fn network_indicator_width(model: &Model, max_width: u16) -> u16 {
     (network_indicator_label(model).chars().count() as u16).min(max_width)
 }
 
-fn render_network_indicator(model: &Model, frame: &mut Frame<'_>, area: Rect, width: u16) {
+fn render_network_indicator(
+    model: &Model,
+    frame: &mut Frame<'_>,
+    area: Rect,
+    width: u16,
+    palette: &Palette,
+) {
     let stats = model.network_stats;
     let label = network_indicator_label(model);
     let x = area.x + area.width.saturating_sub(width);
     let color = if stats.in_flight > 0 || stats.waiting > 0 {
-        Color::Cyan
+        palette.accent
     } else {
-        Color::Gray
+        palette.muted
     };
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(label, Style::default().fg(color)))),
@@ -270,18 +270,23 @@ fn render_network_indicator(model: &Model, frame: &mut Frame<'_>, area: Rect, wi
 /// right-aligned over the same row so it sits opposite that bar's key hints —
 /// one renderer, so a `CommandFailed` raised in any view is visible there
 /// before its scheduled clear wipes it.
-pub(crate) fn render_status_overlay(model: &Model, frame: &mut Frame<'_>, area: Rect) {
+pub(crate) fn render_status_overlay(
+    model: &Model,
+    frame: &mut Frame<'_>,
+    area: Rect,
+    palette: &Palette,
+) {
     if let Some(failure) = model.fatal.as_deref().or_else(|| model.list.failure()) {
         let line = Line::from(vec![
-            Span::styled("error: ", Style::default().fg(Color::Red)),
-            Span::styled(failure.to_owned(), Style::default().fg(Color::Yellow)),
+            Span::styled("error: ", Style::default().fg(palette.error)),
+            Span::styled(failure.to_owned(), Style::default().fg(palette.warning)),
         ]);
         frame.render_widget(Paragraph::new(line).alignment(Alignment::Right), area);
     } else if let Some(status) = &model.status {
         let color = match status.kind {
-            StatusKind::Info => Color::Gray,
-            StatusKind::Success => Color::Green,
-            StatusKind::Error => Color::Red,
+            StatusKind::Info => palette.muted,
+            StatusKind::Success => palette.passing,
+            StatusKind::Error => palette.error,
         };
         let line = Line::from(Span::styled(
             status.text.clone(),
