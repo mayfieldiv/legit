@@ -9,10 +9,20 @@
 //! (`Color::Reset`) so body copy stays legible on whatever background the user
 //! runs, while the accents and status hues are curated truecolor values.
 
+use std::sync::LazyLock;
+
 use ratatui::style::Color;
 
 use crate::blocker::Tier;
 use crate::color::parse_hex;
+
+/// The single curated palette instance, built once. Every colour in the app
+/// resolves through this: the view layer threads it from here, and the shared
+/// formatting / markdown / detail-layout helpers (whose coloured output is
+/// cached in the model or measured by `update`, so they can't take a per-frame
+/// palette argument) read it directly. A future runtime-selected theme replaces
+/// this single source — the additive change ADR 0005 anticipates.
+pub static DARK: LazyLock<Palette> = LazyLock::new(Palette::dark);
 
 /// Resolve a palette hex literal. The literals below are compile-time constants
 /// known to be valid six-digit hex, so a parse failure is a programming error,
@@ -41,6 +51,8 @@ pub struct Palette {
     pub accent: Color,
     /// Hyperlinks (the PR's GitHub URL).
     pub link: Color,
+    /// Inline code and code-block bodies in rendered markdown.
+    pub code: Color,
     /// PR numbers — an identity cue distinct from `accent` so the two can diverge.
     pub count: Color,
     /// PR author names.
@@ -68,8 +80,12 @@ pub struct Palette {
     pub approved: Color,
     /// A review that requested changes.
     pub changes_requested: Color,
+    /// A review that only commented.
+    pub commented: Color,
     /// A draft PR marker.
     pub draft: Color,
+    /// A merged PR's lifecycle state.
+    pub merged: Color,
 }
 
 impl Palette {
@@ -84,6 +100,7 @@ impl Palette {
             separator: hex("#4b5263"),
             accent: hex("#56b6c2"),
             link: hex("#61afef"),
+            code: hex("#7ec8d3"),
             count: hex("#56b6c2"),
             author: hex("#98c379"),
             warning: hex("#e5c07b"),
@@ -98,7 +115,9 @@ impl Palette {
             failing: hex("#e06c75"),
             approved: hex("#98c379"),
             changes_requested: hex("#e06c75"),
+            commented: hex("#61afef"),
             draft: hex("#e5c07b"),
+            merged: hex("#c678dd"),
         }
     }
 
@@ -161,6 +180,7 @@ mod tests {
             ("separator", p.separator),
             ("accent", p.accent),
             ("link", p.link),
+            ("code", p.code),
             ("count", p.count),
             ("author", p.author),
             ("warning", p.warning),
@@ -173,7 +193,9 @@ mod tests {
             ("failing", p.failing),
             ("approved", p.approved),
             ("changes_requested", p.changes_requested),
+            ("commented", p.commented),
             ("draft", p.draft),
+            ("merged", p.merged),
         ] {
             assert!(
                 matches!(color, Color::Rgb(_, _, _)),
