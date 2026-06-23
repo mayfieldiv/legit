@@ -125,6 +125,11 @@ impl Palette {
 
     /// The colour for a Smart-status tier — the one tier-to-role mapping, shared
     /// by the list's action cell and the summary panel's Next Action line.
+    ///
+    /// The `tier_*` fields stay public like every other role so a future theme
+    /// can tune each tier independently; this accessor is the seam that maps the
+    /// runtime [`Tier`] enum onto them, and every call site reads tiers through
+    /// it rather than re-deriving the match.
     pub fn tier(&self, tier: Tier) -> Color {
         match tier {
             Tier::MeBlocking => self.tier_me_blocking,
