@@ -17,7 +17,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::{
     blocker::{ThreadKind, classify_thread},
-    format::{check_cell_spans, checks_summary, format_age, visible_checks},
+    format::{CHECK_INDENT, check_cell_spans, checks_summary, format_age, visible_checks},
     github::rest::PR,
     github::types::FullReviewThread,
     markdown::{self, Block},
@@ -157,13 +157,17 @@ fn checks_section_lines(model: &Model, pr: &PR, width: u16) -> Vec<Line<'static>
     let (visible, overflow) = visible_checks(checks);
     let col_width = (usize::from(width) / CHECKS_GRID_COLUMNS).max(1);
     for row in visible.chunks(CHECKS_GRID_COLUMNS) {
-        let mut spans: Vec<Span<'static>> = Vec::new();
+        // Two-space indent on the first column so the grid matches the summary
+        // panel's single column (the shared `check_row` look) — see
+        // `CHECK_INDENT`.
+        let mut spans: Vec<Span<'static>> = vec![Span::raw(CHECK_INDENT)];
         for (col, check) in row.iter().enumerate() {
             let cell = check_cell_spans(check);
             // Pad every cell but the last in the row out to the column width so
             // the second column aligns. The trailing cell is left unpadded.
             if col + 1 < row.len() {
-                let used: usize = cell.iter().map(|s| s.content.width()).sum();
+                let used: usize =
+                    CHECK_INDENT.len() + cell.iter().map(|s| s.content.width()).sum::<usize>();
                 spans.extend(cell);
                 if used < col_width {
                     spans.push(Span::raw(" ".repeat(col_width - used)));
@@ -176,7 +180,7 @@ fn checks_section_lines(model: &Model, pr: &PR, width: u16) -> Vec<Line<'static>
     }
     if overflow > 0 {
         lines.push(Line::from(Span::styled(
-            format!("+{overflow} more"),
+            format!("{CHECK_INDENT}+{overflow} more"),
             Style::default().fg(DARK.muted),
         )));
     }

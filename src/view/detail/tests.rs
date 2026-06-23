@@ -584,6 +584,53 @@ fn detail_checks_grid_caps_at_eight_with_overflow() {
 }
 
 #[test]
+fn detail_check_rows_carry_the_two_space_indent() {
+    // The grid's first column and the overflow line sit two spaces in from the
+    // "CI Checks" header so the detail checks match the summary column's indent
+    // (the shared `check_row` look the grid replaced). Pin the leading column
+    // explicitly — `contains` assertions elsewhere never check the indent.
+    let checks: Vec<CheckRun> = (0..11)
+        .map(|i| check(&format!("chk{i:02}"), "completed", Some("success")))
+        .collect();
+    let model = model_in_detail_with_checks(sample_pr(), "", checks);
+
+    let terminal = render_snapshot(&model, 80, 24);
+    let rows = buffer_text(&terminal);
+
+    // The header line's start column (the `## ` markdown prefix). The section is
+    // part of the unframed body, so it carries no card gutter — only the body's
+    // own left margin. The two-space check indent is measured from here.
+    let header_row = rows
+        .iter()
+        .find(|r| r.contains("CI Checks"))
+        .unwrap_or_else(|| panic!("CI Checks header row: {rows:?}"));
+    let header_col = header_row.find("##").unwrap();
+
+    // The first grid check icon must sit exactly two columns past the header.
+    // `chk00` is the first check, so its row's leading `✓` is the first column.
+    let icon_row = rows
+        .iter()
+        .find(|r| r.contains("chk00"))
+        .unwrap_or_else(|| panic!("first check row: {rows:?}"));
+    assert_eq!(
+        icon_row.find('✓').unwrap(),
+        header_col + 2,
+        "first grid column carries the two-space indent: {icon_row:?}"
+    );
+
+    // The overflow line carries the same indent (its `+` aligns with the icon).
+    let overflow_row = rows
+        .iter()
+        .find(|r| r.contains("+3 more"))
+        .unwrap_or_else(|| panic!("overflow row: {rows:?}"));
+    assert_eq!(
+        overflow_row.find('+').unwrap(),
+        header_col + 2,
+        "overflow line carries the two-space indent: {overflow_row:?}"
+    );
+}
+
+#[test]
 fn detail_status_bar_shows_esc_and_r_hints() {
     let model = model_in_detail(sample_pr(), "");
 

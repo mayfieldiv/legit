@@ -288,12 +288,18 @@ pub fn check_icon(check: &CheckRun) -> (&'static str, Color) {
     }
 }
 
+/// The two-space indent every check row sits behind — the summary panel's
+/// single column (`check_row`) and the detail view's grid both prepend it so a
+/// check reads the same depth in either view. The single source of truth for
+/// that depth.
+pub const CHECK_INDENT: &str = "  ";
+
 /// The styled spans for one check cell — the coloured status icon from
 /// `check_icon`, the check name, and (when present) the muted Check Duration:
 /// `✓ build 2m`. The single source of truth for a check's painted content,
 /// shared by the summary panel's single column and the detail view's grid so
-/// the icon colouring and duration treatment stay identical. The two-space
-/// indent lives in `check_row`/the grid layout, not here.
+/// the icon colouring and duration treatment stay identical. The `CHECK_INDENT`
+/// is prepended by each caller (`check_row` and the grid layout), not here.
 pub fn check_cell_spans(check: &CheckRun) -> Vec<Span<'static>> {
     let (icon, color) = check_icon(check);
     let mut spans = vec![
@@ -315,7 +321,7 @@ pub fn check_cell_spans(check: &CheckRun) -> Vec<Span<'static>> {
 /// summary check row so the indent and content stay identical to the detail
 /// grid's cells.
 pub fn check_row(check: &CheckRun) -> Line<'static> {
-    let mut spans = vec![Span::raw("  ")];
+    let mut spans = vec![Span::raw(CHECK_INDENT)];
     spans.extend(check_cell_spans(check));
     Line::from(spans)
 }
