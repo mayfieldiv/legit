@@ -43,7 +43,7 @@ pub(crate) const HEADER_BASE_HEIGHT: u16 = 5;
 /// `view::detail`'s layout, `update`'s scroll clamp ([`chrome_rows`]), and its
 /// mouse hit-testing, so the three can't disagree on where the body begins.
 pub(crate) fn header_height(pr: &PR, width: u16) -> u16 {
-    HEADER_BASE_HEIGHT + chip_band_rows(pr, width)
+    HEADER_BASE_HEIGHT.saturating_add(chip_band_rows(pr, width))
 }
 
 /// The number of header rows the PR's Label Chips occupy at `width` — zero when
@@ -65,7 +65,7 @@ fn chip_band_rows(pr: &PR, width: u16) -> u16 {
 /// viewport. Mirrors how `Model::chrome_rows` is shared between
 /// `sync_viewport` and `view::view`.
 pub(crate) fn chrome_rows(pr: &PR, width: u16) -> u16 {
-    header_height(pr, width) + 1
+    header_height(pr, width).saturating_add(1)
 }
 
 /// Sentinel key under which the PR description's `<details>` expansion state
