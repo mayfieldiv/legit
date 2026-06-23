@@ -36,7 +36,7 @@ pub struct PR {
     pub additions: u64,
     pub deletions: u64,
     pub is_draft: bool,
-    pub labels: Vec<String>,
+    pub labels: Vec<Label>,
     pub requested_reviewers: Vec<String>,
     pub assignees: Vec<String>,
     pub review_decision: String,
@@ -48,6 +48,21 @@ pub struct PR {
     pub base_ref: String,
     pub head_repository_owner: String,
     pub state: PRState,
+}
+
+/// A PR label as legit renders it: its name plus the GitHub colour that drives
+/// its Label Chip. The colour rides in on the existing label payload (no new
+/// request); it is optional because GitHub may leave it blank, in which case the
+/// chip falls back to a stable hashed colour. Mirrors the TS `PullRequestLabel`
+/// (`{ name, color }`). Labels stay domain-inert — purely contextual metadata
+/// with no sort, filter, or Smart-status effect.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Label {
+    pub name: String,
+    /// The label's GitHub colour as a bare `rrggbb` hex string, or `None` when
+    /// GitHub left it blank. Not pre-parsed: `label_color` resolves it (or the
+    /// hashed fallback) at render time.
+    pub color: Option<String>,
 }
 
 /// Globally-unique PR identity across Tracked Repos: PR numbers alone collide
@@ -121,6 +136,11 @@ struct RawUser {
 #[derive(Debug, Clone, Deserialize)]
 struct RawLabel {
     name: String,
+    /// The label's hex colour (bare `rrggbb`), already in the list payload.
+    /// Defaulted so a stripped response still parses; an empty string is
+    /// normalised to `None` in `parse_pr` so the chip takes the hashed fallback.
+    #[serde(default)]
+    color: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -183,7 +203,16 @@ fn parse_pr(raw: RawRestPR, repo_slug: &str) -> PR {
         additions: raw.additions,
         deletions: raw.deletions,
         is_draft: raw.draft,
-        labels: raw.labels.into_iter().map(|l| l.name).collect(),
+        labels: raw
+            .labels
+            .into_iter()
+            .map(|l| Label {
+                name: l.name,
+                // Normalise GitHub's blank colour to `None` so the chip falls
+                // back to its hashed colour rather than an empty hex string.
+                color: (!l.color.is_empty()).then_some(l.color),
+            })
+            .collect(),
         requested_reviewers: raw
             .requested_reviewers
             .into_iter()
@@ -539,8 +568,8 @@ mod tests {
     use chrono::TimeZone;
 
     use super::{
-        PR, PRState, RawCheckRunsResponse, RawIssueComment, RawRestPR, RawReview, parse_check_runs,
-        parse_issue_comments, parse_pr, parse_reviews,
+        Label, PR, PRState, RawCheckRunsResponse, RawIssueComment, RawRestPR, RawReview,
+        parse_check_runs, parse_issue_comments, parse_pr, parse_reviews,
     };
 
     fn deserialize(raw: &str) -> RawRestPR {
@@ -557,7 +586,10 @@ mod tests {
                 "created_at": "2026-05-01T10:00:00Z",
                 "updated_at": "2026-05-02T11:30:00Z",
                 "draft": false,
-                "labels": [{ "name": "enhancement" }, { "name": "ready-for-agent" }],
+                "labels": [
+                    { "name": "enhancement", "color": "a2eeef" },
+                    { "name": "ready-for-agent", "color": "" }
+                ],
                 "requested_reviewers": [{ "login": "alice" }, { "login": "bob" }],
                 "assignees": [{ "login": "octocat" }],
                 "head": {
@@ -580,7 +612,18 @@ mod tests {
                 additions: 0,
                 deletions: 0,
                 is_draft: false,
-                labels: vec!["enhancement".to_owned(), "ready-for-agent".to_owned()],
+                labels: vec![
+                    Label {
+                        name: "enhancement".to_owned(),
+                        color: Some("a2eeef".to_owned()),
+                    },
+                    // A blank GitHub colour normalises to `None`, so the chip
+                    // takes the hashed fallback rather than an empty hex string.
+                    Label {
+                        name: "ready-for-agent".to_owned(),
+                        color: None,
+                    },
+                ],
                 requested_reviewers: vec!["alice".to_owned(), "bob".to_owned()],
                 assignees: vec!["octocat".to_owned()],
                 review_decision: String::new(),

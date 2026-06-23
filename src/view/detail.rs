@@ -27,8 +27,9 @@ use ratatui::{
 };
 
 use crate::{
-    app::detail_layout::{HEADER_HEIGHT, detail_content},
+    app::detail_layout::{detail_content, header_height},
     app::model::{DetailState, Model},
+    chip::{chip_rows, chip_spans},
     color::repo_color,
     format::{format_age, format_merge_status, format_size},
     github::rest::PR,
@@ -64,7 +65,7 @@ pub fn render(
     // bar. The header and status-bar rows are what `detail_layout::CHROME_ROWS`
     // accounts for when `update` derives the body viewport.
     let [header_area, body_area, status_area] = Layout::vertical([
-        Constraint::Length(HEADER_HEIGHT),
+        Constraint::Length(header_height(pr, area.width)),
         Constraint::Min(1),
         Constraint::Length(1),
     ])
@@ -164,13 +165,25 @@ fn render_header(
         Style::default().fg(palette.link),
     ));
 
-    // Row 4: divider
+    // Label Chip band (between the URL and the divider): the PR's labels as
+    // filled chips, wrapped to the header width. Matches the summary panel's
+    // treatment; absent when the PR has no labels, so the header keeps its base
+    // height. The band's row count is reserved by `detail_layout::header_height`,
+    // so what is painted here always fits the laid-out header area.
+    let chip_lines: Vec<Line<'static>> = chip_rows(&pr.labels, usize::from(area.width).max(1))
+        .into_iter()
+        .map(|row| Line::from(chip_spans(&row, palette)))
+        .collect();
+
+    // Divider (last header row)
     let divider_line = Line::from(Span::styled(
         "─".repeat(area.width as usize),
         Style::default().fg(palette.separator),
     ));
 
-    let lines = vec![title_line, meta_line, branch_line, url_line, divider_line];
+    let mut lines = vec![title_line, meta_line, branch_line, url_line];
+    lines.extend(chip_lines);
+    lines.push(divider_line);
     frame.render_widget(Paragraph::new(lines), area);
 }
 

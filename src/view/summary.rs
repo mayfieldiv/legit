@@ -21,6 +21,7 @@ use ratatui::{
 };
 
 use crate::app::model::{FilesState, Model};
+use crate::chip::{chip_rows, chip_spans};
 use crate::format::{
     CheckOutcome, check_row, checks_summary, comment_counts, format_age, format_merge_status,
     format_review_state, format_size, outcome, review_icon, reviews_summary, sort_check_runs,
@@ -162,18 +163,18 @@ fn mergeability_line(pr: &PR) -> Line<'static> {
     Line::from(Span::styled(text, Style::default().fg(color)))
 }
 
+/// The labels section, rendered as filled Label Chips that wrap to the panel
+/// width rather than truncating. Each chip carries the label's GitHub colour as
+/// its background and a contrast-flipped foreground; a colourless label takes a
+/// stable hashed colour (see `chip::label_color`). Chips are purely cosmetic.
 fn labels_lines(pr: &PR, width: usize, palette: &Palette) -> Vec<Line<'static>> {
     if pr.labels.is_empty() {
         return Vec::new();
     }
-    let text = format!("labels: {}", pr.labels.join(", "));
-    vec![Line::from(vec![
-        Span::styled("labels: ", Style::default().fg(palette.muted)),
-        Span::raw(truncate(
-            text.strip_prefix("labels: ").unwrap_or(&text),
-            width.saturating_sub("labels: ".len()).max(1),
-        )),
-    ])]
+    chip_rows(&pr.labels, width.max(1))
+        .into_iter()
+        .map(|row| Line::from(chip_spans(&row, palette)))
+        .collect()
 }
 
 fn assignees_lines(pr: &PR, width: usize, palette: &Palette) -> Vec<Line<'static>> {
