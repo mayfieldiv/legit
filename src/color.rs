@@ -19,7 +19,7 @@ use crate::format::format_repo_short;
 /// This is colour maths, not a semantic `Palette` role — a Repo Color is a
 /// cosmetic identity cue, distinct from the curated semantic roles.
 const REPO_RAMP: [Color; 16] = [
-    Color::Rgb(0x56, 0xb6, 0xc2), // cyan
+    Color::Rgb(0x3d, 0xa3, 0xb0), // cyan (darker than the accent role, kept disjoint from it)
     Color::Rgb(0x98, 0xc3, 0x79), // green
     Color::Rgb(0xc6, 0x78, 0xdd), // magenta
     Color::Rgb(0xe5, 0xc0, 0x7b), // amber
@@ -123,6 +123,7 @@ const fn hex_nibble(b: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::palette::DARK;
 
     #[test]
     fn parses_a_valid_six_digit_hex() {
@@ -212,5 +213,17 @@ mod tests {
     #[test]
     fn repo_color_distinguishes_different_repos() {
         assert_ne!(repo_color("acme/web"), repo_color("acme/api"));
+    }
+
+    #[test]
+    fn ramp_is_disjoint_from_the_accent_role() {
+        // A Repo Color must never coincide with the `accent` role: the accent
+        // paints the "All" scope's tab/header, so a concrete repo whose ramp
+        // entry equalled it would be indistinguishable from the All scope. Keep
+        // the ramp disjoint from the accent so the All-vs-repo cue is reliable.
+        assert!(
+            !REPO_RAMP.contains(&DARK.accent),
+            "REPO_RAMP must not contain the accent role"
+        );
     }
 }
