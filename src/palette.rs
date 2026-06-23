@@ -116,7 +116,7 @@ impl Palette {
             warning: hex("#e5c07b"),
             error: hex("#e06c75"),
 
-            selected_bg: hex("#1d2430"),
+            selected_bg: hex("#2d3a52"),
             selected_fg: hex("#f8fafc"),
 
             tier_me_blocking: hex("#c678dd"),
