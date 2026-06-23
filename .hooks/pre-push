@@ -1,5 +1,12 @@
 #!/bin/sh
 
+# Git exports GIT_DIR / GIT_WORK_TREE / etc. to hooks. `cargo test` inherits
+# them, and any test that shells out to git would then be redirected onto this
+# repo instead of its own sandbox (stray commits, flipped core.bare). Scrub
+# them so the test suite runs hermetically. The git calls in src/worktree.rs
+# also strip these defensively.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_PREFIX
+
 echo "Running tests before push..."
 cargo test
 if [ $? -ne 0 ]; then
