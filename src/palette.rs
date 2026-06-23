@@ -65,6 +65,14 @@ pub struct Palette {
     /// Hard error chrome (the `error:` status prefix, an error-kind status line).
     pub error: Color,
 
+    /// The Selected Row's full-width background fill — a subtle dark elevation
+    /// above the terminal background, replacing inverted video so every cell
+    /// keeps its semantic foreground (see ADR 0005).
+    pub selected_bg: Color,
+    /// The Selected Row's brightened title foreground, emphasising the row under
+    /// the cursor while the other cells keep their own colour.
+    pub selected_fg: Color,
+
     /// Smart-status tier: I am blocking this PR.
     pub tier_me_blocking: Color,
     /// Smart-status tier: waiting on the author.
@@ -107,6 +115,9 @@ impl Palette {
             author: hex("#98c379"),
             warning: hex("#e5c07b"),
             error: hex("#e06c75"),
+
+            selected_bg: hex("#1d2430"),
+            selected_fg: hex("#f8fafc"),
 
             tier_me_blocking: hex("#c678dd"),
             tier_waiting_on_author: hex("#e5c07b"),
@@ -176,6 +187,8 @@ mod tests {
             ("author", p.author),
             ("warning", p.warning),
             ("error", p.error),
+            ("selected_bg", p.selected_bg),
+            ("selected_fg", p.selected_fg),
             ("tier_me_blocking", p.tier_me_blocking),
             ("tier_waiting_on_author", p.tier_waiting_on_author),
             ("tier_needs_review", p.tier_needs_review),
