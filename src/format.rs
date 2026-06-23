@@ -237,16 +237,21 @@ pub fn check_sort_group(check: &CheckRun) -> u8 {
 }
 
 /// Sort `checks` in place by outcome priority, then Check Duration descending
-/// (slowest first), then name. A check with no duration sorts as if it has the
-/// shortest duration within its outcome group, so completed/timed checks
-/// surface above untimed ones; name is the final stable tiebreak. Callers that
-/// need the original order untouched sort a borrowed slice of references.
+/// (slowest first), then name. A check with no duration sorts strictly below any
+/// timed check in its outcome group — even a timed check whose duration rounds to
+/// zero outranks an untimed one — so completed/timed checks always surface above
+/// untimed ones; name is the final stable tiebreak. Callers that need the
+/// original order untouched sort a borrowed slice of references.
 pub fn sort_check_runs(checks: &mut [&CheckRun]) {
     checks.sort_by(|a, b| {
         check_sort_group(a)
             .cmp(&check_sort_group(b))
-            // Descending by duration: an absent duration is treated as the
-            // shortest (zero), so it sorts below any timed check in its group.
+            // Timed checks before untimed ones, independent of magnitude, so a
+            // fast (0s) timed check still outranks an untimed check rather than
+            // tying it at zero.
+            .then_with(|| a.duration().is_none().cmp(&b.duration().is_none()))
+            // Then descending by duration among timed checks (untimed ones are
+            // already grouped last by the comparison above).
             .then_with(|| {
                 b.duration()
                     .unwrap_or_default()
@@ -749,6 +754,21 @@ mod tests {
         sort_check_runs(&mut refs);
         let names: Vec<&str> = refs.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["slow", "medium", "fast", "untimed"]);
+    }
+
+    #[test]
+    fn sort_check_runs_ranks_a_zero_duration_timed_check_above_an_untimed_one() {
+        // A timed check that rounds to 0s must still outrank an untimed check in
+        // the same group rather than tying it at zero and falling to name order.
+        let runs = [
+            check("aaa-untimed", "completed", Some("success")),
+            timed_check("zzz-instant", "success", 0),
+        ];
+        let mut refs: Vec<&CheckRun> = runs.iter().collect();
+        sort_check_runs(&mut refs);
+        let names: Vec<&str> = refs.iter().map(|c| c.name.as_str()).collect();
+        // "aaa" < "zzz" by name, yet the timed (0s) check sorts first.
+        assert_eq!(names, ["zzz-instant", "aaa-untimed"]);
     }
 
     #[test]
