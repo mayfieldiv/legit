@@ -23,9 +23,9 @@ use ratatui::{
 use crate::app::model::{FilesState, Model};
 use crate::chip::label_lines;
 use crate::format::{
-    checks_summary, checks_two_column_lines, comment_counts, format_age, format_merge_status,
-    format_review_state, format_size, overflow_line, review_icon, reviews_summary,
-    sorted_check_runs, truncate,
+    checks_summary, checks_two_column_lines, comment_counts, fetched_age_spans, format_age,
+    format_merge_status, format_review_state, format_size, overflow_line, review_icon,
+    reviews_summary, sorted_check_runs, truncate,
 };
 use crate::github::rest::PR;
 use crate::palette::Palette;
@@ -113,16 +113,12 @@ fn identity_lines(
     ]));
 
     // Fetch Age: how stale legit's copy of this PR is, on its own line below
-    // GitHub's created/updated activity times. The leading "fetched " label is
-    // muted like its siblings and the wording stays distinct from "updated" so
-    // the local staleness signal is never confused with GitHub's `updated_at`.
-    // Omitted entirely until the PR has been fetched (no stamp yet), so an
-    // unfetched PR never shows a misleading "now".
-    if let Some(fetched_at) = model.fetched_at(&pr.key()) {
-        lines.push(Line::from(vec![
-            Span::styled("fetched ", Style::default().fg(palette.muted)),
-            Span::raw(format!("{} ago", format_age(fetched_at, now))),
-        ]));
+    // GitHub's created/updated activity times. `fetched_age_spans` owns the
+    // label/value/None-guard rationale; the summary wraps the spans in their
+    // own line (an empty Vec is an unfetched PR, which adds no line).
+    let fetched_spans = fetched_age_spans(model.fetched_at(&pr.key()), now, palette);
+    if !fetched_spans.is_empty() {
+        lines.push(Line::from(fetched_spans));
     }
 
     lines
