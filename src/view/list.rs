@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
 };
@@ -68,10 +68,7 @@ pub fn render(
         show_repo,
         visible: compute_visible_columns(usize::from(width), show_repo, pr_num_col, size_col),
     };
-    frame.render_widget(
-        Paragraph::new(header_row_line(&layout, palette)),
-        header_area,
-    );
+    frame.render_widget(Paragraph::new(header_row_line(&layout)), header_area);
 
     let lines: Vec<Line<'_>> = pr_list
         .visible_rows()
@@ -264,7 +261,7 @@ struct Cell {
 
 /// Column header row. Built from the same layout as PR rows so labels and data
 /// cannot drift apart. Never selected, so it carries no `selected_bg` fill.
-fn header_row_line(layout: &RowLayout, palette: &Palette) -> Line<'static> {
+fn header_row_line(layout: &RowLayout) -> Line<'static> {
     let bold = Style::default().add_modifier(Modifier::BOLD);
     let mut cells = base_cells("", Style::default(), "PR", layout, bold);
     if layout.show_repo {
@@ -311,7 +308,7 @@ fn header_row_line(layout: &RowLayout, palette: &Palette) -> Line<'static> {
         });
     }
     insert_title_cell(&mut cells, title_slot, layout, "Title".to_owned(), bold);
-    render_cells(cells, false, palette)
+    render_cells(cells, None)
 }
 
 /// One PR's display row. The fixed-width cells are built as data so the
@@ -399,7 +396,7 @@ fn row_line(
         pr.title.clone(),
         title_style,
     );
-    render_cells(cells, selected, palette)
+    render_cells(cells, selected.then_some(palette.selected_bg))
 }
 
 /// The leading one-column glyph for a PR row, with its colour: the refresh
@@ -456,7 +453,7 @@ fn insert_title_cell(
     );
 }
 
-fn render_cells(cells: Vec<Cell>, selected: bool, palette: &Palette) -> Line<'static> {
+fn render_cells(cells: Vec<Cell>, fill: Option<Color>) -> Line<'static> {
     let mut spans = Vec::with_capacity(cells.len() * 2 - 1);
     for (i, cell) in cells.into_iter().enumerate() {
         if i > 0 {
@@ -467,13 +464,12 @@ fn render_cells(cells: Vec<Cell>, selected: bool, palette: &Palette) -> Line<'st
     }
 
     let line = Line::from(spans);
-    if selected {
+    match fill {
         // The line's base style fills the full row width — including inter-cell
-        // gaps and trailing padding — with `selected_bg`, while each span keeps
+        // gaps and trailing padding — with the fill colour, while each span keeps
         // its own foreground. A continuous band, not inverted video (ADR 0005).
-        line.style(Style::default().bg(palette.selected_bg))
-    } else {
-        line
+        Some(c) => line.style(Style::default().bg(c)),
+        None => line,
     }
 }
 
