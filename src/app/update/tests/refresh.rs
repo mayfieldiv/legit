@@ -470,6 +470,48 @@ fn refresh_complete_on_an_unknown_pr_is_harmless() {
 }
 
 #[test]
+fn refresh_complete_stamps_the_prs_fetch_age() {
+    let mut model = list_model(&[1]);
+    assert_eq!(
+        model.fetched_at(&key(1)),
+        None,
+        "no stamp before any fetch settles"
+    );
+
+    let now = fixed_now();
+    update_at(&mut model, Msg::RefreshComplete { pr: key(1) }, now);
+
+    assert_eq!(
+        model.fetched_at(&key(1)),
+        Some(now),
+        "a settled Refresh stamps the PR's Fetch Age at the processing instant"
+    );
+}
+
+#[test]
+fn refresh_complete_resets_only_that_prs_fetch_age() {
+    let mut model = list_model(&[1, 2]);
+    let early = fixed_now();
+    let later = early + chrono::Duration::minutes(10);
+
+    // Both PRs stamped at the earlier instant, then only #1 is refreshed.
+    update_at(&mut model, Msg::RefreshComplete { pr: key(1) }, early);
+    update_at(&mut model, Msg::RefreshComplete { pr: key(2) }, early);
+    update_at(&mut model, Msg::RefreshComplete { pr: key(1) }, later);
+
+    assert_eq!(
+        model.fetched_at(&key(1)),
+        Some(later),
+        "refreshing #1 resets its Fetch Age"
+    );
+    assert_eq!(
+        model.fetched_at(&key(2)),
+        Some(early),
+        "and leaves #2's Fetch Age untouched — the signal is strictly per-PR"
+    );
+}
+
+#[test]
 fn refresh_refetches_checks_even_when_head_sha_is_unchanged() {
     // The prime refresh case: CI re-ran on the same commit. Evicting the cached
     // checks on refresh lets the canonical `maybe_fetch_checks` re-fetch them

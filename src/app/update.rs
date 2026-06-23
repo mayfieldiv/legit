@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use ratatui::crossterm::event::{
     Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -405,7 +406,7 @@ fn handle_filter_editing_key(model: &mut Model, code: KeyCode) {
 }
 
 /// Handle one keypress in normal list mode (no filter editor open).
-fn handle_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
+fn handle_list_key(model: &mut Model, code: KeyCode, now: DateTime<Utc>) -> Vec<Cmd> {
     match code {
         KeyCode::Char('q') => model.should_quit = true,
         KeyCode::Char('j') | KeyCode::Down => model.list.move_down(),
@@ -420,12 +421,12 @@ fn handle_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
         KeyCode::Char('l') | KeyCode::Right | KeyCode::Char(']') => step_tab(model, 1),
         KeyCode::Char('o') => {
             if let Some(pr) = model.list.selected_pr().cloned() {
-                return apply(model, Msg::OpenInBrowser(pr));
+                return apply(model, Msg::OpenInBrowser(pr), now);
             }
         }
         KeyCode::Char('d') => {
             if let Some(pr) = model.list.selected_pr().cloned() {
-                return apply(model, Msg::OpenInDevin(pr));
+                return apply(model, Msg::OpenInDevin(pr), now);
             }
         }
         KeyCode::Char('y') => {
@@ -439,8 +440,8 @@ fn handle_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
                 return create_worktree_cmds(model, pr);
             }
         }
-        KeyCode::Char('r') => return apply(model, Msg::RefreshSelected),
-        KeyCode::Char('R') => return apply(model, Msg::RefreshAll),
+        KeyCode::Char('r') => return apply(model, Msg::RefreshSelected, now),
+        KeyCode::Char('R') => return apply(model, Msg::RefreshAll, now),
         KeyCode::Char('/') => {
             model.list.filter_open();
             model.sync_viewport();
@@ -663,7 +664,7 @@ fn focused_details_key(model: &Model) -> Option<String> {
 /// Handle one keypress while the detail view is open. The caller guarantees
 /// `model.view_mode` is `ViewMode::Detail`, so the scroll/refresh arms match
 /// the inner `DetailState` directly.
-fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
+fn handle_detail_key(model: &mut Model, code: KeyCode, now: DateTime<Utc>) -> Vec<Cmd> {
     match code {
         KeyCode::Esc => {
             // Return to the list view. A single assignment drops the whole
@@ -728,7 +729,7 @@ fn handle_detail_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
                     .focus
                     .url()
                     .map_or_else(|| detail.key.html_url(), str::to_owned);
-                return apply(model, Msg::OpenUrl(url));
+                return apply(model, Msg::OpenUrl(url), now);
             }
         }
         // Copy the PR's URL — always the PR itself, never the focused item's
@@ -871,9 +872,15 @@ fn skips_normalize(msg: &Msg, model: &Model) -> bool {
     }
 }
 
-pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
+/// The reducer entry point. `now` is the wall-clock instant this message is
+/// being processed at, supplied by the runtime (the same clock it feeds the
+/// view) and a fixed value in tests — the reducer stays pure and deterministic
+/// because the only ambient input, the clock, is passed in rather than read.
+/// It is what the Fetch Age stamps record when a PR's enrichment arrives or its
+/// `RefreshComplete` fires.
+pub fn update(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
     let skip_normalize = skips_normalize(&msg, model);
-    let cmds = apply(model, msg);
+    let cmds = apply(model, msg, now);
     if !skip_normalize {
         normalize_detail(model);
     }
@@ -882,7 +889,7 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
 
 /// The reducer's message dispatch. Detail-view invariant maintenance lives in
 /// `update`'s `normalize_detail` pass, not in the individual arms.
-fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
+fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
     match msg {
         Msg::TerminalEvent(Event::Key(key)) => {
             if key.kind != KeyEventKind::Press {
@@ -897,7 +904,7 @@ fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             // run for them (e.g. Esc-to-list must not act as if the key was a
             // list keypress). Returning here keeps that out of the list path.
             if matches!(model.view_mode, ViewMode::Detail(_)) {
-                return handle_detail_key(model, key.code);
+                return handle_detail_key(model, key.code, now);
             }
             // List-mode keys. The filter editor (modal precedence) sees every
             // key first and produces no command; a normal list key may (Enter
@@ -905,7 +912,7 @@ fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             if model.list.filter().is_editing() {
                 handle_filter_editing_key(model, key.code);
             } else {
-                let cmds = handle_list_key(model, key.code);
+                let cmds = handle_list_key(model, key.code, now);
                 if !cmds.is_empty() {
                     return cmds;
                 }
@@ -1057,12 +1064,23 @@ fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             cmds.extend(refresh::maybe_retry_mergeable(model, &pr));
             cmds
         }
+        // The per-PR enrichment arrivals — threads, reviews, issue-comments —
+        // each stamp the PR's Fetch Age clock. They are the PrKey-keyed pieces
+        // of one PR's fan-out, so the latest arrival overwrites the stamp to
+        // "now": a logical fetch (initial enrichment or a Refresh re-enriching)
+        // lands them in one batch, all carrying the same processing `now`, so
+        // the stamps coincide rather than stacking. `ChecksArrived` is keyed by
+        // (repo, head SHA) and shared across same-commit PRs, so it maps to no
+        // single PR and deliberately leaves the clock alone — threads/reviews
+        // already cover the PR's fetch.
         Msg::ThreadsArrived { pr, threads } => {
+            model.stamp_fetched(pr.clone(), now);
             model.enrichment.store_threads(pr, threads);
             model.refresh_blockers();
             Vec::new()
         }
         Msg::ReviewsArrived { pr, reviews } => {
+            model.stamp_fetched(pr.clone(), now);
             model.enrichment.reviews.insert(pr, reviews);
             model.refresh_blockers();
             Vec::new()
@@ -1080,6 +1098,7 @@ fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
             Vec::new()
         }
         Msg::IssueCommentsArrived { pr, comments } => {
+            model.stamp_fetched(pr.clone(), now);
             model.enrichment.store_issue_comments(pr, comments);
             Vec::new()
         }
@@ -1197,7 +1216,12 @@ fn apply(model: &mut Model, msg: Msg) -> Vec<Cmd> {
         }
         Msg::RefreshSelected => refresh::refresh_selected_cmds(model),
         Msg::RefreshAll => refresh::refresh_all_cmds(model),
-        Msg::RefreshComplete { pr } => refresh::complete_refresh(model, pr),
+        Msg::RefreshComplete { pr } => {
+            // A Refresh settling is the other Fetch Age trigger: the PR's
+            // re-fetch fan-out has drained, so its data is as fresh as `now`.
+            model.stamp_fetched(pr.clone(), now);
+            refresh::complete_refresh(model, pr)
+        }
         Msg::MergeableRetryDue { pr } => refresh::mergeable_retry_due_cmds(model, &pr),
         Msg::Quit => {
             model.should_quit = true;

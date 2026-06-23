@@ -361,6 +361,17 @@ pub struct Model {
     /// A manual refresh of a PR clears its entry so a fresh `UNKNOWN` can retry
     /// again (mirrors the TS `notePrRefreshed`).
     pub mergeable_retried: HashSet<PrKey>,
+    /// Per-PR Fetch Age clock: when legit last received that PR's data — its
+    /// initial enrichment or a Refresh settling. Keyed by `PrKey` (the same
+    /// per-PR identity as `blockers`) because PRs are fetched and refreshed
+    /// independently, so there is no single global "last updated" moment.
+    /// Stamped via `stamp_fetched` (overwriting with the later instant) when a
+    /// PR's enrichment arrives and when its `RefreshComplete` fires, then read
+    /// by the summary panel and detail header through `fetched_at`. A PR absent
+    /// from the map has never been fetched, so the views omit its Fetch Age line
+    /// rather than show a misleading "now". A stamp for a PR no longer present
+    /// (filtered/pruned) is harmless — it is simply never read.
+    fetched_at: HashMap<PrKey, chrono::DateTime<chrono::Utc>>,
 }
 
 impl Model {
@@ -389,6 +400,7 @@ impl Model {
                 refreshing: HashSet::new(),
                 refresh_completed: 0,
                 mergeable_retried: HashSet::new(),
+                fetched_at: HashMap::new(),
             },
             vec![Cmd::LoadConfig, Cmd::ResolveAuthToken, Cmd::DetectRepo],
         )
@@ -482,6 +494,22 @@ impl Model {
         self.refreshing.contains(&pr.key())
     }
 
+    /// Record that `key`'s data was just received at `now` — the PR's Fetch Age
+    /// clock. Overwrites any prior stamp with the later instant (a fresh
+    /// enrichment or a Refresh settling resets the age), keeping the signal
+    /// strictly per-PR: stamping one PR never touches another's.
+    pub fn stamp_fetched(&mut self, key: PrKey, now: chrono::DateTime<chrono::Utc>) {
+        self.fetched_at.insert(key, now);
+    }
+
+    /// When `key`'s data was last received, or `None` if it has never been
+    /// fetched. The summary panel and detail header feed this through
+    /// `format::format_age` to render "fetched Nm ago"; a `None` means no stamp
+    /// yet, so they omit the Fetch Age line rather than show a misleading age.
+    pub fn fetched_at(&self, key: &PrKey) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.fetched_at.get(key).copied()
+    }
+
     /// The repo slug the active tab narrows the list to, or `None` for the All
     /// tab. An out-of-range `active_tab` clamps to All rather than panicking.
     pub fn active_scope(&self) -> Option<String> {
@@ -567,7 +595,9 @@ impl Model {
 
 #[cfg(test)]
 mod tests {
-    use crate::{app::model::Model, secret::Secret};
+    use chrono::TimeZone;
+
+    use crate::{app::model::Model, github::rest::PrKey, secret::Secret};
 
     #[test]
     fn debug_redacts_auth_token() {
@@ -578,5 +608,33 @@ mod tests {
 
         assert!(debug.contains("<redacted>"));
         assert!(!debug.contains("secret-token"));
+    }
+
+    fn key(number: u64) -> PrKey {
+        PrKey {
+            repo_slug: "acme/web".to_owned(),
+            number,
+        }
+    }
+
+    #[test]
+    fn fetched_at_is_none_until_stamped() {
+        let (model, _) = Model::new();
+        assert_eq!(model.fetched_at(&key(1)), None);
+    }
+
+    #[test]
+    fn stamp_fetched_records_per_pr_and_overwrites_with_the_later_instant() {
+        let (mut model, _) = Model::new();
+        let early = chrono::Utc.with_ymd_and_hms(2026, 5, 20, 12, 0, 0).unwrap();
+        let later = early + chrono::Duration::minutes(5);
+
+        model.stamp_fetched(key(1), early);
+        assert_eq!(model.fetched_at(&key(1)), Some(early));
+        // Stamping PR #1 again overwrites with the newer instant…
+        model.stamp_fetched(key(1), later);
+        assert_eq!(model.fetched_at(&key(1)), Some(later));
+        // …and never touches another PR's stamp.
+        assert_eq!(model.fetched_at(&key(2)), None);
     }
 }

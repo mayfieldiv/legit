@@ -93,7 +93,9 @@ fn process_msg(
     limiter: &Arc<NetworkLimiter>,
 ) {
     tracing::debug!(?msg, "processing message");
-    let cmds = update(model, msg);
+    // The reducer's clock: the instant this message is processed, the same
+    // wall-clock the next frame's view reads. The Fetch Age stamps record it.
+    let cmds = update(model, msg, chrono::Utc::now());
     if !cmds.is_empty() {
         tracing::debug!(commands = cmds.len(), "update returned commands");
     }
