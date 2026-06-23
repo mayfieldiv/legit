@@ -16,6 +16,7 @@ use ratatui::text::{Line, Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::github::types::{CheckRun, FullReviewThread, PRState, Review};
+use crate::palette::DARK;
 
 /// Conclusions that count as a failing check for display. `action_required`
 /// is included here so a completed check that needs follow-up gets an
@@ -189,9 +190,9 @@ pub fn format_review_state(state: &str) -> &'static str {
 /// directly by the views.
 fn format_mergeable(mergeable: &str) -> (&'static str, Color) {
     match mergeable {
-        "MERGEABLE" => ("✓ mergeable", Color::Green),
-        "CONFLICTING" => ("! conflict", Color::Red),
-        _ => ("? merge unknown", Color::Gray),
+        "MERGEABLE" => ("✓ mergeable", DARK.passing),
+        "CONFLICTING" => ("! conflict", DARK.failing),
+        _ => ("? merge unknown", DARK.muted),
     }
 }
 
@@ -205,8 +206,8 @@ fn format_mergeable(mergeable: &str) -> (&'static str, Color) {
 /// counterpart — the reference UI shows "? merge unknown" for merged PRs too.
 pub fn format_merge_status(state: &PRState, mergeable: &str) -> (&'static str, Color) {
     match state {
-        PRState::Merged => ("✓ merged", Color::Magenta),
-        PRState::Closed => ("✗ closed", Color::Red),
+        PRState::Merged => ("✓ merged", DARK.merged),
+        PRState::Closed => ("✗ closed", DARK.failing),
         PRState::Open => format_mergeable(mergeable),
     }
 }
@@ -214,11 +215,11 @@ pub fn format_merge_status(state: &PRState, mergeable: &str) -> (&'static str, C
 /// Icon + colour for a review state. Mirrors the TS `reviewIcon`.
 pub fn review_icon(state: &str) -> (&'static str, Color) {
     match state {
-        "APPROVED" => ("✓", Color::Green),
-        "CHANGES_REQUESTED" => ("✗", Color::Red),
-        "COMMENTED" => ("●", Color::Blue),
-        "DISMISSED" => ("–", Color::Gray),
-        _ => ("?", Color::Gray),
+        "APPROVED" => ("✓", DARK.approved),
+        "CHANGES_REQUESTED" => ("✗", DARK.changes_requested),
+        "COMMENTED" => ("●", DARK.commented),
+        "DISMISSED" => ("–", DARK.muted),
+        _ => ("?", DARK.muted),
     }
 }
 
@@ -249,16 +250,16 @@ pub fn sort_check_runs(checks: &mut [&CheckRun]) {
 /// Icon + colour for a check run. Mirrors the TS `checkIcon`.
 pub fn check_icon(check: &CheckRun) -> (&'static str, Color) {
     if check.status != "completed" {
-        return ("●", Color::Yellow);
+        return ("●", DARK.pending);
     }
     match check.conclusion.as_deref() {
-        Some("success") => ("✓", Color::Green),
-        Some("failure" | "timed_out" | "cancelled") => ("✗", Color::Red),
-        Some("action_required") => ("✗", Color::Yellow),
-        Some("neutral") => ("–", Color::Gray),
-        Some("skipped") => ("⊘", Color::Gray),
-        Some("stale") => ("⟳", Color::Yellow),
-        _ => ("?", Color::Gray),
+        Some("success") => ("✓", DARK.passing),
+        Some("failure" | "timed_out" | "cancelled") => ("✗", DARK.failing),
+        Some("action_required") => ("✗", DARK.pending),
+        Some("neutral") => ("–", DARK.muted),
+        Some("skipped") => ("⊘", DARK.muted),
+        Some("stale") => ("⟳", DARK.pending),
+        _ => ("?", DARK.muted),
     }
 }
 
@@ -412,7 +413,6 @@ mod tests {
     use std::ffi::OsString;
 
     use chrono::TimeZone;
-    use ratatui::style::Color;
 
     use unicode_width::UnicodeWidthStr;
 
@@ -424,6 +424,7 @@ mod tests {
         sort_check_runs, truncate, truncate_middle,
     };
     use crate::github::types::{CheckRun, FullReviewThread, PRState, Review, ReviewComment};
+    use crate::palette::DARK;
 
     fn now() -> chrono::DateTime<chrono::Utc> {
         chrono::Utc.with_ymd_and_hms(2026, 5, 20, 12, 0, 0).unwrap()
@@ -585,11 +586,11 @@ mod tests {
         // state takes over so the row never shows a misleading "? merge unknown".
         assert_eq!(
             format_merge_status(&PRState::Merged, "UNKNOWN"),
-            ("✓ merged", Color::Magenta),
+            ("✓ merged", DARK.merged),
         );
         assert_eq!(
             format_merge_status(&PRState::Closed, "UNKNOWN"),
-            ("✗ closed", Color::Red),
+            ("✗ closed", DARK.failing),
         );
         // An OPEN PR falls through to the plain mergeable flag unchanged.
         assert_eq!(
@@ -598,17 +599,20 @@ mod tests {
         );
         assert_eq!(
             format_merge_status(&PRState::Open, "UNKNOWN"),
-            ("? merge unknown", Color::Gray),
+            ("? merge unknown", DARK.muted),
         );
     }
 
     #[test]
     fn review_icon_maps_state_to_icon_and_colour() {
-        assert_eq!(review_icon("APPROVED"), ("✓", Color::Green));
-        assert_eq!(review_icon("CHANGES_REQUESTED"), ("✗", Color::Red));
-        assert_eq!(review_icon("COMMENTED"), ("●", Color::Blue));
-        assert_eq!(review_icon("DISMISSED"), ("–", Color::Gray));
-        assert_eq!(review_icon("WAT"), ("?", Color::Gray));
+        assert_eq!(review_icon("APPROVED"), ("✓", DARK.approved));
+        assert_eq!(
+            review_icon("CHANGES_REQUESTED"),
+            ("✗", DARK.changes_requested)
+        );
+        assert_eq!(review_icon("COMMENTED"), ("●", DARK.commented));
+        assert_eq!(review_icon("DISMISSED"), ("–", DARK.muted));
+        assert_eq!(review_icon("WAT"), ("?", DARK.muted));
     }
 
     #[test]
@@ -652,35 +656,35 @@ mod tests {
     fn check_icon_maps_status_and_conclusion() {
         assert_eq!(
             check_icon(&check("a", "in_progress", None)),
-            ("●", Color::Yellow)
+            ("●", DARK.pending)
         );
         assert_eq!(
             check_icon(&check("a", "completed", Some("success"))),
-            ("✓", Color::Green)
+            ("✓", DARK.passing)
         );
         assert_eq!(
             check_icon(&check("a", "completed", Some("failure"))),
-            ("✗", Color::Red)
+            ("✗", DARK.failing)
         );
         assert_eq!(
             check_icon(&check("a", "completed", Some("action_required"))),
-            ("✗", Color::Yellow)
+            ("✗", DARK.pending)
         );
         assert_eq!(
             check_icon(&check("a", "completed", Some("neutral"))),
-            ("–", Color::Gray)
+            ("–", DARK.muted)
         );
         assert_eq!(
             check_icon(&check("a", "completed", Some("skipped"))),
-            ("⊘", Color::Gray)
+            ("⊘", DARK.muted)
         );
         assert_eq!(
             check_icon(&check("a", "completed", Some("stale"))),
-            ("⟳", Color::Yellow)
+            ("⟳", DARK.pending)
         );
         assert_eq!(
             check_icon(&check("a", "completed", None)),
-            ("?", Color::Gray)
+            ("?", DARK.muted)
         );
     }
 
@@ -693,7 +697,7 @@ mod tests {
         assert_eq!(text, "  ✓ build");
         let icon_span = &row.spans[1];
         assert_eq!(icon_span.content.as_ref(), "✓");
-        assert_eq!(icon_span.style.fg, Some(Color::Green));
+        assert_eq!(icon_span.style.fg, Some(DARK.passing));
     }
 
     #[test]

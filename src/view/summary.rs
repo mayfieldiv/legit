@@ -15,7 +15,7 @@ use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
 };
@@ -28,6 +28,7 @@ use crate::format::{
 };
 use crate::github::rest::PR;
 use crate::github::types::CheckRun;
+use crate::palette::Palette;
 
 /// Placeholder text for a section whose enrichment hasn't arrived yet.
 const LOADING: &str = "Loading…";
@@ -41,31 +42,49 @@ mod tests;
 
 /// Render the summary panel into `area`. Assumes `area` is the panel's region
 /// (already split off the list by the caller).
-pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, now: DateTime<Utc>) {
+pub fn render(
+    model: &Model,
+    frame: &mut Frame<'_>,
+    area: Rect,
+    now: DateTime<Utc>,
+    palette: &Palette,
+) {
     let Some(pr) = model.list.selected_pr() else {
         let line = Line::from(Span::styled(
             "No PR selected",
-            Style::default().fg(Color::Gray),
+            Style::default().fg(palette.muted),
         ));
         frame.render_widget(Paragraph::new(line), area);
         return;
     };
 
     let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.extend(identity_lines(model, pr, now, usize::from(area.width)));
-    lines.push(next_action_line(model, pr));
-    lines.push(threads_line(model, pr));
-    lines.extend(reviews_lines(model, pr));
-    lines.extend(requested_reviewers_lines(pr));
-    lines.extend(checks_lines(model, pr));
-    lines.extend(files_lines(model, pr));
-    lines.extend(labels_lines(pr, usize::from(area.width)));
-    lines.extend(assignees_lines(pr, usize::from(area.width)));
+    lines.extend(identity_lines(
+        model,
+        pr,
+        now,
+        usize::from(area.width),
+        palette,
+    ));
+    lines.push(next_action_line(model, pr, palette));
+    lines.push(threads_line(model, pr, palette));
+    lines.extend(reviews_lines(model, pr, palette));
+    lines.extend(requested_reviewers_lines(pr, palette));
+    lines.extend(checks_lines(model, pr, palette));
+    lines.extend(files_lines(model, pr, palette));
+    lines.extend(labels_lines(pr, usize::from(area.width), palette));
+    lines.extend(assignees_lines(pr, usize::from(area.width), palette));
 
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-fn identity_lines(model: &Model, pr: &PR, now: DateTime<Utc>, width: usize) -> Vec<Line<'static>> {
+fn identity_lines(
+    model: &Model,
+    pr: &PR,
+    now: DateTime<Utc>,
+    width: usize,
+    palette: &Palette,
+) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     lines.push(Line::from(Span::styled(
         truncate(&pr.title, width.max(1)),
@@ -73,31 +92,36 @@ fn identity_lines(model: &Model, pr: &PR, now: DateTime<Utc>, width: usize) -> V
     )));
 
     let mut meta = vec![
-        Span::styled(pr.author.clone(), Style::default().fg(Color::Green)),
+        Span::styled(pr.author.clone(), Style::default().fg(palette.author)),
         Span::raw(format!(" #{}", pr.number)),
     ];
     if pr.is_draft {
-        meta.push(Span::styled(" draft", Style::default().fg(Color::Yellow)));
+        meta.push(Span::styled(" draft", Style::default().fg(palette.draft)));
     }
     lines.push(Line::from(meta));
 
-    lines.push(url_line(pr, width));
-    lines.extend(checkout_status_lines(model, pr, width));
+    lines.push(url_line(pr, width, palette));
+    lines.extend(checkout_status_lines(model, pr, width, palette));
 
     lines.push(Line::from(vec![
-        Span::styled("created ", Style::default().fg(Color::Gray)),
+        Span::styled("created ", Style::default().fg(palette.muted)),
         Span::raw(format_age(pr.created_at, now)),
-        Span::styled(" updated ", Style::default().fg(Color::Gray)),
+        Span::styled(" updated ", Style::default().fg(palette.muted)),
         Span::raw(format_age(pr.updated_at, now)),
     ]));
 
     lines
 }
 
-fn checkout_status_lines(model: &Model, pr: &PR, width: usize) -> Vec<Line<'static>> {
+fn checkout_status_lines(
+    model: &Model,
+    pr: &PR,
+    width: usize,
+    palette: &Palette,
+) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
-    let branch_spans = branch_spans(pr);
+    let branch_spans = branch_spans(pr, palette);
     if !branch_spans.is_empty() {
         lines.push(Line::from(branch_spans));
     }
@@ -106,6 +130,7 @@ fn checkout_status_lines(model: &Model, pr: &PR, width: usize) -> Vec<Line<'stat
         lines.push(super::worktree_line(
             &worktree.path,
             width.saturating_sub(worktree_label_width()),
+            palette,
         ));
     }
 
@@ -113,15 +138,15 @@ fn checkout_status_lines(model: &Model, pr: &PR, width: usize) -> Vec<Line<'stat
     lines
 }
 
-fn branch_spans(pr: &PR) -> Vec<Span<'static>> {
+fn branch_spans(pr: &PR, palette: &Palette) -> Vec<Span<'static>> {
     if pr.head_ref.is_empty() && pr.base_ref.is_empty() {
         return Vec::new();
     }
 
     vec![
-        Span::styled(pr.head_ref.clone(), Style::default().fg(Color::Cyan)),
-        Span::styled(" → ", Style::default().fg(Color::Gray)),
-        Span::styled(pr.base_ref.clone(), Style::default().fg(Color::Cyan)),
+        Span::styled(pr.head_ref.clone(), Style::default().fg(palette.accent)),
+        Span::styled(" → ", Style::default().fg(palette.separator)),
+        Span::styled(pr.base_ref.clone(), Style::default().fg(palette.accent)),
     ]
 }
 
@@ -137,13 +162,13 @@ fn mergeability_line(pr: &PR) -> Line<'static> {
     Line::from(Span::styled(text, Style::default().fg(color)))
 }
 
-fn labels_lines(pr: &PR, width: usize) -> Vec<Line<'static>> {
+fn labels_lines(pr: &PR, width: usize, palette: &Palette) -> Vec<Line<'static>> {
     if pr.labels.is_empty() {
         return Vec::new();
     }
     let text = format!("labels: {}", pr.labels.join(", "));
     vec![Line::from(vec![
-        Span::styled("labels: ", Style::default().fg(Color::Gray)),
+        Span::styled("labels: ", Style::default().fg(palette.muted)),
         Span::raw(truncate(
             text.strip_prefix("labels: ").unwrap_or(&text),
             width.saturating_sub("labels: ".len()).max(1),
@@ -151,13 +176,13 @@ fn labels_lines(pr: &PR, width: usize) -> Vec<Line<'static>> {
     ])]
 }
 
-fn assignees_lines(pr: &PR, width: usize) -> Vec<Line<'static>> {
+fn assignees_lines(pr: &PR, width: usize, palette: &Palette) -> Vec<Line<'static>> {
     if pr.assignees.is_empty() {
         return Vec::new();
     }
     let text = format!("assignees: {}", pr.assignees.join(", "));
     vec![Line::from(vec![
-        Span::styled("assignees: ", Style::default().fg(Color::Gray)),
+        Span::styled("assignees: ", Style::default().fg(palette.muted)),
         Span::raw(truncate(
             text.strip_prefix("assignees: ").unwrap_or(&text),
             width.saturating_sub("assignees: ".len()).max(1),
@@ -168,13 +193,13 @@ fn assignees_lines(pr: &PR, width: usize) -> Vec<Line<'static>> {
 /// The Next Action line, coloured by smart-status tier (me-blocking magenta,
 /// waiting-on-author yellow, needs-review gray). `Loading…` until the PR's
 /// blocker has been derived (both threads and reviews arrived).
-fn next_action_line(model: &Model, pr: &PR) -> Line<'static> {
+fn next_action_line(model: &Model, pr: &PR, palette: &Palette) -> Line<'static> {
     match model.blockers.get(&pr.key()) {
         Some(result) => Line::from(Span::styled(
             result.reason.clone(),
-            Style::default().fg(super::tier_color(result.tier)),
+            Style::default().fg(palette.tier(result.tier)),
         )),
-        None => loading_line(),
+        None => loading_line(palette),
     }
 }
 
@@ -182,14 +207,14 @@ fn next_action_line(model: &Model, pr: &PR) -> Line<'static> {
 /// commented counts, then one indented row per reviewer with an icon and their
 /// state. `Loading…` beside the header until the reviews fetch arrives (`None`
 /// = not loaded, distinct from `Some(&[])` = loaded, no reviews).
-fn reviews_lines(model: &Model, pr: &PR) -> Vec<Line<'static>> {
+fn reviews_lines(model: &Model, pr: &PR, palette: &Palette) -> Vec<Line<'static>> {
     let Some(reviews) = model.enrichment.reviews.get(&pr.key()) else {
-        return vec![header_with_loading("reviews")];
+        return vec![header_with_loading("reviews", palette)];
     };
 
     let summary = reviews_summary(reviews);
     let mut lines = vec![Line::from(vec![
-        section_header("reviews"),
+        section_header("reviews", palette),
         Span::raw(format!(
             " {} approved, {} changes requested, {} commented",
             summary.approved, summary.changes_requested, summary.commented
@@ -204,24 +229,24 @@ fn reviews_lines(model: &Model, pr: &PR) -> Vec<Line<'static>> {
             Span::raw(format!(" {} ", review.user)),
             Span::styled(
                 format_review_state(&review.state),
-                Style::default().fg(Color::Gray),
+                Style::default().fg(palette.muted),
             ),
         ]));
     }
     lines
 }
 
-fn requested_reviewers_lines(pr: &PR) -> Vec<Line<'static>> {
+fn requested_reviewers_lines(pr: &PR, palette: &Palette) -> Vec<Line<'static>> {
     if pr.requested_reviewers.is_empty() {
         return Vec::new();
     }
-    let mut lines = vec![Line::from(section_header("requested"))];
+    let mut lines = vec![Line::from(section_header("requested", palette))];
     for reviewer in &pr.requested_reviewers {
         lines.push(Line::from(vec![
             Span::raw("  "),
-            Span::styled("○", Style::default().fg(Color::Yellow)),
+            Span::styled("○", Style::default().fg(palette.pending)),
             Span::raw(format!(" {reviewer} ")),
-            Span::styled("pending", Style::default().fg(Color::Gray)),
+            Span::styled("pending", Style::default().fg(palette.muted)),
         ]));
     }
     lines
@@ -232,14 +257,14 @@ fn requested_reviewers_lines(pr: &PR) -> Vec<Line<'static>> {
 /// `format::comment_counts` (the canonical derivation shared with the detail
 /// view in issue #51), which mirrors the TS `computeCommentCounts` bot
 /// classification.
-fn threads_line(model: &Model, pr: &PR) -> Line<'static> {
+fn threads_line(model: &Model, pr: &PR, palette: &Palette) -> Line<'static> {
     let Some(threads) = model.enrichment.review_threads.get(&pr.key()) else {
-        return header_with_loading("threads");
+        return header_with_loading("threads", palette);
     };
 
     let counts = comment_counts(threads, &model.config.bot_logins);
     Line::from(vec![
-        section_header("threads"),
+        section_header("threads", palette),
         Span::raw(format!(
             " {} total, {} unresolved ({} human, {} bot)",
             counts.total, counts.unresolved, counts.unresolved_human, counts.unresolved_bot
@@ -252,32 +277,32 @@ fn threads_line(model: &Model, pr: &PR) -> Line<'static> {
 /// (passing checks are summarised by the count alone). `Loading…` until the
 /// checks fetch arrives — which can't start until review-status reports the
 /// PR's head SHA, so a PR with no head SHA also reads as loading.
-fn checks_lines(model: &Model, pr: &PR) -> Vec<Line<'static>> {
+fn checks_lines(model: &Model, pr: &PR, palette: &Palette) -> Vec<Line<'static>> {
     let Some(checks) = model.enrichment.checks_for(pr) else {
-        return vec![header_with_loading("checks")];
+        return vec![header_with_loading("checks", palette)];
     };
 
     let summary = checks_summary(checks);
 
-    let mut header: Vec<Span<'static>> = vec![section_header("checks"), Span::raw(" ")];
+    let mut header: Vec<Span<'static>> = vec![section_header("checks", palette), Span::raw(" ")];
     if summary.failed > 0 {
         header.push(Span::styled(
             format!("{} failed ", summary.failed),
-            Style::default().fg(Color::Red),
+            Style::default().fg(palette.failing),
         ));
     }
     if summary.pending > 0 {
         header.push(Span::styled(
             format!("{} pending ", summary.pending),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(palette.pending),
         ));
     }
     header.push(Span::styled(
         format!("{}/{} passed", summary.passed, summary.total),
         Style::default().fg(if summary.passed == summary.total {
-            Color::Green
+            palette.passing
         } else {
-            Color::Gray
+            palette.muted
         }),
     ));
     let mut lines = vec![Line::from(header)];
@@ -299,7 +324,7 @@ fn checks_lines(model: &Model, pr: &PR) -> Vec<Line<'static>> {
     if overflow > 0 {
         lines.push(Line::from(Span::styled(
             format!("  +{overflow} more"),
-            Style::default().fg(Color::Gray),
+            Style::default().fg(palette.muted),
         )));
     }
     lines
@@ -309,14 +334,14 @@ fn checks_lines(model: &Model, pr: &PR) -> Vec<Line<'static>> {
 /// per non-empty category (`code: +14/-3 (2)`), plus a `total` row. `Loading…`
 /// both before the fetch is requested (no entry) and while it's in flight
 /// (`Requested`); the breakdown renders once it's `Loaded` and categorised.
-fn files_lines(model: &Model, pr: &PR) -> Vec<Line<'static>> {
+fn files_lines(model: &Model, pr: &PR, palette: &Palette) -> Vec<Line<'static>> {
     let categorization = match model.enrichment.files.get(&pr.key()) {
         Some(FilesState::Loaded(categorization)) => categorization,
-        None | Some(FilesState::Requested) => return vec![header_with_loading("files")],
+        None | Some(FilesState::Requested) => return vec![header_with_loading("files", palette)],
     };
     let breakdown = &categorization.breakdown;
 
-    let mut lines = vec![Line::from(section_header("files"))];
+    let mut lines = vec![Line::from(section_header("files", palette))];
     for (category, stats) in breakdown.category_rows() {
         if stats.files == 0 {
             continue;
@@ -340,11 +365,11 @@ fn files_lines(model: &Model, pr: &PR) -> Vec<Line<'static>> {
 }
 
 /// The PR's full GitHub URL. Mirrors the TS `prUrl`.
-fn url_line(pr: &PR, width: usize) -> Line<'static> {
+fn url_line(pr: &PR, width: usize, palette: &Palette) -> Line<'static> {
     let url = format!("https://github.com/{}/pull/{}", pr.repo_slug, pr.number);
     Line::from(Span::styled(
         truncate(&url, width.max(1)),
-        Style::default().fg(Color::Cyan),
+        Style::default().fg(palette.link),
     ))
 }
 
@@ -356,22 +381,22 @@ fn category_row(label: &str, additions: u64, deletions: u64, files: u64) -> Line
     ])
 }
 
-/// A muted section-header span (e.g. `reviews`, `checks`).
-fn section_header(label: &str) -> Span<'static> {
-    Span::styled(label.to_owned(), Style::default().fg(Color::Cyan))
+/// An accented section-header span (e.g. `reviews`, `checks`).
+fn section_header(label: &str, palette: &Palette) -> Span<'static> {
+    Span::styled(label.to_owned(), Style::default().fg(palette.accent))
 }
 
 /// A section header followed by a `Loading…` placeholder, for a section whose
 /// enrichment hasn't arrived.
-fn header_with_loading(label: &str) -> Line<'static> {
+fn header_with_loading(label: &str, palette: &Palette) -> Line<'static> {
     Line::from(vec![
-        section_header(label),
+        section_header(label, palette),
         Span::raw(" "),
-        Span::styled(LOADING, Style::default().fg(Color::Gray)),
+        Span::styled(LOADING, Style::default().fg(palette.muted)),
     ])
 }
 
 /// A muted `Loading…` placeholder line for a not-yet-arrived section.
-fn loading_line() -> Line<'static> {
-    Line::from(Span::styled(LOADING, Style::default().fg(Color::Gray)))
+fn loading_line(palette: &Palette) -> Line<'static> {
+    Line::from(Span::styled(LOADING, Style::default().fg(palette.muted)))
 }

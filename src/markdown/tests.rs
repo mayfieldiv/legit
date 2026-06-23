@@ -1,7 +1,8 @@
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
-use super::{ACCENT, Block, CODE, MUTED, flatten_blocks, has_details, render_blocks};
+use super::{Block, flatten_blocks, has_details, render_blocks};
+use crate::palette::DARK;
 
 /// Render markdown to flat lines with every `<details>` collapsed — the default
 /// the detail view shows before any Enter toggle. Most tests assert on this
@@ -55,7 +56,7 @@ fn h1_heading_is_bold_and_accented() {
     let prefix = find_span(&lines, "# ").expect("prefix span not found");
     assert_eq!(
         prefix.style.fg,
-        Some(ACCENT),
+        Some(DARK.accent),
         "h1 prefix should be accent colour"
     );
     assert!(
@@ -71,7 +72,7 @@ fn h2_heading_is_bold_and_accented() {
     assert!(text.contains("## "), "missing h2 prefix: {text:?}");
 
     let prefix = find_span(&lines, "## ").expect("prefix span not found");
-    assert_eq!(prefix.style.fg, Some(ACCENT));
+    assert_eq!(prefix.style.fg, Some(DARK.accent));
     assert!(prefix.style.add_modifier.contains(Modifier::BOLD));
 }
 
@@ -82,7 +83,7 @@ fn h3_heading_is_accented_not_bold() {
     assert!(text.contains("### "), "missing h3 prefix: {text:?}");
 
     let prefix = find_span(&lines, "### ").expect("prefix span not found");
-    assert_eq!(prefix.style.fg, Some(ACCENT));
+    assert_eq!(prefix.style.fg, Some(DARK.accent));
     // h3+ should NOT be bold — less visual weight than h1/h2.
     assert!(
         !prefix.style.add_modifier.contains(Modifier::BOLD),
@@ -112,7 +113,7 @@ fn heading_text_is_accented() {
     let text_span = find_span(&lines, "Hello world").expect("heading text span not found");
     assert_eq!(
         text_span.style.fg,
-        Some(ACCENT),
+        Some(DARK.accent),
         "h1 text must be accent: {text_span:?}"
     );
     assert!(
@@ -128,7 +129,7 @@ fn h3_text_is_accented_not_bold() {
     let text_span = find_span(&lines, "Sub section").expect("heading text span not found");
     assert_eq!(
         text_span.style.fg,
-        Some(ACCENT),
+        Some(DARK.accent),
         "h3 text must be accent: {text_span:?}"
     );
     assert!(
@@ -198,7 +199,7 @@ fn paragraph_inline_code_has_code_colour() {
     let code_span = find_span(&lines, "foo()").expect("code span not found");
     assert_eq!(
         code_span.style.fg,
-        Some(CODE),
+        Some(DARK.code),
         "inline code must have code colour"
     );
 }
@@ -221,11 +222,15 @@ fn fenced_code_block_shows_language_tag_in_fence() {
 
     // Opening fence is muted.
     let fence = find_span(&lines, "```rust").expect("opening fence span not found");
-    assert_eq!(fence.style.fg, Some(MUTED), "fence must be muted");
+    assert_eq!(fence.style.fg, Some(DARK.muted), "fence must be muted");
 
     // Code body is code colour.
     let body = find_span(&lines, "fn main()").expect("body span not found");
-    assert_eq!(body.style.fg, Some(CODE), "code body must be code colour");
+    assert_eq!(
+        body.style.fg,
+        Some(DARK.code),
+        "code body must be code colour"
+    );
 }
 
 #[test]
@@ -236,7 +241,7 @@ fn fenced_code_block_without_language_shows_plain_fence() {
     assert!(text.contains("hello"), "missing code body: {text:?}");
 
     let fence = find_span(&lines, "```").expect("fence span");
-    assert_eq!(fence.style.fg, Some(MUTED));
+    assert_eq!(fence.style.fg, Some(DARK.muted));
 }
 
 // ── Lists ─────────────────────────────────────────────────────────────────
@@ -301,10 +306,10 @@ fn blockquote_prefixes_text_with_bar() {
 
     // The bar span must be muted.
     let bar = find_span(&lines, "│ ").expect("blockquote bar span");
-    assert_eq!(bar.style.fg, Some(MUTED));
+    assert_eq!(bar.style.fg, Some(DARK.muted));
     // The text span must be muted.
     let body = find_span(&lines, "quoted text").expect("blockquote text span");
-    assert_eq!(body.style.fg, Some(MUTED));
+    assert_eq!(body.style.fg, Some(DARK.muted));
 }
 
 #[test]
@@ -337,7 +342,7 @@ fn blockquote_inline_formatting_no_repeated_bar() {
     let code_span = find_span(&lines, "code").expect("code span");
     assert_eq!(
         code_span.style.fg,
-        Some(MUTED),
+        Some(DARK.muted),
         "inline code in blockquote must be muted: {code_span:?}"
     );
 }
@@ -372,7 +377,7 @@ fn text_after_nested_blockquote_stays_barred_and_muted() {
     let trailing = find_span(&nested, "trailing").expect("trailing span");
     assert_eq!(
         trailing.style.fg,
-        Some(MUTED),
+        Some(DARK.muted),
         "text after a nested quote must stay muted: {trailing:?}"
     );
 }
@@ -429,7 +434,7 @@ fn thematic_break_emits_muted_rule_line() {
     );
     // The rule span must be muted.
     let rule = find_span(&lines, "────").expect("rule span not found");
-    assert_eq!(rule.style.fg, Some(MUTED));
+    assert_eq!(rule.style.fg, Some(DARK.muted));
 }
 
 // ── Link ─────────────────────────────────────────────────────────────────
@@ -446,7 +451,7 @@ fn link_shows_text_and_url_in_parens() {
     // URL must appear in muted parens.
     let url_span =
         find_span(&lines, "https://github.com/mayfieldiv/legit").expect("url span not found");
-    assert_eq!(url_span.style.fg, Some(MUTED));
+    assert_eq!(url_span.style.fg, Some(DARK.muted));
 }
 
 // ── Image ─────────────────────────────────────────────────────────────────
@@ -460,7 +465,7 @@ fn image_renders_as_placeholder_with_alt_text() {
         "missing image placeholder: {text:?}"
     );
     let span = find_span(&lines, "[image:").expect("image span");
-    assert_eq!(span.style.fg, Some(MUTED));
+    assert_eq!(span.style.fg, Some(DARK.muted));
 }
 
 #[test]
@@ -561,7 +566,11 @@ fn details_expanded_shows_the_summary_and_body_with_an_expanded_marker() {
 fn details_summary_marker_is_accent_and_text_is_bold() {
     let lines = render("<details>\n<summary>AI Prompt</summary>\n\nx\n\n</details>");
     let marker = find_span(&lines, "▶").expect("marker span");
-    assert_eq!(marker.style.fg, Some(ACCENT), "marker should be accent");
+    assert_eq!(
+        marker.style.fg,
+        Some(DARK.accent),
+        "marker should be accent"
+    );
     let summary = find_span(&lines, "AI Prompt").expect("summary span");
     assert!(
         summary.style.add_modifier.contains(Modifier::BOLD),
@@ -577,7 +586,11 @@ fn details_inner_markdown_is_rendered_when_expanded() {
         render_blocks("<details>\n<summary>S</summary>\n\nuse `cargo test` now\n\n</details>");
     let lines = flatten_blocks(&blocks, true);
     let code = find_span(&lines, "cargo test").expect("inline code span");
-    assert_eq!(code.style.fg, Some(CODE), "inner markdown must be rendered");
+    assert_eq!(
+        code.style.fg,
+        Some(DARK.code),
+        "inner markdown must be rendered"
+    );
 }
 
 #[test]

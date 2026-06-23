@@ -18,7 +18,7 @@
 //! Supported inline styles: bold, italic, inline code, links (text + URL),
 //! images ([image: alt/url] fallback).
 
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
@@ -26,15 +26,16 @@ use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, T
 mod details_html;
 use details_html::{DetailsToken, tokenize_details};
 
-// ── Colour constants ──────────────────────────────────────────────────────────
+use crate::palette::DARK;
 
-/// Accent colour (TS `theme.accent` #61AFEF): headings, section labels.
-const ACCENT: Color = Color::Cyan;
-/// Muted colour (TS `theme.muted` #5C6370): code fences, blockquote bar,
-/// thematic breaks, image placeholders.
-const MUTED: Color = Color::DarkGray;
-/// Code colour (TS `theme.code` #7EC8D3): code block body, inline code.
-const CODE: Color = Color::LightCyan;
+// ── Colour roles ──────────────────────────────────────────────────────────────
+//
+// Markdown reads three roles from the curated palette: `accent` (headings,
+// section labels, the `<details>` marker), `muted` (code fences, blockquote
+// bar, thematic breaks, link/image suffixes) and `code` (code-block bodies and
+// inline code). Rendered colours are baked into the `Line`s at parse time and
+// cached in the model, so this pure renderer reads the single `DARK` instance
+// rather than taking a per-call palette argument.
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -155,7 +156,10 @@ fn summary_line(summary: &str, expanded: bool, depth: usize) -> Line<'static> {
     let marker = if expanded { "▼ " } else { "▶ " };
     let indent = "  ".repeat(depth);
     Line::from(vec![
-        Span::styled(format!("{indent}{marker}"), Style::default().fg(ACCENT)),
+        Span::styled(
+            format!("{indent}{marker}"),
+            Style::default().fg(DARK.accent),
+        ),
         Span::styled(
             summary.to_owned(),
             Style::default().add_modifier(Modifier::BOLD),
@@ -294,7 +298,7 @@ pub fn heading_span(depth: u8, text: impl Into<String>) -> Span<'static> {
 /// Return the ratatui style for a heading at the given depth: accent always;
 /// bold for h1/h2 (depth <= 2), plain accent for h3+.
 fn heading_style(depth: u8) -> Style {
-    let s = Style::default().fg(ACCENT);
+    let s = Style::default().fg(DARK.accent);
     if depth <= 2 {
         s.add_modifier(Modifier::BOLD)
     } else {
@@ -414,7 +418,7 @@ impl RenderCtx {
             // the same leading `│ ` — matching the TS reference that wraps
             // the entire paragraph in a single `│ <InlineNodes/>`.
             Event::Start(Tag::Paragraph) if self.blockquote_depth > 0 => {
-                self.push_span(Span::styled("│ ", Style::default().fg(MUTED)));
+                self.push_span(Span::styled("│ ", Style::default().fg(DARK.muted)));
             }
             Event::Start(Tag::Paragraph) => {}
             Event::Start(Tag::CodeBlock(kind)) => {
@@ -528,16 +532,16 @@ impl RenderCtx {
                 let style = if let Some(depth) = self.in_heading {
                     heading_style(depth)
                 } else if self.blockquote_depth > 0 {
-                    Style::default().fg(MUTED)
+                    Style::default().fg(DARK.muted)
                 } else {
-                    Style::default().fg(CODE)
+                    Style::default().fg(DARK.code)
                 };
                 self.push_span(Span::styled(text.into_string(), style));
             }
             Event::Rule => {
                 self.lines.push(Line::from(Span::styled(
                     "────────────────────────────────────────",
-                    Style::default().fg(MUTED),
+                    Style::default().fg(DARK.muted),
                 )));
                 self.blank_line();
             }
@@ -592,15 +596,19 @@ impl RenderCtx {
         } else {
             format!("```{}", self.code_lang)
         };
-        self.lines
-            .push(Line::from(Span::styled(fence, Style::default().fg(MUTED))));
+        self.lines.push(Line::from(Span::styled(
+            fence,
+            Style::default().fg(DARK.muted),
+        )));
     }
 
     fn end_code_block(&mut self) {
         self.in_code_block = false;
         // Closing fence.
-        self.lines
-            .push(Line::from(Span::styled("```", Style::default().fg(MUTED))));
+        self.lines.push(Line::from(Span::styled(
+            "```",
+            Style::default().fg(DARK.muted),
+        )));
         self.blank_line();
     }
 
@@ -635,7 +643,7 @@ impl RenderCtx {
         // been pushed by Text events.
         if let Some(url) = self.inline.link_url.take() {
             let base = self.inline.to_ratatui();
-            self.push_span(Span::styled(format!(" ({url})"), base.fg(MUTED)));
+            self.push_span(Span::styled(format!(" ({url})"), base.fg(DARK.muted)));
         }
     }
 
@@ -649,7 +657,7 @@ impl RenderCtx {
         let label = if alt.is_empty() { fallback } else { alt };
         self.push_span(Span::styled(
             format!("[image: {label}]"),
-            Style::default().fg(MUTED),
+            Style::default().fg(DARK.muted),
         ));
     }
 
@@ -662,7 +670,7 @@ impl RenderCtx {
             for line_text in text.lines() {
                 self.lines.push(Line::from(Span::styled(
                     line_text.to_owned(),
-                    Style::default().fg(CODE),
+                    Style::default().fg(DARK.code),
                 )));
             }
             return;
@@ -682,7 +690,7 @@ impl RenderCtx {
             // blockquote paragraph opened (see Start(Paragraph) handler).
             // Here we only apply the muted foreground; bold/italic from the
             // inline stack flow through to_ratatui() as usual.
-            let style = self.inline.to_ratatui().fg(MUTED);
+            let style = self.inline.to_ratatui().fg(DARK.muted);
             self.push_span(Span::styled(text, style));
             return;
         }

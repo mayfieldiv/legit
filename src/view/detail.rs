@@ -21,7 +21,7 @@ use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
 };
@@ -32,6 +32,7 @@ use crate::{
     format::{format_age, format_merge_status, format_size},
     github::rest::PR,
     markdown::Block,
+    palette::Palette,
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -48,12 +49,13 @@ pub fn render(
     frame: &mut Frame<'_>,
     area: Rect,
     now: DateTime<Utc>,
+    palette: &Palette,
 ) {
     // Look up the enriched PR from the list. If it has been removed (e.g.
     // a list refresh completed between navigation and this render), show the
     // loading placeholder so the view degrades gracefully.
     let Some(pr) = model.list.pr(&detail.key) else {
-        render_loading(frame, area);
+        render_loading(frame, area, palette);
         return;
     };
 
@@ -71,27 +73,34 @@ pub fn render(
     // here, so draw it immediately — matching the TS reference, which shows the
     // header at once and only the body waits on the fetch. The loading
     // placeholder occupies just the body area until the body arrives.
-    render_header(model, pr, frame, header_area, now);
-    render_status_bar(model, frame, status_area);
+    render_header(model, pr, frame, header_area, now, palette);
+    render_status_bar(model, frame, status_area, palette);
 
     match &detail.body {
-        None => render_loading(frame, body_area),
+        None => render_loading(frame, body_area, palette),
         Some(body) => render_body(model, pr, body, detail, frame, body_area, now),
     }
 }
 
 /// Render the "Loading PR detail…" placeholder while the fetch is in flight.
-fn render_loading(frame: &mut Frame<'_>, area: Rect) {
+fn render_loading(frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
     let line = Line::from(Span::styled(
         "Loading PR detail…",
-        Style::default().fg(Color::Yellow),
+        Style::default().fg(palette.pending),
     ));
     frame.render_widget(Paragraph::new(line), area);
 }
 
 // ── Header ────────────────────────────────────────────────────────────────────
 
-fn render_header(model: &Model, pr: &PR, frame: &mut Frame<'_>, area: Rect, now: DateTime<Utc>) {
+fn render_header(
+    model: &Model,
+    pr: &PR,
+    frame: &mut Frame<'_>,
+    area: Rect,
+    now: DateTime<Utc>,
+    palette: &Palette,
+) {
     // Row 0: #number title (bold)
     let title_text = format!("#{} {}", pr.number, pr.title);
     let title_line = Line::from(Span::styled(
@@ -101,30 +110,32 @@ fn render_header(model: &Model, pr: &PR, frame: &mut Frame<'_>, area: Rect, now:
 
     // Row 1: author · repo · created X · updated Y · +A/-D [draft]
     let mut meta_spans = vec![
-        Span::styled(pr.author.clone(), Style::default().fg(Color::Green)),
-        Span::styled(" · ", Style::default().fg(Color::DarkGray)),
-        Span::styled(pr.repo_slug.clone(), Style::default().fg(Color::Cyan)),
-        Span::styled(" · created ", Style::default().fg(Color::DarkGray)),
+        Span::styled(pr.author.clone(), Style::default().fg(palette.author)),
+        Span::styled(" · ", Style::default().fg(palette.separator)),
+        Span::styled(pr.repo_slug.clone(), Style::default().fg(palette.accent)),
+        Span::styled(" · ", Style::default().fg(palette.separator)),
+        Span::styled("created ", Style::default().fg(palette.muted)),
         Span::raw(format_age(pr.created_at, now)),
-        Span::styled(" · updated ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" · ", Style::default().fg(palette.separator)),
+        Span::styled("updated ", Style::default().fg(palette.muted)),
         Span::raw(format_age(pr.updated_at, now)),
-        Span::styled(" · ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" · ", Style::default().fg(palette.separator)),
         Span::raw(format_size(pr.additions, pr.deletions)),
     ];
     if pr.is_draft {
-        meta_spans.push(Span::styled(" draft", Style::default().fg(Color::Yellow)));
+        meta_spans.push(Span::styled(" draft", Style::default().fg(palette.draft)));
     }
     let meta_line = Line::from(meta_spans);
 
     // Row 2: head → base  ·  optional worktree path  ·  merge/lifecycle state
     let (merge_text, merge_color) = format_merge_status(&pr.state, &pr.mergeable);
     let mut branch_spans = vec![
-        Span::styled(pr.head_ref.clone(), Style::default().fg(Color::Cyan)),
-        Span::styled(" → ", Style::default().fg(Color::DarkGray)),
-        Span::styled(pr.base_ref.clone(), Style::default().fg(Color::Cyan)),
+        Span::styled(pr.head_ref.clone(), Style::default().fg(palette.accent)),
+        Span::styled(" → ", Style::default().fg(palette.separator)),
+        Span::styled(pr.base_ref.clone(), Style::default().fg(palette.accent)),
     ];
     if let Some(entry) = model.worktree_for_pr(pr) {
-        branch_spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
+        branch_spans.push(Span::styled(" · ", Style::default().fg(palette.separator)));
         let reserved_width = spans_display_width(&branch_spans)
             + super::WORKTREE_GLYPH.width()
             + " worktree: ".width()
@@ -133,11 +144,12 @@ fn render_header(model: &Model, pr: &PR, frame: &mut Frame<'_>, area: Rect, now:
         let mut worktree_line = super::worktree_line(
             &entry.path,
             usize::from(area.width).saturating_sub(reserved_width),
+            palette,
         );
         branch_spans.append(&mut worktree_line.spans);
     }
     branch_spans.extend([
-        Span::styled(" · ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" · ", Style::default().fg(palette.separator)),
         Span::styled(merge_text, Style::default().fg(merge_color)),
     ]);
     let branch_line = Line::from(branch_spans);
@@ -145,13 +157,13 @@ fn render_header(model: &Model, pr: &PR, frame: &mut Frame<'_>, area: Rect, now:
     // Row 3: full GitHub URL
     let url_line = Line::from(Span::styled(
         pr.key().html_url(),
-        Style::default().fg(Color::Cyan),
+        Style::default().fg(palette.link),
     ));
 
     // Row 4: divider
     let divider_line = Line::from(Span::styled(
         "─".repeat(area.width as usize),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(palette.separator),
     ));
 
     let lines = vec![title_line, meta_line, branch_line, url_line, divider_line];
@@ -191,7 +203,7 @@ fn render_body(
 
 // ── Status bar ────────────────────────────────────────────────────────────────
 
-fn render_status_bar(model: &Model, frame: &mut Frame<'_>, area: Rect) {
+fn render_status_bar(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
     let bold = Style::default().add_modifier(Modifier::BOLD);
     let resolved_hint = if model.show_resolved {
         " hide resolved  "
@@ -222,5 +234,5 @@ fn render_status_bar(model: &Model, frame: &mut Frame<'_>, area: Rect) {
         Span::raw(" worktree"),
     ]);
     frame.render_widget(Paragraph::new(hints), area);
-    super::render_status_overlay(model, frame, area);
+    super::render_status_overlay(model, frame, area, palette);
 }

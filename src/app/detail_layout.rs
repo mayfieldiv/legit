@@ -10,7 +10,7 @@
 
 use chrono::{DateTime, Utc};
 use ratatui::{
-    style::{Color, Style},
+    style::Style,
     text::{Line, Span},
 };
 
@@ -20,6 +20,7 @@ use crate::{
     github::rest::PR,
     github::types::{CheckRun, FullReviewThread},
     markdown::{self, Block},
+    palette::DARK,
 };
 
 use super::{
@@ -58,7 +59,7 @@ pub(crate) fn render_description_blocks(body: &str) -> Vec<Block> {
     if trimmed.is_empty() {
         vec![Block::Lines(vec![Line::from(Span::styled(
             "No description.",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(DARK.muted),
         ))])]
     } else {
         markdown::render_blocks(trimmed)
@@ -91,19 +92,19 @@ fn checks_section_lines(model: &Model, pr: &PR) -> Vec<Line<'static>> {
         markdown::heading_span(2, "CI Checks"),
         Span::styled(
             format!(" {}/{} passed", summary.passed, summary.total),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(DARK.muted),
         ),
     ];
     if summary.failed > 0 {
         header_spans.push(Span::styled(
             format!(" · {} failed", summary.failed),
-            Style::default().fg(Color::Red),
+            Style::default().fg(DARK.failing),
         ));
     }
     if summary.pending > 0 {
         header_spans.push(Span::styled(
             format!(" · {} pending", summary.pending),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(DARK.pending),
         ));
     }
     lines.push(Line::from(header_spans));
@@ -120,11 +121,11 @@ fn checks_section_lines(model: &Model, pr: &PR) -> Vec<Line<'static>> {
 /// The coloured status badge for one thread (mirrors the TS `ThreadCard` badge).
 fn thread_badge(thread: &FullReviewThread) -> Span<'static> {
     match classify_thread(thread) {
-        ThreadKind::Resolved => Span::styled(" ✓ resolved", Style::default().fg(Color::Green)),
+        ThreadKind::Resolved => Span::styled(" ✓ resolved", Style::default().fg(DARK.passing)),
         ThreadKind::AwaitingReviewer => {
-            Span::styled(" ◐ awaiting reviewer", Style::default().fg(Color::Cyan))
+            Span::styled(" ◐ awaiting reviewer", Style::default().fg(DARK.accent))
         }
-        ThreadKind::Unreplied => Span::styled(" ● unreplied", Style::default().fg(Color::Yellow)),
+        ThreadKind::Unreplied => Span::styled(" ● unreplied", Style::default().fg(DARK.pending)),
     }
 }
 
@@ -136,21 +137,17 @@ fn comment_byline(
     created_at: DateTime<Utc>,
     now: DateTime<Utc>,
 ) -> Line<'static> {
-    let author_color = if is_bot {
-        Color::DarkGray
-    } else {
-        Color::Green
-    };
+    let author_color = if is_bot { DARK.muted } else { DARK.author };
     let mut spans = vec![Span::styled(
         author.to_owned(),
         Style::default().fg(author_color),
     )];
     if is_bot {
-        spans.push(Span::styled(" [bot]", Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(" [bot]", Style::default().fg(DARK.muted)));
     }
     spans.push(Span::styled(
         format!(" · {}", format_age(created_at, now)),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(DARK.muted),
     ));
     Line::from(spans)
 }
@@ -169,11 +166,11 @@ fn section_intro(
     loading: &'static str,
     all_hidden: &'static str,
 ) -> Vec<Line<'static>> {
-    let muted = Style::default().fg(Color::DarkGray);
+    let muted = Style::default().fg(DARK.muted);
     let Some((total, visible)) = counts else {
         return vec![
             Line::from(""),
-            Line::from(Span::styled(loading, Style::default().fg(Color::Yellow))),
+            Line::from(Span::styled(loading, Style::default().fg(DARK.pending))),
         ];
     };
     if total == 0 {
@@ -237,7 +234,7 @@ impl DetailContent {
     ) {
         let focused = self.item_ranges.len() == focused_index;
         let pad = " ".repeat(indent);
-        let border = Style::default().fg(Color::DarkGray);
+        let border = Style::default().fg(DARK.separator);
         // Horizontal rule spanning the row minus the indent and two corners.
         let rule = "─".repeat((width as usize).saturating_sub(indent + 2));
         let (top, bottom) = if focused {
@@ -336,7 +333,7 @@ pub(crate) fn detail_content(
         };
         let mut card = vec![
             Line::from(vec![
-                Span::styled(location, Style::default().fg(Color::Cyan)),
+                Span::styled(location, Style::default().fg(DARK.accent)),
                 thread_badge(thread),
             ]),
             comment_byline(&root.author, root.is_bot, root.created_at, now),
@@ -351,7 +348,7 @@ pub(crate) fn detail_content(
                 comment_byline(&comment.author, comment.is_bot, comment.created_at, now);
             byline
                 .spans
-                .insert(0, Span::styled("↳ ", Style::default().fg(Color::DarkGray)));
+                .insert(0, Span::styled("↳ ", Style::default().fg(DARK.muted)));
             let mut card = vec![byline];
             card.extend(card_body(model, detail, &comment.url, 2, width));
             content.push_card(card, focused_index, 2, width);
@@ -427,7 +424,7 @@ fn collapse_body(body: Vec<Line<'static>>) -> Vec<Line<'static>> {
     out.truncate(COLLAPSED_CARD_BODY_ROWS);
     out.push(Line::from(Span::styled(
         format!("… +{hidden} more lines (truncated)"),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(DARK.muted),
     )));
     out
 }
