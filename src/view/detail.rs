@@ -62,8 +62,9 @@ pub fn render(
     };
 
     // The detail area is split into: header, body (fills remaining), status
-    // bar. The header and status-bar rows are what `detail_layout::CHROME_ROWS`
-    // accounts for when `update` derives the body viewport.
+    // bar. The header and status-bar rows are what `detail_layout::chrome_rows`
+    // accounts for when `update` derives the body viewport — a count that now
+    // varies with the Label Chip band, since the header grows to fit the chips.
     let [header_area, body_area, status_area] = Layout::vertical([
         Constraint::Length(header_height(pr, area.width)),
         Constraint::Min(1),
