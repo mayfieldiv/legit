@@ -167,24 +167,30 @@ pub fn match_worktree<'a>(
         .or_else(|| entries.iter().find(|entry| entry.path == expected_path))
 }
 
-/// Build a `git` invocation with the ambient git environment stripped.
+/// Strip the ambient git environment from a command.
 ///
 /// Git exports `GIT_DIR`/`GIT_WORK_TREE`/etc. to hook subprocesses, and our
 /// `.hooks/pre-push` hook runs `cargo test`. Those variables override `-C` and
 /// `current_dir` when git locates the repository, so without stripping them a
-/// test that drives git against a throwaway sandbox repo would instead operate
+/// command that drives git against a throwaway sandbox repo would instead operate
 /// on the real repository the hook is running inside (appending stray commits,
-/// flipping `core.bare`). Scrubbing them keeps every invocation scoped to the
-/// path we pass it.
-fn git_command() -> Command {
-    let mut command = Command::new("git");
+/// flipping `core.bare`). This applies both to direct `git` calls and to `gh`,
+/// which shells out to `git` — both must be scrubbed.
+fn scrub_git_env(command: &mut Command) -> &mut Command {
     command
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
         .env_remove("GIT_OBJECT_DIRECTORY")
         .env_remove("GIT_COMMON_DIR")
-        .env_remove("GIT_PREFIX");
+        .env_remove("GIT_PREFIX")
+}
+
+/// Build a `git` invocation scoped to the path we pass it, with the ambient git
+/// environment stripped (see [`scrub_git_env`]).
+fn git_command() -> Command {
+    let mut command = Command::new("git");
+    scrub_git_env(&mut command);
     command
 }
 
@@ -245,6 +251,9 @@ fn checkout_pr(target_path: &Path, pr_number: u64) -> anyhow::Result<()> {
         .current_dir(target_path)
         .env_remove("GITHUB_TOKEN")
         .env_remove("GH_TOKEN");
+    // gh shells out to git; scrub the ambient git env so an inherited GIT_DIR
+    // can't redirect the checkout off target_path onto the wrong repository.
+    scrub_git_env(&mut gh);
     run_command("gh pr checkout", &mut gh).map(|_| ())
 }
 
@@ -729,27 +738,37 @@ mod tests {
     }
 
     #[test]
-    fn git_command_strips_ambient_git_env() {
-        // The hermeticity contract: every git invocation scrubs the inherited
-        // git environment so a sandboxed call can't be redirected onto the repo
-        // a hook is running inside. Assert each variable is marked for removal.
-        let envs: Vec<(OsString, Option<OsString>)> = git_command()
-            .get_envs()
-            .map(|(key, value)| (key.to_owned(), value.map(|v| v.to_owned())))
-            .collect();
-        for var in [
-            "GIT_DIR",
-            "GIT_WORK_TREE",
-            "GIT_INDEX_FILE",
-            "GIT_OBJECT_DIRECTORY",
-            "GIT_COMMON_DIR",
-            "GIT_PREFIX",
-        ] {
-            assert!(
-                envs.iter()
-                    .any(|(key, value)| key == std::ffi::OsStr::new(var) && value.is_none()),
-                "git_command should mark {var} for removal, got {envs:?}"
-            );
-        }
+    fn git_env_is_scrubbed_for_git_and_gh_commands() {
+        // The hermeticity contract: every invocation that reaches git scrubs the
+        // inherited git environment so a sandboxed call can't be redirected onto
+        // the repo a hook is running inside. This covers direct `git` calls and
+        // `gh` (which shells out to git). Assert each variable is marked removed.
+        let assert_scrubbed = |label: &str, command: &Command| {
+            let envs: Vec<(OsString, Option<OsString>)> = command
+                .get_envs()
+                .map(|(key, value)| (key.to_owned(), value.map(|v| v.to_owned())))
+                .collect();
+            for var in [
+                "GIT_DIR",
+                "GIT_WORK_TREE",
+                "GIT_INDEX_FILE",
+                "GIT_OBJECT_DIRECTORY",
+                "GIT_COMMON_DIR",
+                "GIT_PREFIX",
+            ] {
+                assert!(
+                    envs.iter()
+                        .any(|(key, value)| key == std::ffi::OsStr::new(var) && value.is_none()),
+                    "{label} should mark {var} for removal, got {envs:?}"
+                );
+            }
+        };
+
+        assert_scrubbed("git_command", &git_command());
+
+        // gh shells out to git, so its command must be scrubbed too.
+        let mut gh = Command::new("gh");
+        scrub_git_env(&mut gh);
+        assert_scrubbed("scrubbed gh command", &gh);
     }
 }
