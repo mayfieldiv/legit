@@ -167,9 +167,30 @@ pub fn match_worktree<'a>(
         .or_else(|| entries.iter().find(|entry| entry.path == expected_path))
 }
 
+/// Build a `git` invocation with the ambient git environment stripped.
+///
+/// Git exports `GIT_DIR`/`GIT_WORK_TREE`/etc. to hook subprocesses, and our
+/// `.hooks/pre-push` hook runs `cargo test`. Those variables override `-C` and
+/// `current_dir` when git locates the repository, so without stripping them a
+/// test that drives git against a throwaway sandbox repo would instead operate
+/// on the real repository the hook is running inside (appending stray commits,
+/// flipping `core.bare`). Scrubbing them keeps every invocation scoped to the
+/// path we pass it.
+fn git_command() -> Command {
+    let mut command = Command::new("git");
+    command
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_OBJECT_DIRECTORY")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_PREFIX");
+    command
+}
+
 pub fn list_worktrees(source_clone: &Path) -> anyhow::Result<Vec<WorktreeEntry>> {
     ensure_source_clone(source_clone)?;
-    let mut command = Command::new("git");
+    let mut command = git_command();
     command
         .arg("-C")
         .arg(source_clone)
@@ -198,7 +219,7 @@ fn create_worktree_for_pr_with_checkout(
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
 
-    let mut git = Command::new("git");
+    let mut git = git_command();
     git.arg("-C")
         .arg(source_clone)
         .args(["worktree", "add", "-d"])
@@ -228,7 +249,7 @@ fn checkout_pr(target_path: &Path, pr_number: u64) -> anyhow::Result<()> {
 }
 
 fn remove_worktree(source_clone: &Path, target_path: &Path) -> anyhow::Result<()> {
-    let mut command = Command::new("git");
+    let mut command = git_command();
     command
         .arg("-C")
         .arg(source_clone)
@@ -288,7 +309,7 @@ fn ensure_source_clone(source_clone: &Path) -> anyhow::Result<()> {
         bail!("source clone {} is not a directory", source_clone.display());
     }
 
-    let mut command = Command::new("git");
+    let mut command = git_command();
     command
         .arg("-C")
         .arg(source_clone)
@@ -378,7 +399,7 @@ mod tests {
     }
 
     fn run_git(args: &[&str], cwd: &Path) -> String {
-        let output = Command::new("git")
+        let output = git_command()
             .args(args)
             .current_dir(cwd)
             .output()
@@ -705,5 +726,30 @@ mod tests {
         };
 
         assert_eq!(key.html_url(), "https://github.com/acme/widgets/pull/42");
+    }
+
+    #[test]
+    fn git_command_strips_ambient_git_env() {
+        // The hermeticity contract: every git invocation scrubs the inherited
+        // git environment so a sandboxed call can't be redirected onto the repo
+        // a hook is running inside. Assert each variable is marked for removal.
+        let envs: Vec<(OsString, Option<OsString>)> = git_command()
+            .get_envs()
+            .map(|(key, value)| (key.to_owned(), value.map(|v| v.to_owned())))
+            .collect();
+        for var in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_COMMON_DIR",
+            "GIT_PREFIX",
+        ] {
+            assert!(
+                envs.iter()
+                    .any(|(key, value)| key == std::ffi::OsStr::new(var) && value.is_none()),
+                "git_command should mark {var} for removal, got {envs:?}"
+            );
+        }
     }
 }
