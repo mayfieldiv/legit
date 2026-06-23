@@ -1,8 +1,9 @@
 //! Pure colour maths for the view layer. Kept dependency-free and
 //! side-effect-free so the colour values a frame paints can be asserted
 //! directly in unit tests. Today it is just `parse_hex`, the primitive the
-//! curated `palette` is defined in terms of; the repo-colour and label-chip
-//! work layer their own helpers (hue hashing, contrast flips) on top later.
+//! curated `palette` is defined in terms of; it is also where any later colour
+//! maths would live (per-repo hue hashing, contrast flips for label chips) if
+//! and when that work lands — none is in flight yet.
 
 use ratatui::style::Color;
 
