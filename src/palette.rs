@@ -9,26 +9,28 @@
 //! (`Color::Reset`) so body copy stays legible on whatever background the user
 //! runs, while the accents and status hues are curated truecolor values.
 
-use std::sync::LazyLock;
-
 use ratatui::style::Color;
 
 use crate::blocker::Tier;
 use crate::color::parse_hex;
 
-/// The single curated palette instance, built once. Every colour in the app
-/// resolves through this: the view layer threads it from here, and the shared
-/// formatting / markdown / detail-layout helpers (whose coloured output is
+/// The single curated palette instance, resolved at compile time. Every colour
+/// in the app resolves through this: the view layer threads it from here, and the
+/// shared formatting / markdown / detail-layout helpers (whose coloured output is
 /// cached in the model or measured by `update`, so they can't take a per-frame
 /// palette argument) read it directly. A future runtime-selected theme replaces
 /// this single source — the additive change ADR 0005 anticipates.
-pub static DARK: LazyLock<Palette> = LazyLock::new(Palette::dark);
+pub const DARK: Palette = Palette::dark();
 
-/// Resolve a palette hex literal. The literals below are compile-time constants
-/// known to be valid six-digit hex, so a parse failure is a programming error,
-/// not a runtime condition.
-fn hex(literal: &str) -> Color {
-    parse_hex(literal).expect("palette colours are valid six-digit hex literals")
+/// Resolve a palette hex literal at compile time. The literals below are valid
+/// six-digit hex by construction, so a malformed one is a programming error —
+/// and because this is `const`, it fails the build rather than panicking at
+/// runtime.
+const fn hex(literal: &str) -> Color {
+    match parse_hex(literal) {
+        Some(color) => color,
+        None => panic!("palette colours are valid six-digit hex literals"),
+    }
 }
 
 /// A curated set of semantic colour roles. Every field is the colour for one
@@ -93,7 +95,7 @@ impl Palette {
     /// semantics (cyan accent, green author/passing, magenta me-blocking, amber
     /// pending/draft, red failing) pinned to balanced dark-background truecolor
     /// values rather than the terminal's sixteen ANSI colours.
-    pub fn dark() -> Self {
+    pub const fn dark() -> Self {
         Self {
             text: Color::Reset,
             muted: hex("#7d8590"),
@@ -135,16 +137,6 @@ impl Palette {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn dark_builds_without_a_malformed_literal() {
-        // `dark()` resolves every role through `parse_hex`; this asserts none of
-        // the literals are malformed (which would panic in `hex`).
-        let palette = Palette::dark();
-        assert_eq!(palette.accent, Color::Rgb(0x56, 0xb6, 0xc2));
-        assert_eq!(palette.author, Color::Rgb(0x98, 0xc3, 0x79));
-        assert_eq!(palette.failing, Color::Rgb(0xe0, 0x6c, 0x75));
-    }
 
     #[test]
     fn text_follows_the_terminal_foreground() {

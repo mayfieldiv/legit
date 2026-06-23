@@ -50,7 +50,7 @@ pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
     // through every render call. The format/markdown/detail-layout helpers read
     // `DARK` directly, so sourcing the view layer from it too keeps a single
     // seam — swap `DARK` and the whole app follows.
-    let palette = &*DARK;
+    let palette = &DARK;
     let area = frame.area();
 
     // Detail view takes the whole frame and manages its own chrome (header + status bar).

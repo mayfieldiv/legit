@@ -12,16 +12,56 @@ use ratatui::style::Color;
 /// hex digits — an empty, short, over-long, or non-hex value — so a malformed
 /// colour (e.g. a label colour GitHub left blank) can fall back to a default
 /// rather than panic.
-pub fn parse_hex(s: &str) -> Option<Color> {
-    let hex = s.strip_prefix('#').unwrap_or(s);
-    if hex.len() != 6 || !hex.is_ascii() {
+///
+/// `const` so the curated `palette` can be a compile-time constant: a malformed
+/// palette literal then fails the build rather than panicking on first use. That
+/// is why the parse is a hand-rolled byte match — `u8::from_str_radix` is not
+/// yet `const`.
+pub const fn parse_hex(s: &str) -> Option<Color> {
+    let bytes = s.as_bytes();
+    // Accept one optional leading '#'. Work on raw bytes throughout: a non-ASCII
+    // input (e.g. a 6-byte multibyte string) has no hex-digit bytes, so it is
+    // rejected below without a UTF-8 boundary panic.
+    let offset = if !bytes.is_empty() && bytes[0] == b'#' {
+        1
+    } else {
+        0
+    };
+    if bytes.len() != 6 + offset {
         return None;
     }
-    // `hex` is six ASCII bytes, so byte-indexing lands on char boundaries.
-    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+    let r = match hex_byte(bytes[offset], bytes[offset + 1]) {
+        Some(v) => v,
+        None => return None,
+    };
+    let g = match hex_byte(bytes[offset + 2], bytes[offset + 3]) {
+        Some(v) => v,
+        None => return None,
+    };
+    let b = match hex_byte(bytes[offset + 4], bytes[offset + 5]) {
+        Some(v) => v,
+        None => return None,
+    };
     Some(Color::Rgb(r, g, b))
+}
+
+/// Combine two hex-digit bytes (high then low nibble) into one byte, or `None`
+/// if either is not a hex digit.
+const fn hex_byte(hi: u8, lo: u8) -> Option<u8> {
+    match (hex_nibble(hi), hex_nibble(lo)) {
+        (Some(hi), Some(lo)) => Some((hi << 4) | lo),
+        _ => None,
+    }
+}
+
+/// One ASCII hex digit (`0-9`, `a-f`, `A-F`) to its 0–15 value, or `None`.
+const fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
