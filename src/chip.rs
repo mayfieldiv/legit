@@ -14,15 +14,19 @@ use ratatui::{
     style::{Color, Style},
     text::Span,
 };
+use unicode_width::UnicodeWidthStr;
 
 use crate::color::{contrast_text, hash_hue, parse_hex};
 use crate::github::rest::Label;
 use crate::palette::Palette;
 
-/// The space a chip occupies on a row: the label name plus one padding column on
-/// each side. Mirrors GHUI's `label.name.length + 2`.
+/// The space a chip occupies on a row: the label name's display width plus one
+/// padding column on each side. Measures terminal display columns (not Unicode
+/// scalar count) so wide glyphs — emoji, CJK — reserve the room ratatui actually
+/// paints, keeping `chip_rows` (and the header band it sizes) in step with the
+/// rendered chips. Mirrors GHUI's `label.name.length + 2`.
 fn chip_width(label: &Label) -> usize {
-    label.name.chars().count() + 2
+    label.name.width() + 2
 }
 
 /// The colour a Label Chip paints as its background: the label's GitHub colour
@@ -171,5 +175,16 @@ mod tests {
     #[test]
     fn chip_rows_is_empty_for_no_labels() {
         assert!(chip_rows(&[], 40).is_empty());
+    }
+
+    #[test]
+    fn chip_rows_measures_display_width_for_wide_glyphs() {
+        // A CJK glyph is two display columns. Two "中" chips (display width 2 ->
+        // chip width 4 each) overflow width 8 once the inter-chip gap is counted,
+        // so they wrap. A scalar-count measure (chip width 3) would pack them on
+        // one row and disagree with what ratatui paints.
+        let labels = vec![label("中", None), label("中", None)];
+        let rows = chip_rows(&labels, 8);
+        assert_eq!(rows.len(), 2, "wide-glyph chips must wrap by display width");
     }
 }
