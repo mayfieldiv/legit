@@ -132,12 +132,6 @@ impl Palette {
     }
 }
 
-impl Default for Palette {
-    fn default() -> Self {
-        Self::dark()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
