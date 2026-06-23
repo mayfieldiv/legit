@@ -1066,13 +1066,19 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
         }
         // The per-PR enrichment arrivals — threads, reviews, issue-comments —
         // each stamp the PR's Fetch Age clock. They are the PrKey-keyed pieces
-        // of one PR's fan-out, so the latest arrival overwrites the stamp to
-        // "now": a logical fetch (initial enrichment or a Refresh re-enriching)
-        // lands them in one batch, all carrying the same processing `now`, so
-        // the stamps coincide rather than stacking. `ChecksArrived` is keyed by
-        // (repo, head SHA) and shared across same-commit PRs, so it maps to no
-        // single PR and deliberately leaves the clock alone — threads/reviews
-        // already cover the PR's fetch.
+        // of one PR's fan-out, but they arrive as independent async messages,
+        // each processed at its own `now` in `process_msg`, so the stamps do
+        // NOT coincide: the later arrival simply overwrites with its own `now`,
+        // and the displayed age tracks the last piece of the fetch to land.
+        //
+        // Two PrKey-keyed siblings deliberately do not stamp.
+        // `ChecksArrived` is keyed by (repo, head SHA) and shared across
+        // same-commit PRs, so it maps to no single PR and leaves the clock
+        // alone. `FilesArrived` is PrKey-keyed and part of the same RefreshPr
+        // fan-out, but it too leaves the clock alone: the threads/reviews/
+        // issue-comments trio already covers a PR's fetch arrival (and
+        // `RefreshComplete` covers the refresh path), so a fourth stamp would be
+        // redundant.
         Msg::ThreadsArrived { pr, threads } => {
             model.stamp_fetched(pr.clone(), now);
             model.enrichment.store_threads(pr, threads);

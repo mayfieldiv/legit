@@ -93,8 +93,11 @@ fn process_msg(
     limiter: &Arc<NetworkLimiter>,
 ) {
     tracing::debug!(?msg, "processing message");
-    // The reducer's clock: the instant this message is processed, the same
-    // wall-clock the next frame's view reads. The Fetch Age stamps record it.
+    // The reducer's clock: the instant this message is processed. The Fetch Age
+    // stamps record it. It is NOT the wall-clock the view reads — each draw
+    // samples its own, later `chrono::Utc::now()` (lines 62/82), so the reducer
+    // clock is just a past instant the view-now is measured against when
+    // computing the displayed age.
     let cmds = update(model, msg, chrono::Utc::now());
     if !cmds.is_empty() {
         tracing::debug!(commands = cmds.len(), "update returned commands");
