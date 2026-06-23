@@ -128,6 +128,19 @@ fn render_header(
         Span::styled(" · ", Style::default().fg(palette.separator)),
         Span::raw(format_size(pr.additions, pr.deletions)),
     ];
+    // Fetch Age: how stale legit's copy of this PR is. It rides the meta row
+    // (rather than its own line) so the pinned header height is unchanged. The
+    // "fetched " label is muted like the sibling "created"/"updated" labels, and
+    // the wording stays distinct from GitHub's "updated Y" activity time so the
+    // local staleness signal is never confused with it. Omitted until the PR has
+    // been fetched (no stamp), so an unfetched PR shows no misleading age.
+    if let Some(fetched_at) = model.fetched_at(&pr.key()) {
+        meta_spans.extend([
+            Span::styled(" · ", Style::default().fg(palette.separator)),
+            Span::styled("fetched ", Style::default().fg(palette.muted)),
+            Span::raw(format!("{} ago", format_age(fetched_at, now))),
+        ]);
+    }
     if pr.is_draft {
         meta_spans.push(Span::styled(" draft", Style::default().fg(palette.draft)));
     }

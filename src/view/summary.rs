@@ -112,6 +112,19 @@ fn identity_lines(
         Span::raw(format_age(pr.updated_at, now)),
     ]));
 
+    // Fetch Age: how stale legit's copy of this PR is, on its own line below
+    // GitHub's created/updated activity times. The leading "fetched " label is
+    // muted like its siblings and the wording stays distinct from "updated" so
+    // the local staleness signal is never confused with GitHub's `updated_at`.
+    // Omitted entirely until the PR has been fetched (no stamp yet), so an
+    // unfetched PR never shows a misleading "now".
+    if let Some(fetched_at) = model.fetched_at(&pr.key()) {
+        lines.push(Line::from(vec![
+            Span::styled("fetched ", Style::default().fg(palette.muted)),
+            Span::raw(format!("{} ago", format_age(fetched_at, now))),
+        ]));
+    }
+
     lines
 }
 
