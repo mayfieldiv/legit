@@ -60,11 +60,12 @@ pub fn format_age(then: DateTime<Utc>, now: DateTime<Utc>) -> String {
 }
 
 /// The styled spans for a PR's Fetch Age — the muted `fetched ` label plus the
-/// `<age> ago` value: `fetched 2m ago`. The single source of truth for the
-/// staleness signal's painted content, shared by the summary panel (which wraps
-/// it in its own line) and the detail header (which prepends a ` · ` separator
-/// and extends its meta row). Mirrors `check_cell_spans`: the caller owns the
-/// surrounding layout, this owns the cell.
+/// `<age> ago` value (`fetched 2m ago`), or `fetched just now` within the first
+/// minute. The single source of truth for the staleness signal's painted
+/// content, shared by the summary panel (which wraps it in its own line) and the
+/// detail header (which prepends a ` · ` separator and extends its meta row).
+/// Mirrors `check_cell_spans`: the caller owns the surrounding layout, this owns
+/// the cell.
 ///
 /// `None` (the PR has no Fetch Age stamp yet — see CONTEXT.md "Fetch Age")
 /// returns an empty `Vec`, so an unfetched PR shows no misleading "now". The
@@ -78,9 +79,15 @@ pub fn fetched_age_spans(
     let Some(fetched_at) = fetched_at else {
         return Vec::new();
     };
+    // `format_age` returns "now" for anything under a minute; "now ago" reads
+    // wrong, so the just-fetched case gets its own phrasing.
+    let value = match format_age(fetched_at, now).as_str() {
+        "now" => "just now".to_owned(),
+        age => format!("{age} ago"),
+    };
     vec![
         Span::styled("fetched ", Style::default().fg(palette.muted)),
-        Span::raw(format!("{} ago", format_age(fetched_at, now))),
+        Span::raw(value),
     ]
 }
 
@@ -779,6 +786,16 @@ mod tests {
         assert_eq!(spans[0].content.as_ref(), "fetched ");
         assert_eq!(spans[0].style.fg, Some(DARK.muted));
         assert_eq!(spans[1].style.fg, None);
+    }
+
+    #[test]
+    fn fetched_age_spans_reads_just_now_within_the_first_minute() {
+        // Under a minute old, format_age yields "now"; the line must read
+        // "fetched just now", never the ungrammatical "fetched now ago".
+        let fetched = now() - chrono::Duration::seconds(20);
+        let spans = fetched_age_spans(Some(fetched), now(), &DARK);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "fetched just now");
     }
 
     #[test]
