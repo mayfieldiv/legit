@@ -29,6 +29,7 @@ use ratatui::{
 use crate::{
     app::detail_layout::{HEADER_HEIGHT, detail_content},
     app::model::{DetailState, Model},
+    color::repo_color,
     format::{format_age, format_merge_status, format_size},
     github::rest::PR,
     markdown::Block,
@@ -112,7 +113,10 @@ fn render_header(
     let mut meta_spans = vec![
         Span::styled(pr.author.clone(), Style::default().fg(palette.author)),
         Span::styled(" · ", Style::default().fg(palette.separator)),
-        Span::styled(pr.repo_slug.clone(), Style::default().fg(palette.accent)),
+        Span::styled(
+            pr.repo_slug.clone(),
+            Style::default().fg(repo_color(&pr.repo_slug)),
+        ),
         Span::styled(" · ", Style::default().fg(palette.separator)),
         Span::styled("created ", Style::default().fg(palette.muted)),
         Span::raw(format_age(pr.created_at, now)),

@@ -8,9 +8,10 @@ use ratatui::{
 };
 
 use crate::{
-    app::grouping::DisplayRow,
+    app::grouping::{DisplayRow, Grouping},
     app::model::Model,
-    blocker::{BlockerResult, Tier, compact_next_action},
+    blocker::{BlockerResult, compact_next_action},
+    color::repo_color,
     format::{
         CheckOutcome, comment_counts, format_age, format_repo_short, format_review_state, outcome,
         pad_to_width, truncate, truncate_middle,
@@ -73,7 +74,7 @@ pub fn render(
     let lines: Vec<Line<'_>> = pr_list
         .visible_rows()
         .map(|(row, selected)| match row {
-            DisplayRow::Header(label) => header_line(label, width, palette),
+            DisplayRow::Header(label) => header_line(label, model.list.grouping(), width, palette),
             DisplayRow::Pr(index) => {
                 let pr = &prs[*index];
                 row_line(pr, model, &layout, now, selected, palette)
@@ -164,18 +165,26 @@ fn centered_ellipsis(width: usize) -> String {
     format!("{}…{}", " ".repeat(left), " ".repeat(right))
 }
 
-/// A group header row: `── <label> ` in the accent colour, padded to the row
-/// width. Visually distinct from PR rows (the leading rule and colour).
-fn header_line(label: &str, width: u16, palette: &Palette) -> Line<'static> {
+/// A group header row: `── <label> `, padded to the row width and bolded.
+/// Visually distinct from PR rows (the leading rule and colour). A repo group's
+/// header takes the repo's stable Repo Color so the boundaries between repos are
+/// obvious; every other grouping keeps the accent colour (Smart-status tier
+/// headers keep their accent rather than borrowing a tier colour, so tier
+/// meaning stays a property of the action cell, not the header rule).
+fn header_line(label: &str, grouping: Grouping, width: u16, palette: &Palette) -> Line<'static> {
     let text = pad_to_width(
         &format!("{}── {label} ", " ".repeat(WORKTREE_COL + GAP)),
         width as usize,
     );
+    // Under repo grouping the header label is the repo slug (`parse_pr` always
+    // stamps a non-empty `owner/repo`), so it resolves to that repo's colour.
+    let fg = match grouping {
+        Grouping::Repo => repo_color(label),
+        _ => palette.accent,
+    };
     Line::from(Span::styled(
         text,
-        Style::default()
-            .fg(palette.accent)
-            .add_modifier(Modifier::BOLD),
+        Style::default().fg(fg).add_modifier(Modifier::BOLD),
     ))
 }
 
@@ -332,14 +341,13 @@ fn row_line(
             .add_modifier(Modifier::BOLD),
     );
     if layout.show_repo {
-        // The repo cell reuses the me-blocking tier role (the port's mapping for
-        // the TS selfHighlight colour). A dedicated stable per-repo hue lands
-        // with Repo Color (#83); until then this keeps the existing treatment.
+        // The repo cell takes the repo's stable Repo Color, so a mixed All-tab
+        // list groups visually by repo while scanning.
         let repo = truncate_middle(format_repo_short(&pr.repo_slug), REPO_COL);
         cells.push(Cell {
             text: repo,
             width: REPO_COL,
-            style: Style::default().fg(palette.tier(Tier::MeBlocking)),
+            style: Style::default().fg(repo_color(&pr.repo_slug)),
         });
     }
     let title_slot = cells.len();
