@@ -12,7 +12,7 @@ use crate::app::list_layout;
 use crate::app::model::{Model, StatusKind, ViewMode};
 use crate::format::{abbreviate_home, truncate_middle};
 use crate::git_remote::RepoInfo;
-use crate::palette::Palette;
+use crate::palette::{DARK, Palette};
 
 pub mod detail;
 pub mod list;
@@ -46,15 +46,16 @@ fn grouping_label(model: &Model) -> &'static str {
 }
 
 pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
-    // The one curated palette, built once per frame and threaded through every
-    // render call (ADR 0005). It is the seam a future terminal-derived theme
-    // drops into — swap what is built here and every call site follows.
-    let palette = Palette::dark();
+    // The one curated palette (ADR 0005): the shared `DARK` instance, threaded
+    // through every render call. The format/markdown/detail-layout helpers read
+    // `DARK` directly, so sourcing the view layer from it too keeps a single
+    // seam — swap `DARK` and the whole app follows.
+    let palette = &*DARK;
     let area = frame.area();
 
     // Detail view takes the whole frame and manages its own chrome (header + status bar).
     if let ViewMode::Detail(detail) = &model.view_mode {
-        detail::render(model, detail, frame, area, now, &palette);
+        detail::render(model, detail, frame, area, now, palette);
         return;
     }
 
@@ -74,10 +75,10 @@ pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
     ])
     .areas(area);
 
-    render_app_header(model, frame, header, &palette);
-    render_tabs(model, frame, tabs, &palette);
+    render_app_header(model, frame, header, palette);
+    render_tabs(model, frame, tabs, palette);
     if filter_visible {
-        render_filter_chip(model, frame, chip, &palette);
+        render_filter_chip(model, frame, chip, palette);
     }
     // Split the main region into the list and the summary panel when the
     // terminal is wide enough; below 80 columns the list takes the whole row.
@@ -91,13 +92,13 @@ pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
                 Constraint::Length(panel_width),
             ])
             .areas(main);
-            list::render(model, frame, list_area, now, &palette);
-            render_summary_divider(frame, divider_area, &palette);
-            summary::render(model, frame, summary_area, now, &palette);
+            list::render(model, frame, list_area, now, palette);
+            render_summary_divider(frame, divider_area, palette);
+            summary::render(model, frame, summary_area, now, palette);
         }
-        None => list::render(model, frame, main, now, &palette),
+        None => list::render(model, frame, main, now, palette),
     }
-    render_status(model, frame, status, &palette);
+    render_status(model, frame, status, palette);
 }
 
 fn render_app_header(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
