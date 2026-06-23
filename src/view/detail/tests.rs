@@ -160,6 +160,20 @@ fn check(name: &str, status: &str, conclusion: Option<&str>) -> CheckRun {
         name: name.to_owned(),
         status: status.to_owned(),
         conclusion: conclusion.map(str::to_owned),
+        started_at: None,
+        completed_at: None,
+    }
+}
+
+/// A completed check with a Check Duration of `seconds` (both endpoints present).
+fn timed_check(name: &str, conclusion: &str, seconds: i64) -> CheckRun {
+    let started = chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 5, 20, 12, 0, 0).unwrap();
+    CheckRun {
+        name: name.to_owned(),
+        status: "completed".to_owned(),
+        conclusion: Some(conclusion.to_owned()),
+        started_at: Some(started),
+        completed_at: Some(started + chrono::Duration::seconds(seconds)),
     }
 }
 
@@ -506,6 +520,67 @@ fn detail_with_checks_shows_summary_and_rows() {
         rows.iter().any(|r| r.contains("deploy")),
         "deploy check must render: {rows:?}"
     );
+}
+
+#[test]
+fn detail_checks_grid_is_two_column_with_durations() {
+    // Four passing checks with distinct durations, so they sort slowest-first
+    // and land two per row. The grid is row-major: column one then column two.
+    let checks = vec![
+        timed_check("alpha", "success", 600), // 10m
+        timed_check("bravo", "success", 300), // 5m
+        timed_check("charlie", "success", 120),
+        check("delta", "completed", Some("success")), // untimed
+    ];
+    let model = model_in_detail_with_checks(sample_pr(), "", checks);
+
+    let terminal = render_snapshot(&model, 80, 20);
+    let rows = buffer_text(&terminal);
+
+    // The two slowest share the first grid row (two columns side by side).
+    let first_grid_row = rows
+        .iter()
+        .find(|r| r.contains("alpha"))
+        .unwrap_or_else(|| panic!("alpha row: {rows:?}"));
+    assert!(
+        first_grid_row.contains("bravo"),
+        "two checks share a grid row (two columns): {first_grid_row:?}"
+    );
+    // A timed check shows its duration; the untimed one shows none. `delta` is
+    // the trailing (untimed) cell, so the text from its name to end of row must
+    // carry no duration token (a leading digit + s/m).
+    assert!(first_grid_row.contains("10m"), "alpha duration: {rows:?}");
+    let delta_row = rows
+        .iter()
+        .find(|r| r.contains("delta"))
+        .unwrap_or_else(|| panic!("delta row: {rows:?}"));
+    let after_delta = &delta_row[delta_row.find("delta").unwrap()..];
+    let delta_has_duration = after_delta
+        .as_bytes()
+        .windows(2)
+        .any(|w| w[0].is_ascii_digit() && (w[1] == b's' || w[1] == b'm'));
+    assert!(
+        !delta_has_duration,
+        "untimed check shows no duration after its name: {after_delta:?}"
+    );
+}
+
+#[test]
+fn detail_checks_grid_caps_at_eight_with_overflow() {
+    let checks: Vec<CheckRun> = (0..11)
+        .map(|i| check(&format!("chk{i:02}"), "completed", Some("success")))
+        .collect();
+    let model = model_in_detail_with_checks(sample_pr(), "", checks);
+
+    let terminal = render_snapshot(&model, 80, 24);
+    let rows = buffer_text(&terminal);
+    let joined = rows.join("\n");
+
+    let rendered = (0..11)
+        .filter(|i| joined.contains(&format!("chk{i:02}")))
+        .count();
+    assert_eq!(rendered, 8, "eight checks render in the grid: {rows:?}");
+    assert!(joined.contains("+3 more"), "overflow line: {rows:?}");
 }
 
 #[test]

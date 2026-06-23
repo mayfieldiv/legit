@@ -128,6 +128,21 @@ fn check(name: &str, status: &str, conclusion: Option<&str>) -> crate::github::t
         name: name.to_owned(),
         status: status.to_owned(),
         conclusion: conclusion.map(str::to_owned),
+        started_at: None,
+        completed_at: None,
+    }
+}
+
+/// A completed check carrying both endpoints, so it has a Check Duration of
+/// `seconds`. Used by the grid snapshot tests to assert a duration renders.
+fn timed_check(name: &str, conclusion: &str, seconds: i64) -> crate::github::types::CheckRun {
+    let started = fixed_now();
+    crate::github::types::CheckRun {
+        name: name.to_owned(),
+        status: "completed".to_owned(),
+        conclusion: Some(conclusion.to_owned()),
+        started_at: Some(started),
+        completed_at: Some(started + chrono::Duration::seconds(seconds)),
     }
 }
 
@@ -443,7 +458,7 @@ fn threads_show_loading_until_arrived() {
 }
 
 #[test]
-fn renders_check_counts_and_rows_for_non_passing_only() {
+fn renders_check_counts_and_rows_for_all_outcomes() {
     let mut model = model_with_selected(sample_pr(42, "Add the thing"));
     with_checks(
         &mut model,
@@ -461,13 +476,69 @@ fn renders_check_counts_and_rows_for_non_passing_only() {
     assert!(joined.contains("1 failed"), "failed count: {rows:?}");
     assert!(joined.contains("1 pending"), "pending count: {rows:?}");
     assert!(joined.contains("passed"), "passed count: {rows:?}");
-    // Non-passing checks get their own rows; the passing one does not.
+    // Every outcome now gets its own row, passing checks included.
     assert!(joined.contains("lint"), "failed check row: {rows:?}");
     assert!(joined.contains("deploy"), "pending check row: {rows:?}");
-    assert!(
-        !joined.contains("build"),
-        "passing check must not get its own row: {rows:?}"
+    assert!(joined.contains("build"), "passing check row: {rows:?}");
+}
+
+#[test]
+fn checks_summary_panel_is_single_column_with_durations() {
+    let mut model = model_with_selected(sample_pr(42, "Add the thing"));
+    with_checks(
+        &mut model,
+        "abc123",
+        vec![
+            timed_check("build", "success", 150), // 2m
+            timed_check("lint", "success", 30),   // 30s
+            check("untimed", "completed", Some("success")),
+        ],
     );
+
+    let rows = panel_rows(&model, 140, 30);
+    // Each check sits on its own row (single column): no row carries two check
+    // names side by side.
+    let build_row = rows
+        .iter()
+        .find(|r| r.contains("build"))
+        .unwrap_or_else(|| panic!("build row: {rows:?}"));
+    assert!(
+        !build_row.contains("lint") && !build_row.contains("untimed"),
+        "summary is single column: {build_row:?}"
+    );
+    // A timed check shows its duration; the untimed one shows none.
+    assert!(build_row.contains("2m"), "build duration: {build_row:?}");
+    let untimed_row = rows
+        .iter()
+        .find(|r| r.contains("untimed"))
+        .unwrap_or_else(|| panic!("untimed row: {rows:?}"));
+    // No digit-followed-by-s/m duration token on the untimed row.
+    let has_duration_token = untimed_row
+        .as_bytes()
+        .windows(2)
+        .any(|w| w[0].is_ascii_digit() && (w[1] == b's' || w[1] == b'm'));
+    assert!(
+        !has_duration_token,
+        "untimed check shows no duration: {untimed_row:?}"
+    );
+}
+
+#[test]
+fn checks_summary_panel_caps_at_eight_with_overflow() {
+    let mut model = model_with_selected(sample_pr(42, "Add the thing"));
+    let checks: Vec<crate::github::types::CheckRun> = (0..11)
+        .map(|i| check(&format!("check-{i:02}"), "completed", Some("success")))
+        .collect();
+    with_checks(&mut model, "abc123", checks);
+
+    let rows = panel_rows(&model, 140, 40);
+    let joined = rows.join("\n");
+    // Eleven checks: eight rows render, three collapse into the overflow line.
+    let rendered = (0..11)
+        .filter(|i| joined.contains(&format!("check-{i:02}")))
+        .count();
+    assert_eq!(rendered, 8, "eight checks render: {rows:?}");
+    assert!(joined.contains("+3 more"), "overflow line: {rows:?}");
 }
 
 #[test]

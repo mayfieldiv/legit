@@ -52,6 +52,8 @@ fn check(name: &str, status: &str, conclusion: Option<&str>) -> CheckRun {
         name: name.to_owned(),
         status: status.to_owned(),
         conclusion: conclusion.map(str::to_owned),
+        started_at: None,
+        completed_at: None,
     }
 }
 

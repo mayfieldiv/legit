@@ -23,20 +23,14 @@ use ratatui::{
 use crate::app::model::{FilesState, Model};
 use crate::chip::label_lines;
 use crate::format::{
-    CheckOutcome, check_row, checks_summary, comment_counts, format_age, format_merge_status,
-    format_review_state, format_size, outcome, review_icon, reviews_summary, sort_check_runs,
-    truncate,
+    check_row, checks_summary, comment_counts, format_age, format_merge_status,
+    format_review_state, format_size, review_icon, reviews_summary, truncate, visible_checks,
 };
 use crate::github::rest::PR;
-use crate::github::types::CheckRun;
 use crate::palette::Palette;
 
 /// Placeholder text for a section whose enrichment hasn't arrived yet.
 const LOADING: &str = "Loading…";
-
-/// Max number of individual check rows before collapsing the rest into a
-/// `+N more` line. Mirrors the TS `MAX_VISIBLE_CHECKS`.
-const MAX_VISIBLE_CHECKS: usize = 6;
 
 #[cfg(test)]
 mod tests;
@@ -260,10 +254,12 @@ fn threads_line(model: &Model, pr: &PR, palette: &Palette) -> Line<'static> {
 }
 
 /// The CI checks section: a `checks` header with failed / pending / passed
-/// counts, then one indented row per failed, pending, or action-required check
-/// (passing checks are summarised by the count alone). `Loading…` until the
-/// checks fetch arrives — which can't start until review-status reports the
-/// PR's head SHA, so a PR with no head SHA also reads as loading.
+/// counts (always over ALL checks), then one indented row per check of any
+/// outcome — ordered failing-first, then slowest, then name — capped at eight
+/// with a `+N more` overflow line. A single column, mirroring the detail view's
+/// grid ordering. `Loading…` until the checks fetch arrives — which can't start
+/// until review-status reports the PR's head SHA, so a PR with no head SHA also
+/// reads as loading.
 fn checks_lines(model: &Model, pr: &PR, palette: &Palette) -> Vec<Line<'static>> {
     let Some(checks) = model.enrichment.checks_for(pr) else {
         return vec![header_with_loading("checks", palette)];
@@ -294,20 +290,13 @@ fn checks_lines(model: &Model, pr: &PR, palette: &Palette) -> Vec<Line<'static>>
     ));
     let mut lines = vec![Line::from(header)];
 
-    // Per-check rows for the non-passing checks only, sorted (failing first,
-    // then by name) and capped, mirroring the TS `sortCheckRuns` + visible cap.
-    // Classifying via `outcome` keeps this filter in lockstep with the header
-    // counts above, which `checks_summary` derives from the same predicate.
-    let mut non_passing: Vec<&CheckRun> = checks
-        .iter()
-        .filter(|c| outcome(c) != CheckOutcome::Passed)
-        .collect();
-    sort_check_runs(&mut non_passing);
-
-    for check in non_passing.iter().take(MAX_VISIBLE_CHECKS) {
+    // Up to eight checks of ANY outcome, ordered failing-first then slowest via
+    // the shared `visible_checks` selection (the same ordering and cap the
+    // detail grid draws from). The header counts above still tally ALL checks.
+    let (visible, overflow) = visible_checks(checks);
+    for check in visible {
         lines.push(check_row(check));
     }
-    let overflow = non_passing.len().saturating_sub(MAX_VISIBLE_CHECKS);
     if overflow > 0 {
         lines.push(Line::from(Span::styled(
             format!("  +{overflow} more"),

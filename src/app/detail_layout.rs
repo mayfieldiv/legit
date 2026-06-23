@@ -13,12 +13,13 @@ use ratatui::{
     style::Style,
     text::{Line, Span},
 };
+use unicode_width::UnicodeWidthStr;
 
 use crate::{
     blocker::{ThreadKind, classify_thread},
-    format::{check_row, checks_summary, format_age, sort_check_runs},
+    format::{check_cell_spans, checks_summary, format_age, visible_checks},
     github::rest::PR,
-    github::types::{CheckRun, FullReviewThread},
+    github::types::FullReviewThread,
     markdown::{self, Block},
     palette::DARK,
 };
@@ -98,15 +99,23 @@ pub(crate) fn render_description_blocks(body: &str) -> Vec<Block> {
     }
 }
 
+/// Number of columns in the detail view's checks grid. The wide detail body
+/// lays checks out two-up; the narrower summary panel uses one (its own
+/// `summary::checks_lines`).
+const CHECKS_GRID_COLUMNS: usize = 2;
+
 /// Build the CI checks section lines: blank separator + bold header with
-/// pass/fail/pending counts + one row per check (sorted failing-first, then
-/// pending, then passed). Returns an empty `Vec` when checks haven't arrived
-/// for this PR's commit or the check list is empty. Mirrors `summary::checks_lines`.
+/// pass/fail/pending counts (over ALL checks) + a two-column grid of up to
+/// eight checks of any outcome, ordered failing-first then slowest, with a
+/// `+N more` overflow line beyond eight. Returns an empty `Vec` when checks
+/// haven't arrived for this PR's commit or the check list is empty. Shares the
+/// `visible_checks` selection and `check_cell_spans` content with
+/// `summary::checks_lines`; only the column count differs.
 ///
 /// Part of the measured layout: the checks section is appended to the
 /// description per-frame (so late-arriving checks show without a re-fetch),
 /// so the true content height — and thus the max scroll offset — includes it.
-fn checks_section_lines(model: &Model, pr: &PR) -> Vec<Line<'static>> {
+fn checks_section_lines(model: &Model, pr: &PR, width: u16) -> Vec<Line<'static>> {
     let Some(checks) = model.enrichment.checks_for(pr) else {
         return Vec::new();
     };
@@ -141,10 +150,36 @@ fn checks_section_lines(model: &Model, pr: &PR) -> Vec<Line<'static>> {
     }
     lines.push(Line::from(header_spans));
 
-    // All check rows, sorted (failing first, then pending, then passed).
-    let mut sorted: Vec<&CheckRun> = checks.iter().collect();
-    sort_check_runs(&mut sorted);
-    lines.extend(sorted.into_iter().map(check_row));
+    // Up to eight checks of any outcome, ordered failing-first then slowest,
+    // laid out row-major into two columns (the wide detail body uses the
+    // horizontal space; the summary panel's single column draws from the same
+    // selection). The header counts above still tally ALL checks.
+    let (visible, overflow) = visible_checks(checks);
+    let col_width = (usize::from(width) / CHECKS_GRID_COLUMNS).max(1);
+    for row in visible.chunks(CHECKS_GRID_COLUMNS) {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        for (col, check) in row.iter().enumerate() {
+            let cell = check_cell_spans(check);
+            // Pad every cell but the last in the row out to the column width so
+            // the second column aligns. The trailing cell is left unpadded.
+            if col + 1 < row.len() {
+                let used: usize = cell.iter().map(|s| s.content.width()).sum();
+                spans.extend(cell);
+                if used < col_width {
+                    spans.push(Span::raw(" ".repeat(col_width - used)));
+                }
+            } else {
+                spans.extend(cell);
+            }
+        }
+        lines.push(Line::from(spans));
+    }
+    if overflow > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("+{overflow} more"),
+            Style::default().fg(DARK.muted),
+        )));
+    }
     lines
 }
 
@@ -345,7 +380,7 @@ pub(crate) fn detail_content(
     content.item_ranges.push(0..description.len());
     content.lines.extend(description);
 
-    content.lines.extend(checks_section_lines(model, pr));
+    content.lines.extend(checks_section_lines(model, pr, width));
 
     // ── Review Threads ──
     content.lines.extend(section_intro(

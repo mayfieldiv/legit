@@ -236,15 +236,40 @@ pub fn check_sort_group(check: &CheckRun) -> u8 {
     }
 }
 
-/// Sort `checks` in place by sort group then name. Mirrors the TS
-/// `sortCheckRuns` (which returns a sorted copy); callers that need the
-/// original order untouched sort a borrowed slice of references.
+/// Sort `checks` in place by outcome priority, then Check Duration descending
+/// (slowest first), then name. A check with no duration sorts as if it has the
+/// shortest duration within its outcome group, so completed/timed checks
+/// surface above untimed ones; name is the final stable tiebreak. Callers that
+/// need the original order untouched sort a borrowed slice of references.
 pub fn sort_check_runs(checks: &mut [&CheckRun]) {
     checks.sort_by(|a, b| {
         check_sort_group(a)
             .cmp(&check_sort_group(b))
+            // Descending by duration: an absent duration is treated as the
+            // shortest (zero), so it sorts below any timed check in its group.
+            .then_with(|| {
+                b.duration()
+                    .unwrap_or_default()
+                    .cmp(&a.duration().unwrap_or_default())
+            })
             .then(a.name.cmp(&b.name))
     });
+}
+
+/// Render a Check Duration as a short human string. `None` (an untimed check)
+/// renders as the empty string — never a zero or placeholder. Sub-minute spans
+/// read in seconds (`45s`); a minute or more reads in whole minutes (`3m`),
+/// matching the compact, lossy posture of `format_age`.
+pub fn format_duration(duration: Option<chrono::Duration>) -> String {
+    let Some(duration) = duration else {
+        return String::new();
+    };
+    let seconds = duration.num_seconds().max(0);
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else {
+        format!("{}m", seconds / 60)
+    }
 }
 
 /// Icon + colour for a check run. Mirrors the TS `checkIcon`.
@@ -263,17 +288,53 @@ pub fn check_icon(check: &CheckRun) -> (&'static str, Color) {
     }
 }
 
-/// One indented check row — two spaces, the coloured status icon from
-/// `check_icon`, then the check name: `  ✓ build`. The single source of truth
-/// for a check row, shared by the summary panel and the detail view so the
-/// indent, icon colouring, and name spacing stay identical.
-pub fn check_row(check: &CheckRun) -> Line<'static> {
+/// The styled spans for one check cell — the coloured status icon from
+/// `check_icon`, the check name, and (when present) the muted Check Duration:
+/// `✓ build 2m`. The single source of truth for a check's painted content,
+/// shared by the summary panel's single column and the detail view's grid so
+/// the icon colouring and duration treatment stay identical. The two-space
+/// indent lives in `check_row`/the grid layout, not here.
+pub fn check_cell_spans(check: &CheckRun) -> Vec<Span<'static>> {
     let (icon, color) = check_icon(check);
-    Line::from(vec![
-        Span::raw("  "),
+    let mut spans = vec![
         Span::styled(icon, Style::default().fg(color)),
         Span::raw(format!(" {}", check.name)),
-    ])
+    ];
+    let duration = format_duration(check.duration());
+    if !duration.is_empty() {
+        spans.push(Span::styled(
+            format!(" {duration}"),
+            Style::default().fg(DARK.muted),
+        ));
+    }
+    spans
+}
+
+/// One indented check row for the summary panel's single column — two spaces
+/// then `check_cell_spans`: `  ✓ build 2m`. The single source of truth for a
+/// summary check row so the indent and content stay identical to the detail
+/// grid's cells.
+pub fn check_row(check: &CheckRun) -> Line<'static> {
+    let mut spans = vec![Span::raw("  ")];
+    spans.extend(check_cell_spans(check));
+    Line::from(spans)
+}
+
+/// Maximum number of individual check rows rendered before the remainder
+/// collapses into a single `+N more` overflow line. Shared by the summary panel
+/// and the detail view so both draw the same eight checks.
+pub const MAX_VISIBLE_CHECKS: usize = 8;
+
+/// Order `checks` via `sort_check_runs` and split into the up-to-eight visible
+/// checks and the overflow count (checks beyond the cap). The single source of
+/// truth for the eight-cap/overflow rule, shared by the summary panel and the
+/// detail view so both show the same checks and the same `+N more`.
+pub fn visible_checks(checks: &[CheckRun]) -> (Vec<&CheckRun>, usize) {
+    let mut sorted: Vec<&CheckRun> = checks.iter().collect();
+    sort_check_runs(&mut sorted);
+    let overflow = sorted.len().saturating_sub(MAX_VISIBLE_CHECKS);
+    sorted.truncate(MAX_VISIBLE_CHECKS);
+    (sorted, overflow)
 }
 
 /// The three-way classification of a check run's outcome. The single source of
@@ -417,11 +478,12 @@ mod tests {
     use unicode_width::UnicodeWidthStr;
 
     use super::{
-        CheckOutcome, ChecksSummary, CommentCounts, ReviewsSummary, abbreviate_home,
-        abbreviate_home_with, check_icon, check_row, check_sort_group, checks_summary,
-        comment_counts, format_age, format_merge_status, format_mergeable, format_repo_short,
-        format_review_state, format_size, outcome, pad_to_width, review_icon, reviews_summary,
-        sort_check_runs, truncate, truncate_middle,
+        CheckOutcome, ChecksSummary, CommentCounts, MAX_VISIBLE_CHECKS, ReviewsSummary,
+        abbreviate_home, abbreviate_home_with, check_icon, check_row, check_sort_group,
+        checks_summary, comment_counts, format_age, format_duration, format_merge_status,
+        format_mergeable, format_repo_short, format_review_state, format_size, outcome,
+        pad_to_width, review_icon, reviews_summary, sort_check_runs, truncate, truncate_middle,
+        visible_checks,
     };
     use crate::github::types::{CheckRun, FullReviewThread, PRState, Review, ReviewComment};
     use crate::palette::DARK;
@@ -435,6 +497,21 @@ mod tests {
             name: name.to_owned(),
             status: status.to_owned(),
             conclusion: conclusion.map(str::to_owned),
+            started_at: None,
+            completed_at: None,
+        }
+    }
+
+    /// A completed check with a Check Duration of `seconds` (both endpoints
+    /// present). The wall-clock start is arbitrary; only the span matters.
+    fn timed_check(name: &str, conclusion: &str, seconds: i64) -> CheckRun {
+        let started = now();
+        CheckRun {
+            name: name.to_owned(),
+            status: "completed".to_owned(),
+            conclusion: Some(conclusion.to_owned()),
+            started_at: Some(started),
+            completed_at: Some(started + chrono::Duration::seconds(seconds)),
         }
     }
 
@@ -648,8 +725,81 @@ mod tests {
         sort_check_runs(&mut refs);
         let names: Vec<&str> = refs.iter().map(|c| c.name.as_str()).collect();
         // Failing group (beta, yak) first, then pending (alpha), then passing
-        // (zebra); ties within a group sort by name.
+        // (zebra); untimed checks tie on duration, so they fall back to name.
         assert_eq!(names, ["beta", "yak", "alpha", "zebra"]);
+    }
+
+    #[test]
+    fn sort_check_runs_orders_by_duration_descending_within_a_group() {
+        // All passing, so the group is equal; the slowest must surface first,
+        // and an untimed check sorts below every timed one (as if zero).
+        let runs = [
+            timed_check("fast", "success", 30),
+            timed_check("slow", "success", 600),
+            check("untimed", "completed", Some("success")),
+            timed_check("medium", "success", 120),
+        ];
+        let mut refs: Vec<&CheckRun> = runs.iter().collect();
+        sort_check_runs(&mut refs);
+        let names: Vec<&str> = refs.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["slow", "medium", "fast", "untimed"]);
+    }
+
+    #[test]
+    fn sort_check_runs_breaks_equal_durations_by_name() {
+        let runs = [
+            timed_check("yak", "success", 60),
+            timed_check("alpha", "success", 60),
+        ];
+        let mut refs: Vec<&CheckRun> = runs.iter().collect();
+        sort_check_runs(&mut refs);
+        let names: Vec<&str> = refs.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["alpha", "yak"]);
+    }
+
+    #[test]
+    fn sort_check_runs_keeps_failing_first_even_when_passing_is_slower() {
+        // A slow passing check must still sort below a fast failing one: the
+        // outcome group dominates the duration tiebreak.
+        let runs = [
+            timed_check("slow-pass", "success", 600),
+            timed_check("fast-fail", "failure", 5),
+        ];
+        let mut refs: Vec<&CheckRun> = runs.iter().collect();
+        sort_check_runs(&mut refs);
+        let names: Vec<&str> = refs.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["fast-fail", "slow-pass"]);
+    }
+
+    #[test]
+    fn format_duration_renders_sub_minute_minutes_and_missing() {
+        assert_eq!(format_duration(Some(chrono::Duration::seconds(45))), "45s");
+        assert_eq!(format_duration(Some(chrono::Duration::seconds(0))), "0s");
+        assert_eq!(format_duration(Some(chrono::Duration::seconds(150))), "2m");
+        assert_eq!(format_duration(Some(chrono::Duration::minutes(10))), "10m");
+        // No duration renders as nothing — never a zero or placeholder.
+        assert_eq!(format_duration(None), "");
+    }
+
+    #[test]
+    fn visible_checks_caps_at_eight_and_reports_overflow() {
+        // Eleven passing checks: eight render, three overflow.
+        let runs: Vec<CheckRun> = (0..11)
+            .map(|i| check(&format!("check-{i:02}"), "completed", Some("success")))
+            .collect();
+        let (visible, overflow) = visible_checks(&runs);
+        assert_eq!(visible.len(), MAX_VISIBLE_CHECKS);
+        assert_eq!(overflow, 3);
+    }
+
+    #[test]
+    fn visible_checks_shows_no_overflow_at_exactly_eight() {
+        let runs: Vec<CheckRun> = (0..8)
+            .map(|i| check(&format!("check-{i:02}"), "completed", Some("success")))
+            .collect();
+        let (visible, overflow) = visible_checks(&runs);
+        assert_eq!(visible.len(), 8);
+        assert_eq!(overflow, 0);
     }
 
     #[test]
@@ -691,13 +841,25 @@ mod tests {
     #[test]
     fn check_row_indents_icon_and_name() {
         let row = check_row(&check("build", "completed", Some("success")));
-        // Two-space indent, the icon span, then the space-prefixed name. Carry
-        // the icon's colour through so the row matches `check_icon`.
+        // Two-space indent, the icon span, then the space-prefixed name. An
+        // untimed check shows no duration. Carry the icon's colour through so
+        // the row matches `check_icon`.
         let text: String = row.spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, "  ✓ build");
         let icon_span = &row.spans[1];
         assert_eq!(icon_span.content.as_ref(), "✓");
         assert_eq!(icon_span.style.fg, Some(DARK.passing));
+    }
+
+    #[test]
+    fn check_row_appends_muted_duration_when_present() {
+        let row = check_row(&timed_check("build", "success", 150));
+        let text: String = row.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "  ✓ build 2m");
+        // The duration is the last span and reads in the muted role.
+        let duration_span = row.spans.last().expect("a duration span");
+        assert_eq!(duration_span.content.as_ref(), " 2m");
+        assert_eq!(duration_span.style.fg, Some(DARK.muted));
     }
 
     #[test]

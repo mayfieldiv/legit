@@ -458,6 +458,10 @@ struct RawCheckRun {
     status: String,
     #[serde(default)]
     conclusion: Option<String>,
+    #[serde(default)]
+    started_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    completed_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -537,6 +541,8 @@ fn parse_check_runs(raw: RawCheckRunsResponse) -> Vec<CheckRun> {
             name: run.name,
             status: run.status,
             conclusion: run.conclusion,
+            started_at: run.started_at,
+            completed_at: run.completed_at,
         })
         .collect()
 }
@@ -770,8 +776,10 @@ mod tests {
     fn check_runs_parse_name_status_conclusion() {
         let raw: RawCheckRunsResponse = serde_json::from_str(
             r#"{ "total_count": 2, "check_runs": [
-                { "name": "build", "status": "completed", "conclusion": "success" },
-                { "name": "deploy", "status": "in_progress", "conclusion": null }
+                { "name": "build", "status": "completed", "conclusion": "success",
+                  "started_at": "2026-05-01T00:00:00Z", "completed_at": "2026-05-01T00:02:30Z" },
+                { "name": "deploy", "status": "in_progress", "conclusion": null,
+                  "started_at": "2026-05-01T00:00:00Z" }
             ] }"#,
         )
         .expect("deserialize");
@@ -782,8 +790,20 @@ mod tests {
         assert_eq!(checks[0].name, "build");
         assert_eq!(checks[0].status, "completed");
         assert_eq!(checks[0].conclusion.as_deref(), Some("success"));
+        // Both endpoints present -> a derived Check Duration of 2m30s.
+        assert_eq!(
+            checks[0].duration(),
+            Some(chrono::Duration::seconds(150)),
+            "completed run carries both timestamps"
+        );
         assert_eq!(checks[1].status, "in_progress");
         assert_eq!(checks[1].conclusion, None);
+        // Only one endpoint present -> no duration.
+        assert_eq!(
+            checks[1].duration(),
+            None,
+            "an in-progress run has no completed_at, so no duration"
+        );
     }
 
     #[test]

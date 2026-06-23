@@ -255,6 +255,8 @@ fn checks_arrived_stores_checks_by_repo_and_head_sha() {
         name: "build".to_owned(),
         status: "completed".to_owned(),
         conclusion: Some("success".to_owned()),
+        started_at: None,
+        completed_at: None,
     };
 
     update(
