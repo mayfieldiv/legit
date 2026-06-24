@@ -29,7 +29,7 @@ use ratatui::{
 use crate::{
     app::detail_layout::{detail_content, header_height},
     app::model::{DetailState, Model},
-    chip::{chip_rows, chip_spans},
+    chip::label_lines,
     color::repo_color,
     format::{format_age, format_merge_status, format_size},
     github::rest::PR,
@@ -171,10 +171,7 @@ fn render_header(
     // treatment; absent when the PR has no labels, so the header keeps its base
     // height. The band's row count is reserved by `detail_layout::header_height`,
     // so what is painted here always fits the laid-out header area.
-    let chip_lines: Vec<Line<'static>> = chip_rows(&pr.labels, usize::from(area.width))
-        .into_iter()
-        .map(|row| Line::from(chip_spans(&row, palette)))
-        .collect();
+    let chip_lines = label_lines(&pr.labels, usize::from(area.width), palette);
 
     // Divider (last header row)
     let divider_line = Line::from(Span::styled(

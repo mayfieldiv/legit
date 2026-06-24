@@ -12,7 +12,7 @@
 
 use ratatui::{
     style::{Color, Style},
-    text::Span,
+    text::{Line, Span},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -97,6 +97,19 @@ pub fn chip_spans(row: &[&Label], palette: &Palette) -> Vec<Span<'static>> {
         ));
     }
     spans
+}
+
+/// Render `labels` as filled Label Chip rows wrapped to `width` columns: each
+/// packed row from [`chip_rows`] turned into a styled line by [`chip_spans`].
+/// Empty when there are no labels — `chip_rows` yields no rows — so callers need
+/// no separate empty guard. The rendering half of the module's surface, paired
+/// with `chip_rows(..).len()` as the layout-sizing half (`detail_layout`'s chip
+/// band), so the band reserved and the chips painted always agree.
+pub fn label_lines(labels: &[Label], width: usize, palette: &Palette) -> Vec<Line<'static>> {
+    chip_rows(labels, width)
+        .into_iter()
+        .map(|row| Line::from(chip_spans(&row, palette)))
+        .collect()
 }
 
 #[cfg(test)]
