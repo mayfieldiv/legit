@@ -619,9 +619,9 @@ fn detail_viewport_rows(model: &Model) -> usize {
     let chrome = match &model.view_mode {
         ViewMode::Detail(detail) => match model.list.pr(&detail.key) {
             Some(pr) => detail_layout::chrome_rows(pr, model.terminal_width),
-            None => detail_layout::HEADER_BASE_HEIGHT + 1,
+            None => detail_layout::BASE_CHROME_ROWS,
         },
-        _ => detail_layout::HEADER_BASE_HEIGHT + 1,
+        _ => detail_layout::BASE_CHROME_ROWS,
     };
     usize::from(model.terminal_height).saturating_sub(usize::from(chrome))
 }

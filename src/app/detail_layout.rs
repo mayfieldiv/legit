@@ -34,6 +34,13 @@ use super::{
 /// this base by [`header_height`] when the PR has labels.
 pub(crate) const HEADER_BASE_HEIGHT: u16 = 5;
 
+/// The chrome rows a label-less PR reserves around the scrollable body: the
+/// fixed [`HEADER_BASE_HEIGHT`] plus the 1-row status bar. Equals
+/// `chrome_rows(pr, width)` whenever the PR has no Label Chips (its chip band
+/// is then zero rows), so it is the base case [`chrome_rows`] names and the
+/// fallback `update`'s scroll clamp uses for a PR no longer in the list.
+pub(crate) const BASE_CHROME_ROWS: u16 = HEADER_BASE_HEIGHT + 1;
+
 /// Total rows in the detail view's pinned header for `pr` at `width`: the fixed
 /// [`HEADER_BASE_HEIGHT`] plus the number of rows the PR's Label Chips wrap onto
 /// (none when it has no labels). The header draws from the list PR, which is
@@ -497,7 +504,7 @@ mod tests {
     fn header_height_is_the_base_when_the_pr_has_no_labels() {
         let pr = pr_with_labels(Vec::new());
         assert_eq!(header_height(&pr, 80), HEADER_BASE_HEIGHT);
-        assert_eq!(chrome_rows(&pr, 80), HEADER_BASE_HEIGHT + 1);
+        assert_eq!(chrome_rows(&pr, 80), BASE_CHROME_ROWS);
     }
 
     #[test]
@@ -509,6 +516,6 @@ mod tests {
         // At a narrow width the chips wrap onto two band rows, growing the header
         // and the chrome the scroll clamp reserves in lockstep.
         assert_eq!(header_height(&pr, 4), HEADER_BASE_HEIGHT + 2);
-        assert_eq!(chrome_rows(&pr, 4), HEADER_BASE_HEIGHT + 2 + 1);
+        assert_eq!(chrome_rows(&pr, 4), BASE_CHROME_ROWS + 2);
     }
 }

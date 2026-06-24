@@ -989,7 +989,7 @@ fn focused_item_range(model: &crate::app::model::Model) -> std::ops::Range<usize
 /// comment cards start below the fold of its small viewport.
 fn tall_focusable_detail_model() -> crate::app::model::Model {
     let mut model = model_with_one_pr();
-    model.terminal_height = (crate::app::detail_layout::HEADER_BASE_HEIGHT + 1) + 8;
+    model.terminal_height = crate::app::detail_layout::BASE_CHROME_ROWS + 8;
     model.terminal_width = 80;
     update(&mut model, key_event(KeyCode::Enter));
     let body: String = (1..=30).map(|n| format!("Line {n}\n\n")).collect();
@@ -1007,8 +1007,7 @@ fn focusing_an_offscreen_card_scrolls_it_into_view() {
     update(&mut model, key_event(KeyCode::Char('j')));
 
     let range = focused_item_range(&model);
-    let viewport =
-        (model.terminal_height - (crate::app::detail_layout::HEADER_BASE_HEIGHT + 1)) as usize;
+    let viewport = (model.terminal_height - crate::app::detail_layout::BASE_CHROME_ROWS) as usize;
     let scroll = detail_scroll(&model);
     assert!(
         scroll <= range.start && range.end <= scroll + viewport,
@@ -1054,8 +1053,7 @@ fn scroll_clamp_covers_the_thread_and_conversation_sections() {
 /// The open detail view's true max scroll: full measured content minus the
 /// body viewport.
 fn max_detail_scroll(model: &crate::app::model::Model) -> usize {
-    let viewport =
-        usize::from(model.terminal_height - (crate::app::detail_layout::HEADER_BASE_HEIGHT + 1));
+    let viewport = usize::from(model.terminal_height - crate::app::detail_layout::BASE_CHROME_ROWS);
     measured_content(model).lines.len().saturating_sub(viewport)
 }
 
@@ -1068,7 +1066,7 @@ fn refreshing_to_a_shorter_body_reclamps_scroll_so_page_up_stays_live() {
     // offset (the same drift bug the over-scroll test guards against on the
     // PageDown path).
     let mut model = model_with_one_pr();
-    model.terminal_height = (crate::app::detail_layout::HEADER_BASE_HEIGHT + 1) + 6;
+    model.terminal_height = crate::app::detail_layout::BASE_CHROME_ROWS + 6;
     update(&mut model, key_event(KeyCode::Enter));
     let tall: String = (1..=40).map(|n| format!("Line {n}\n\n")).collect();
     update(
@@ -1148,8 +1146,7 @@ fn showing_resolved_threads_keeps_the_focused_card_in_view() {
         "the revealed resolved thread above shifts the focused card's index"
     );
     let range = focused_item_range(&model);
-    let viewport =
-        (model.terminal_height - (crate::app::detail_layout::HEADER_BASE_HEIGHT + 1)) as usize;
+    let viewport = (model.terminal_height - crate::app::detail_layout::BASE_CHROME_ROWS) as usize;
     let scroll = detail_scroll(&model);
     assert!(
         scroll <= range.start && range.end <= scroll + viewport,
@@ -1167,7 +1164,7 @@ fn body_arrival_scrolls_the_already_focused_card_into_view() {
     // view, not leave the focus border off-screen with o/Enter acting on an
     // invisible card.
     let mut model = model_with_one_pr();
-    model.terminal_height = (crate::app::detail_layout::HEADER_BASE_HEIGHT + 1) + 8;
+    model.terminal_height = crate::app::detail_layout::BASE_CHROME_ROWS + 8;
     model.terminal_width = 80;
     update(&mut model, key_event(KeyCode::Enter));
     seed_detail_enrichment(&mut model);
@@ -1181,8 +1178,7 @@ fn body_arrival_scrolls_the_already_focused_card_into_view() {
     set_detail_body(&mut model, &body);
 
     let range = focused_item_range(&model);
-    let viewport =
-        (model.terminal_height - (crate::app::detail_layout::HEADER_BASE_HEIGHT + 1)) as usize;
+    let viewport = (model.terminal_height - crate::app::detail_layout::BASE_CHROME_ROWS) as usize;
     let scroll = detail_scroll(&model);
     assert!(
         scroll <= range.start && range.end <= scroll + viewport,
@@ -1219,8 +1215,7 @@ fn expanding_the_focused_card_brings_its_grown_tail_into_view() {
         range.end > collapsed_range.end,
         "precondition: expanding the card's <details> must grow it"
     );
-    let viewport =
-        (model.terminal_height - (crate::app::detail_layout::HEADER_BASE_HEIGHT + 1)) as usize;
+    let viewport = (model.terminal_height - crate::app::detail_layout::BASE_CHROME_ROWS) as usize;
     let scroll = detail_scroll(&model);
     assert!(
         scroll <= range.start && (range.end <= scroll + viewport || scroll == range.start),
@@ -1307,11 +1302,12 @@ fn over_scrolling_clamps_to_the_last_screenful_and_page_up_stays_live() {
     // must pin the offset at the last screenful, not let it accumulate —
     // otherwise the next PageUp presses are visually dead until the inflated
     // offset works back down into view.
-    // Reference the base chrome-row count (the fixture PR has no labels, so its
-    // Label Chip band is empty and the header stays at the base height) so a
-    // future layout change keeps this regression test in sync with the clamp it
-    // guards (rather than a hardcoded literal that would silently desync).
-    let chrome_rows = crate::app::detail_layout::HEADER_BASE_HEIGHT + 1;
+    // Reference the named base chrome-row count (the fixture PR has no labels,
+    // so its Label Chip band is empty and the header stays at the base height)
+    // so a future layout change keeps this regression test in sync with the
+    // clamp it guards (rather than a hardcoded literal that would silently
+    // desync).
+    let chrome_rows = crate::app::detail_layout::BASE_CHROME_ROWS;
     let mut model = model_with_one_pr();
     model.terminal_height = chrome_rows + 6; // body viewport = 6 rows
     update(&mut model, key_event(KeyCode::Enter));
