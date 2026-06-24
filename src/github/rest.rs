@@ -349,7 +349,7 @@ impl OctocrabRest {
         let mut all = Vec::new();
         let mut page = 1u32;
         loop {
-            let params = CheckRunParams {
+            let params = PageParams {
                 per_page: 100,
                 page,
             };
@@ -370,11 +370,15 @@ impl OctocrabRest {
         Ok(all)
     }
 
-    /// Map each of a commit's check suites to the name of the Actions workflow
-    /// that produced it, via `GET /repos/:owner/:repo/actions/runs?head_sha=…`.
-    /// Drives the `workflow / job` check labels. The response nests runs under
-    /// `workflow_runs` and paginates by `page`. Checks not produced by Actions
-    /// (external statuses, other apps) simply won't appear in the map.
+    /// Map each of a commit's check suites to the display name of the Actions
+    /// workflow that produced it, driving the `workflow / job` check labels.
+    ///
+    /// Composed from two endpoints: the commit's workflow runs
+    /// (`GET /actions/runs?head_sha=…`) give `check_suite_id → workflow_id`, and
+    /// the repo's workflows (`GET /actions/workflows`) give `workflow_id → name`.
+    /// The workflow's `name:` is used deliberately rather than the per-run name,
+    /// which a `run-name:` override can replace (e.g. CodeQL's `PR #123`). Checks
+    /// not produced by Actions (external statuses, other apps) won't appear.
     #[tracing::instrument(name = "workflow_names_by_suite", skip(self))]
     async fn workflow_names_by_suite(
         &self,
@@ -382,6 +386,8 @@ impl OctocrabRest {
         repo: &str,
         head_sha: &str,
     ) -> Result<HashMap<u64, String>> {
+        let names_by_id = self.workflow_names_by_id(owner, repo).await?;
+
         let route = format!("/repos/{owner}/{repo}/actions/runs");
         let mut by_suite = HashMap::new();
         let mut page = 1u32;
@@ -400,8 +406,10 @@ impl OctocrabRest {
                 })?;
             let count = response.workflow_runs.len();
             for run in response.workflow_runs {
-                if let Some(suite_id) = run.check_suite_id {
-                    by_suite.insert(suite_id, run.name);
+                if let (Some(suite_id), Some(workflow_id)) = (run.check_suite_id, run.workflow_id)
+                    && let Some(name) = names_by_id.get(&workflow_id)
+                {
+                    by_suite.insert(suite_id, name.clone());
                 }
             }
             if count < 100 {
@@ -410,6 +418,37 @@ impl OctocrabRest {
             page += 1;
         }
         Ok(by_suite)
+    }
+
+    /// Map each Actions workflow in the repo to its display name (the `name:`
+    /// field), via `GET /repos/:owner/:repo/actions/workflows`. The join target
+    /// for [`workflow_names_by_suite`]; the response nests workflows under
+    /// `workflows` and paginates by `page`.
+    #[tracing::instrument(name = "workflow_names_by_id", skip(self))]
+    async fn workflow_names_by_id(&self, owner: &str, repo: &str) -> Result<HashMap<u64, String>> {
+        let route = format!("/repos/{owner}/{repo}/actions/workflows");
+        let mut by_id = HashMap::new();
+        let mut page = 1u32;
+        loop {
+            let params = PageParams {
+                per_page: 100,
+                page,
+            };
+            let response: RawWorkflowsResponse = self
+                .client
+                .get(&route, Some(&params))
+                .await
+                .with_context(|| format!("listing workflows for {owner}/{repo} (page {page})"))?;
+            let count = response.workflows.len();
+            for workflow in response.workflows {
+                by_id.insert(workflow.id, workflow.name);
+            }
+            if count < 100 {
+                break;
+            }
+            page += 1;
+        }
+        Ok(by_id)
     }
 
     /// Fetch a single PR's body (markdown). The single-PR endpoint at
@@ -482,8 +521,10 @@ struct PerPageParams {
     per_page: u8,
 }
 
+/// Generic page cursor for endpoints that paginate by `?per_page&page` (the
+/// check-runs and workflows lists).
 #[derive(serde::Serialize)]
-struct CheckRunParams {
+struct PageParams {
     per_page: u8,
     page: u32,
 }
@@ -527,8 +568,9 @@ struct RawCheckSuite {
 }
 
 /// Wire shape for the Actions workflow-runs endpoint
-/// (`GET /repos/:owner/:repo/actions/runs?head_sha=…`). Maps each check suite to
-/// the name of the workflow that produced it.
+/// (`GET /repos/:owner/:repo/actions/runs?head_sha=…`). Links each check suite
+/// to the workflow that produced it; the workflow's display name is then looked
+/// up via [`RawWorkflowsResponse`].
 #[derive(Debug, Clone, Deserialize)]
 struct RawWorkflowRunsResponse {
     #[serde(default)]
@@ -537,9 +579,11 @@ struct RawWorkflowRunsResponse {
 
 #[derive(Debug, Clone, Deserialize)]
 struct RawWorkflowRun {
-    /// The workflow run's name — the workflow's `name:` (or a `run-name:`
-    /// override). Shown as the `workflow` half of `workflow / job`.
-    name: String,
+    /// The workflow this run belongs to; joined against [`RawWorkflow`] for the
+    /// display name. Preferred over the run's own `name`, which a `run-name:`
+    /// override can replace.
+    #[serde(default)]
+    workflow_id: Option<u64>,
     /// The check suite this workflow run created; the join key onto `RawCheckRun`.
     #[serde(default)]
     check_suite_id: Option<u64>,
@@ -550,6 +594,21 @@ struct WorkflowRunParams<'a> {
     head_sha: &'a str,
     per_page: u8,
     page: u32,
+}
+
+/// Wire shape for the Actions workflows endpoint
+/// (`GET /repos/:owner/:repo/actions/workflows`). Supplies each workflow's
+/// display name (its `name:` field) for the `workflow / job` check labels.
+#[derive(Debug, Clone, Deserialize)]
+struct RawWorkflowsResponse {
+    #[serde(default)]
+    workflows: Vec<RawWorkflow>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RawWorkflow {
+    id: u64,
+    name: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
