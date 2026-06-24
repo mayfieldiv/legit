@@ -104,6 +104,11 @@ pub(crate) fn render_description_blocks(body: &str) -> Vec<Block> {
 /// `summary::checks_lines`).
 const CHECKS_GRID_COLUMNS: usize = 2;
 
+/// Blank columns between the checks grid's two columns. The column boundary is
+/// the widest check cell plus this gap, so the columns stay packed near the
+/// left instead of being spread to the body's edges on a wide terminal.
+const CHECKS_GRID_GAP: usize = 2;
+
 /// Build the CI checks section lines: blank separator + bold header with
 /// pass/fail/pending counts (over ALL checks) + a two-column grid of up to
 /// eight checks of any outcome, ordered failing-first then slowest, with a
@@ -155,7 +160,24 @@ fn checks_section_lines(model: &Model, pr: &PR, width: u16) -> Vec<Line<'static>
     // horizontal space; the summary panel's single column draws from the same
     // selection). The header counts above still tally ALL checks.
     let (visible, overflow) = visible_checks(checks);
-    let col_width = (usize::from(width) / CHECKS_GRID_COLUMNS).max(1);
+    // Size the columns to the content, not the terminal: the widest check cell
+    // (plus the indent and a small gap) sets the column boundary, so the two
+    // columns sit packed near the left rather than flung to the body's edges on
+    // a wide terminal. Capped at an even share of the width so a pathologically
+    // long check name can't push the second column off-screen.
+    let widest_cell = visible
+        .iter()
+        .map(|c| {
+            check_cell_spans(c)
+                .iter()
+                .map(|s| s.content.width())
+                .sum::<usize>()
+        })
+        .max()
+        .unwrap_or(0);
+    let natural_col_width = CHECK_INDENT.len() + widest_cell + CHECKS_GRID_GAP;
+    let max_col_width = (usize::from(width) / CHECKS_GRID_COLUMNS).max(1);
+    let col_width = natural_col_width.min(max_col_width);
     for row in visible.chunks(CHECKS_GRID_COLUMNS) {
         // Two-space indent on the first column so the grid matches the summary
         // panel's single column (the shared `check_row` look) — see

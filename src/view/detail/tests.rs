@@ -566,6 +566,47 @@ fn detail_checks_grid_is_two_column_with_durations() {
 }
 
 #[test]
+fn detail_checks_grid_columns_pack_to_content_not_half_width() {
+    // Two short checks on one row. The column boundary is the widest cell plus a
+    // gap, so the second column sits a few columns past the first — NOT flung to
+    // half the terminal width. Regression guard: the grid once split the body
+    // evenly in two, so on a wide terminal the second column landed near
+    // width/2 (column ~60 here) instead of packed beside the first.
+    let checks = vec![
+        timed_check("alpha", "success", 600), // 10m, the widest cell
+        timed_check("bravo", "success", 300), // 5m
+    ];
+    let model = model_in_detail_with_checks(sample_pr(), "", checks);
+
+    let terminal = render_snapshot(&model, 120, 12);
+    let rows = buffer_text(&terminal);
+
+    let grid_row = rows
+        .iter()
+        .find(|r| r.contains("alpha"))
+        .unwrap_or_else(|| panic!("alpha row: {rows:?}"));
+    // Cell index == column for this ASCII + single-width-icon content.
+    let icon_cols: Vec<usize> = grid_row
+        .chars()
+        .enumerate()
+        .filter(|(_, c)| *c == '✓')
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(
+        icon_cols.len(),
+        2,
+        "two columns share the row: {grid_row:?}"
+    );
+    // First column carries the two-space indent; the second begins two columns
+    // (the grid gap) past the widest cell `  ✓ alpha 10m` (ends at column 13).
+    assert_eq!(icon_cols[0], 2, "first column indent: {grid_row:?}");
+    assert_eq!(
+        icon_cols[1], 15,
+        "second column packs to content, not half width: {grid_row:?}"
+    );
+}
+
+#[test]
 fn detail_checks_grid_caps_at_eight_with_overflow() {
     let checks: Vec<CheckRun> = (0..11)
         .map(|i| check(&format!("chk{i:02}"), "completed", Some("success")))
