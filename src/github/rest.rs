@@ -1,10 +1,10 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use octocrab::{Octocrab, Page};
 use serde::{Deserialize, de::DeserializeOwned};
-use tokio::sync::mpsc;
+use tokio::sync::{OnceCell, mpsc};
 
 use crate::{
     file_category::FileChange,
@@ -233,6 +233,46 @@ fn parse_pr(raw: RawRestPR, repo_slug: &str) -> PR {
 
 // ── Octocrab transport ──────────────────────────────────────────────────────
 
+/// A list-load-scoped memo of a repo's Actions `workflow_id → name` map. The map
+/// is repo-global and immutable for the session, but a fresh [`OctocrabRest`] is
+/// built per check fetch, so without this every PR's check fetch would re-page
+/// the identical `GET /actions/workflows` list. Shared by `Arc` inside the per-PR
+/// `RequestContext` so the list is fetched once per list-load rather than once
+/// per PR; the per-commit workflow-runs lookup still runs per PR.
+#[derive(Clone, Default)]
+pub struct WorkflowNameCache(Arc<OnceCell<HashMap<u64, String>>>);
+
+impl WorkflowNameCache {
+    /// The repo's `workflow_id → name` map, fetching and memoising it on first
+    /// use. A failed fetch isn't cached, so a later check fetch retries.
+    async fn get_or_init(
+        &self,
+        rest: &OctocrabRest,
+        owner: &str,
+        repo: &str,
+    ) -> Result<&HashMap<u64, String>> {
+        self.0
+            .get_or_try_init(|| rest.workflow_names_by_id(owner, repo))
+            .await
+    }
+}
+
+impl std::fmt::Debug for WorkflowNameCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkflowNameCache").finish_non_exhaustive()
+    }
+}
+
+// The cache is derived data, not part of a request's identity, so two contexts
+// are equal regardless of cache state (and it's empty in the equality tests).
+impl PartialEq for WorkflowNameCache {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for WorkflowNameCache {}
+
 /// Octocrab-backed REST client. Uses a personal access token; the raw `get`
 /// lets us deserialize directly into our permissive `RawRestPR` so octocrab's
 /// strict model types don't tie us to fields GitHub may omit.
@@ -330,15 +370,16 @@ impl OctocrabRest {
     /// companion Actions workflow-runs lookup resolves each run's workflow name;
     /// it's best-effort, so a failure there still yields checks with bare job
     /// names rather than failing the whole fetch.
-    #[tracing::instrument(name = "list_check_runs", skip(self))]
+    #[tracing::instrument(name = "list_check_runs", skip(self, cache))]
     pub async fn list_check_runs(
         &self,
         owner: &str,
         repo: &str,
         commit_sha: &str,
+        cache: &WorkflowNameCache,
     ) -> Result<Vec<CheckRun>> {
         let workflows = self
-            .workflow_names_by_suite(owner, repo, commit_sha)
+            .workflow_names_by_suite(owner, repo, commit_sha, cache)
             .await
             .unwrap_or_else(|error| {
                 tracing::warn!(%error, "workflow-name lookup failed; using bare check names");
@@ -379,14 +420,15 @@ impl OctocrabRest {
     /// The workflow's `name:` is used deliberately rather than the per-run name,
     /// which a `run-name:` override can replace (e.g. CodeQL's `PR #123`). Checks
     /// not produced by Actions (external statuses, other apps) won't appear.
-    #[tracing::instrument(name = "workflow_names_by_suite", skip(self))]
+    #[tracing::instrument(name = "workflow_names_by_suite", skip(self, cache))]
     async fn workflow_names_by_suite(
         &self,
         owner: &str,
         repo: &str,
         head_sha: &str,
+        cache: &WorkflowNameCache,
     ) -> Result<HashMap<u64, String>> {
-        let names_by_id = self.workflow_names_by_id(owner, repo).await?;
+        let names_by_id = cache.get_or_init(self, owner, repo).await?;
 
         let route = format!("/repos/{owner}/{repo}/actions/runs");
         let mut by_suite = HashMap::new();

@@ -5,7 +5,11 @@ use ratatui::crossterm::event::{
 };
 
 use crate::{
-    format::abbreviate_home, git_remote::RepoInfo, github::rest::PrKey, secret::Secret, worktree,
+    format::abbreviate_home,
+    git_remote::RepoInfo,
+    github::rest::{PrKey, WorkflowNameCache},
+    secret::Secret,
+    worktree,
 };
 
 use super::{
@@ -172,6 +176,7 @@ fn request_context(
         repo: repo.clone(),
         token: token.clone(),
         bot_logins: bot_logins.to_vec(),
+        workflow_cache: WorkflowNameCache::default(),
     })
 }
 
