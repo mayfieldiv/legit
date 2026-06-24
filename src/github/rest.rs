@@ -365,11 +365,11 @@ impl OctocrabRest {
     }
 
     /// Fetch all CI check runs for a commit, each tagged with its `workflow / job`
-    /// name. The check-runs endpoint nests the array under `check_runs` and
-    /// paginates by `page`, so it can't use the Link-header `get_all` helper. A
-    /// companion Actions workflow-runs lookup resolves each run's workflow name;
-    /// it's best-effort, so a failure there still yields checks with bare job
-    /// names rather than failing the whole fetch.
+    /// name. The companion Actions workflow-name lookup is independent of the
+    /// check-runs fetch, so the two run concurrently and the labelling latency
+    /// overlaps the check fetch rather than preceding it. The lookup is
+    /// best-effort — `join!` (not `try_join!`) lets a label failure yield bare
+    /// job names rather than failing the whole fetch.
     #[tracing::instrument(name = "list_check_runs", skip(self, cache))]
     pub async fn list_check_runs(
         &self,
@@ -378,16 +378,30 @@ impl OctocrabRest {
         commit_sha: &str,
         cache: &WorkflowNameCache,
     ) -> Result<Vec<CheckRun>> {
-        let workflows = self
-            .workflow_names_by_suite(owner, repo, commit_sha, cache)
-            .await
-            .unwrap_or_else(|error| {
-                tracing::warn!(%error, "workflow-name lookup failed; using bare check names");
-                HashMap::new()
-            });
+        let (workflows, raw) = tokio::join!(
+            self.workflow_names_by_suite(owner, repo, commit_sha, cache),
+            self.fetch_raw_check_runs(owner, repo, commit_sha),
+        );
+        let workflows = workflows.unwrap_or_else(|error| {
+            tracing::warn!(%error, "workflow-name lookup failed; using bare check names");
+            HashMap::new()
+        });
+        Ok(parse_check_runs(raw?, &workflows))
+    }
 
+    /// Fetch and accumulate every page of a commit's raw check runs. The
+    /// check-runs endpoint nests the array under `check_runs` and paginates by
+    /// `page`, so it can't use the Link-header `get_all` helper. Split from the
+    /// workflow-name lookup so [`list_check_runs`] can run the two concurrently.
+    #[tracing::instrument(name = "fetch_raw_check_runs", skip(self))]
+    async fn fetch_raw_check_runs(
+        &self,
+        owner: &str,
+        repo: &str,
+        commit_sha: &str,
+    ) -> Result<RawCheckRunsResponse> {
         let route = format!("/repos/{owner}/{repo}/commits/{commit_sha}/check-runs");
-        let mut all = Vec::new();
+        let mut check_runs = Vec::new();
         let mut page = 1u32;
         loop {
             let params = PageParams {
@@ -402,24 +416,26 @@ impl OctocrabRest {
                     format!("listing check runs for {owner}/{repo}@{commit_sha} (page {page})")
                 })?;
             let count = response.check_runs.len();
-            all.extend(parse_check_runs(response, &workflows));
+            check_runs.extend(response.check_runs);
             if count < 100 {
                 break;
             }
             page += 1;
         }
-        Ok(all)
+        Ok(RawCheckRunsResponse { check_runs })
     }
 
     /// Map each of a commit's check suites to the display name of the Actions
     /// workflow that produced it, driving the `workflow / job` check labels.
     ///
-    /// Composed from two endpoints: the commit's workflow runs
-    /// (`GET /actions/runs?head_sha=…`) give `check_suite_id → workflow_id`, and
-    /// the repo's workflows (`GET /actions/workflows`) give `workflow_id → name`.
-    /// The workflow's `name:` is used deliberately rather than the per-run name,
-    /// which a `run-name:` override can replace (e.g. CodeQL's `PR #123`). Checks
-    /// not produced by Actions (external statuses, other apps) won't appear.
+    /// Composed from two independent lookups, run concurrently: the repo's
+    /// workflows (`GET /actions/workflows`, memoised in `cache`) give
+    /// `workflow_id → name`, and the commit's workflow runs
+    /// (`GET /actions/runs?head_sha=…`) give `check_suite_id → workflow_id`. Both
+    /// must succeed for a useful map, so `try_join!` short-circuits on either
+    /// error. The workflow's `name:` is used deliberately rather than the per-run
+    /// name, which a `run-name:` override can replace (e.g. CodeQL's `PR #123`).
+    /// Checks not produced by Actions (external statuses, other apps) won't appear.
     #[tracing::instrument(name = "workflow_names_by_suite", skip(self, cache))]
     async fn workflow_names_by_suite(
         &self,
@@ -428,8 +444,33 @@ impl OctocrabRest {
         head_sha: &str,
         cache: &WorkflowNameCache,
     ) -> Result<HashMap<u64, String>> {
-        let names_by_id = cache.get_or_init(self, owner, repo).await?;
+        let (names_by_id, suite_workflow_ids) = tokio::try_join!(
+            cache.get_or_init(self, owner, repo),
+            self.suite_workflow_ids(owner, repo, head_sha),
+        )?;
+        Ok(suite_workflow_ids
+            .into_iter()
+            .filter_map(|(suite_id, workflow_id)| {
+                names_by_id
+                    .get(&workflow_id)
+                    .map(|name| (suite_id, name.clone()))
+            })
+            .collect())
+    }
 
+    /// Map each of a commit's check suites to the Actions workflow id that
+    /// produced it, via `GET /actions/runs?head_sha=…` (paginated by `page`). The
+    /// `check_suite_id → workflow_id` half of [`workflow_names_by_suite`]'s join;
+    /// the names come from the cached repo workflow list. A re-run reuses the
+    /// suite id, so a later page's run wins for that suite — matching the eventual
+    /// `collect` into a map.
+    #[tracing::instrument(name = "suite_workflow_ids", skip(self))]
+    async fn suite_workflow_ids(
+        &self,
+        owner: &str,
+        repo: &str,
+        head_sha: &str,
+    ) -> Result<HashMap<u64, u64>> {
         let route = format!("/repos/{owner}/{repo}/actions/runs");
         let mut by_suite = HashMap::new();
         let mut page = 1u32;
@@ -448,10 +489,8 @@ impl OctocrabRest {
                 })?;
             let count = response.workflow_runs.len();
             for run in response.workflow_runs {
-                if let (Some(suite_id), Some(workflow_id)) = (run.check_suite_id, run.workflow_id)
-                    && let Some(name) = names_by_id.get(&workflow_id)
-                {
-                    by_suite.insert(suite_id, name.clone());
+                if let (Some(suite_id), Some(workflow_id)) = (run.check_suite_id, run.workflow_id) {
+                    by_suite.insert(suite_id, workflow_id);
                 }
             }
             if count < 100 {
