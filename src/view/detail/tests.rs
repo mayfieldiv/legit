@@ -3,6 +3,7 @@ use ratatui::{Terminal, backend::TestBackend};
 
 use crate::{
     app::detail_items::{DetailFocus, DetailItems},
+    app::detail_layout::{MAX_GRID_COLUMNS, MAX_GRID_ROWS},
     app::model::{DetailState, Model, RepoDetection, ViewMode},
     git_remote::RepoInfo,
     github::rest::{Label, PR},
@@ -523,9 +524,9 @@ fn detail_with_checks_shows_summary_and_rows() {
 }
 
 #[test]
-fn detail_checks_grid_is_two_column_with_durations() {
+fn detail_checks_grid_lays_checks_row_major_with_durations() {
     // Four passing checks with distinct durations, so they sort slowest-first
-    // and land two per row. The grid is row-major: column one then column two.
+    // and lay out row-major. At width 80 these short names share one grid row.
     let checks = vec![
         timed_check("alpha", "success", 600), // 10m
         timed_check("bravo", "success", 300), // 5m
@@ -537,14 +538,14 @@ fn detail_checks_grid_is_two_column_with_durations() {
     let terminal = render_snapshot(&model, 80, 20);
     let rows = buffer_text(&terminal);
 
-    // The two slowest share the first grid row (two columns side by side).
+    // The slower checks share the first grid row (multiple columns side by side).
     let first_grid_row = rows
         .iter()
         .find(|r| r.contains("alpha"))
         .unwrap_or_else(|| panic!("alpha row: {rows:?}"));
     assert!(
         first_grid_row.contains("bravo"),
-        "two checks share a grid row (two columns): {first_grid_row:?}"
+        "checks share a grid row (multiple columns): {first_grid_row:?}"
     );
     // A timed check shows its duration; the untimed one shows none. `delta` is
     // the trailing (untimed) cell, so the text from its name to end of row must
@@ -607,21 +608,60 @@ fn detail_checks_grid_columns_pack_to_content_not_half_width() {
 }
 
 #[test]
-fn detail_checks_grid_caps_at_eight_with_overflow() {
-    let checks: Vec<CheckRun> = (0..11)
+fn detail_checks_grid_grows_columns_with_the_terminal_width() {
+    // Twelve short checks. The grid grows columns to fill the width: at a narrow
+    // body it packs few per row, at a wider body more — this is the "use the
+    // space" behaviour. The cell is `✓ chkNN` (width 7), so the column stride is
+    // 9: width 27 fits three columns, width 45 fits five.
+    let checks: Vec<CheckRun> = (0..12)
         .map(|i| check(&format!("chk{i:02}"), "completed", Some("success")))
         .collect();
     let model = model_in_detail_with_checks(sample_pr(), "", checks);
 
-    let terminal = render_snapshot(&model, 80, 24);
+    let icons_in_first_grid_row = |width: u16| {
+        let terminal = render_snapshot(&model, width, 20);
+        let rows = buffer_text(&terminal);
+        rows.iter()
+            .find(|r| r.contains("chk00"))
+            .unwrap_or_else(|| panic!("first grid row at width {width}: {rows:?}"))
+            .chars()
+            .filter(|c| *c == '✓')
+            .count()
+    };
+
+    let narrow = icons_in_first_grid_row(27);
+    let wide = icons_in_first_grid_row(45);
+    assert_eq!(narrow, 3, "three columns at width 27");
+    assert_eq!(wide, 5, "five columns at width 45");
+    assert!(wide > narrow, "a wider body shows more columns per row");
+}
+
+#[test]
+fn detail_checks_grid_shows_more_than_eight_then_overflows() {
+    // A wide body shows `MAX_GRID_COLUMNS × MAX_GRID_ROWS` checks — well past the
+    // summary panel's eight — and collapses the rest into `+N more`.
+    let cap = MAX_GRID_COLUMNS * MAX_GRID_ROWS;
+    let overflow = 6;
+    let total = cap + overflow;
+    let checks: Vec<CheckRun> = (0..total)
+        .map(|i| check(&format!("chk{i:02}"), "completed", Some("success")))
+        .collect();
+    let model = model_in_detail_with_checks(sample_pr(), "", checks);
+
+    // Width 120 packs the short `✓ chkNN` cells (stride 9) to MAX_GRID_COLUMNS.
+    let terminal = render_snapshot(&model, 120, 30);
     let rows = buffer_text(&terminal);
     let joined = rows.join("\n");
 
-    let rendered = (0..11)
+    let rendered = (0..total)
         .filter(|i| joined.contains(&format!("chk{i:02}")))
         .count();
-    assert_eq!(rendered, 8, "eight checks render in the grid: {rows:?}");
-    assert!(joined.contains("+3 more"), "overflow line: {rows:?}");
+    assert!(cap > 8, "the wide grid shows more than the summary's eight");
+    assert_eq!(rendered, cap, "columns × rows checks render: {rows:?}");
+    assert!(
+        joined.contains(&format!("+{overflow} more")),
+        "overflow line: {rows:?}"
+    );
 }
 
 #[test]
@@ -630,12 +670,15 @@ fn detail_check_rows_carry_the_two_space_indent() {
     // "CI Checks" header so the detail checks match the summary column's indent
     // (the shared `check_row` look the grid replaced). Pin the leading column
     // explicitly — `contains` assertions elsewhere never check the indent.
-    let checks: Vec<CheckRun> = (0..11)
+    // Enough checks to overflow the grid's `columns × rows` cap so the `+N more`
+    // line is present to assert against.
+    let total = MAX_GRID_COLUMNS * MAX_GRID_ROWS + 3;
+    let checks: Vec<CheckRun> = (0..total)
         .map(|i| check(&format!("chk{i:02}"), "completed", Some("success")))
         .collect();
     let model = model_in_detail_with_checks(sample_pr(), "", checks);
 
-    let terminal = render_snapshot(&model, 80, 24);
+    let terminal = render_snapshot(&model, 120, 24);
     let rows = buffer_text(&terminal);
 
     // The header line's start column (the `## ` markdown prefix). The section is

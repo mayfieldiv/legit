@@ -17,9 +17,9 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::{
     blocker::{ThreadKind, classify_thread},
-    format::{CHECK_INDENT, check_cell_spans, checks_summary, format_age, visible_checks},
+    format::{CHECK_INDENT, check_cell_spans, checks_summary, format_age, sorted_check_runs},
     github::rest::PR,
-    github::types::FullReviewThread,
+    github::types::{CheckRun, FullReviewThread},
     markdown::{self, Block},
     palette::DARK,
 };
@@ -99,23 +99,55 @@ pub(crate) fn render_description_blocks(body: &str) -> Vec<Block> {
     }
 }
 
-/// Number of columns in the detail view's checks grid. The wide detail body
-/// lays checks out two-up; the narrower summary panel uses one (its own
+/// Upper bound on the detail checks grid's column count. The grid grows as many
+/// columns as the body width fits (see [`grid_columns`]), but stops here so an
+/// ultrawide terminal stays scannable rather than smearing checks across the
+/// whole row. The narrower summary panel always uses one column (its own
 /// `summary::checks_lines`).
-const CHECKS_GRID_COLUMNS: usize = 2;
+pub(crate) const MAX_GRID_COLUMNS: usize = 6;
 
-/// Blank columns between the checks grid's two columns. The column boundary is
-/// the widest check cell plus this gap, so the columns stay packed near the
-/// left instead of being spread to the body's edges on a wide terminal.
+/// Rows of checks the detail grid draws before the remainder collapses into a
+/// `+N more` overflow line. The visible cap is `columns × MAX_GRID_ROWS`, so a
+/// wider terminal (more columns) shows more checks while the vertical footprint
+/// stays bounded.
+pub(crate) const MAX_GRID_ROWS: usize = 4;
+
+/// Blank columns between two adjacent grid columns. The column stride is the
+/// widest check cell plus this gap, so the columns stay packed near the left
+/// instead of being spread to the body's edges on a wide terminal.
 const CHECKS_GRID_GAP: usize = 2;
 
+/// The display width of one check's painted cell (`check_cell_spans`): the icon,
+/// name, and any Check Duration. Sets the grid's column stride.
+fn cell_width(check: &CheckRun) -> usize {
+    check_cell_spans(check)
+        .iter()
+        .map(|s| s.content.width())
+        .sum()
+}
+
+/// How many grid columns of `cell_width`-wide check cells fit in `width`: the
+/// [`CHECK_INDENT`] sits in front, then each column takes the cell plus a
+/// [`CHECKS_GRID_GAP`] — except the last, which needs no trailing gap. Clamped
+/// to at least one column and at most [`MAX_GRID_COLUMNS`].
+fn grid_columns(width: u16, cell_width: usize) -> usize {
+    let stride = (cell_width + CHECKS_GRID_GAP).max(1);
+    let usable = usize::from(width).saturating_sub(CHECK_INDENT.len());
+    // n columns occupy n·stride − GAP (the last column drops its trailing gap),
+    // so the largest n that fits is ⌊(usable + GAP) / stride⌋.
+    let fit = (usable + CHECKS_GRID_GAP) / stride;
+    fit.clamp(1, MAX_GRID_COLUMNS)
+}
+
 /// Build the CI checks section lines: blank separator + bold header with
-/// pass/fail/pending counts (over ALL checks) + a two-column grid of up to
-/// eight checks of any outcome, ordered failing-first then slowest, with a
-/// `+N more` overflow line beyond eight. Returns an empty `Vec` when checks
-/// haven't arrived for this PR's commit or the check list is empty. Shares the
-/// `visible_checks` selection and `check_cell_spans` content with
-/// `summary::checks_lines`; only the column count differs.
+/// pass/fail/pending counts (over ALL checks) + a grid of checks of any outcome,
+/// ordered failing-first then slowest, with a `+N more` overflow line beyond the
+/// visible cap. The grid grows as many columns as the body width fits (capped at
+/// [`MAX_GRID_COLUMNS`]) and shows `columns × MAX_GRID_ROWS` checks, so a wide
+/// terminal shows more. Returns an empty `Vec` when checks haven't arrived for
+/// this PR's commit or the check list is empty. Shares the `sorted_check_runs`
+/// ordering and `check_cell_spans` content with `summary::checks_lines`; only
+/// the column count and cap differ.
 ///
 /// Part of the measured layout: the checks section is appended to the
 /// description per-frame (so late-arriving checks show without a re-fetch),
@@ -155,44 +187,39 @@ fn checks_section_lines(model: &Model, pr: &PR, width: u16) -> Vec<Line<'static>
     }
     lines.push(Line::from(header_spans));
 
-    // Up to eight checks of any outcome, ordered failing-first then slowest,
-    // laid out row-major into two columns (the wide detail body uses the
-    // horizontal space; the summary panel's single column draws from the same
-    // selection). The header counts above still tally ALL checks.
-    let (visible, overflow) = visible_checks(checks);
-    // Size the columns to the content, not the terminal: the widest check cell
-    // (plus the indent and a small gap) sets the column boundary, so the two
-    // columns sit packed near the left rather than flung to the body's edges on
-    // a wide terminal. Capped at an even share of the width so a pathologically
-    // long check name can't push the second column off-screen.
-    let widest_cell = visible
-        .iter()
-        .map(|c| {
-            check_cell_spans(c)
-                .iter()
-                .map(|s| s.content.width())
-                .sum::<usize>()
-        })
-        .max()
-        .unwrap_or(0);
-    let natural_col_width = CHECK_INDENT.len() + widest_cell + CHECKS_GRID_GAP;
-    let max_col_width = (usize::from(width) / CHECKS_GRID_COLUMNS).max(1);
-    let col_width = natural_col_width.min(max_col_width);
-    for row in visible.chunks(CHECKS_GRID_COLUMNS) {
-        // Two-space indent on the first column so the grid matches the summary
-        // panel's single column (the shared `check_row` look) — see
+    // Checks of any outcome, ordered failing-first then slowest, laid out
+    // row-major into as many columns as the body width fits. The header counts
+    // above still tally ALL checks.
+    let sorted = sorted_check_runs(checks);
+    // Size the columns to the content: the widest check cell (plus a gap) is the
+    // column stride, so the columns sit packed near the left rather than flung
+    // to the body's edges on a wide terminal. Measure the widest over only the
+    // checks that could be shown (a top-priority prefix) so a long name ranked
+    // past the cap can't widen — and so thin out — the visible columns.
+    let candidate = &sorted[..sorted.len().min(MAX_GRID_COLUMNS * MAX_GRID_ROWS)];
+    let widest_cell = candidate.iter().map(|c| cell_width(c)).max().unwrap_or(0);
+    let columns = grid_columns(width, widest_cell);
+    let stride = widest_cell + CHECKS_GRID_GAP;
+
+    // Show `columns × MAX_GRID_ROWS` checks; the rest collapse into `+N more`.
+    let cap = columns * MAX_GRID_ROWS;
+    let overflow = sorted.len().saturating_sub(cap);
+    let visible = &sorted[..sorted.len().min(cap)];
+
+    for row in visible.chunks(columns) {
+        // Two-space indent in front of the first column so the grid matches the
+        // summary panel's single column (the shared `check_row` look) — see
         // `CHECK_INDENT`.
         let mut spans: Vec<Span<'static>> = vec![Span::raw(CHECK_INDENT)];
         for (col, check) in row.iter().enumerate() {
             let cell = check_cell_spans(check);
-            // Pad every cell but the last in the row out to the column width so
-            // the second column aligns. The trailing cell is left unpadded.
+            // Pad every cell but the row's last out to the column stride so the
+            // next column's content aligns. The trailing cell is left unpadded.
             if col + 1 < row.len() {
-                let used: usize =
-                    CHECK_INDENT.len() + cell.iter().map(|s| s.content.width()).sum::<usize>();
+                let used = cell.iter().map(|s| s.content.width()).sum::<usize>();
                 spans.extend(cell);
-                if used < col_width {
-                    spans.push(Span::raw(" ".repeat(col_width - used)));
+                if used < stride {
+                    spans.push(Span::raw(" ".repeat(stride - used)));
                 }
             } else {
                 spans.extend(cell);

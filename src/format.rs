@@ -331,21 +331,38 @@ pub fn check_row(check: &CheckRun) -> Line<'static> {
     Line::from(spans)
 }
 
-/// Maximum number of individual check rows rendered before the remainder
-/// collapses into a single `+N more` overflow line. Shared by the summary panel
-/// and the detail view so both draw the same eight checks.
+/// Maximum number of individual check rows the single-column summary panel
+/// renders before the remainder collapses into a `+N more` overflow line. The
+/// detail view's grid sizes its own cap to the number of grid columns (a wide
+/// terminal shows more); see `detail_layout`.
 pub const MAX_VISIBLE_CHECKS: usize = 8;
 
-/// Order `checks` via `sort_check_runs` and split into the up-to-eight visible
-/// checks and the overflow count (checks beyond the cap). The single source of
-/// truth for the eight-cap/overflow rule, shared by the summary panel and the
-/// detail view so both show the same checks and the same `+N more`.
-pub fn visible_checks(checks: &[CheckRun]) -> (Vec<&CheckRun>, usize) {
+/// Order `checks` by the shared check ordering and return them as references,
+/// leaving the input slice untouched. The single source of truth for the order
+/// both the summary panel and the detail grid draw checks in — the detail grid
+/// needs the full sorted list (to size its columns to the content) before it
+/// knows its own visible cap, so it sorts through here and truncates itself.
+pub fn sorted_check_runs(checks: &[CheckRun]) -> Vec<&CheckRun> {
     let mut sorted: Vec<&CheckRun> = checks.iter().collect();
     sort_check_runs(&mut sorted);
-    let overflow = sorted.len().saturating_sub(MAX_VISIBLE_CHECKS);
-    sorted.truncate(MAX_VISIBLE_CHECKS);
+    sorted
+}
+
+/// Order `checks` via `sorted_check_runs` and split into the visible checks
+/// (capped at `cap`) and the overflow count (checks beyond the cap). The single
+/// source of truth for the cap/overflow rule: the summary panel passes
+/// [`MAX_VISIBLE_CHECKS`]; the detail grid passes its column-scaled cap.
+pub fn visible_checks_capped(checks: &[CheckRun], cap: usize) -> (Vec<&CheckRun>, usize) {
+    let mut sorted = sorted_check_runs(checks);
+    let overflow = sorted.len().saturating_sub(cap);
+    sorted.truncate(cap);
     (sorted, overflow)
+}
+
+/// The summary panel's check selection: [`visible_checks_capped`] at the fixed
+/// [`MAX_VISIBLE_CHECKS`] cap for the single column.
+pub fn visible_checks(checks: &[CheckRun]) -> (Vec<&CheckRun>, usize) {
+    visible_checks_capped(checks, MAX_VISIBLE_CHECKS)
 }
 
 /// The three-way classification of a check run's outcome. The single source of
