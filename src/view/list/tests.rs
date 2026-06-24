@@ -710,6 +710,85 @@ fn list_cells_use_distinct_ts_parity_colours() {
     );
 }
 
+#[test]
+fn selected_row_fills_the_background_and_brightens_only_the_title() {
+    // The Selected Row is painted by a subtle full-width `selected_bg` fill plus
+    // a brightened `selected_fg` title — not inverted video — so every other
+    // cell keeps its semantic foreground (see ADR 0005).
+    let model = model_with(
+        vec![
+            pr(1, "selected", "carol", 1),
+            pr(2, "not selected", "alice", 2),
+        ],
+        Grouping::None,
+        |_| Some(Tier::NeedsReview),
+    );
+    let terminal = render_snapshot(&model, 116, 6);
+    let buffer = terminal.backend().buffer();
+    let rows = buffer_text(&terminal);
+    // Row 3 is the first PR row and, with the default cursor, the Selected Row.
+    let selected = &rows[3];
+    let palette = Palette::dark();
+
+    // The fill spans the full list width, including inter-cell gaps and trailing
+    // padding — a continuous band, not per-cell blocks.
+    let list_width = crate::app::list_layout::list_width(116);
+    for x in 0..list_width {
+        assert_eq!(
+            buffer[(x, 3)].bg,
+            palette.selected_bg,
+            "selected row should fill the full width with selected_bg at column {x}"
+        );
+    }
+
+    // The title is brightened to `selected_fg`.
+    let title_x = selected.find("selected").expect("title rendered") as u16;
+    assert_eq!(
+        buffer[(title_x, 3)].fg,
+        palette.selected_fg,
+        "selected row's title should use the selected_fg role"
+    );
+
+    // A non-title cell keeps its semantic foreground: the PR number stays on the
+    // count role rather than flipping with the selection.
+    let pr_num_x = selected.find('#').expect("pr number rendered") as u16;
+    assert_eq!(
+        buffer[(pr_num_x, 3)].fg,
+        palette.count,
+        "selected row's PR number keeps the count role"
+    );
+    // And it is not inverted video.
+    assert!(
+        !buffer[(pr_num_x, 3)]
+            .modifier
+            .contains(ratatui::style::Modifier::REVERSED),
+        "selected row must not use inverted video"
+    );
+}
+
+#[test]
+fn unselected_row_has_no_background_fill() {
+    // The unselected branch is unchanged: no `selected_bg`, default background.
+    let model = model_with(
+        vec![
+            pr(1, "selected", "carol", 1),
+            pr(2, "not selected", "alice", 2),
+        ],
+        Grouping::None,
+        |_| Some(Tier::NeedsReview),
+    );
+    let terminal = render_snapshot(&model, 116, 6);
+    let buffer = terminal.backend().buffer();
+    let rows = buffer_text(&terminal);
+    let row = &rows[4]; // second PR row: the non-selected list row
+    let pr_num_x = row.find('#').expect("pr number rendered") as u16;
+    assert_eq!(
+        buffer[(pr_num_x, 4)].bg,
+        Color::Reset,
+        "an unselected row keeps the default background"
+    );
+}
+
 // ── repo tabs ──────────────────────────────────────────────────────────────
 
 /// First row of a rendered snapshot — the Repo Tab bar.
