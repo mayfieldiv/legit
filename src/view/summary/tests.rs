@@ -569,21 +569,22 @@ fn checks_summary_panel_gives_a_wide_check_its_own_row() {
 }
 
 #[test]
-fn checks_summary_panel_caps_at_eight_with_overflow() {
+fn checks_summary_panel_caps_at_eight_rows_with_overflow() {
     let mut model = model_with_selected(sample_pr(42, "Add the thing"));
-    let checks: Vec<crate::github::types::CheckRun> = (0..11)
+    let checks: Vec<crate::github::types::CheckRun> = (0..20)
         .map(|i| check(&format!("check-{i:02}"), "completed", Some("success")))
         .collect();
     with_checks(&mut model, "abc123", checks);
 
     let rows = panel_rows(&model, 140, 40);
     let joined = rows.join("\n");
-    // Eleven checks: eight rows render, three collapse into the overflow line.
-    let rendered = (0..11)
+    // The cap is eight ROWS. These short checks all pair two-up, so eight rows
+    // hold sixteen checks; the remaining four collapse into the overflow line.
+    let rendered = (0..20)
         .filter(|i| joined.contains(&format!("check-{i:02}")))
         .count();
-    assert_eq!(rendered, 8, "eight checks render: {rows:?}");
-    assert!(joined.contains("+3 more"), "overflow line: {rows:?}");
+    assert_eq!(rendered, 16, "eight rows of two checks render: {rows:?}");
+    assert!(joined.contains("+4 more"), "overflow line: {rows:?}");
 }
 
 #[test]

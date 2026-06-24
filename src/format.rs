@@ -336,9 +336,10 @@ pub fn check_row(check: &CheckRun) -> Line<'static> {
 /// column begins this many spaces past the widest pairable cell.
 const SUMMARY_COLUMN_GAP: usize = 2;
 
-/// Lay the already-selected, already-ordered `checks` into up to two columns for
-/// the summary panel at content width `width`, returning one `Line` per grid row
-/// (the caller adds the header and any `+N more`).
+/// Lay the already-ordered `checks` into up to two columns for the summary panel
+/// at content width `width`, emitting at most `max_rows` grid rows. Returns the
+/// rendered rows (the caller adds the header) and the count of checks that didn't
+/// fit — the `+N more` overflow.
 ///
 /// Most checks pair two-up, packed to the left: the column stride is the widest
 /// *pairable* cell plus [`SUMMARY_COLUMN_GAP`], so the second column hugs the
@@ -347,7 +348,14 @@ const SUMMARY_COLUMN_GAP: usize = 2;
 /// takes its own full-width row (so does a trailing unpaired check). This is the
 /// "some rows have just one check" behaviour: a narrow panel where nothing pairs
 /// degrades cleanly to the old single column.
-pub fn checks_two_column_lines(checks: &[&CheckRun], width: usize) -> Vec<Line<'static>> {
+///
+/// The cap is on *rows*, not checks, so a wide terminal that pairs everything
+/// shows up to `2 × max_rows` checks while the section's height stays bounded.
+pub fn checks_two_column_lines(
+    checks: &[&CheckRun],
+    width: usize,
+    max_rows: usize,
+) -> (Vec<Line<'static>>, usize) {
     let inner = width.saturating_sub(CHECK_INDENT.len());
     // A cell wider than half the drawable width can't share a row with a
     // partner, so it can never be a column — it gets a solo row instead.
@@ -357,7 +365,11 @@ pub fn checks_two_column_lines(checks: &[&CheckRun], width: usize) -> Vec<Line<'
     // Pack the paired columns to content: the widest pairable cell plus the gap
     // is where the second column begins. Two columns always fit — a pairable
     // cell is at most `half` wide and `CHECK_INDENT + 2·half + GAP <= width`.
-    let stride = checks
+    // Measure the stride over only the checks that could fill the row budget (at
+    // most two per row) so a long name ranked past the cap can't widen the
+    // visible columns.
+    let candidate = &checks[..checks.len().min(2 * max_rows)];
+    let stride = candidate
         .iter()
         .copied()
         .filter(|c| pairable(c))
@@ -366,26 +378,45 @@ pub fn checks_two_column_lines(checks: &[&CheckRun], width: usize) -> Vec<Line<'
         .map_or(0, |widest| widest + SUMMARY_COLUMN_GAP);
 
     let mut lines: Vec<Line<'static>> = Vec::new();
+    // Count checks actually rendered into a row; a check held in `pending` is not
+    // rendered until flushed, so the overflow tally below counts it correctly.
+    let mut placed = 0usize;
     let mut pending: Option<&CheckRun> = None;
-    for &check in checks {
+    let mut i = 0;
+    while i < checks.len() && lines.len() < max_rows {
+        let check = checks[i];
         if pairable(check) {
             match pending.take() {
-                None => pending = Some(check),
-                Some(first) => lines.push(two_column_row(first, check, stride)),
+                None => {
+                    pending = Some(check);
+                    i += 1;
+                }
+                Some(first) => {
+                    lines.push(two_column_row(first, check, stride));
+                    placed += 2;
+                    i += 1;
+                }
             }
+        } else if let Some(first) = pending.take() {
+            // A wide check can't pair: flush the half-formed pair to its own row
+            // first. Don't advance — the wide check is handled next iteration if
+            // the row budget still allows.
+            lines.push(check_row(first));
+            placed += 1;
         } else {
-            // A wide check can't pair: flush any half-formed pair to its own
-            // row first, then give the wide check its own full-width row.
-            if let Some(first) = pending.take() {
-                lines.push(check_row(first));
-            }
             lines.push(check_row(check));
+            placed += 1;
+            i += 1;
         }
     }
-    if let Some(first) = pending.take() {
+    // A trailing unpaired check gets its own row if the budget allows.
+    if let Some(first) = pending.take()
+        && lines.len() < max_rows
+    {
         lines.push(check_row(first));
+        placed += 1;
     }
-    lines
+    (lines, checks.len().saturating_sub(placed))
 }
 
 /// One two-column grid row: `first` (after the shared [`CHECK_INDENT`]) padded
@@ -413,38 +444,15 @@ pub fn overflow_line(count: usize, muted: Color) -> Line<'static> {
     ))
 }
 
-/// Maximum number of individual check rows the single-column summary panel
-/// renders before the remainder collapses into a `+N more` overflow line. The
-/// detail view's grid sizes its own cap to the number of grid columns (a wide
-/// terminal shows more); see `detail_layout`.
-pub const MAX_VISIBLE_CHECKS: usize = 8;
-
 /// Order `checks` by the shared check ordering and return them as references,
 /// leaving the input slice untouched. The single source of truth for the order
-/// both the summary panel and the detail grid draw checks in — the detail grid
-/// needs the full sorted list (to size its columns to the content) before it
-/// knows its own visible cap, so it sorts through here and truncates itself.
+/// both the summary panel and the detail grid draw checks in. Each view then
+/// lays out and caps the sorted list its own way: the detail grid sizes columns
+/// to the body width, while the summary panel packs two-up to a row budget.
 pub fn sorted_check_runs(checks: &[CheckRun]) -> Vec<&CheckRun> {
     let mut sorted: Vec<&CheckRun> = checks.iter().collect();
     sort_check_runs(&mut sorted);
     sorted
-}
-
-/// Order `checks` via `sorted_check_runs` and split into the visible checks
-/// (capped at `cap`) and the overflow count (checks beyond the cap). The single
-/// source of truth for the cap/overflow rule: the summary panel passes
-/// [`MAX_VISIBLE_CHECKS`]; the detail grid passes its column-scaled cap.
-pub fn visible_checks_capped(checks: &[CheckRun], cap: usize) -> (Vec<&CheckRun>, usize) {
-    let mut sorted = sorted_check_runs(checks);
-    let overflow = sorted.len().saturating_sub(cap);
-    sorted.truncate(cap);
-    (sorted, overflow)
-}
-
-/// The summary panel's check selection: [`visible_checks_capped`] at the fixed
-/// [`MAX_VISIBLE_CHECKS`] cap for the single column.
-pub fn visible_checks(checks: &[CheckRun]) -> (Vec<&CheckRun>, usize) {
-    visible_checks_capped(checks, MAX_VISIBLE_CHECKS)
 }
 
 /// The three-way classification of a check run's outcome. The single source of
@@ -589,12 +597,11 @@ mod tests {
     use unicode_width::UnicodeWidthStr;
 
     use super::{
-        CheckOutcome, ChecksSummary, CommentCounts, MAX_VISIBLE_CHECKS, ReviewsSummary,
-        abbreviate_home, abbreviate_home_with, check_icon, check_row, check_sort_group,
-        checks_summary, checks_two_column_lines, comment_counts, format_age, format_duration,
-        format_merge_status, format_mergeable, format_repo_short, format_review_state, format_size,
-        outcome, pad_to_width, review_icon, reviews_summary, sort_check_runs, truncate,
-        truncate_middle, visible_checks,
+        CheckOutcome, ChecksSummary, CommentCounts, ReviewsSummary, abbreviate_home,
+        abbreviate_home_with, check_icon, check_row, check_sort_group, checks_summary,
+        checks_two_column_lines, comment_counts, format_age, format_duration, format_merge_status,
+        format_mergeable, format_repo_short, format_review_state, format_size, outcome,
+        pad_to_width, review_icon, reviews_summary, sort_check_runs, truncate, truncate_middle,
     };
     use crate::github::types::{CheckRun, FullReviewThread, PRState, Review, ReviewComment};
     use crate::palette::DARK;
@@ -908,24 +915,25 @@ mod tests {
     }
 
     #[test]
-    fn visible_checks_caps_at_eight_and_reports_overflow() {
-        // Eleven passing checks: eight render, three overflow.
-        let runs: Vec<CheckRun> = (0..11)
-            .map(|i| check(&format!("check-{i:02}"), "completed", Some("success")))
+    fn checks_two_column_caps_rows_and_reports_overflow() {
+        // Twenty short checks that all pair two-up. A three-row budget renders
+        // three rows of two — six checks — and reports the other fourteen as
+        // overflow. The cap is on rows, so it holds twice as many checks.
+        let runs: Vec<CheckRun> = (0..20)
+            .map(|i| check(&format!("c{i:02}"), "completed", Some("success")))
             .collect();
-        let (visible, overflow) = visible_checks(&runs);
-        assert_eq!(visible.len(), MAX_VISIBLE_CHECKS);
-        assert_eq!(overflow, 3);
-    }
+        let refs: Vec<&CheckRun> = runs.iter().collect();
 
-    #[test]
-    fn visible_checks_shows_no_overflow_at_exactly_eight() {
-        let runs: Vec<CheckRun> = (0..8)
-            .map(|i| check(&format!("check-{i:02}"), "completed", Some("success")))
-            .collect();
-        let (visible, overflow) = visible_checks(&runs);
-        assert_eq!(visible.len(), 8);
-        assert_eq!(overflow, 0);
+        let (lines, overflow) = checks_two_column_lines(&refs, 30, 3);
+        assert_eq!(lines.len(), 3, "row budget caps the grid at three rows");
+        assert_eq!(overflow, 14, "the remaining checks overflow");
+        for line in &lines {
+            assert_eq!(
+                line.spans.iter().filter(|s| s.content == "✓").count(),
+                2,
+                "each capped row still pairs two checks"
+            );
+        }
     }
 
     #[test]
@@ -1007,9 +1015,10 @@ mod tests {
         // Width 30: drawable 28, half 13. `✓ a` (3) pairs; the 20-char name
         // (cell 22) is wider than half, so it gets its own row. The pairable
         // cells are all 3 wide, so the column stride is 3 + gap(2) = 5.
-        let lines = checks_two_column_lines(&refs, 30);
+        let (lines, overflow) = checks_two_column_lines(&refs, 30, 8);
         let texts: Vec<String> = lines.iter().map(line_text).collect();
 
+        assert_eq!(overflow, 0, "everything fits in the row budget");
         assert_eq!(texts.len(), 3, "two pair rows + one solo row: {texts:?}");
         assert_eq!(texts[0], "  ✓ a  ✓ b", "first pair packs to content");
         assert_eq!(
@@ -1038,7 +1047,8 @@ mod tests {
 
         // A panel too narrow to fit two columns: every check takes its own row,
         // exactly like the old single column.
-        let lines = checks_two_column_lines(&refs, 8);
+        let (lines, overflow) = checks_two_column_lines(&refs, 8, 8);
+        assert_eq!(overflow, 0, "both checks fit");
         assert_eq!(lines.len(), 2, "one check per row");
         for line in &lines {
             assert_eq!(

@@ -24,14 +24,20 @@ use crate::app::model::{FilesState, Model};
 use crate::chip::label_lines;
 use crate::format::{
     checks_summary, checks_two_column_lines, comment_counts, format_age, format_merge_status,
-    format_review_state, format_size, overflow_line, review_icon, reviews_summary, truncate,
-    visible_checks,
+    format_review_state, format_size, overflow_line, review_icon, reviews_summary,
+    sorted_check_runs, truncate,
 };
 use crate::github::rest::PR;
 use crate::palette::Palette;
 
 /// Placeholder text for a section whose enrichment hasn't arrived yet.
 const LOADING: &str = "Loading…";
+
+/// Grid rows the CI checks section draws before the rest collapse into a
+/// `+N more` line. The cap is on rows, not checks: the two-column packer can
+/// show up to twice this many checks when they pair, while the section's height
+/// stays bounded for the other panel sections below it.
+const MAX_CHECK_ROWS: usize = 8;
 
 #[cfg(test)]
 mod tests;
@@ -292,11 +298,13 @@ fn checks_lines(model: &Model, pr: &PR, width: usize, palette: &Palette) -> Vec<
     ));
     let mut lines = vec![Line::from(header)];
 
-    // Up to eight checks of ANY outcome, ordered failing-first then slowest via
-    // the shared `visible_checks` selection, laid into two content-packed
-    // columns. The header counts above still tally ALL checks.
-    let (visible, overflow) = visible_checks(checks);
-    lines.extend(checks_two_column_lines(&visible, width));
+    // Checks of ANY outcome, ordered failing-first then slowest, laid into two
+    // content-packed columns up to a fixed row budget — so a wide panel that
+    // pairs everything shows up to twice as many checks as it has rows. The
+    // header counts above still tally ALL checks.
+    let sorted = sorted_check_runs(checks);
+    let (grid, overflow) = checks_two_column_lines(&sorted, width, MAX_CHECK_ROWS);
+    lines.extend(grid);
     if overflow > 0 {
         lines.push(overflow_line(overflow, palette.muted));
     }
