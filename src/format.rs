@@ -246,17 +246,9 @@ pub fn sort_check_runs(checks: &mut [&CheckRun]) {
     checks.sort_by(|a, b| {
         check_sort_group(a)
             .cmp(&check_sort_group(b))
-            // Timed checks before untimed ones, independent of magnitude, so a
-            // fast (0s) timed check still outranks an untimed check rather than
-            // tying it at zero.
-            .then_with(|| a.duration().is_none().cmp(&b.duration().is_none()))
-            // Then descending by duration among timed checks (untimed ones are
-            // already grouped last by the comparison above).
-            .then_with(|| {
-                b.duration()
-                    .unwrap_or_default()
-                    .cmp(&a.duration().unwrap_or_default())
-            })
+            // Descending Check Duration via Option ordering: None < Some, so reversing
+            // the operands sorts longer durations first and drops untimed checks last.
+            .then_with(|| b.duration().cmp(&a.duration()))
             .then(a.name.cmp(&b.name))
     });
 }
