@@ -18,11 +18,11 @@ use unicode_width::UnicodeWidthStr;
 use crate::{
     blocker::{ThreadKind, classify_thread},
     format::{
-        CHECK_INDENT, check_cell_spans, checks_summary, format_age, overflow_line,
-        sorted_check_runs,
+        CHECK_INDENT, check_cell_spans, check_cell_width, checks_summary, format_age,
+        overflow_line, sorted_check_runs,
     },
     github::rest::PR,
-    github::types::{CheckRun, FullReviewThread},
+    github::types::FullReviewThread,
     markdown::{self, Block},
     palette::DARK,
 };
@@ -120,15 +120,6 @@ pub(crate) const MAX_GRID_ROWS: usize = 4;
 /// instead of being spread to the body's edges on a wide terminal.
 const CHECKS_GRID_GAP: usize = 2;
 
-/// The display width of one check's painted cell (`check_cell_spans`): the icon,
-/// name, and any Check Duration. Sets the grid's column stride.
-fn cell_width(check: &CheckRun) -> usize {
-    check_cell_spans(check)
-        .iter()
-        .map(|s| s.content.width())
-        .sum()
-}
-
 /// How many grid columns of `cell_width`-wide check cells fit in `width`: the
 /// [`CHECK_INDENT`] sits in front, then each column takes the cell plus a
 /// [`CHECKS_GRID_GAP`] — except the last, which needs no trailing gap. Clamped
@@ -200,7 +191,11 @@ fn checks_section_lines(model: &Model, pr: &PR, width: u16) -> Vec<Line<'static>
     // checks that could be shown (a top-priority prefix) so a long name ranked
     // past the cap can't widen — and so thin out — the visible columns.
     let candidate = &sorted[..sorted.len().min(MAX_GRID_COLUMNS * MAX_GRID_ROWS)];
-    let widest_cell = candidate.iter().map(|c| cell_width(c)).max().unwrap_or(0);
+    let widest_cell = candidate
+        .iter()
+        .map(|c| check_cell_width(c))
+        .max()
+        .unwrap_or(0);
     let columns = grid_columns(width, widest_cell);
     let stride = widest_cell + CHECKS_GRID_GAP;
 

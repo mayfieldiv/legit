@@ -313,13 +313,92 @@ pub fn check_cell_spans(check: &CheckRun) -> Vec<Span<'static>> {
     spans
 }
 
-/// One indented check row for the summary panel's single column — two spaces
-/// then `check_cell_spans`: `  ✓ build 2m`. The single source of truth for a
-/// summary check row so the indent and content stay identical to the detail
-/// grid's cells.
+/// The display width of one check's painted cell (`check_cell_spans`): the icon,
+/// name, and any Check Duration. Sets the column stride for both grids.
+pub fn check_cell_width(check: &CheckRun) -> usize {
+    check_cell_spans(check)
+        .iter()
+        .map(|s| s.content.width())
+        .sum()
+}
+
+/// One indented check row for a single column — two spaces then
+/// `check_cell_spans`: `  ✓ build 2m`. The single source of truth for a
+/// one-column check row so the indent and content stay identical to the detail
+/// grid's cells and the summary grid's solo rows.
 pub fn check_row(check: &CheckRun) -> Line<'static> {
     let mut spans = vec![Span::raw(CHECK_INDENT)];
     spans.extend(check_cell_spans(check));
+    Line::from(spans)
+}
+
+/// Blank columns separating the summary panel's two check columns. The second
+/// column begins this many spaces past the widest pairable cell.
+const SUMMARY_COLUMN_GAP: usize = 2;
+
+/// Lay the already-selected, already-ordered `checks` into up to two columns for
+/// the summary panel at content width `width`, returning one `Line` per grid row
+/// (the caller adds the header and any `+N more`).
+///
+/// Most checks pair two-up, packed to the left: the column stride is the widest
+/// *pairable* cell plus [`SUMMARY_COLUMN_GAP`], so the second column hugs the
+/// first rather than spreading to the panel's midpoint. A check whose cell is
+/// too wide to leave room for a partner — wider than half the drawable width —
+/// takes its own full-width row (so does a trailing unpaired check). This is the
+/// "some rows have just one check" behaviour: a narrow panel where nothing pairs
+/// degrades cleanly to the old single column.
+pub fn checks_two_column_lines(checks: &[&CheckRun], width: usize) -> Vec<Line<'static>> {
+    let inner = width.saturating_sub(CHECK_INDENT.len());
+    // A cell wider than half the drawable width can't share a row with a
+    // partner, so it can never be a column — it gets a solo row instead.
+    let half = inner.saturating_sub(SUMMARY_COLUMN_GAP) / 2;
+    let pairable = |check: &CheckRun| check_cell_width(check) <= half;
+
+    // Pack the paired columns to content: the widest pairable cell plus the gap
+    // is where the second column begins. Two columns always fit — a pairable
+    // cell is at most `half` wide and `CHECK_INDENT + 2·half + GAP <= width`.
+    let stride = checks
+        .iter()
+        .copied()
+        .filter(|c| pairable(c))
+        .map(check_cell_width)
+        .max()
+        .map_or(0, |widest| widest + SUMMARY_COLUMN_GAP);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut pending: Option<&CheckRun> = None;
+    for &check in checks {
+        if pairable(check) {
+            match pending.take() {
+                None => pending = Some(check),
+                Some(first) => lines.push(two_column_row(first, check, stride)),
+            }
+        } else {
+            // A wide check can't pair: flush any half-formed pair to its own
+            // row first, then give the wide check its own full-width row.
+            if let Some(first) = pending.take() {
+                lines.push(check_row(first));
+            }
+            lines.push(check_row(check));
+        }
+    }
+    if let Some(first) = pending.take() {
+        lines.push(check_row(first));
+    }
+    lines
+}
+
+/// One two-column grid row: `first` (after the shared [`CHECK_INDENT`]) padded
+/// out to `stride` columns so `second` aligns, then `second` unpadded.
+fn two_column_row(first: &CheckRun, second: &CheckRun, stride: usize) -> Line<'static> {
+    let cell = check_cell_spans(first);
+    let used: usize = cell.iter().map(|s| s.content.width()).sum();
+    let mut spans = vec![Span::raw(CHECK_INDENT)];
+    spans.extend(cell);
+    if used < stride {
+        spans.push(Span::raw(" ".repeat(stride - used)));
+    }
+    spans.extend(check_cell_spans(second));
     Line::from(spans)
 }
 
@@ -506,15 +585,16 @@ mod tests {
 
     use chrono::TimeZone;
 
+    use ratatui::text::Line;
     use unicode_width::UnicodeWidthStr;
 
     use super::{
         CheckOutcome, ChecksSummary, CommentCounts, MAX_VISIBLE_CHECKS, ReviewsSummary,
         abbreviate_home, abbreviate_home_with, check_icon, check_row, check_sort_group,
-        checks_summary, comment_counts, format_age, format_duration, format_merge_status,
-        format_mergeable, format_repo_short, format_review_state, format_size, outcome,
-        pad_to_width, review_icon, reviews_summary, sort_check_runs, truncate, truncate_middle,
-        visible_checks,
+        checks_summary, checks_two_column_lines, comment_counts, format_age, format_duration,
+        format_merge_status, format_mergeable, format_repo_short, format_review_state, format_size,
+        outcome, pad_to_width, review_icon, reviews_summary, sort_check_runs, truncate,
+        truncate_middle, visible_checks,
     };
     use crate::github::types::{CheckRun, FullReviewThread, PRState, Review, ReviewComment};
     use crate::palette::DARK;
@@ -906,6 +986,67 @@ mod tests {
         let duration_span = row.spans.last().expect("a duration span");
         assert_eq!(duration_span.content.as_ref(), " 2m");
         assert_eq!(duration_span.style.fg, Some(DARK.muted));
+    }
+
+    /// Flatten a `Line`'s spans back to plain text for an exact column assertion.
+    fn line_text(line: &Line) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn checks_two_column_pairs_narrow_checks_and_solos_a_wide_one() {
+        let runs = [
+            check("a", "completed", Some("success")),
+            check("b", "completed", Some("success")),
+            check(&"x".repeat(20), "completed", Some("success")),
+            check("c", "completed", Some("success")),
+            check("d", "completed", Some("success")),
+        ];
+        let refs: Vec<&CheckRun> = runs.iter().collect();
+
+        // Width 30: drawable 28, half 13. `✓ a` (3) pairs; the 20-char name
+        // (cell 22) is wider than half, so it gets its own row. The pairable
+        // cells are all 3 wide, so the column stride is 3 + gap(2) = 5.
+        let lines = checks_two_column_lines(&refs, 30);
+        let texts: Vec<String> = lines.iter().map(line_text).collect();
+
+        assert_eq!(texts.len(), 3, "two pair rows + one solo row: {texts:?}");
+        assert_eq!(texts[0], "  ✓ a  ✓ b", "first pair packs to content");
+        assert_eq!(
+            lines[1].spans.iter().filter(|s| s.content == "✓").count(),
+            1,
+            "the wide check is alone on its row: {:?}",
+            texts[1]
+        );
+        assert!(
+            texts[1].contains(&"x".repeat(20)),
+            "wide check name: {texts:?}"
+        );
+        assert_eq!(
+            texts[2], "  ✓ c  ✓ d",
+            "the checks after the wide one re-pair"
+        );
+    }
+
+    #[test]
+    fn checks_two_column_degrades_to_one_column_when_too_narrow() {
+        let runs = [
+            check("alpha", "completed", Some("success")),
+            check("bravo", "completed", Some("success")),
+        ];
+        let refs: Vec<&CheckRun> = runs.iter().collect();
+
+        // A panel too narrow to fit two columns: every check takes its own row,
+        // exactly like the old single column.
+        let lines = checks_two_column_lines(&refs, 8);
+        assert_eq!(lines.len(), 2, "one check per row");
+        for line in &lines {
+            assert_eq!(
+                line.spans.iter().filter(|s| s.content == "✓").count(),
+                1,
+                "single column: one check per row"
+            );
+        }
     }
 
     #[test]

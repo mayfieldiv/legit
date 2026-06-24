@@ -23,7 +23,7 @@ use ratatui::{
 use crate::app::model::{FilesState, Model};
 use crate::chip::label_lines;
 use crate::format::{
-    check_row, checks_summary, comment_counts, format_age, format_merge_status,
+    checks_summary, checks_two_column_lines, comment_counts, format_age, format_merge_status,
     format_review_state, format_size, overflow_line, review_icon, reviews_summary, truncate,
     visible_checks,
 };
@@ -66,7 +66,7 @@ pub fn render(
     lines.push(threads_line(model, pr, palette));
     lines.extend(reviews_lines(model, pr, palette));
     lines.extend(requested_reviewers_lines(pr, palette));
-    lines.extend(checks_lines(model, pr, palette));
+    lines.extend(checks_lines(model, pr, usize::from(area.width), palette));
     lines.extend(files_lines(model, pr, palette));
     lines.extend(label_lines(&pr.labels, usize::from(area.width), palette));
     lines.extend(assignees_lines(pr, usize::from(area.width), palette));
@@ -255,13 +255,14 @@ fn threads_line(model: &Model, pr: &PR, palette: &Palette) -> Line<'static> {
 }
 
 /// The CI checks section: a `checks` header with failed / pending / passed
-/// counts (always over ALL checks), then one indented row per check of any
-/// outcome — ordered failing-first, then slowest, then name — capped at eight
-/// with a `+N more` overflow line. A single column, mirroring the detail view's
-/// grid ordering. `Loading…` until the checks fetch arrives — which can't start
-/// until review-status reports the PR's head SHA, so a PR with no head SHA also
-/// reads as loading.
-fn checks_lines(model: &Model, pr: &PR, palette: &Palette) -> Vec<Line<'static>> {
+/// counts (always over ALL checks), then up to eight checks of any outcome —
+/// ordered failing-first, then slowest, then name — laid into two content-packed
+/// columns (`checks_two_column_lines`), with a `+N more` overflow line. A check
+/// too wide to share a row falls back to its own full-width row, so a narrow
+/// panel degrades to a single column. `Loading…` until the checks fetch arrives
+/// — which can't start until review-status reports the PR's head SHA, so a PR
+/// with no head SHA also reads as loading.
+fn checks_lines(model: &Model, pr: &PR, width: usize, palette: &Palette) -> Vec<Line<'static>> {
     let Some(checks) = model.enrichment.checks_for(pr) else {
         return vec![header_with_loading("checks", palette)];
     };
@@ -292,12 +293,10 @@ fn checks_lines(model: &Model, pr: &PR, palette: &Palette) -> Vec<Line<'static>>
     let mut lines = vec![Line::from(header)];
 
     // Up to eight checks of ANY outcome, ordered failing-first then slowest via
-    // the shared `visible_checks` selection (the same ordering and cap the
-    // detail grid draws from). The header counts above still tally ALL checks.
+    // the shared `visible_checks` selection, laid into two content-packed
+    // columns. The header counts above still tally ALL checks.
     let (visible, overflow) = visible_checks(checks);
-    for check in visible {
-        lines.push(check_row(check));
-    }
+    lines.extend(checks_two_column_lines(&visible, width));
     if overflow > 0 {
         lines.push(overflow_line(overflow, palette.muted));
     }

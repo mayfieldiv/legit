@@ -483,7 +483,7 @@ fn renders_check_counts_and_rows_for_all_outcomes() {
 }
 
 #[test]
-fn checks_summary_panel_is_single_column_with_durations() {
+fn checks_summary_panel_pairs_short_checks_into_two_columns() {
     let mut model = model_with_selected(sample_pr(42, "Add the thing"));
     with_checks(
         &mut model,
@@ -496,22 +496,26 @@ fn checks_summary_panel_is_single_column_with_durations() {
     );
 
     let rows = panel_rows(&model, 140, 30);
-    // Each check sits on its own row (single column): no row carries two check
-    // names side by side.
+    // The two slowest short checks share one row (two columns side by side).
     let build_row = rows
         .iter()
         .find(|r| r.contains("build"))
         .unwrap_or_else(|| panic!("build row: {rows:?}"));
     assert!(
-        !build_row.contains("lint") && !build_row.contains("untimed"),
-        "summary is single column: {build_row:?}"
+        build_row.contains("lint"),
+        "two short checks pair on one row: {build_row:?}"
     );
     // A timed check shows its duration; the untimed one shows none.
     assert!(build_row.contains("2m"), "build duration: {build_row:?}");
+    // `untimed` is the trailing unpaired check, so it sits alone on its row.
     let untimed_row = rows
         .iter()
         .find(|r| r.contains("untimed"))
         .unwrap_or_else(|| panic!("untimed row: {rows:?}"));
+    assert!(
+        !untimed_row.contains("build") && !untimed_row.contains("lint"),
+        "trailing unpaired check sits alone: {untimed_row:?}"
+    );
     // No digit-followed-by-s/m duration token on the untimed row.
     let has_duration_token = untimed_row
         .as_bytes()
@@ -520,6 +524,47 @@ fn checks_summary_panel_is_single_column_with_durations() {
     assert!(
         !has_duration_token,
         "untimed check shows no duration: {untimed_row:?}"
+    );
+}
+
+#[test]
+fn checks_summary_panel_gives_a_wide_check_its_own_row() {
+    // A check too wide to leave room for a partner takes a full-width row, while
+    // the short checks around it still pair two-up. Distinct durations fix the
+    // order: s-one, s-two, the long check, s-three, s-four.
+    let mut model = model_with_selected(sample_pr(42, "Add the thing"));
+    with_checks(
+        &mut model,
+        "abc123",
+        vec![
+            timed_check("s-one", "success", 500),
+            timed_check("s-two", "success", 400),
+            timed_check("this-is-a-very-long-check-name", "success", 300),
+            timed_check("s-three", "success", 200),
+            timed_check("s-four", "success", 100),
+        ],
+    );
+
+    let rows = panel_rows(&model, 140, 30);
+    // The long check is alone on its row — no short check shares it.
+    let long_row = rows
+        .iter()
+        .find(|r| r.contains("this-is-a-very-long-check-name"))
+        .unwrap_or_else(|| panic!("long check row: {rows:?}"));
+    assert!(
+        ["s-one", "s-two", "s-three", "s-four"]
+            .iter()
+            .all(|s| !long_row.contains(s)),
+        "wide check sits on its own row: {long_row:?}"
+    );
+    // The short checks on either side still pair: s-one with s-two.
+    let pair_row = rows
+        .iter()
+        .find(|r| r.contains("s-one"))
+        .unwrap_or_else(|| panic!("s-one row: {rows:?}"));
+    assert!(
+        pair_row.contains("s-two"),
+        "short checks still pair around the wide one: {pair_row:?}"
     );
 }
 
