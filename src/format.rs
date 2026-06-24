@@ -293,17 +293,51 @@ pub fn check_icon(check: &CheckRun) -> (&'static str, Color) {
 /// that depth.
 pub const CHECK_INDENT: &str = "  ";
 
+/// Width to keep of a truncated workflow name before the job name starts
+/// truncating too. The job is the more distinctive half, so a tight column
+/// shrinks the `workflow / ` prefix down to this floor first (or to the
+/// workflow's full width, if it's already shorter).
+const MIN_WORKFLOW_WIDTH: usize = 8;
+
+/// Fit a `workflow` + ` / ` + `job` label into `budget` columns. The workflow
+/// shrinks first — down to [`MIN_WORKFLOW_WIDTH`] — and only the remaining
+/// shortfall comes off the job, since the job name carries the most signal.
+/// Returns the (possibly truncated) workflow and job; the caller adds the ` / `.
+/// The workflow truncates at the end (keeping its recognisable start); the job
+/// truncates in the middle (both ends carry signal, e.g. `build…backend`).
+fn fit_workflow_label(workflow: &str, job: &str, budget: usize) -> (String, String) {
+    const SEP: usize = 3; // " / "
+    let (wf_width, job_width) = (workflow.width(), job.width());
+    if wf_width + SEP + job_width <= budget {
+        return (workflow.to_owned(), job.to_owned());
+    }
+    let over = (wf_width + SEP + job_width) - budget;
+    // Take from the workflow first, but not below the floor; whatever shortfall
+    // is left then comes off the job.
+    let floor = wf_width.min(MIN_WORKFLOW_WIDTH);
+    let wf_target = wf_width.saturating_sub(over).max(floor);
+    let remaining = over - (wf_width - wf_target);
+    let job_target = job_width.saturating_sub(remaining);
+    // Final clamp so an extreme-narrow column can't overflow the budget.
+    let wf_target = wf_target.min(budget.saturating_sub(SEP));
+    let job_target = job_target.min(budget.saturating_sub(wf_target + SEP));
+    (
+        truncate(workflow, wf_target),
+        truncate_middle(job, job_target),
+    )
+}
+
 /// The styled spans for one check cell within `max_width` columns — the coloured
 /// status icon from `check_icon`, the `workflow / job` label, and (when present)
 /// the muted Check Duration: `✓ ci / build 2m`.
 ///
 /// The `workflow / ` prefix (separator included) is painted muted so the job
 /// name stands out as the primary text. The icon and duration are never dropped;
-/// the job name is middle-truncated to fit (`ci / Gen…Commits`) so a long label
-/// still lines up. Pass `usize::MAX` to disable truncation. The single source of
-/// truth for a check's painted content, shared by the summary panel and the
-/// detail grid so the icon colouring and label treatment stay identical. The
-/// `CHECK_INDENT` is prepended by each caller, not here.
+/// the label is truncated to fit via [`fit_workflow_label`] — the workflow gives
+/// way first, then the job. Pass `usize::MAX` to disable truncation. The single
+/// source of truth for a check's painted content, shared by the summary panel
+/// and the detail grid so the icon colouring and label treatment stay identical.
+/// The `CHECK_INDENT` is prepended by each caller, not here.
 pub fn check_cell_spans(check: &CheckRun, max_width: usize) -> Vec<Span<'static>> {
     let (icon, color) = check_icon(check);
     let duration = format_duration(check.duration());
@@ -318,23 +352,14 @@ pub fn check_cell_spans(check: &CheckRun, max_width: usize) -> Vec<Span<'static>
 
     let mut spans = vec![Span::styled(icon, Style::default().fg(color))];
     match check.workflow_name.as_deref().filter(|w| !w.is_empty()) {
-        // `workflow / ` muted, then the job name in the default colour. The job
-        // absorbs the squeeze; only a very tight column truncates the prefix too.
+        // `workflow / ` muted, then the job name in the default colour.
         Some(workflow) => {
-            let prefix = format!("{workflow} / ");
-            if prefix.width() >= label_budget {
-                spans.push(Span::styled(
-                    format!(" {}", truncate_middle(&prefix, label_budget)),
-                    Style::default().fg(DARK.muted),
-                ));
-            } else {
-                let job = truncate_middle(&check.name, label_budget - prefix.width());
-                spans.push(Span::styled(
-                    format!(" {prefix}"),
-                    Style::default().fg(DARK.muted),
-                ));
-                spans.push(Span::raw(job));
-            }
+            let (wf_text, job_text) = fit_workflow_label(workflow, &check.name, label_budget);
+            spans.push(Span::styled(
+                format!(" {wf_text} / "),
+                Style::default().fg(DARK.muted),
+            ));
+            spans.push(Span::raw(job_text));
         }
         // No workflow: the bare job name, middle-truncated to fit.
         None => spans.push(Span::raw(format!(
@@ -643,12 +668,12 @@ mod tests {
     use unicode_width::UnicodeWidthStr;
 
     use super::{
-        CheckOutcome, ChecksSummary, CommentCounts, ReviewsSummary, abbreviate_home,
-        abbreviate_home_with, check_cell_spans, check_icon, check_row, check_sort_group,
-        checks_summary, checks_two_column_lines, comment_counts, format_age, format_duration,
-        format_merge_status, format_mergeable, format_repo_short, format_review_state, format_size,
-        outcome, pad_to_width, review_icon, reviews_summary, sort_check_runs, truncate,
-        truncate_middle,
+        CheckOutcome, ChecksSummary, CommentCounts, MIN_WORKFLOW_WIDTH, ReviewsSummary,
+        abbreviate_home, abbreviate_home_with, check_cell_spans, check_icon, check_row,
+        check_sort_group, checks_summary, checks_two_column_lines, comment_counts,
+        fit_workflow_label, format_age, format_duration, format_merge_status, format_mergeable,
+        format_repo_short, format_review_state, format_size, outcome, pad_to_width, review_icon,
+        reviews_summary, sort_check_runs, truncate, truncate_middle,
     };
     use crate::github::types::{CheckRun, FullReviewThread, PRState, Review, ReviewComment};
     use crate::palette::DARK;
@@ -1090,6 +1115,42 @@ mod tests {
             "row fits the width ({}): {text:?}",
             text.chars().count()
         );
+    }
+
+    #[test]
+    fn fit_workflow_label_shrinks_the_workflow_before_the_job() {
+        // Plenty of room: nothing truncated.
+        assert_eq!(
+            fit_workflow_label("ci", "Tests", 40),
+            ("ci".to_owned(), "Tests".to_owned())
+        );
+
+        // Tight enough that the workflow must give, but the job still fits whole:
+        // the workflow truncates (end ellipsis) while the job is left untouched.
+        let (wf, job) = fit_workflow_label("Build and Test on Pull Request", "deploy", 26);
+        assert!(wf.contains('…'), "workflow truncated first: {wf:?}");
+        assert_eq!(
+            job, "deploy",
+            "job stays whole while the workflow has slack"
+        );
+
+        // Tighter still: the workflow bottoms out at its floor, then the job
+        // starts truncating too.
+        let (wf, job) = fit_workflow_label(
+            "Build and Test on Pull Request",
+            "build-and-test-backend",
+            24,
+        );
+        assert!(
+            wf.width() <= MIN_WORKFLOW_WIDTH,
+            "workflow held at its floor: {wf:?} ({}w)",
+            wf.width()
+        );
+        assert!(
+            wf.contains('…') && job.contains('…'),
+            "both truncated once the workflow hit the floor: {wf:?} / {job:?}"
+        );
+        assert!(wf.width() + 3 + job.width() <= 24, "fits the budget");
     }
 
     /// Flatten a `Line`'s spans back to plain text for an exact column assertion.
