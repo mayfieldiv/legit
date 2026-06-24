@@ -3,7 +3,7 @@ use ratatui::{Terminal, backend::TestBackend};
 
 use crate::{
     app::detail_items::{DetailFocus, DetailItems},
-    app::detail_layout::{MAX_GRID_COLUMNS, MAX_GRID_ROWS},
+    app::detail_layout::MAX_GRID_COLUMNS,
     app::model::{DetailState, Model, RepoDetection, ViewMode},
     git_remote::RepoInfo,
     github::rest::{Label, PR},
@@ -615,43 +615,40 @@ fn detail_checks_grid_grows_columns_with_the_terminal_width() {
 }
 
 #[test]
-fn detail_checks_grid_shows_more_than_eight_then_overflows() {
-    // A wide body shows `MAX_GRID_COLUMNS × MAX_GRID_ROWS` checks — well past the
-    // summary panel's eight — and collapses the rest into `+N more`.
-    let cap = MAX_GRID_COLUMNS * MAX_GRID_ROWS;
-    let overflow = 6;
-    let total = cap + overflow;
+fn detail_checks_grid_shows_every_check_with_no_overflow() {
+    // The detail view is the exhaustive one: it lists every check across as many
+    // rows as needed, with no row cap and no `+N more` overflow (unlike the
+    // summary panel). Seed well past the summary's eight to prove it.
+    let total = MAX_GRID_COLUMNS * 4 + 6;
     let checks: Vec<CheckRun> = (0..total)
         .map(|i| check(&format!("chk{i:02}"), "completed", Some("success")))
         .collect();
     let model = model_in_detail_with_checks(sample_pr(), "", checks);
 
-    // Width 120 packs the short `✓ chkNN` cells (stride 9) to MAX_GRID_COLUMNS.
-    let terminal = render_snapshot(&model, 120, 30);
+    // Width 120 packs the short `✓ chkNN` cells (stride 9) to MAX_GRID_COLUMNS;
+    // a tall body holds every grid row without scrolling.
+    let terminal = render_snapshot(&model, 120, 40);
     let rows = buffer_text(&terminal);
     let joined = rows.join("\n");
 
     let rendered = (0..total)
         .filter(|i| joined.contains(&format!("chk{i:02}")))
         .count();
-    assert!(cap > 8, "the wide grid shows more than the summary's eight");
-    assert_eq!(rendered, cap, "columns × rows checks render: {rows:?}");
+    assert!(total > 8, "more checks than the summary panel's eight");
+    assert_eq!(rendered, total, "every check renders: {rows:?}");
     assert!(
-        joined.contains(&format!("+{overflow} more")),
-        "overflow line: {rows:?}"
+        !rows.iter().any(|r| r.contains("more")),
+        "no overflow line in the exhaustive detail grid: {rows:?}"
     );
 }
 
 #[test]
 fn detail_check_rows_carry_the_two_space_indent() {
-    // The grid's first column and the overflow line sit two spaces in from the
-    // "CI Checks" header so the detail checks match the summary column's indent
-    // (the shared `check_row` look the grid replaced). Pin the leading column
-    // explicitly — `contains` assertions elsewhere never check the indent.
-    // Enough checks to overflow the grid's `columns × rows` cap so the `+N more`
-    // line is present to assert against.
-    let total = MAX_GRID_COLUMNS * MAX_GRID_ROWS + 3;
-    let checks: Vec<CheckRun> = (0..total)
+    // The grid's first column sits two spaces in from the "CI Checks" header so
+    // the detail checks read at the same depth as the summary panel (the shared
+    // `CHECK_INDENT`). Pin the leading column explicitly — `contains` assertions
+    // elsewhere never check the indent.
+    let checks: Vec<CheckRun> = (0..6)
         .map(|i| check(&format!("chk{i:02}"), "completed", Some("success")))
         .collect();
     let model = model_in_detail_with_checks(sample_pr(), "", checks);
@@ -678,17 +675,6 @@ fn detail_check_rows_carry_the_two_space_indent() {
         icon_row.find('✓').unwrap(),
         header_col + 2,
         "first grid column carries the two-space indent: {icon_row:?}"
-    );
-
-    // The overflow line carries the same indent (its `+` aligns with the icon).
-    let overflow_row = rows
-        .iter()
-        .find(|r| r.contains("+3 more"))
-        .unwrap_or_else(|| panic!("overflow row: {rows:?}"));
-    assert_eq!(
-        overflow_row.find('+').unwrap(),
-        header_col + 2,
-        "overflow line carries the two-space indent: {overflow_row:?}"
     );
 }
 

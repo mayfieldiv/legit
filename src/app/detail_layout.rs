@@ -19,7 +19,7 @@ use crate::{
     blocker::{ThreadKind, classify_thread},
     format::{
         CHECK_INDENT, check_cell_spans, check_cell_width, checks_summary, format_age,
-        overflow_line, sorted_check_runs,
+        sorted_check_runs,
     },
     github::rest::PR,
     github::types::FullReviewThread,
@@ -109,12 +109,6 @@ pub(crate) fn render_description_blocks(body: &str) -> Vec<Block> {
 /// `summary::checks_lines`).
 pub(crate) const MAX_GRID_COLUMNS: usize = 6;
 
-/// Rows of checks the detail grid draws before the remainder collapses into a
-/// `+N more` overflow line. The visible cap is `columns × MAX_GRID_ROWS`, so a
-/// wider terminal (more columns) shows more checks while the vertical footprint
-/// stays bounded.
-pub(crate) const MAX_GRID_ROWS: usize = 4;
-
 /// Blank columns between two adjacent grid columns. The column stride is the
 /// widest check cell plus this gap, so the columns stay packed near the left
 /// instead of being spread to the body's edges on a wide terminal.
@@ -134,14 +128,14 @@ fn grid_columns(width: u16, cell_width: usize) -> usize {
 }
 
 /// Build the CI checks section lines: blank separator + bold header with
-/// pass/fail/pending counts (over ALL checks) + a grid of checks of any outcome,
-/// ordered failing-first then slowest, with a `+N more` overflow line beyond the
-/// visible cap. The grid grows as many columns as the body width fits (capped at
-/// [`MAX_GRID_COLUMNS`]) and shows `columns × MAX_GRID_ROWS` checks, so a wide
-/// terminal shows more. Returns an empty `Vec` when checks haven't arrived for
-/// this PR's commit or the check list is empty. Shares the `sorted_check_runs`
-/// ordering and `check_cell_spans` content with `summary::checks_lines`; only
-/// the column count and cap differ.
+/// pass/fail/pending counts (over ALL checks) + a grid of every check of any
+/// outcome, ordered failing-first then slowest. The grid grows as many columns
+/// as the body width fits (capped at [`MAX_GRID_COLUMNS`]); unlike the summary
+/// panel, the detail view is the exhaustive one, so it lists every check across
+/// as many rows as needed, with no row cap or `+N more` overflow. Returns an
+/// empty `Vec` when checks haven't arrived for this PR's commit or the check
+/// list is empty. Shares the `sorted_check_runs` ordering and `check_cell_spans`
+/// content with `summary::checks_lines`; only the column packing differs.
 ///
 /// Part of the measured layout: the checks section is appended to the
 /// description per-frame (so late-arriving checks show without a re-fetch),
@@ -187,33 +181,34 @@ fn checks_section_lines(model: &Model, pr: &PR, width: u16) -> Vec<Line<'static>
     let sorted = sorted_check_runs(checks);
     // Size the columns to the content: the widest check cell (plus a gap) is the
     // column stride, so the columns sit packed near the left rather than flung
-    // to the body's edges on a wide terminal. Measure the widest over only the
-    // checks that could be shown (a top-priority prefix) so a long name ranked
-    // past the cap can't widen — and so thin out — the visible columns.
-    let candidate = &sorted[..sorted.len().min(MAX_GRID_COLUMNS * MAX_GRID_ROWS)];
-    let widest_cell = candidate
+    // to the body's edges on a wide terminal. Every check is shown (the detail
+    // view is the exhaustive one), so the widest is measured over all of them.
+    let widest_cell = sorted
         .iter()
         .map(|c| check_cell_width(c))
         .max()
         .unwrap_or(0);
     let columns = grid_columns(width, widest_cell);
     let stride = widest_cell + CHECKS_GRID_GAP;
+    // With two or more columns every cell is at most `widest_cell` wide and the
+    // row fits the body by construction, so cells need no truncation. But a cell
+    // wider than the body forces a single column (`grid_columns` clamps to 1),
+    // and there the cell can exceed the body — bound it to the usable width so
+    // `check_cell_spans` middle-truncates the label. The body is an unwrapped
+    // `Paragraph`, which would otherwise clip a long `workflow / job` with no
+    // ellipsis.
+    let cell_budget = if columns == 1 {
+        (width as usize).saturating_sub(CHECK_INDENT.len())
+    } else {
+        usize::MAX
+    };
 
-    // Show `columns × MAX_GRID_ROWS` checks; the rest collapse into `+N more`.
-    let cap = columns * MAX_GRID_ROWS;
-    let overflow = sorted.len().saturating_sub(cap);
-    let visible = &sorted[..sorted.len().min(cap)];
-
-    for row in visible.chunks(columns) {
-        // Two-space indent in front of the first column so the grid matches the
-        // summary panel's single column (the shared `check_row` look) — see
-        // `CHECK_INDENT`.
+    for row in sorted.chunks(columns) {
+        // Two-space indent in front of the first column so a check reads at the
+        // same depth as in the summary panel (the shared `CHECK_INDENT`).
         let mut spans: Vec<Span<'static>> = vec![Span::raw(CHECK_INDENT)];
         for (col, check) in row.iter().enumerate() {
-            // The grid sizes its columns to the widest cell, so cells fit by
-            // construction — no truncation (a long `workflow / job` instead
-            // reduces the column count via `grid_columns`).
-            let cell = check_cell_spans(check, usize::MAX);
+            let cell = check_cell_spans(check, cell_budget);
             // Pad every cell but the row's last out to the column stride so the
             // next column's content aligns. The trailing cell is left unpadded.
             if col + 1 < row.len() {
@@ -227,9 +222,6 @@ fn checks_section_lines(model: &Model, pr: &PR, width: u16) -> Vec<Line<'static>
             }
         }
         lines.push(Line::from(spans));
-    }
-    if overflow > 0 {
-        lines.push(overflow_line(overflow, DARK.muted));
     }
     lines
 }
