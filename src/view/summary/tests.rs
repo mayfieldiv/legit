@@ -8,6 +8,7 @@ use crate::{
     git_remote::RepoInfo,
     github::rest::{Label, PR},
     github::types::PRState,
+    test_fixtures::{check, timed_check},
     view,
     worktree::WorktreeEntry,
 };
@@ -121,31 +122,6 @@ fn with_checks(model: &mut Model, head_sha: &str, checks: Vec<crate::github::typ
         .enrichment
         .checks
         .insert((key.repo_slug, head_sha.to_owned()), checks);
-}
-
-fn check(name: &str, status: &str, conclusion: Option<&str>) -> crate::github::types::CheckRun {
-    crate::github::types::CheckRun {
-        name: name.to_owned(),
-        workflow_name: None,
-        status: status.to_owned(),
-        conclusion: conclusion.map(str::to_owned),
-        started_at: None,
-        completed_at: None,
-    }
-}
-
-/// A completed check carrying both endpoints, so it has a Check Duration of
-/// `seconds`. Used by the grid snapshot tests to assert a duration renders.
-fn timed_check(name: &str, conclusion: &str, seconds: i64) -> crate::github::types::CheckRun {
-    let started = fixed_now();
-    crate::github::types::CheckRun {
-        name: name.to_owned(),
-        workflow_name: None,
-        status: "completed".to_owned(),
-        conclusion: Some(conclusion.to_owned()),
-        started_at: Some(started),
-        completed_at: Some(started + chrono::Duration::seconds(seconds)),
-    }
 }
 
 /// Seed categorised files for the selected PR, running `categorize` with no

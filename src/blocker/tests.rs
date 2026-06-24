@@ -10,6 +10,7 @@ use super::{
 };
 use crate::github::rest::PR;
 use crate::github::types::{CheckRun, FullReviewThread, PRState, Review, ReviewComment};
+use crate::test_fixtures::check;
 
 // ── PR builder ───────────────────────────────────────────────────────────────
 
@@ -46,17 +47,6 @@ const OTHER: &str = "bob";
 const AUTHOR: &str = "charlie";
 
 // ── check / review / thread helpers ──────────────────────────────────────────
-
-fn check(name: &str, status: &str, conclusion: Option<&str>) -> CheckRun {
-    CheckRun {
-        name: name.to_owned(),
-        workflow_name: None,
-        status: status.to_owned(),
-        conclusion: conclusion.map(str::to_owned),
-        started_at: None,
-        completed_at: None,
-    }
-}
 
 fn failed_check() -> CheckRun {
     check("ci", "completed", Some("failure"))

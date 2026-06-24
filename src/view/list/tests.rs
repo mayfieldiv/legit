@@ -10,8 +10,9 @@ use crate::{
     git_remote::RepoInfo,
     github::limiter::NetworkStats,
     github::rest::PR,
-    github::types::{CheckRun, FullReviewThread, PRState, Review, ReviewComment},
+    github::types::{FullReviewThread, PRState, Review, ReviewComment},
     palette::Palette,
+    test_fixtures::check,
     view,
     worktree::{self, WorktreeEntry},
 };
@@ -185,17 +186,6 @@ fn review(user: &str, state: &str) -> Review {
     Review {
         user: user.to_owned(),
         state: state.to_owned(),
-    }
-}
-
-fn check(name: &str, status: &str, conclusion: Option<&str>) -> CheckRun {
-    CheckRun {
-        name: name.to_owned(),
-        workflow_name: None,
-        status: status.to_owned(),
-        conclusion: conclusion.map(str::to_owned),
-        started_at: None,
-        completed_at: None,
     }
 }
 

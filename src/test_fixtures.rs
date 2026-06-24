@@ -6,11 +6,38 @@
 
 use chrono::{DateTime, TimeZone, Utc};
 
-use crate::github::types::{FullReviewThread, IssueComment, ReviewComment};
+use crate::github::types::{CheckRun, FullReviewThread, IssueComment, ReviewComment};
 
 /// A fixed timestamp safely in the past relative to every test's `now`.
 pub fn fixed_created_at() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap()
+}
+
+/// An untimed check run (no start/end, so no Check Duration). Vary the
+/// `workflow_name` or timestamps via struct-update where a test needs it.
+pub fn check(name: &str, status: &str, conclusion: Option<&str>) -> CheckRun {
+    CheckRun {
+        name: name.to_owned(),
+        workflow_name: None,
+        status: status.to_owned(),
+        conclusion: conclusion.map(str::to_owned),
+        started_at: None,
+        completed_at: None,
+    }
+}
+
+/// A completed check carrying both endpoints, so it has a Check Duration of
+/// `seconds`. The wall-clock start is arbitrary; only the span matters.
+pub fn timed_check(name: &str, conclusion: &str, seconds: i64) -> CheckRun {
+    let started = fixed_created_at();
+    CheckRun {
+        name: name.to_owned(),
+        workflow_name: None,
+        status: "completed".to_owned(),
+        conclusion: Some(conclusion.to_owned()),
+        started_at: Some(started),
+        completed_at: Some(started + chrono::Duration::seconds(seconds)),
+    }
 }
 
 /// A human review comment with the canonical fixture URL

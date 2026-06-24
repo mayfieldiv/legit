@@ -8,7 +8,7 @@ use crate::{
     git_remote::RepoInfo,
     github::rest::{Label, PR},
     github::types::{CheckRun, FullReviewThread, IssueComment, PRState, ReviewComment},
-    test_fixtures::{self, review_comment},
+    test_fixtures::{self, check, review_comment, timed_check},
     view,
     worktree::WorktreeEntry,
 };
@@ -154,30 +154,6 @@ fn model_in_detail_with_checks(pr: PR, body: &str, checks: Vec<CheckRun>) -> Mod
     });
     model.enrichment.checks.insert((repo_slug, sha), checks);
     model
-}
-
-fn check(name: &str, status: &str, conclusion: Option<&str>) -> CheckRun {
-    CheckRun {
-        name: name.to_owned(),
-        workflow_name: None,
-        status: status.to_owned(),
-        conclusion: conclusion.map(str::to_owned),
-        started_at: None,
-        completed_at: None,
-    }
-}
-
-/// A completed check with a Check Duration of `seconds` (both endpoints present).
-fn timed_check(name: &str, conclusion: &str, seconds: i64) -> CheckRun {
-    let started = chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 5, 20, 12, 0, 0).unwrap();
-    CheckRun {
-        name: name.to_owned(),
-        workflow_name: None,
-        status: "completed".to_owned(),
-        conclusion: Some(conclusion.to_owned()),
-        started_at: Some(started),
-        completed_at: Some(started + chrono::Duration::seconds(seconds)),
-    }
 }
 
 /// The shared fixture thread with this module's explicit location knobs (the

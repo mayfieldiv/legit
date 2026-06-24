@@ -677,20 +677,10 @@ mod tests {
     };
     use crate::github::types::{CheckRun, FullReviewThread, PRState, Review, ReviewComment};
     use crate::palette::DARK;
+    use crate::test_fixtures::{check, timed_check};
 
     fn now() -> chrono::DateTime<chrono::Utc> {
         chrono::Utc.with_ymd_and_hms(2026, 5, 20, 12, 0, 0).unwrap()
-    }
-
-    fn check(name: &str, status: &str, conclusion: Option<&str>) -> CheckRun {
-        CheckRun {
-            name: name.to_owned(),
-            workflow_name: None,
-            status: status.to_owned(),
-            conclusion: conclusion.map(str::to_owned),
-            started_at: None,
-            completed_at: None,
-        }
     }
 
     /// A check in a named workflow, so the `workflow / job` label renders.
@@ -698,20 +688,6 @@ mod tests {
         CheckRun {
             workflow_name: Some(workflow.to_owned()),
             ..check(name, "completed", Some("success"))
-        }
-    }
-
-    /// A completed check with a Check Duration of `seconds` (both endpoints
-    /// present). The wall-clock start is arbitrary; only the span matters.
-    fn timed_check(name: &str, conclusion: &str, seconds: i64) -> CheckRun {
-        let started = now();
-        CheckRun {
-            name: name.to_owned(),
-            workflow_name: None,
-            status: "completed".to_owned(),
-            conclusion: Some(conclusion.to_owned()),
-            started_at: Some(started),
-            completed_at: Some(started + chrono::Duration::seconds(seconds)),
         }
     }
 
