@@ -288,9 +288,9 @@ pub fn check_icon(check: &CheckRun) -> (&'static str, Color) {
 }
 
 /// The two-space indent every check row sits behind — the summary panel's
-/// single column (`check_row`) and the detail view's grid both prepend it so a
-/// check reads the same depth in either view. The single source of truth for
-/// that depth.
+/// two-column grid (with `check_row` as its solo-row fallback) and the detail
+/// view's grid both prepend it so a check reads the same depth in either view.
+/// The single source of truth for that depth.
 pub const CHECK_INDENT: &str = "  ";
 
 /// Width to keep of a truncated workflow name before the job name starts
@@ -379,6 +379,12 @@ pub fn check_cell_spans(check: &CheckRun, max_width: usize) -> Vec<Span<'static>
 /// The untruncated display width of one check's painted cell: the icon, the full
 /// `workflow / job` label, and any Check Duration. Sets the column stride for
 /// both grids (which size columns to the content, then truncate as needed).
+///
+/// Measures by building the real spans via `check_cell_spans` and summing rather
+/// than a width-only path that re-derives the layout arithmetic, so the width
+/// can't drift from what's actually painted. The throwaway `Vec<Span>` is a
+/// deliberate trade of allocation for that guarantee — at most a couple dozen
+/// cells, measured a few times per throttled frame, it's nowhere near observable.
 pub fn check_cell_width(check: &CheckRun) -> usize {
     check_cell_spans(check, usize::MAX)
         .iter()

@@ -105,7 +105,7 @@ pub(crate) fn render_description_blocks(body: &str) -> Vec<Block> {
 /// Upper bound on the detail checks grid's column count. The grid grows as many
 /// columns as the body width fits (see [`grid_columns`]), but stops here so an
 /// ultrawide terminal stays scannable rather than smearing checks across the
-/// whole row. The narrower summary panel always uses one column (its own
+/// whole row. The narrower summary panel packs at most two columns (its own
 /// `summary::checks_lines`).
 pub(crate) const MAX_GRID_COLUMNS: usize = 6;
 
