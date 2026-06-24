@@ -323,6 +323,17 @@ pub fn check_row(check: &CheckRun) -> Line<'static> {
     Line::from(spans)
 }
 
+/// The muted `+N more` overflow line shown when the visible-check cap hides some
+/// checks: `  +3 more`. Indented with `CHECK_INDENT` so it lines up under the
+/// check rows in either view. The muted colour is passed in because the summary
+/// panel themes from the live `palette` while the detail grid uses `DARK`.
+pub fn overflow_line(count: usize, muted: Color) -> Line<'static> {
+    Line::from(Span::styled(
+        format!("{CHECK_INDENT}+{count} more"),
+        Style::default().fg(muted),
+    ))
+}
+
 /// Maximum number of individual check rows the single-column summary panel
 /// renders before the remainder collapses into a `+N more` overflow line. The
 /// detail view's grid sizes its own cap to the number of grid columns (a wide

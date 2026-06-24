@@ -17,7 +17,10 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::{
     blocker::{ThreadKind, classify_thread},
-    format::{CHECK_INDENT, check_cell_spans, checks_summary, format_age, sorted_check_runs},
+    format::{
+        CHECK_INDENT, check_cell_spans, checks_summary, format_age, overflow_line,
+        sorted_check_runs,
+    },
     github::rest::PR,
     github::types::{CheckRun, FullReviewThread},
     markdown::{self, Block},
@@ -228,10 +231,7 @@ fn checks_section_lines(model: &Model, pr: &PR, width: u16) -> Vec<Line<'static>
         lines.push(Line::from(spans));
     }
     if overflow > 0 {
-        lines.push(Line::from(Span::styled(
-            format!("{CHECK_INDENT}+{overflow} more"),
-            Style::default().fg(DARK.muted),
-        )));
+        lines.push(overflow_line(overflow, DARK.muted));
     }
     lines
 }

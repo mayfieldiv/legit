@@ -23,8 +23,9 @@ use ratatui::{
 use crate::app::model::{FilesState, Model};
 use crate::chip::label_lines;
 use crate::format::{
-    CHECK_INDENT, check_row, checks_summary, comment_counts, format_age, format_merge_status,
-    format_review_state, format_size, review_icon, reviews_summary, truncate, visible_checks,
+    check_row, checks_summary, comment_counts, format_age, format_merge_status,
+    format_review_state, format_size, overflow_line, review_icon, reviews_summary, truncate,
+    visible_checks,
 };
 use crate::github::rest::PR;
 use crate::palette::Palette;
@@ -298,10 +299,7 @@ fn checks_lines(model: &Model, pr: &PR, palette: &Palette) -> Vec<Line<'static>>
         lines.push(check_row(check));
     }
     if overflow > 0 {
-        lines.push(Line::from(Span::styled(
-            format!("{CHECK_INDENT}+{overflow} more"),
-            Style::default().fg(palette.muted),
-        )));
+        lines.push(overflow_line(overflow, palette.muted));
     }
     lines
 }
