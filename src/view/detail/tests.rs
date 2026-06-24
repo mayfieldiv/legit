@@ -256,6 +256,51 @@ fn detail_header_shows_github_url() {
 }
 
 #[test]
+fn detail_header_repo_name_takes_the_repo_color() {
+    let model = model_in_detail(sample_pr(), "");
+
+    let terminal = render_snapshot(&model, 80, 10);
+    let buf = terminal.backend().buffer();
+    let rows = buffer_text(&terminal);
+
+    // The repo slug is on the meta row (row 1: author · repo · …).
+    let meta = &rows[1];
+    let repo_x = meta.find("acme/web").expect("repo slug rendered") as u16;
+    assert_eq!(
+        buf[(repo_x, 1)].fg,
+        crate::color::repo_color("acme/web"),
+        "the detail header's repo name takes its stable Repo Color"
+    );
+}
+
+#[test]
+fn detail_header_github_url_stays_on_the_link_role() {
+    // The slug appears inside the URL too, but the URL reads as one link: the
+    // slug substring is not recoloured to the Repo Color.
+    let model = model_in_detail(sample_pr(), "");
+
+    let terminal = render_snapshot(&model, 80, 10);
+    let buf = terminal.backend().buffer();
+    let rows = buffer_text(&terminal);
+
+    let url = "https://github.com/acme/web/pull/42";
+    let (y, row) = rows
+        .iter()
+        .enumerate()
+        .find(|(_, r)| r.contains(url))
+        .expect("URL row");
+    let url_start = row.find(url).unwrap() as u16;
+    // Probe the slug substring inside the URL ("acme/web").
+    let slug_offset = url.find("acme/web").unwrap() as u16;
+    let probe_x = url_start + slug_offset;
+    assert_eq!(
+        buf[(probe_x, y as u16)].fg,
+        crate::palette::Palette::dark().link,
+        "the URL's repo-slug substring stays on the link role, not the Repo Color"
+    );
+}
+
+#[test]
 fn detail_header_shows_branch_and_mergeable() {
     let model = model_in_detail(sample_pr(), "");
 

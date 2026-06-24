@@ -10,6 +10,7 @@ use ratatui::{
 use crate::app::grouping::Grouping;
 use crate::app::list_layout;
 use crate::app::model::{Model, StatusKind, ViewMode};
+use crate::color::repo_color;
 use crate::format::{abbreviate_home, truncate_middle};
 use crate::git_remote::RepoInfo;
 use crate::palette::{DARK, Palette};
@@ -111,6 +112,12 @@ fn render_app_header(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: 
         .iter()
         .filter(|pr| scope == "All repos" || pr.repo_slug == scope)
         .count();
+    // A concrete repo scope takes that repo's Repo Color so the header
+    // reinforces which repo is in view; the All scope stays on the accent role.
+    let scope_color = match model.active_scope() {
+        Some(slug) => repo_color(&slug),
+        None => palette.accent,
+    };
     let line = Line::from(vec![
         Span::styled(
             "legit",
@@ -119,7 +126,12 @@ fn render_app_header(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: 
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" — "),
-        Span::styled(scope, Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(
+            scope,
+            Style::default()
+                .fg(scope_color)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw(format!(" — {count} open PRs")),
     ]);
     frame.render_widget(Paragraph::new(line), area);
@@ -169,15 +181,23 @@ fn render_tabs(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Palet
     let labels = std::iter::once("All".to_owned()).chain(repos.iter().map(RepoInfo::slug));
     let mut spans = Vec::new();
     for (i, label) in labels.enumerate() {
+        // The All tab (index 0) stays on the accent role; each per-repo tab
+        // takes its repo's stable Repo Color so the bar can be scanned by
+        // colour. The active tab is marked by its bracket + bold layered on top
+        // of that colour, so the colour is additive to the active marker, not a
+        // replacement for it.
+        let tab_color = if i == 0 {
+            palette.accent
+        } else {
+            repo_color(&label)
+        };
         let (text, style) = if i == active {
             (
                 format!("[{label}]"),
-                Style::default()
-                    .fg(palette.accent)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(tab_color).add_modifier(Modifier::BOLD),
             )
         } else {
-            (format!(" {label} "), Style::default())
+            (format!(" {label} "), Style::default().fg(tab_color))
         };
         spans.push(Span::styled(text, style));
         spans.push(Span::raw(" "));

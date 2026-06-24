@@ -596,6 +596,65 @@ fn all_tab_grouped_by_repo_shows_one_header_per_repo() {
 }
 
 #[test]
+fn repo_group_headers_take_each_repos_color() {
+    let mut other = pr(2, "two", "dave", 2);
+    other.repo_slug = "zeta/api".to_owned();
+    let model = model_with(
+        vec![pr(1, "one", "carol", 1), other],
+        Grouping::Repo,
+        |_| Some(Tier::NeedsReview),
+    );
+
+    let terminal = render_snapshot(&model, 80, 9);
+    let buf = terminal.backend().buffer();
+    let rows = list_rows(&terminal);
+
+    // `list_rows` strips the app header (y 0), tab bar (y 1), and column header
+    // (y 2), so its index i maps to buffer y = i + 3. The acme/web header is
+    // list row 0 (buffer y 3); the zeta/api header is list row 2 (buffer y 5).
+    let web_x = rows[0].find("──").expect("acme/web header rule") as u16;
+    let api_x = rows[2].find("──").expect("zeta/api header rule") as u16;
+    assert_eq!(
+        buf[(web_x, 3)].fg,
+        crate::color::repo_color("acme/web"),
+        "a repo group header takes that repo's Repo Color"
+    );
+    assert_eq!(
+        buf[(api_x, 5)].fg,
+        crate::color::repo_color("zeta/api"),
+        "each repo group header takes its own Repo Color"
+    );
+    assert_ne!(
+        buf[(web_x, 3)].fg,
+        buf[(api_x, 5)].fg,
+        "distinct repos get distinct header colours"
+    );
+}
+
+#[test]
+fn smart_status_group_headers_keep_the_accent_colour() {
+    // Tier grouping headers are not repo names, so they keep the accent role
+    // rather than borrowing a colour — tier meaning stays in the action cell.
+    let model = model_with(
+        vec![pr(1, "one", "carol", 1)],
+        Grouping::SmartStatus,
+        |_| Some(Tier::MeBlocking),
+    );
+
+    let terminal = render_snapshot(&model, 80, 6);
+    let buf = terminal.backend().buffer();
+    let rows = list_rows(&terminal);
+
+    // List row 0 (the only header) is buffer y = 3 (see the repo-group test).
+    let rule_x = rows[0].find("──").expect("smart-status header rule") as u16;
+    assert_eq!(
+        buf[(rule_x, 3)].fg,
+        Palette::dark().accent,
+        "a Smart-status group header keeps the accent colour"
+    );
+}
+
+#[test]
 fn all_tab_shows_repo_column_whenever_multiple_repos_are_tracked() {
     // TS parity: `showRepo` keys off the tracked-repo count — a stable,
     // structural condition — not the repo spread of the visible PRs, so the
@@ -622,8 +681,8 @@ fn all_tab_shows_repo_column_whenever_multiple_repos_are_tracked() {
     let repo_x = rows[0].find("web").expect("repo cell rendered") as u16;
     assert_eq!(
         terminal.backend().buffer()[(repo_x, 3)].fg,
-        Palette::dark().tier_me_blocking,
-        "repo cells reuse the me-blocking tier role (the port's TS selfHighlight)"
+        crate::color::repo_color("acme/web"),
+        "repo cells take the repo's stable Repo Color"
     );
 }
 
@@ -848,6 +907,97 @@ fn tab_bar_brackets_follow_the_active_tab() {
     assert!(
         row.starts_with(" All   acme/api  [acme/web] "),
         "acme/web active: {row:?}"
+    );
+}
+
+#[test]
+fn per_repo_tabs_take_their_repo_color_and_all_stays_on_accent() {
+    let model = two_repo_model();
+
+    let terminal = render_snapshot(&model, 50, 4);
+    let buf = terminal.backend().buffer();
+    let row = tab_row(&terminal); // " All " is the active All tab, bracketed.
+
+    // The All tab is on the accent role (active here, so also bold) — not tinted.
+    let all_x = row.find("All").expect("All tab") as u16;
+    assert_eq!(
+        buf[(all_x, 1)].fg,
+        Palette::dark().accent,
+        "the All tab stays on the accent role"
+    );
+    // Each per-repo tab takes its repo's Repo Color.
+    let api_x = row.find("acme/api").expect("acme/api tab") as u16;
+    let web_x = row.find("acme/web").expect("acme/web tab") as u16;
+    assert_eq!(
+        buf[(api_x, 1)].fg,
+        crate::color::repo_color("acme/api"),
+        "a per-repo tab takes its Repo Color"
+    );
+    assert_eq!(
+        buf[(web_x, 1)].fg,
+        crate::color::repo_color("acme/web"),
+        "each per-repo tab takes its own Repo Color"
+    );
+}
+
+#[test]
+fn active_per_repo_tab_keeps_bracket_and_bold_on_top_of_its_color() {
+    let mut model = two_repo_model();
+    model.active_tab = 2; // acme/web active
+    model.relayout();
+
+    let terminal = render_snapshot(&model, 50, 4);
+    let buf = terminal.backend().buffer();
+    let row = tab_row(&terminal);
+
+    // The active per-repo tab is bracketed (its marker) and bold, layered on top
+    // of its Repo Color rather than replacing it with the accent.
+    assert!(row.contains("[acme/web]"), "active tab bracketed: {row:?}");
+    let web_x = row.find("acme/web").expect("acme/web tab") as u16;
+    let cell = &buf[(web_x, 1)];
+    assert_eq!(
+        cell.fg,
+        crate::color::repo_color("acme/web"),
+        "the active per-repo tab keeps its Repo Color"
+    );
+    assert!(
+        cell.modifier.contains(ratatui::style::Modifier::BOLD),
+        "the active per-repo tab is still bold: {:?}",
+        cell.modifier
+    );
+}
+
+#[test]
+fn app_header_scope_takes_the_repo_color_for_a_concrete_repo() {
+    let mut model = two_repo_model();
+    model.active_tab = 2; // acme/web scope
+    model.relayout();
+
+    let terminal = render_snapshot(&model, 80, 5);
+    let buf = terminal.backend().buffer();
+    let row = app_header_row(&terminal);
+
+    let scope_x = row.find("acme/web").expect("scope in header") as u16;
+    assert_eq!(
+        buf[(scope_x, 0)].fg,
+        crate::color::repo_color("acme/web"),
+        "a concrete repo scope takes its Repo Color in the app header"
+    );
+}
+
+#[test]
+fn app_header_all_scope_stays_on_accent() {
+    let model = two_repo_model(); // active_tab 0 -> All scope
+
+    let terminal = render_snapshot(&model, 80, 5);
+    let buf = terminal.backend().buffer();
+    let row = app_header_row(&terminal);
+
+    let scope_x = row.find("All repos").expect("All scope in header") as u16;
+    assert_eq!(
+        buf[(scope_x, 0)].fg,
+        Palette::dark().accent,
+        "the All scope stays on the accent role"
     );
 }
 
