@@ -50,6 +50,7 @@ const AUTHOR: &str = "charlie";
 fn check(name: &str, status: &str, conclusion: Option<&str>) -> CheckRun {
     CheckRun {
         name: name.to_owned(),
+        workflow_name: None,
         status: status.to_owned(),
         conclusion: conclusion.map(str::to_owned),
         started_at: None,

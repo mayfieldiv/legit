@@ -6,9 +6,11 @@
 //! both the summary panel and the detail view (issue #51) consume them rather
 //! than re-deriving them per panel. The icon/colour helpers return a data-only
 //! `(&'static str, Color)` tuple — mirroring TS's plain `{ icon, fg }` shape.
-//! `check_row` goes one step further and assembles a ready-to-render
-//! `Line<'static>` so the two panels share a byte-identical check row, which is
-//! why this module also pulls in ratatui's `Line`/`Span` text types.
+//! `check_cell_spans` goes one step further and assembles a check's ready-to-paint
+//! spans (the icon, the `workflow / job` label, the duration), which the summary
+//! grid and the detail grid both wrap into `Line<'static>`s so a check reads
+//! identically in either view — which is why this module pulls in ratatui's
+//! `Line`/`Span` text types.
 
 use chrono::{DateTime, Utc};
 use ratatui::style::{Color, Style};
@@ -291,19 +293,55 @@ pub fn check_icon(check: &CheckRun) -> (&'static str, Color) {
 /// that depth.
 pub const CHECK_INDENT: &str = "  ";
 
-/// The styled spans for one check cell — the coloured status icon from
-/// `check_icon`, the check name, and (when present) the muted Check Duration:
-/// `✓ build 2m`. The single source of truth for a check's painted content,
-/// shared by the summary panel's single column and the detail view's grid so
-/// the icon colouring and duration treatment stay identical. The `CHECK_INDENT`
-/// is prepended by each caller (`check_row` and the grid layout), not here.
-pub fn check_cell_spans(check: &CheckRun) -> Vec<Span<'static>> {
+/// The styled spans for one check cell within `max_width` columns — the coloured
+/// status icon from `check_icon`, the `workflow / job` label, and (when present)
+/// the muted Check Duration: `✓ ci / build 2m`.
+///
+/// The `workflow / ` prefix (separator included) is painted muted so the job
+/// name stands out as the primary text. The icon and duration are never dropped;
+/// the job name is middle-truncated to fit (`ci / Gen…Commits`) so a long label
+/// still lines up. Pass `usize::MAX` to disable truncation. The single source of
+/// truth for a check's painted content, shared by the summary panel and the
+/// detail grid so the icon colouring and label treatment stay identical. The
+/// `CHECK_INDENT` is prepended by each caller, not here.
+pub fn check_cell_spans(check: &CheckRun, max_width: usize) -> Vec<Span<'static>> {
     let (icon, color) = check_icon(check);
-    let mut spans = vec![
-        Span::styled(icon, Style::default().fg(color)),
-        Span::raw(format!(" {}", check.name)),
-    ];
     let duration = format_duration(check.duration());
+    // Columns the fixed parts always take: the icon, the space before the label,
+    // and (when present) the space + duration. The label gets whatever is left.
+    let duration_cols = if duration.is_empty() {
+        0
+    } else {
+        1 + duration.width()
+    };
+    let label_budget = max_width.saturating_sub(icon.width() + 1 + duration_cols);
+
+    let mut spans = vec![Span::styled(icon, Style::default().fg(color))];
+    match check.workflow_name.as_deref().filter(|w| !w.is_empty()) {
+        // `workflow / ` muted, then the job name in the default colour. The job
+        // absorbs the squeeze; only a very tight column truncates the prefix too.
+        Some(workflow) => {
+            let prefix = format!("{workflow} / ");
+            if prefix.width() >= label_budget {
+                spans.push(Span::styled(
+                    format!(" {}", truncate_middle(&prefix, label_budget)),
+                    Style::default().fg(DARK.muted),
+                ));
+            } else {
+                let job = truncate_middle(&check.name, label_budget - prefix.width());
+                spans.push(Span::styled(
+                    format!(" {prefix}"),
+                    Style::default().fg(DARK.muted),
+                ));
+                spans.push(Span::raw(job));
+            }
+        }
+        // No workflow: the bare job name, middle-truncated to fit.
+        None => spans.push(Span::raw(format!(
+            " {}",
+            truncate_middle(&check.name, label_budget)
+        ))),
+    }
     if !duration.is_empty() {
         spans.push(Span::styled(
             format!(" {duration}"),
@@ -313,22 +351,26 @@ pub fn check_cell_spans(check: &CheckRun) -> Vec<Span<'static>> {
     spans
 }
 
-/// The display width of one check's painted cell (`check_cell_spans`): the icon,
-/// name, and any Check Duration. Sets the column stride for both grids.
+/// The untruncated display width of one check's painted cell: the icon, the full
+/// `workflow / job` label, and any Check Duration. Sets the column stride for
+/// both grids (which size columns to the content, then truncate as needed).
 pub fn check_cell_width(check: &CheckRun) -> usize {
-    check_cell_spans(check)
+    check_cell_spans(check, usize::MAX)
         .iter()
         .map(|s| s.content.width())
         .sum()
 }
 
-/// One indented check row for a single column — two spaces then
-/// `check_cell_spans`: `  ✓ build 2m`. The single source of truth for a
-/// one-column check row so the indent and content stay identical to the detail
-/// grid's cells and the summary grid's solo rows.
-pub fn check_row(check: &CheckRun) -> Line<'static> {
+/// One indented single-column check row within `width` columns — two spaces then
+/// the cell, the label middle-truncated to fit. The single source of truth for a
+/// one-column check row (the summary grid's solo rows), so the indent and content
+/// stay identical to the detail grid's cells.
+pub fn check_row(check: &CheckRun, width: usize) -> Line<'static> {
     let mut spans = vec![Span::raw(CHECK_INDENT)];
-    spans.extend(check_cell_spans(check));
+    spans.extend(check_cell_spans(
+        check,
+        width.saturating_sub(CHECK_INDENT.len()),
+    ));
     Line::from(spans)
 }
 
@@ -401,10 +443,12 @@ pub fn checks_two_column_lines(
             // A wide check can't pair: flush the half-formed pair to its own row
             // first. Don't advance — the wide check is handled next iteration if
             // the row budget still allows.
-            lines.push(check_row(first));
+            lines.push(check_row(first, width));
             placed += 1;
         } else {
-            lines.push(check_row(check));
+            // A solo row spans the full width; its label is middle-truncated to
+            // fit so a long `workflow / job` reads `release / Gen…Commits 1m`.
+            lines.push(check_row(check, width));
             placed += 1;
             i += 1;
         }
@@ -413,23 +457,25 @@ pub fn checks_two_column_lines(
     if let Some(first) = pending.take()
         && lines.len() < max_rows
     {
-        lines.push(check_row(first));
+        lines.push(check_row(first, width));
         placed += 1;
     }
     (lines, checks.len().saturating_sub(placed))
 }
 
 /// One two-column grid row: `first` (after the shared [`CHECK_INDENT`]) padded
-/// out to `stride` columns so `second` aligns, then `second` unpadded.
+/// out to `stride` columns so `second` aligns, then `second` unpadded. Both
+/// cells are pairable — each at most half the drawable width — so neither needs
+/// truncating; the row fits within the panel by construction.
 fn two_column_row(first: &CheckRun, second: &CheckRun, stride: usize) -> Line<'static> {
-    let cell = check_cell_spans(first);
+    let cell = check_cell_spans(first, usize::MAX);
     let used: usize = cell.iter().map(|s| s.content.width()).sum();
     let mut spans = vec![Span::raw(CHECK_INDENT)];
     spans.extend(cell);
     if used < stride {
         spans.push(Span::raw(" ".repeat(stride - used)));
     }
-    spans.extend(check_cell_spans(second));
+    spans.extend(check_cell_spans(second, usize::MAX));
     Line::from(spans)
 }
 
@@ -598,10 +644,11 @@ mod tests {
 
     use super::{
         CheckOutcome, ChecksSummary, CommentCounts, ReviewsSummary, abbreviate_home,
-        abbreviate_home_with, check_icon, check_row, check_sort_group, checks_summary,
-        checks_two_column_lines, comment_counts, format_age, format_duration, format_merge_status,
-        format_mergeable, format_repo_short, format_review_state, format_size, outcome,
-        pad_to_width, review_icon, reviews_summary, sort_check_runs, truncate, truncate_middle,
+        abbreviate_home_with, check_cell_spans, check_icon, check_row, check_sort_group,
+        checks_summary, checks_two_column_lines, comment_counts, format_age, format_duration,
+        format_merge_status, format_mergeable, format_repo_short, format_review_state, format_size,
+        outcome, pad_to_width, review_icon, reviews_summary, sort_check_runs, truncate,
+        truncate_middle,
     };
     use crate::github::types::{CheckRun, FullReviewThread, PRState, Review, ReviewComment};
     use crate::palette::DARK;
@@ -613,10 +660,19 @@ mod tests {
     fn check(name: &str, status: &str, conclusion: Option<&str>) -> CheckRun {
         CheckRun {
             name: name.to_owned(),
+            workflow_name: None,
             status: status.to_owned(),
             conclusion: conclusion.map(str::to_owned),
             started_at: None,
             completed_at: None,
+        }
+    }
+
+    /// A check in a named workflow, so the `workflow / job` label renders.
+    fn check_in(workflow: &str, name: &str) -> CheckRun {
+        CheckRun {
+            workflow_name: Some(workflow.to_owned()),
+            ..check(name, "completed", Some("success"))
         }
     }
 
@@ -626,6 +682,7 @@ mod tests {
         let started = now();
         CheckRun {
             name: name.to_owned(),
+            workflow_name: None,
             status: "completed".to_owned(),
             conclusion: Some(conclusion.to_owned()),
             started_at: Some(started),
@@ -974,7 +1031,7 @@ mod tests {
 
     #[test]
     fn check_row_indents_icon_and_name() {
-        let row = check_row(&check("build", "completed", Some("success")));
+        let row = check_row(&check("build", "completed", Some("success")), usize::MAX);
         // Two-space indent, the icon span, then the space-prefixed name. An
         // untimed check shows no duration. Carry the icon's colour through so
         // the row matches `check_icon`.
@@ -987,13 +1044,52 @@ mod tests {
 
     #[test]
     fn check_row_appends_muted_duration_when_present() {
-        let row = check_row(&timed_check("build", "success", 150));
+        let row = check_row(&timed_check("build", "success", 150), usize::MAX);
         let text: String = row.spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, "  ✓ build 2m");
         // The duration is the last span and reads in the muted role.
         let duration_span = row.spans.last().expect("a duration span");
         assert_eq!(duration_span.content.as_ref(), " 2m");
         assert_eq!(duration_span.style.fg, Some(DARK.muted));
+    }
+
+    #[test]
+    fn check_cell_paints_the_workflow_prefix_muted_and_the_job_plain() {
+        let spans = check_cell_spans(&check_in("ci", "Tests"), usize::MAX);
+        // icon, then a muted `workflow / ` prefix, then the job name in the
+        // default colour so it stands out.
+        let prefix = &spans[1];
+        assert_eq!(prefix.content.as_ref(), " ci / ");
+        assert_eq!(prefix.style.fg, Some(DARK.muted));
+        let job = &spans[2];
+        assert_eq!(job.content.as_ref(), "Tests");
+        assert_eq!(job.style.fg, None, "the job name uses the default colour");
+
+        // No workflow → a single plain name span, no separator.
+        let bare = check_cell_spans(&check("Tests", "completed", Some("success")), usize::MAX);
+        assert_eq!(bare[1].content.as_ref(), " Tests");
+        assert_eq!(bare[1].style.fg, None);
+    }
+
+    #[test]
+    fn check_row_middle_truncates_a_long_label_to_fit() {
+        // A label far wider than the row: the icon and indent are kept, the label
+        // is middle-truncated with an ellipsis, and the whole row fits `width`.
+        let run = check_in("release", "Generate Version, Release Notes and Commits");
+        let width = 24;
+        let row = check_row(&run, width);
+        let text: String = line_text(&row);
+
+        assert!(text.contains('…'), "label is middle-truncated: {text:?}");
+        assert!(
+            text.starts_with("  ✓ release / "),
+            "workflow prefix is kept: {text:?}"
+        );
+        assert!(
+            text.chars().count() <= width,
+            "row fits the width ({}): {text:?}",
+            text.chars().count()
+        );
     }
 
     /// Flatten a `Line`'s spans back to plain text for an exact column assertion.

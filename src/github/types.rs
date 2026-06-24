@@ -38,6 +38,11 @@ pub struct ReviewStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckRun {
     pub name: String,
+    /// The name of the workflow this run belongs to, when known — the
+    /// disambiguator GitHub's checks tab shows as `workflow / job`. Resolved by
+    /// mapping the run's check suite to its Actions workflow run; `None` for a
+    /// non-Actions check or when the workflow lookup didn't cover it.
+    pub workflow_name: Option<String>,
     pub status: String,
     pub conclusion: Option<String>,
     /// When the run began, as reported by the check-runs endpoint. Parse-only:

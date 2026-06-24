@@ -126,6 +126,7 @@ fn with_checks(model: &mut Model, head_sha: &str, checks: Vec<crate::github::typ
 fn check(name: &str, status: &str, conclusion: Option<&str>) -> crate::github::types::CheckRun {
     crate::github::types::CheckRun {
         name: name.to_owned(),
+        workflow_name: None,
         status: status.to_owned(),
         conclusion: conclusion.map(str::to_owned),
         started_at: None,
@@ -139,6 +140,7 @@ fn timed_check(name: &str, conclusion: &str, seconds: i64) -> crate::github::typ
     let started = fixed_now();
     crate::github::types::CheckRun {
         name: name.to_owned(),
+        workflow_name: None,
         status: "completed".to_owned(),
         conclusion: Some(conclusion.to_owned()),
         started_at: Some(started),

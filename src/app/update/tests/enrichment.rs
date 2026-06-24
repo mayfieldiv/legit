@@ -253,6 +253,7 @@ fn checks_arrived_stores_checks_by_repo_and_head_sha() {
     let mut model = enriched_model(&[1]);
     let check = crate::github::types::CheckRun {
         name: "build".to_owned(),
+        workflow_name: None,
         status: "completed".to_owned(),
         conclusion: Some("success".to_owned()),
         started_at: None,

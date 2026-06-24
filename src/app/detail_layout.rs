@@ -210,7 +210,10 @@ fn checks_section_lines(model: &Model, pr: &PR, width: u16) -> Vec<Line<'static>
         // `CHECK_INDENT`.
         let mut spans: Vec<Span<'static>> = vec![Span::raw(CHECK_INDENT)];
         for (col, check) in row.iter().enumerate() {
-            let cell = check_cell_spans(check);
+            // The grid sizes its columns to the widest cell, so cells fit by
+            // construction — no truncation (a long `workflow / job` instead
+            // reduces the column count via `grid_columns`).
+            let cell = check_cell_spans(check, usize::MAX);
             // Pad every cell but the row's last out to the column stride so the
             // next column's content aligns. The trailing cell is left unpadded.
             if col + 1 < row.len() {
