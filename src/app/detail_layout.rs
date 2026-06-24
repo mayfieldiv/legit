@@ -60,7 +60,7 @@ fn chip_band_rows(pr: &PR, width: u16) -> u16 {
     if pr.labels.is_empty() {
         return 0;
     }
-    let rows = crate::chip::chip_rows(&pr.labels, usize::from(width).max(1)).len();
+    let rows = crate::chip::chip_rows(&pr.labels, usize::from(width)).len();
     u16::try_from(rows).unwrap_or(u16::MAX)
 }
 

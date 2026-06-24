@@ -171,7 +171,7 @@ fn labels_lines(pr: &PR, width: usize, palette: &Palette) -> Vec<Line<'static>> 
     if pr.labels.is_empty() {
         return Vec::new();
     }
-    chip_rows(&pr.labels, width.max(1))
+    chip_rows(&pr.labels, width)
         .into_iter()
         .map(|row| Line::from(chip_spans(&row, palette)))
         .collect()

@@ -47,6 +47,11 @@ pub fn label_color(label: &Label) -> Color {
 /// one-column gap from the previous chip — would overflow `width`; a chip is
 /// never dropped, so at a very narrow width each chip simply takes its own row.
 /// Ported from GHUI's `labelChipRows`.
+///
+/// Tolerates `width` 0 — callers need not clamp it. `width` is only read in the
+/// overflow comparison, which fires only once a row is non-empty, by which
+/// point the next chip already overflows any width below the smallest chip
+/// (`>= 5` columns); so widths 0 and 1 partition identically and neither panics.
 pub fn chip_rows(labels: &[Label], width: usize) -> Vec<Vec<&Label>> {
     let mut rows: Vec<Vec<&Label>> = Vec::new();
     let mut current: Vec<&Label> = Vec::new();

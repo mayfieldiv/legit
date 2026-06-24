@@ -171,7 +171,7 @@ fn render_header(
     // treatment; absent when the PR has no labels, so the header keeps its base
     // height. The band's row count is reserved by `detail_layout::header_height`,
     // so what is painted here always fits the laid-out header area.
-    let chip_lines: Vec<Line<'static>> = chip_rows(&pr.labels, usize::from(area.width).max(1))
+    let chip_lines: Vec<Line<'static>> = chip_rows(&pr.labels, usize::from(area.width))
         .into_iter()
         .map(|row| Line::from(chip_spans(&row, palette)))
         .collect();
