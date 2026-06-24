@@ -2,8 +2,8 @@
 //! side-effect-free so the colour values a frame paints can be asserted
 //! directly in unit tests. It holds `parse_hex` (the primitive the curated
 //! `palette` is defined in terms of) and the per-repo hue hashing behind the
-//! Repo Color — `hash_hue` and `repo_color`. Contrast flips for label chips
-//! would live here too if and when that work lands.
+//! Repo Color — `hash_hue` and `repo_color` — and the `contrast_text` flip that
+//! keeps a Label Chip's text legible on the chip's own background colour.
 
 use ratatui::style::Color;
 
@@ -60,6 +60,35 @@ pub fn hash_hue(seed: &str) -> Color {
 /// `shortRepoName` in `src/ui/pullRequests.ts`.
 pub fn repo_color(slug: &str) -> Color {
     hash_hue(format_repo_short(slug))
+}
+
+/// The dark text colour a Label Chip uses on a light background.
+const CONTRAST_DARK: Color = Color::Rgb(0x11, 0x11, 0x11);
+/// The light text colour a Label Chip uses on a dark background. Matches the
+/// palette's `selected_fg` near-white so chip text reads the same brightness as
+/// the rest of the curated foregrounds.
+const CONTRAST_LIGHT: Color = Color::Rgb(0xf8, 0xfa, 0xfc);
+
+/// Pick a legible text colour for a Label Chip drawn on background `bg`.
+///
+/// Flips to a dark text colour on a light background and a light text colour on
+/// a dark one, deciding by the background's rec-709 relative luminance about a
+/// fixed threshold (the analogue of GHUI's `labelTextColor`). A non-`Rgb`
+/// background (the terminal default) has no measurable luminance, so it falls
+/// back to the light text colour, keeping the helper total.
+pub fn contrast_text(bg: Color) -> Color {
+    let Color::Rgb(r, g, b) = bg else {
+        return CONTRAST_LIGHT;
+    };
+    // Rec-709 relative luminance, normalised to 0..=1. The green channel
+    // dominates (0.7152), matching human sensitivity, so the flip tracks
+    // perceived brightness rather than a flat channel average.
+    let luminance = (0.2126 * f32::from(r) + 0.7152 * f32::from(g) + 0.0722 * f32::from(b)) / 255.0;
+    if luminance > 0.6 {
+        CONTRAST_DARK
+    } else {
+        CONTRAST_LIGHT
+    }
 }
 
 /// Parse a `#rrggbb` (or bare `rrggbb`) hex string into a truecolor [`Color`].
@@ -164,6 +193,39 @@ mod tests {
         // and must be rejected by the ASCII guard rather than panicking on a
         // non-char-boundary byte index.
         assert_eq!(parse_hex("ééé"), None);
+    }
+
+    #[test]
+    fn contrast_text_is_dark_on_a_light_background() {
+        // A near-white background is well above the luminance threshold, so the
+        // chip text flips to the dark colour to stay legible.
+        assert_eq!(contrast_text(Color::Rgb(0xff, 0xff, 0xff)), CONTRAST_DARK);
+        assert_eq!(contrast_text(Color::Rgb(0xe5, 0xc0, 0x7b)), CONTRAST_DARK);
+    }
+
+    #[test]
+    fn contrast_text_is_light_on_a_dark_background() {
+        // A dark background falls below the threshold, so the text flips to the
+        // light colour.
+        assert_eq!(contrast_text(Color::Rgb(0x00, 0x00, 0x00)), CONTRAST_LIGHT);
+        assert_eq!(contrast_text(Color::Rgb(0x1d, 0x24, 0x30)), CONTRAST_LIGHT);
+    }
+
+    #[test]
+    fn contrast_text_uses_rec_709_weights_not_a_naive_average() {
+        // Pure green is the heavily-weighted channel under rec-709 (0.7152), so
+        // a fully-saturated green reads as "light" and takes dark text, while a
+        // pure blue (0.0722) reads as "dark" and takes light text — a naive
+        // average could not separate these.
+        assert_eq!(contrast_text(Color::Rgb(0x00, 0xff, 0x00)), CONTRAST_DARK);
+        assert_eq!(contrast_text(Color::Rgb(0x00, 0x00, 0xff)), CONTRAST_LIGHT);
+    }
+
+    #[test]
+    fn contrast_text_falls_back_to_light_for_a_non_rgb_background() {
+        // A chip's background is always truecolor, but guard the non-Rgb case
+        // (e.g. the terminal default) so the helper is total.
+        assert_eq!(contrast_text(Color::Reset), CONTRAST_LIGHT);
     }
 
     #[test]

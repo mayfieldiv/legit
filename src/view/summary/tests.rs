@@ -6,7 +6,7 @@ use crate::{
     app::model::{Model, RepoDetection},
     blocker::{BlockerResult, Tier},
     git_remote::RepoInfo,
-    github::rest::PR,
+    github::rest::{Label, PR},
     github::types::PRState,
     view,
     worktree::WorktreeEntry,
@@ -187,6 +187,60 @@ fn panel_rows(model: &Model, width: u16, height: u16) -> Vec<String> {
         .collect()
 }
 
+/// Render the full frame and return the cloned buffer so tests can assert cell
+/// styling (a chip's background/foreground), not just text.
+fn frame_buffer(model: &Model, width: u16, height: u16) -> ratatui::buffer::Buffer {
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| view::view(model, frame, fixed_now()))
+        .expect("draw");
+    terminal.backend().buffer().clone()
+}
+
+/// The first panel column (right of the list/summary split) at `width`. Chip
+/// assertions scan only the panel so they can't pick up the list's Selected Row
+/// background fill, which lives in the list columns.
+fn panel_split_x(width: u16) -> u16 {
+    width - panel_width(width).expect("panel should be visible at this width")
+}
+
+/// Find the first panel cell whose background equals `bg`, scanning row-major.
+/// In the panel a chip is the only surface that fills a background, so this
+/// locates a chip glyph unambiguously (unlike matching by symbol, which
+/// collides with body text). Returns the cell so its foreground can be asserted.
+fn find_panel_cell_with_bg(
+    buf: &ratatui::buffer::Buffer,
+    split_x: u16,
+    bg: ratatui::style::Color,
+) -> &ratatui::buffer::Cell {
+    let area = *buf.area();
+    for y in 0..area.height {
+        for x in split_x..area.width {
+            if buf[(x, y)].bg == bg {
+                return &buf[(x, y)];
+            }
+        }
+    }
+    panic!("no panel cell with background {bg:?}");
+}
+
+/// Whether any panel cell carries a truecolor background — used to assert a
+/// colourless chip still paints a fill without pinning the exact hashed hue.
+fn panel_has_filled_chip(buf: &ratatui::buffer::Buffer, split_x: u16) -> bool {
+    let area = *buf.area();
+    (0..area.height).any(|y| {
+        (split_x..area.width).any(|x| matches!(buf[(x, y)].bg, ratatui::style::Color::Rgb(_, _, _)))
+    })
+}
+
+fn label(name: &str, color: Option<&str>) -> Label {
+    Label {
+        name: name.to_owned(),
+        color: color.map(str::to_owned),
+    }
+}
+
 #[test]
 fn no_pr_selected_renders_placeholder() {
     let (model, _) = Model::new();
@@ -221,7 +275,10 @@ fn renders_smart_status_reason_as_the_first_section() {
 fn renders_identity_metadata_labels_assignees_and_requested_reviewers() {
     let mut pr = sample_pr(42, "Add the thing");
     pr.is_draft = true;
-    pr.labels = vec!["enhancement".to_owned(), "ready-for-agent".to_owned()];
+    pr.labels = vec![
+        label("enhancement", Some("a2eeef")),
+        label("ready-for-agent", None),
+    ];
     pr.assignees = vec!["octocat".to_owned()];
     pr.requested_reviewers = vec!["alice".to_owned(), "bob".to_owned()];
     let model = model_with_selected(pr);
@@ -236,9 +293,13 @@ fn renders_identity_metadata_labels_assignees_and_requested_reviewers() {
         "branches: {rows:?}"
     );
     assert!(joined.contains("created 5h updated 2h"), "dates: {rows:?}");
+    // Labels render as filled chips (padded names), no longer the old
+    // "labels: a, b" line; the chip text is the label name with a pad column.
+    assert!(joined.contains(" enhancement "), "label chip: {rows:?}");
+    assert!(joined.contains(" ready-for-agent "), "label chip: {rows:?}");
     assert!(
-        joined.contains("labels: enhancement, ready-for-agent"),
-        "labels: {rows:?}"
+        !joined.contains("labels:"),
+        "labels are chips, not a labels: line: {rows:?}"
     );
     assert!(joined.contains("assignees: octocat"), "assignees: {rows:?}");
     assert!(joined.contains("requested"), "requested header: {rows:?}");
@@ -700,4 +761,90 @@ fn no_pr_selected_at_each_width() {
             "no-PR placeholder @ {width}: {rows:?}"
         );
     }
+}
+
+#[test]
+fn label_chip_paints_the_github_colour_with_a_contrast_flipped_foreground() {
+    let mut pr = sample_pr(42, "Add the thing");
+    // A light label colour (near-white) must take dark text; a dark label colour
+    // must take light text — the contrast flip keyed off rec-709 luminance. The
+    // dark hue is kept distinct from the Selected Row's `selected_bg` fill so the
+    // panel scan can't confuse them.
+    pr.labels = vec![label("bug", Some("ffffff")), label("infra", Some("222831"))];
+    let model = model_with_selected(pr);
+
+    let buf = frame_buffer(&model, 140, 24);
+    let split_x = panel_split_x(140);
+
+    // The light chip carries the label colour as background and dark contrast
+    // text as foreground.
+    let light_chip =
+        find_panel_cell_with_bg(&buf, split_x, ratatui::style::Color::Rgb(255, 255, 255));
+    assert_eq!(
+        light_chip.fg,
+        ratatui::style::Color::Rgb(0x11, 0x11, 0x11),
+        "light chip takes dark contrast text"
+    );
+
+    // The dark chip carries its colour and flips to light text.
+    let dark_chip =
+        find_panel_cell_with_bg(&buf, split_x, ratatui::style::Color::Rgb(0x22, 0x28, 0x31));
+    assert_eq!(
+        dark_chip.fg,
+        ratatui::style::Color::Rgb(0xf8, 0xfa, 0xfc),
+        "dark chip takes light contrast text"
+    );
+}
+
+#[test]
+fn colourless_label_chip_still_paints_a_filled_background() {
+    let mut pr = sample_pr(42, "Add the thing");
+    pr.labels = vec![label("needs-triage", None)];
+    let model = model_with_selected(pr);
+
+    let buf = frame_buffer(&model, 140, 24);
+    let split_x = panel_split_x(140);
+    // A colourless label never renders without a fill: it takes the stable
+    // hashed fallback, a truecolor value.
+    assert!(
+        panel_has_filled_chip(&buf, split_x),
+        "colourless chip falls back to a filled hashed background"
+    );
+}
+
+#[test]
+fn label_chips_wrap_onto_multiple_rows_at_narrow_widths() {
+    let mut pr = sample_pr(42, "Add the thing");
+    pr.labels = vec![
+        label("enhancement", None),
+        label("good first issue", None),
+        label("help wanted", None),
+    ];
+    let model = model_with_selected(pr);
+
+    // At the narrow 80-col layout the panel is 36 cols; the three chips can't
+    // share one row, so they wrap rather than truncate — every name is present.
+    let rows = panel_rows(&model, 80, 30);
+    let joined = rows.join("\n");
+    assert!(
+        joined.contains(" enhancement "),
+        "wrap keeps chip 1: {rows:?}"
+    );
+    assert!(
+        joined.contains(" good first issue "),
+        "wrap keeps chip 2: {rows:?}"
+    );
+    assert!(
+        joined.contains(" help wanted "),
+        "wrap keeps chip 3: {rows:?}"
+    );
+
+    // The chips occupy more than one panel row (they wrapped).
+    let chip_rows = rows
+        .iter()
+        .filter(|r| {
+            r.contains("enhancement") || r.contains("good first issue") || r.contains("help wanted")
+        })
+        .count();
+    assert!(chip_rows >= 2, "chips wrapped onto >=2 rows: {rows:?}");
 }

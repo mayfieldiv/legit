@@ -1,6 +1,7 @@
 mod app;
 mod auth;
 mod blocker;
+mod chip;
 mod clipboard;
 mod color;
 mod config;

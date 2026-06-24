@@ -21,6 +21,7 @@ use ratatui::{
 };
 
 use crate::app::model::{FilesState, Model};
+use crate::chip::label_lines;
 use crate::format::{
     CheckOutcome, check_row, checks_summary, comment_counts, format_age, format_merge_status,
     format_review_state, format_size, outcome, review_icon, reviews_summary, sort_check_runs,
@@ -72,7 +73,7 @@ pub fn render(
     lines.extend(requested_reviewers_lines(pr, palette));
     lines.extend(checks_lines(model, pr, palette));
     lines.extend(files_lines(model, pr, palette));
-    lines.extend(labels_lines(pr, usize::from(area.width), palette));
+    lines.extend(label_lines(&pr.labels, usize::from(area.width), palette));
     lines.extend(assignees_lines(pr, usize::from(area.width), palette));
 
     frame.render_widget(Paragraph::new(lines), area);
@@ -160,20 +161,6 @@ fn worktree_label_width() -> usize {
 fn mergeability_line(pr: &PR) -> Line<'static> {
     let (text, color) = format_merge_status(&pr.state, &pr.mergeable);
     Line::from(Span::styled(text, Style::default().fg(color)))
-}
-
-fn labels_lines(pr: &PR, width: usize, palette: &Palette) -> Vec<Line<'static>> {
-    if pr.labels.is_empty() {
-        return Vec::new();
-    }
-    let text = format!("labels: {}", pr.labels.join(", "));
-    vec![Line::from(vec![
-        Span::styled("labels: ", Style::default().fg(palette.muted)),
-        Span::raw(truncate(
-            text.strip_prefix("labels: ").unwrap_or(&text),
-            width.saturating_sub("labels: ".len()).max(1),
-        )),
-    ])]
 }
 
 fn assignees_lines(pr: &PR, width: usize, palette: &Palette) -> Vec<Line<'static>> {

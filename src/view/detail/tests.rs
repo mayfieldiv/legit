@@ -5,7 +5,7 @@ use crate::{
     app::detail_items::{DetailFocus, DetailItems},
     app::model::{DetailState, Model, RepoDetection, ViewMode},
     git_remote::RepoInfo,
-    github::rest::PR,
+    github::rest::{Label, PR},
     github::types::{CheckRun, FullReviewThread, IssueComment, PRState, ReviewComment},
     test_fixtures::{self, review_comment},
     view,
@@ -36,6 +36,24 @@ fn buffer_text(terminal: &Terminal<TestBackend>) -> Vec<String> {
                 .collect::<String>()
         })
         .collect()
+}
+
+/// Find the first cell whose background equals `bg`, scanning row-major. A chip
+/// is the only header surface that fills a background, so this locates a chip
+/// glyph so its foreground can be asserted.
+fn find_cell_with_bg(
+    buf: &ratatui::buffer::Buffer,
+    bg: ratatui::style::Color,
+) -> &ratatui::buffer::Cell {
+    let area = *buf.area();
+    for y in 0..area.height {
+        for x in 0..area.width {
+            if buf[(x, y)].bg == bg {
+                return &buf[(x, y)];
+            }
+        }
+    }
+    panic!("no cell with background {bg:?} in buffer");
 }
 
 fn sample_pr() -> PR {
@@ -271,6 +289,66 @@ fn detail_header_repo_name_takes_the_repo_color() {
         crate::color::repo_color("acme/web"),
         "the detail header's repo name takes its stable Repo Color"
     );
+}
+
+#[test]
+fn detail_header_renders_label_chips_with_contrast_flipped_text() {
+    let mut pr = sample_pr();
+    // A light label colour takes dark text; a dark one takes light text.
+    pr.labels = vec![
+        Label {
+            name: "bug".to_owned(),
+            color: Some("ffffff".to_owned()),
+        },
+        Label {
+            name: "infra".to_owned(),
+            color: Some("222831".to_owned()),
+        },
+    ];
+    let model = model_in_detail(pr, "");
+
+    let terminal = render_snapshot(&model, 80, 14);
+    let buf = terminal.backend().buffer();
+    let rows = buffer_text(&terminal);
+
+    // The chips render in the header band, above the divider.
+    assert!(
+        rows.iter().any(|r| r.contains(" bug ")),
+        "label chip 'bug' in detail header: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|r| r.contains(" infra ")),
+        "label chip 'infra' in detail header: {rows:?}"
+    );
+
+    // The light chip carries the GitHub colour as background with dark text;
+    // the dark chip flips to light text.
+    let light = find_cell_with_bg(buf, ratatui::style::Color::Rgb(0xff, 0xff, 0xff));
+    assert_eq!(
+        light.fg,
+        ratatui::style::Color::Rgb(0x11, 0x11, 0x11),
+        "light chip takes dark contrast text"
+    );
+    let dark = find_cell_with_bg(buf, ratatui::style::Color::Rgb(0x22, 0x28, 0x31));
+    assert_eq!(
+        dark.fg,
+        ratatui::style::Color::Rgb(0xf8, 0xfa, 0xfc),
+        "dark chip takes light contrast text"
+    );
+}
+
+#[test]
+fn detail_header_without_labels_renders_no_chip_band() {
+    // A PR with no labels keeps the base header height: no chip background fills
+    // appear anywhere in the frame.
+    let model = model_in_detail(sample_pr(), "");
+    let terminal = render_snapshot(&model, 80, 14);
+    let buf = terminal.backend().buffer();
+    let area = *buf.area();
+    let any_fill = (0..area.height).any(|y| {
+        (0..area.width).any(|x| matches!(buf[(x, y)].bg, ratatui::style::Color::Rgb(_, _, _)))
+    });
+    assert!(!any_fill, "a labelless PR paints no chip fills");
 }
 
 #[test]

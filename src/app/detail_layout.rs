@@ -28,20 +28,52 @@ use super::{
     model::{DetailState, Model},
 };
 
-/// Number of rows in the detail view's pinned header: title, meta, URL,
-/// branch+mergeable/worktree, divider. Constant — the header draws from the
-/// list PR, which is always available, so it shows even while the body fetch is
-/// in flight.
-pub(crate) const HEADER_HEIGHT: u16 = 5;
+/// The fixed rows of the detail view's pinned header that are always present:
+/// title, meta, branch+mergeable/worktree, URL, divider. The Label Chip band
+/// (zero or more wrapped rows) sits above the divider and is added on top of
+/// this base by [`header_height`] when the PR has labels.
+pub(crate) const HEADER_BASE_HEIGHT: u16 = 5;
 
-/// Fixed chrome rows the detail view reserves around the scrollable body: the
-/// pinned `HEADER_HEIGHT` plus the 1-row status bar (the
+/// The chrome rows a label-less PR reserves around the scrollable body: the
+/// fixed [`HEADER_BASE_HEIGHT`] plus the 1-row status bar. Equals
+/// `chrome_rows(pr, width)` whenever the PR has no Label Chips (its chip band
+/// is then zero rows), so it is the base case [`chrome_rows`] names and the
+/// fallback `update`'s scroll clamp uses for a PR no longer in the list.
+pub(crate) const BASE_CHROME_ROWS: u16 = HEADER_BASE_HEIGHT + 1;
+
+/// Total rows in the detail view's pinned header for `pr` at `width`: the fixed
+/// [`HEADER_BASE_HEIGHT`] plus the number of rows the PR's Label Chips wrap onto
+/// (none when it has no labels). The header draws from the list PR, which is
+/// always available, so it shows even while the body fetch is in flight.
+///
+/// The single source of truth for the header's height, shared by
+/// `view::detail`'s layout, `update`'s scroll clamp ([`chrome_rows`]), and its
+/// mouse hit-testing, so the three can't disagree on where the body begins.
+pub(crate) fn header_height(pr: &PR, width: u16) -> u16 {
+    HEADER_BASE_HEIGHT.saturating_add(chip_band_rows(pr, width))
+}
+
+/// The number of header rows the PR's Label Chips occupy at `width` — zero when
+/// the PR has no labels. The chips wrap with the same packer the chip render
+/// uses, so the reserved band always matches what is painted.
+fn chip_band_rows(pr: &PR, width: u16) -> u16 {
+    if pr.labels.is_empty() {
+        return 0;
+    }
+    let rows = crate::chip::chip_rows(&pr.labels, usize::from(width)).len();
+    u16::try_from(rows).unwrap_or(u16::MAX)
+}
+
+/// Fixed chrome rows the detail view reserves around the scrollable body for
+/// `pr` at `width`: the pinned [`header_height`] plus the 1-row status bar (the
 /// `Constraint::Length(1)` in `view::detail::render`'s `Layout::vertical`).
 /// The single source of truth shared by that layout and `update`'s scroll
 /// clamp, which subtracts it from the terminal height to derive the same body
 /// viewport. Mirrors how `Model::chrome_rows` is shared between
 /// `sync_viewport` and `view::view`.
-pub(crate) const CHROME_ROWS: u16 = HEADER_HEIGHT + 1;
+pub(crate) fn chrome_rows(pr: &PR, width: u16) -> u16 {
+    header_height(pr, width).saturating_add(1)
+}
 
 /// Sentinel key under which the PR description's `<details>` expansion state
 /// lives in `DetailState::expanded`. The description has no comment URL, and
@@ -427,4 +459,63 @@ fn collapse_body(body: Vec<Line<'static>>) -> Vec<Line<'static>> {
         Style::default().fg(DARK.muted),
     )));
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::github::rest::Label;
+    use crate::github::types::PRState;
+
+    fn pr_with_labels(labels: Vec<Label>) -> PR {
+        PR {
+            number: 1,
+            repo_slug: "acme/web".to_owned(),
+            title: "t".to_owned(),
+            author: "a".to_owned(),
+            created_at: DateTime::UNIX_EPOCH,
+            updated_at: DateTime::UNIX_EPOCH,
+            additions: 0,
+            deletions: 0,
+            is_draft: false,
+            labels,
+            requested_reviewers: Vec::new(),
+            assignees: Vec::new(),
+            review_decision: String::new(),
+            mergeable: "UNKNOWN".to_owned(),
+            last_commit_date: None,
+            head_commit_sha: None,
+            review_status_loaded: false,
+            head_ref: "h".to_owned(),
+            base_ref: "b".to_owned(),
+            head_repository_owner: "acme".to_owned(),
+            state: PRState::Open,
+        }
+    }
+
+    fn label(name: &str) -> Label {
+        Label {
+            name: name.to_owned(),
+            color: None,
+        }
+    }
+
+    #[test]
+    fn header_height_is_the_base_when_the_pr_has_no_labels() {
+        let pr = pr_with_labels(Vec::new());
+        assert_eq!(header_height(&pr, 80), HEADER_BASE_HEIGHT);
+        assert_eq!(chrome_rows(&pr, 80), BASE_CHROME_ROWS);
+    }
+
+    #[test]
+    fn header_height_grows_by_the_label_chip_band() {
+        let pr = pr_with_labels(vec![label("a"), label("bb")]);
+        // " a " (3) + gap (1) + " bb " (4) = 8 columns; at width 80 the two chips
+        // share one band row, so the header is the base plus one.
+        assert_eq!(header_height(&pr, 80), HEADER_BASE_HEIGHT + 1);
+        // At a narrow width the chips wrap onto two band rows, growing the header
+        // and the chrome the scroll clamp reserves in lockstep.
+        assert_eq!(header_height(&pr, 4), HEADER_BASE_HEIGHT + 2);
+        assert_eq!(chrome_rows(&pr, 4), BASE_CHROME_ROWS + 2);
+    }
 }

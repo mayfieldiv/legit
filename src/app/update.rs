@@ -513,7 +513,16 @@ fn handle_list_left_click(model: &mut Model, mouse: MouseEvent) -> Vec<Cmd> {
 }
 
 fn handle_detail_left_click(model: &mut Model, mouse: MouseEvent) -> Vec<Cmd> {
-    let body_top = detail_layout::HEADER_HEIGHT;
+    let ViewMode::Detail(detail) = &model.view_mode else {
+        return Vec::new();
+    };
+    // The body starts below the header, whose height now varies with the PR's
+    // Label Chip band, so derive `body_top` from the same `header_height` the
+    // view lays out against rather than a constant.
+    let Some(pr) = model.list.pr(&detail.key) else {
+        return Vec::new();
+    };
+    let body_top = detail_layout::header_height(pr, model.terminal_width);
     let status_row = model.terminal_height.saturating_sub(1);
     if mouse.row < body_top || mouse.row >= status_row {
         return Vec::new();
@@ -603,9 +612,18 @@ fn measured_detail_content(model: &Model) -> Option<detail_layout::DetailContent
 }
 
 /// The detail body's viewport height: the terminal minus the pinned header and
-/// status bar.
+/// status bar. The header height varies with the open PR's Label Chip band, so
+/// it is derived from that PR; a PR no longer in the list (or List mode) falls
+/// back to the base chrome, leaving the clamp harmless until the next frame.
 fn detail_viewport_rows(model: &Model) -> usize {
-    usize::from(model.terminal_height).saturating_sub(usize::from(detail_layout::CHROME_ROWS))
+    let chrome = match &model.view_mode {
+        ViewMode::Detail(detail) => match model.list.pr(&detail.key) {
+            Some(pr) => detail_layout::chrome_rows(pr, model.terminal_width),
+            None => detail_layout::BASE_CHROME_ROWS,
+        },
+        _ => detail_layout::BASE_CHROME_ROWS,
+    };
+    usize::from(model.terminal_height).saturating_sub(usize::from(chrome))
 }
 
 /// The `detail.expanded` key Enter should toggle for the focused card, or
