@@ -365,8 +365,8 @@ pub struct Model {
     /// initial enrichment or a Refresh settling. Keyed by `PrKey` (the same
     /// per-PR identity as `blockers`) because PRs are fetched and refreshed
     /// independently, so there is no single global "last updated" moment.
-    /// Stamped via `stamp_fetched` (overwriting with the later instant) when a
-    /// PR's enrichment arrives and when its `RefreshComplete` fires, then read
+    /// Stamped via `stamp_fetched` (last-write-wins, the most recent stamp) when
+    /// a PR's enrichment arrives and when its `RefreshComplete` fires, then read
     /// by the summary panel and detail header through `fetched_at`. A PR absent
     /// from the map has never been fetched, so the views omit its Fetch Age line
     /// rather than show a misleading "now". A stamp for a PR no longer present
@@ -495,17 +495,20 @@ impl Model {
     }
 
     /// Record that `key`'s data was just received at `now` — the PR's Fetch Age
-    /// clock. Overwrites any prior stamp with the later instant (a fresh
-    /// enrichment or a Refresh settling resets the age), keeping the signal
-    /// strictly per-PR: stamping one PR never touches another's.
+    /// clock. Last-write-wins: `now` overwrites any prior stamp unconditionally,
+    /// so the clock tracks the most recent fetch *event*. `now` is wall-clock
+    /// (non-monotonic), so a re-stamp is not guaranteed to be a later instant —
+    /// the latest event still sets the clock, the right semantic for a "last
+    /// received" signal. Strictly per-PR: stamping one PR never touches another's.
     pub fn stamp_fetched(&mut self, key: PrKey, now: chrono::DateTime<chrono::Utc>) {
         self.fetched_at.insert(key, now);
     }
 
     /// When `key`'s data was last received, or `None` if it has never been
     /// fetched. The summary panel and detail header feed this through
-    /// `format::format_age` to render "fetched Nm ago"; a `None` means no stamp
-    /// yet, so they omit the Fetch Age line rather than show a misleading age.
+    /// `format::fetched_age_spans` (which uses `format_age` for the relative age)
+    /// to render "fetched Nm ago"; a `None` makes that helper return no spans, so
+    /// they omit the Fetch Age line rather than show a misleading age.
     pub fn fetched_at(&self, key: &PrKey) -> Option<chrono::DateTime<chrono::Utc>> {
         self.fetched_at.get(key).copied()
     }
@@ -624,17 +627,22 @@ mod tests {
     }
 
     #[test]
-    fn stamp_fetched_records_per_pr_and_overwrites_with_the_later_instant() {
+    fn stamp_fetched_records_per_pr_and_keeps_the_most_recent_stamp() {
         let (mut model, _) = Model::new();
         let early = chrono::Utc.with_ymd_and_hms(2026, 5, 20, 12, 0, 0).unwrap();
         let later = early + chrono::Duration::minutes(5);
 
         model.stamp_fetched(key(1), early);
         assert_eq!(model.fetched_at(&key(1)), Some(early));
-        // Stamping PR #1 again overwrites with the newer instant…
+        // Last-write-wins: a re-stamp overwrites with the latest fetch event…
         model.stamp_fetched(key(1), later);
         assert_eq!(model.fetched_at(&key(1)), Some(later));
-        // …and never touches another PR's stamp.
+        // …even when that instant is *earlier* than the prior one (wall-clock is
+        // non-monotonic — e.g. an NTP step-back). This pins last-write-wins, not
+        // a max(): a max would have kept `later` here.
+        model.stamp_fetched(key(1), early);
+        assert_eq!(model.fetched_at(&key(1)), Some(early));
+        // Stamping #1 never touches another PR's stamp.
         assert_eq!(model.fetched_at(&key(2)), None);
     }
 }
