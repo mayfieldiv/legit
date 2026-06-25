@@ -26,12 +26,17 @@ use crate::palette::{DARK, Palette};
 /// engine treats it as its own Next Action after hard CI failures.
 const FAILING_CONCLUSIONS: [&str; 4] = ["failure", "timed_out", "cancelled", "action_required"];
 
+/// Seconds below which an age reads as the sub-minute case: `format_age`'s "now"
+/// and `fetched_age_spans`'s "just now". Shared between the two so their
+/// sub-minute thresholds can never drift apart.
+const SUB_MINUTE_SECS: i64 = 60;
+
 /// Format a past instant as a compact age relative to `now`. Mirrors the TS
 /// `formatAge` in `src/lib/format.ts`: "now", "Nm", "Nh", "Nd", "Nmo",
 /// "NyNmo" / "Ny".
 pub fn format_age(then: DateTime<Utc>, now: DateTime<Utc>) -> String {
     let seconds = (now - then).num_seconds().max(0);
-    if seconds < 60 {
+    if seconds < SUB_MINUTE_SECS {
         return "now".to_owned();
     }
     let minutes = seconds / 60;
@@ -79,11 +84,14 @@ pub fn fetched_age_spans(
     let Some(fetched_at) = fetched_at else {
         return Vec::new();
     };
-    // `format_age` returns "now" for anything under a minute; "now ago" reads
-    // wrong, so the just-fetched case gets its own phrasing.
-    let value = match format_age(fetched_at, now).as_str() {
-        "now" => "just now".to_owned(),
-        age => format!("{age} ago"),
+    // Under a minute reads "just now", never the ungrammatical "now ago". Branch
+    // on the elapsed seconds directly — the same `SUB_MINUTE_SECS` threshold
+    // `format_age` uses — rather than re-parsing its "now" output: no throwaway
+    // String and no literal-match coupling to that function's sub-minute wording.
+    let value = if (now - fetched_at).num_seconds() < SUB_MINUTE_SECS {
+        "just now".to_owned()
+    } else {
+        format!("{} ago", format_age(fetched_at, now))
     };
     vec![
         Span::styled("fetched ", Style::default().fg(palette.muted)),
