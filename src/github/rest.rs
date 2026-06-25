@@ -1,10 +1,10 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use octocrab::{Octocrab, Page};
 use serde::{Deserialize, de::DeserializeOwned};
-use tokio::sync::mpsc;
+use tokio::sync::{OnceCell, mpsc};
 
 use crate::{
     file_category::FileChange,
@@ -233,6 +233,46 @@ fn parse_pr(raw: RawRestPR, repo_slug: &str) -> PR {
 
 // ── Octocrab transport ──────────────────────────────────────────────────────
 
+/// A list-load-scoped memo of a repo's Actions `workflow_id → name` map. The map
+/// is repo-global and immutable for the session, but a fresh [`OctocrabRest`] is
+/// built per check fetch, so without this every PR's check fetch would re-page
+/// the identical `GET /actions/workflows` list. Shared by `Arc` inside the per-PR
+/// `RequestContext` so the list is fetched once per list-load rather than once
+/// per PR; the per-commit workflow-runs lookup still runs per PR.
+#[derive(Clone, Default)]
+pub struct WorkflowNameCache(Arc<OnceCell<HashMap<u64, String>>>);
+
+impl WorkflowNameCache {
+    /// The repo's `workflow_id → name` map, fetching and memoising it on first
+    /// use. A failed fetch isn't cached, so a later check fetch retries.
+    async fn get_or_init(
+        &self,
+        rest: &OctocrabRest,
+        owner: &str,
+        repo: &str,
+    ) -> Result<&HashMap<u64, String>> {
+        self.0
+            .get_or_try_init(|| rest.workflow_names_by_id(owner, repo))
+            .await
+    }
+}
+
+impl std::fmt::Debug for WorkflowNameCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkflowNameCache").finish_non_exhaustive()
+    }
+}
+
+// The cache is derived data, not part of a request's identity, so two contexts
+// are equal regardless of cache state (and it's empty in the equality tests).
+impl PartialEq for WorkflowNameCache {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for WorkflowNameCache {}
+
 /// Octocrab-backed REST client. Uses a personal access token; the raw `get`
 /// lets us deserialize directly into our permissive `RawRestPR` so octocrab's
 /// strict model types don't tie us to fields GitHub may omit.
@@ -324,21 +364,47 @@ impl OctocrabRest {
         Ok(parse_issue_comments(raw, bot_logins))
     }
 
-    /// Fetch all CI check runs for a commit. The check-runs endpoint nests the
-    /// array under `check_runs` and paginates by `page`, so it can't use the
-    /// Link-header `get_all` helper.
-    #[tracing::instrument(name = "list_check_runs", skip(self))]
+    /// Fetch all CI check runs for a commit, each tagged with its `workflow / job`
+    /// name. The companion Actions workflow-name lookup is independent of the
+    /// check-runs fetch, so the two run concurrently and the labelling latency
+    /// overlaps the check fetch rather than preceding it. The lookup is
+    /// best-effort — `join!` (not `try_join!`) lets a label failure yield bare
+    /// job names rather than failing the whole fetch.
+    #[tracing::instrument(name = "list_check_runs", skip(self, cache))]
     pub async fn list_check_runs(
         &self,
         owner: &str,
         repo: &str,
         commit_sha: &str,
+        cache: &WorkflowNameCache,
     ) -> Result<Vec<CheckRun>> {
+        let (workflows, raw) = tokio::join!(
+            self.workflow_names_by_suite(owner, repo, commit_sha, cache),
+            self.fetch_raw_check_runs(owner, repo, commit_sha),
+        );
+        let workflows = workflows.unwrap_or_else(|error| {
+            tracing::warn!(%error, "workflow-name lookup failed; using bare check names");
+            HashMap::new()
+        });
+        Ok(parse_check_runs(raw?, &workflows))
+    }
+
+    /// Fetch and accumulate every page of a commit's raw check runs. The
+    /// check-runs endpoint nests the array under `check_runs` and paginates by
+    /// `page`, so it can't use the Link-header `get_all` helper. Split from the
+    /// workflow-name lookup so [`list_check_runs`] can run the two concurrently.
+    #[tracing::instrument(name = "fetch_raw_check_runs", skip(self))]
+    async fn fetch_raw_check_runs(
+        &self,
+        owner: &str,
+        repo: &str,
+        commit_sha: &str,
+    ) -> Result<RawCheckRunsResponse> {
         let route = format!("/repos/{owner}/{repo}/commits/{commit_sha}/check-runs");
-        let mut all = Vec::new();
+        let mut check_runs = Vec::new();
         let mut page = 1u32;
         loop {
-            let params = CheckRunParams {
+            let params = PageParams {
                 per_page: 100,
                 page,
             };
@@ -350,13 +416,120 @@ impl OctocrabRest {
                     format!("listing check runs for {owner}/{repo}@{commit_sha} (page {page})")
                 })?;
             let count = response.check_runs.len();
-            all.extend(parse_check_runs(response));
+            check_runs.extend(response.check_runs);
             if count < 100 {
                 break;
             }
             page += 1;
         }
-        Ok(all)
+        Ok(RawCheckRunsResponse { check_runs })
+    }
+
+    /// Map each of a commit's check suites to the display name of the Actions
+    /// workflow that produced it, driving the `workflow / job` check labels.
+    ///
+    /// Composed from two independent lookups, run concurrently: the repo's
+    /// workflows (`GET /actions/workflows`, memoised in `cache`) give
+    /// `workflow_id → name`, and the commit's workflow runs
+    /// (`GET /actions/runs?head_sha=…`) give `check_suite_id → workflow_id`. Both
+    /// must succeed for a useful map, so `try_join!` short-circuits on either
+    /// error. The workflow's `name:` is used deliberately rather than the per-run
+    /// name, which a `run-name:` override can replace (e.g. CodeQL's `PR #123`).
+    /// Checks not produced by Actions (external statuses, other apps) won't appear.
+    #[tracing::instrument(name = "workflow_names_by_suite", skip(self, cache))]
+    async fn workflow_names_by_suite(
+        &self,
+        owner: &str,
+        repo: &str,
+        head_sha: &str,
+        cache: &WorkflowNameCache,
+    ) -> Result<HashMap<u64, String>> {
+        let (names_by_id, suite_workflow_ids) = tokio::try_join!(
+            cache.get_or_init(self, owner, repo),
+            self.suite_workflow_ids(owner, repo, head_sha),
+        )?;
+        Ok(suite_workflow_ids
+            .into_iter()
+            .filter_map(|(suite_id, workflow_id)| {
+                names_by_id
+                    .get(&workflow_id)
+                    .map(|name| (suite_id, name.clone()))
+            })
+            .collect())
+    }
+
+    /// Map each of a commit's check suites to the Actions workflow id that
+    /// produced it, via `GET /actions/runs?head_sha=…` (paginated by `page`). The
+    /// `check_suite_id → workflow_id` half of [`workflow_names_by_suite`]'s join;
+    /// the names come from the cached repo workflow list. A re-run reuses the
+    /// suite id, so a later page's run wins for that suite — matching the eventual
+    /// `collect` into a map.
+    #[tracing::instrument(name = "suite_workflow_ids", skip(self))]
+    async fn suite_workflow_ids(
+        &self,
+        owner: &str,
+        repo: &str,
+        head_sha: &str,
+    ) -> Result<HashMap<u64, u64>> {
+        let route = format!("/repos/{owner}/{repo}/actions/runs");
+        let mut by_suite = HashMap::new();
+        let mut page = 1u32;
+        loop {
+            let params = WorkflowRunParams {
+                head_sha,
+                per_page: 100,
+                page,
+            };
+            let response: RawWorkflowRunsResponse = self
+                .client
+                .get(&route, Some(&params))
+                .await
+                .with_context(|| {
+                    format!("listing workflow runs for {owner}/{repo}@{head_sha} (page {page})")
+                })?;
+            let count = response.workflow_runs.len();
+            for run in response.workflow_runs {
+                if let (Some(suite_id), Some(workflow_id)) = (run.check_suite_id, run.workflow_id) {
+                    by_suite.insert(suite_id, workflow_id);
+                }
+            }
+            if count < 100 {
+                break;
+            }
+            page += 1;
+        }
+        Ok(by_suite)
+    }
+
+    /// Map each Actions workflow in the repo to its display name (the `name:`
+    /// field), via `GET /repos/:owner/:repo/actions/workflows`. The join target
+    /// for [`workflow_names_by_suite`]; the response nests workflows under
+    /// `workflows` and paginates by `page`.
+    #[tracing::instrument(name = "workflow_names_by_id", skip(self))]
+    async fn workflow_names_by_id(&self, owner: &str, repo: &str) -> Result<HashMap<u64, String>> {
+        let route = format!("/repos/{owner}/{repo}/actions/workflows");
+        let mut by_id = HashMap::new();
+        let mut page = 1u32;
+        loop {
+            let params = PageParams {
+                per_page: 100,
+                page,
+            };
+            let response: RawWorkflowsResponse = self
+                .client
+                .get(&route, Some(&params))
+                .await
+                .with_context(|| format!("listing workflows for {owner}/{repo} (page {page})"))?;
+            let count = response.workflows.len();
+            for workflow in response.workflows {
+                by_id.insert(workflow.id, workflow.name);
+            }
+            if count < 100 {
+                break;
+            }
+            page += 1;
+        }
+        Ok(by_id)
     }
 
     /// Fetch a single PR's body (markdown). The single-PR endpoint at
@@ -429,8 +602,10 @@ struct PerPageParams {
     per_page: u8,
 }
 
+/// Generic page cursor for endpoints that paginate by `?per_page&page` (the
+/// check-runs and workflows lists).
 #[derive(serde::Serialize)]
-struct CheckRunParams {
+struct PageParams {
     per_page: u8,
     page: u32,
 }
@@ -458,6 +633,63 @@ struct RawCheckRun {
     status: String,
     #[serde(default)]
     conclusion: Option<String>,
+    #[serde(default)]
+    started_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    completed_at: Option<DateTime<Utc>>,
+    /// The check suite this run belongs to. Joined against the Actions
+    /// workflow-runs endpoint to recover the run's `workflow / job` name.
+    #[serde(default)]
+    check_suite: Option<RawCheckSuite>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RawCheckSuite {
+    id: u64,
+}
+
+/// Wire shape for the Actions workflow-runs endpoint
+/// (`GET /repos/:owner/:repo/actions/runs?head_sha=…`). Links each check suite
+/// to the workflow that produced it; the workflow's display name is then looked
+/// up via [`RawWorkflowsResponse`].
+#[derive(Debug, Clone, Deserialize)]
+struct RawWorkflowRunsResponse {
+    #[serde(default)]
+    workflow_runs: Vec<RawWorkflowRun>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RawWorkflowRun {
+    /// The workflow this run belongs to; joined against [`RawWorkflow`] for the
+    /// display name. Preferred over the run's own `name`, which a `run-name:`
+    /// override can replace.
+    #[serde(default)]
+    workflow_id: Option<u64>,
+    /// The check suite this workflow run created; the join key onto `RawCheckRun`.
+    #[serde(default)]
+    check_suite_id: Option<u64>,
+}
+
+#[derive(serde::Serialize)]
+struct WorkflowRunParams<'a> {
+    head_sha: &'a str,
+    per_page: u8,
+    page: u32,
+}
+
+/// Wire shape for the Actions workflows endpoint
+/// (`GET /repos/:owner/:repo/actions/workflows`). Supplies each workflow's
+/// display name (its `name:` field) for the `workflow / job` check labels.
+#[derive(Debug, Clone, Deserialize)]
+struct RawWorkflowsResponse {
+    #[serde(default)]
+    workflows: Vec<RawWorkflow>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RawWorkflow {
+    id: u64,
+    name: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -530,13 +762,22 @@ fn parse_reviews(raw: Vec<RawReview>) -> Vec<Review> {
     reviews
 }
 
-fn parse_check_runs(raw: RawCheckRunsResponse) -> Vec<CheckRun> {
+/// Convert raw check runs to domain `CheckRun`s, resolving each run's workflow
+/// name from `workflows` (a check-suite-id → workflow-name map). A run whose
+/// suite isn't in the map (a non-Actions check, or a gap in the lookup) keeps a
+/// `None` workflow name and renders as its bare job name.
+fn parse_check_runs(raw: RawCheckRunsResponse, workflows: &HashMap<u64, String>) -> Vec<CheckRun> {
     raw.check_runs
         .into_iter()
         .map(|run| CheckRun {
             name: run.name,
+            workflow_name: run
+                .check_suite
+                .and_then(|suite| workflows.get(&suite.id).cloned()),
             status: run.status,
             conclusion: run.conclusion,
+            started_at: run.started_at,
+            completed_at: run.completed_at,
         })
         .collect()
 }
@@ -565,6 +806,8 @@ fn parse_issue_comments(raw: Vec<RawIssueComment>, bot_logins: &[String]) -> Vec
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use chrono::TimeZone;
 
     use super::{
@@ -770,20 +1013,57 @@ mod tests {
     fn check_runs_parse_name_status_conclusion() {
         let raw: RawCheckRunsResponse = serde_json::from_str(
             r#"{ "total_count": 2, "check_runs": [
-                { "name": "build", "status": "completed", "conclusion": "success" },
-                { "name": "deploy", "status": "in_progress", "conclusion": null }
+                { "name": "build", "status": "completed", "conclusion": "success",
+                  "started_at": "2026-05-01T00:00:00Z", "completed_at": "2026-05-01T00:02:30Z" },
+                { "name": "deploy", "status": "in_progress", "conclusion": null,
+                  "started_at": "2026-05-01T00:00:00Z" }
             ] }"#,
         )
         .expect("deserialize");
 
-        let checks = parse_check_runs(raw);
+        let checks = parse_check_runs(raw, &HashMap::new());
 
         assert_eq!(checks.len(), 2);
         assert_eq!(checks[0].name, "build");
         assert_eq!(checks[0].status, "completed");
         assert_eq!(checks[0].conclusion.as_deref(), Some("success"));
+        // No check_suite in the payload -> no workflow name, bare job label.
+        assert_eq!(checks[0].workflow_name, None);
+        // Both endpoints present -> a derived Check Duration of 2m30s.
+        assert_eq!(
+            checks[0].duration(),
+            Some(chrono::Duration::seconds(150)),
+            "completed run carries both timestamps"
+        );
         assert_eq!(checks[1].status, "in_progress");
         assert_eq!(checks[1].conclusion, None);
+        // Only one endpoint present -> no duration.
+        assert_eq!(
+            checks[1].duration(),
+            None,
+            "an in-progress run has no completed_at, so no duration"
+        );
+    }
+
+    #[test]
+    fn check_runs_resolve_workflow_name_from_their_suite() {
+        let raw: RawCheckRunsResponse = serde_json::from_str(
+            r#"{ "total_count": 2, "check_runs": [
+                { "name": "Tests", "status": "completed", "conclusion": "success",
+                  "check_suite": { "id": 11 } },
+                { "name": "Tests", "status": "completed", "conclusion": "success",
+                  "check_suite": { "id": 22 } }
+            ] }"#,
+        )
+        .expect("deserialize");
+
+        // Two suites map to two different workflows, disambiguating the two
+        // identically-named "Tests" jobs.
+        let workflows = HashMap::from([(11, "ci".to_owned()), (22, "e2e".to_owned())]);
+        let checks = parse_check_runs(raw, &workflows);
+
+        assert_eq!(checks[0].workflow_name.as_deref(), Some("ci"));
+        assert_eq!(checks[1].workflow_name.as_deref(), Some("e2e"));
     }
 
     #[test]

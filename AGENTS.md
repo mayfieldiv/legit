@@ -1,5 +1,6 @@
 # AGENTS.md
 
+- **Primary TUI manual-testing path in this environment: drive a `herdr` pane.** See `docs/agents/manual-testing.md` — launch the real TUI, read frames, send keys, capture colour. The pane lives in the user's herdr session (the `manual-test` tab) so they can watch. The `tmux` flow below is an alternative when herdr isn't available.
 - For TUI testing, use the `tmux` skill with a repo-local socket at `.tmux/legit-test.sock` (gitignored). Deriving it from the repo root keeps the path identical no matter the `$TMPDIR` or the current directory, so the attach command you give the user is always the same. Session name: `legit-test`.
   ```bash
   SOCKET="$(git rev-parse --show-toplevel)/.tmux/legit-test.sock"
@@ -23,6 +24,10 @@
 - **Never post to GitHub without explicit user approval.** Do not create issues, file PRs, post PR comments, reply to review threads, or perform any write action on GitHub unless the user explicitly asks for it.
 
 ## Agent skills
+
+### Manual TUI testing
+
+Drive the real TUI in a `herdr` pane — launch, read frames, send keys, capture colour. See `docs/agents/manual-testing.md`.
 
 ### Issue tracker
 

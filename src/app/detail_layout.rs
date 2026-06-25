@@ -13,12 +13,16 @@ use ratatui::{
     style::Style,
     text::{Line, Span},
 };
+use unicode_width::UnicodeWidthStr;
 
 use crate::{
     blocker::{ThreadKind, classify_thread},
-    format::{check_row, checks_summary, format_age, sort_check_runs},
+    format::{
+        CHECK_INDENT, check_cell_spans, check_cell_width, checks_summary, format_age,
+        sorted_check_runs,
+    },
     github::rest::PR,
-    github::types::{CheckRun, FullReviewThread},
+    github::types::FullReviewThread,
     markdown::{self, Block},
     palette::DARK,
 };
@@ -98,15 +102,45 @@ pub(crate) fn render_description_blocks(body: &str) -> Vec<Block> {
     }
 }
 
+/// Upper bound on the detail checks grid's column count. The grid grows as many
+/// columns as the body width fits (see [`grid_columns`]), but stops here so an
+/// ultrawide terminal stays scannable rather than smearing checks across the
+/// whole row. The narrower summary panel packs at most two columns (its own
+/// `summary::checks_lines`).
+pub(crate) const MAX_GRID_COLUMNS: usize = 6;
+
+/// Blank columns between two adjacent grid columns. The column stride is the
+/// widest check cell plus this gap, so the columns stay packed near the left
+/// instead of being spread to the body's edges on a wide terminal.
+const CHECKS_GRID_GAP: usize = 2;
+
+/// How many grid columns of `cell_width`-wide check cells fit in `width`: the
+/// [`CHECK_INDENT`] sits in front, then each column takes the cell plus a
+/// [`CHECKS_GRID_GAP`] — except the last, which needs no trailing gap. Clamped
+/// to at least one column and at most [`MAX_GRID_COLUMNS`].
+fn grid_columns(width: u16, cell_width: usize) -> usize {
+    let stride = (cell_width + CHECKS_GRID_GAP).max(1);
+    let usable = usize::from(width).saturating_sub(CHECK_INDENT.len());
+    // n columns occupy n·stride − GAP (the last column drops its trailing gap),
+    // so the largest n that fits is ⌊(usable + GAP) / stride⌋.
+    let fit = (usable + CHECKS_GRID_GAP) / stride;
+    fit.clamp(1, MAX_GRID_COLUMNS)
+}
+
 /// Build the CI checks section lines: blank separator + bold header with
-/// pass/fail/pending counts + one row per check (sorted failing-first, then
-/// pending, then passed). Returns an empty `Vec` when checks haven't arrived
-/// for this PR's commit or the check list is empty. Mirrors `summary::checks_lines`.
+/// pass/fail/pending counts (over ALL checks) + a grid of every check of any
+/// outcome, ordered failing-first then slowest. The grid grows as many columns
+/// as the body width fits (capped at [`MAX_GRID_COLUMNS`]); unlike the summary
+/// panel, the detail view is the exhaustive one, so it lists every check across
+/// as many rows as needed, with no row cap or `+N more` overflow. Returns an
+/// empty `Vec` when checks haven't arrived for this PR's commit or the check
+/// list is empty. Shares the `sorted_check_runs` ordering and `check_cell_spans`
+/// content with `summary::checks_lines`; only the column packing differs.
 ///
 /// Part of the measured layout: the checks section is appended to the
 /// description per-frame (so late-arriving checks show without a re-fetch),
 /// so the true content height — and thus the max scroll offset — includes it.
-fn checks_section_lines(model: &Model, pr: &PR) -> Vec<Line<'static>> {
+fn checks_section_lines(model: &Model, pr: &PR, width: u16) -> Vec<Line<'static>> {
     let Some(checks) = model.enrichment.checks_for(pr) else {
         return Vec::new();
     };
@@ -141,10 +175,54 @@ fn checks_section_lines(model: &Model, pr: &PR) -> Vec<Line<'static>> {
     }
     lines.push(Line::from(header_spans));
 
-    // All check rows, sorted (failing first, then pending, then passed).
-    let mut sorted: Vec<&CheckRun> = checks.iter().collect();
-    sort_check_runs(&mut sorted);
-    lines.extend(sorted.into_iter().map(check_row));
+    // Checks of any outcome, ordered failing-first then slowest, laid out
+    // row-major into as many columns as the body width fits. The header counts
+    // above still tally ALL checks.
+    let sorted = sorted_check_runs(checks);
+    // Size the columns to the content: the widest check cell (plus a gap) is the
+    // column stride, so the columns sit packed near the left rather than flung
+    // to the body's edges on a wide terminal. Every check is shown (the detail
+    // view is the exhaustive one), so the widest is measured over all of them.
+    let widest_cell = sorted
+        .iter()
+        .map(|c| check_cell_width(c))
+        .max()
+        .unwrap_or(0);
+    let columns = grid_columns(width, widest_cell);
+    let stride = widest_cell + CHECKS_GRID_GAP;
+    // With two or more columns every cell is at most `widest_cell` wide and the
+    // row fits the body by construction, so cells need no truncation. But a cell
+    // wider than the body forces a single column (`grid_columns` clamps to 1),
+    // and there the cell can exceed the body — bound it to the usable width so
+    // `check_cell_spans` middle-truncates the label. The body is an unwrapped
+    // `Paragraph`, which would otherwise clip a long `workflow / job` with no
+    // ellipsis.
+    let cell_budget = if columns == 1 {
+        (width as usize).saturating_sub(CHECK_INDENT.len())
+    } else {
+        usize::MAX
+    };
+
+    for row in sorted.chunks(columns) {
+        // Two-space indent in front of the first column so a check reads at the
+        // same depth as in the summary panel (the shared `CHECK_INDENT`).
+        let mut spans: Vec<Span<'static>> = vec![Span::raw(CHECK_INDENT)];
+        for (col, check) in row.iter().enumerate() {
+            let cell = check_cell_spans(check, cell_budget);
+            // Pad every cell but the row's last out to the column stride so the
+            // next column's content aligns. The trailing cell is left unpadded.
+            if col + 1 < row.len() {
+                let used = cell.iter().map(|s| s.content.width()).sum::<usize>();
+                spans.extend(cell);
+                if used < stride {
+                    spans.push(Span::raw(" ".repeat(stride - used)));
+                }
+            } else {
+                spans.extend(cell);
+            }
+        }
+        lines.push(Line::from(spans));
+    }
     lines
 }
 
@@ -345,7 +423,7 @@ pub(crate) fn detail_content(
     content.item_ranges.push(0..description.len());
     content.lines.extend(description);
 
-    content.lines.extend(checks_section_lines(model, pr));
+    content.lines.extend(checks_section_lines(model, pr, width));
 
     // ── Review Threads ──
     content.lines.extend(section_intro(

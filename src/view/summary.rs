@@ -23,20 +23,21 @@ use ratatui::{
 use crate::app::model::{FilesState, Model};
 use crate::chip::label_lines;
 use crate::format::{
-    CheckOutcome, check_row, checks_summary, comment_counts, format_age, format_merge_status,
-    format_review_state, format_size, outcome, review_icon, reviews_summary, sort_check_runs,
-    truncate,
+    checks_summary, checks_two_column_lines, comment_counts, format_age, format_merge_status,
+    format_review_state, format_size, overflow_line, review_icon, reviews_summary,
+    sorted_check_runs, truncate,
 };
 use crate::github::rest::PR;
-use crate::github::types::CheckRun;
 use crate::palette::Palette;
 
 /// Placeholder text for a section whose enrichment hasn't arrived yet.
 const LOADING: &str = "Loading…";
 
-/// Max number of individual check rows before collapsing the rest into a
-/// `+N more` line. Mirrors the TS `MAX_VISIBLE_CHECKS`.
-const MAX_VISIBLE_CHECKS: usize = 6;
+/// Grid rows the CI checks section draws before the rest collapse into a
+/// `+N more` line. The cap is on rows, not checks: the two-column packer can
+/// show up to twice this many checks when they pair, while the section's height
+/// stays bounded for the other panel sections below it.
+const MAX_CHECK_ROWS: usize = 8;
 
 #[cfg(test)]
 mod tests;
@@ -71,7 +72,7 @@ pub fn render(
     lines.push(threads_line(model, pr, palette));
     lines.extend(reviews_lines(model, pr, palette));
     lines.extend(requested_reviewers_lines(pr, palette));
-    lines.extend(checks_lines(model, pr, palette));
+    lines.extend(checks_lines(model, pr, usize::from(area.width), palette));
     lines.extend(files_lines(model, pr, palette));
     lines.extend(label_lines(&pr.labels, usize::from(area.width), palette));
     lines.extend(assignees_lines(pr, usize::from(area.width), palette));
@@ -260,11 +261,14 @@ fn threads_line(model: &Model, pr: &PR, palette: &Palette) -> Line<'static> {
 }
 
 /// The CI checks section: a `checks` header with failed / pending / passed
-/// counts, then one indented row per failed, pending, or action-required check
-/// (passing checks are summarised by the count alone). `Loading…` until the
-/// checks fetch arrives — which can't start until review-status reports the
-/// PR's head SHA, so a PR with no head SHA also reads as loading.
-fn checks_lines(model: &Model, pr: &PR, palette: &Palette) -> Vec<Line<'static>> {
+/// counts (always over ALL checks), then up to eight checks of any outcome —
+/// ordered failing-first, then slowest, then name — laid into two content-packed
+/// columns (`checks_two_column_lines`), with a `+N more` overflow line. A check
+/// too wide to share a row falls back to its own full-width row, so a narrow
+/// panel degrades to a single column. `Loading…` until the checks fetch arrives
+/// — which can't start until review-status reports the PR's head SHA, so a PR
+/// with no head SHA also reads as loading.
+fn checks_lines(model: &Model, pr: &PR, width: usize, palette: &Palette) -> Vec<Line<'static>> {
     let Some(checks) = model.enrichment.checks_for(pr) else {
         return vec![header_with_loading("checks", palette)];
     };
@@ -294,25 +298,15 @@ fn checks_lines(model: &Model, pr: &PR, palette: &Palette) -> Vec<Line<'static>>
     ));
     let mut lines = vec![Line::from(header)];
 
-    // Per-check rows for the non-passing checks only, sorted (failing first,
-    // then by name) and capped, mirroring the TS `sortCheckRuns` + visible cap.
-    // Classifying via `outcome` keeps this filter in lockstep with the header
-    // counts above, which `checks_summary` derives from the same predicate.
-    let mut non_passing: Vec<&CheckRun> = checks
-        .iter()
-        .filter(|c| outcome(c) != CheckOutcome::Passed)
-        .collect();
-    sort_check_runs(&mut non_passing);
-
-    for check in non_passing.iter().take(MAX_VISIBLE_CHECKS) {
-        lines.push(check_row(check));
-    }
-    let overflow = non_passing.len().saturating_sub(MAX_VISIBLE_CHECKS);
+    // Checks of ANY outcome, ordered failing-first then slowest, laid into two
+    // content-packed columns up to a fixed row budget — so a wide panel that
+    // pairs everything shows up to twice as many checks as it has rows. The
+    // header counts above still tally ALL checks.
+    let sorted = sorted_check_runs(checks);
+    let (grid, overflow) = checks_two_column_lines(&sorted, width, MAX_CHECK_ROWS);
+    lines.extend(grid);
     if overflow > 0 {
-        lines.push(Line::from(Span::styled(
-            format!("  +{overflow} more"),
-            Style::default().fg(palette.muted),
-        )));
+        lines.push(overflow_line(overflow, palette.muted));
     }
     lines
 }

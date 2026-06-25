@@ -8,6 +8,7 @@ use crate::{
     git_remote::RepoInfo,
     github::rest::{Label, PR},
     github::types::PRState,
+    test_fixtures::{check, timed_check},
     view,
     worktree::WorktreeEntry,
 };
@@ -121,14 +122,6 @@ fn with_checks(model: &mut Model, head_sha: &str, checks: Vec<crate::github::typ
         .enrichment
         .checks
         .insert((key.repo_slug, head_sha.to_owned()), checks);
-}
-
-fn check(name: &str, status: &str, conclusion: Option<&str>) -> crate::github::types::CheckRun {
-    crate::github::types::CheckRun {
-        name: name.to_owned(),
-        status: status.to_owned(),
-        conclusion: conclusion.map(str::to_owned),
-    }
 }
 
 /// Seed categorised files for the selected PR, running `categorize` with no
@@ -443,7 +436,7 @@ fn threads_show_loading_until_arrived() {
 }
 
 #[test]
-fn renders_check_counts_and_rows_for_non_passing_only() {
+fn renders_check_counts_and_rows_for_all_outcomes() {
     let mut model = model_with_selected(sample_pr(42, "Add the thing"));
     with_checks(
         &mut model,
@@ -461,13 +454,115 @@ fn renders_check_counts_and_rows_for_non_passing_only() {
     assert!(joined.contains("1 failed"), "failed count: {rows:?}");
     assert!(joined.contains("1 pending"), "pending count: {rows:?}");
     assert!(joined.contains("passed"), "passed count: {rows:?}");
-    // Non-passing checks get their own rows; the passing one does not.
+    // Every outcome now gets its own row, passing checks included.
     assert!(joined.contains("lint"), "failed check row: {rows:?}");
     assert!(joined.contains("deploy"), "pending check row: {rows:?}");
-    assert!(
-        !joined.contains("build"),
-        "passing check must not get its own row: {rows:?}"
+    assert!(joined.contains("build"), "passing check row: {rows:?}");
+}
+
+#[test]
+fn checks_summary_panel_pairs_short_checks_into_two_columns() {
+    let mut model = model_with_selected(sample_pr(42, "Add the thing"));
+    with_checks(
+        &mut model,
+        "abc123",
+        vec![
+            timed_check("build", "success", 150), // 2m
+            timed_check("lint", "success", 30),   // 30s
+            check("untimed", "completed", Some("success")),
+        ],
     );
+
+    let rows = panel_rows(&model, 140, 30);
+    // The two slowest short checks share one row (two columns side by side).
+    let build_row = rows
+        .iter()
+        .find(|r| r.contains("build"))
+        .unwrap_or_else(|| panic!("build row: {rows:?}"));
+    assert!(
+        build_row.contains("lint"),
+        "two short checks pair on one row: {build_row:?}"
+    );
+    // A timed check shows its duration; the untimed one shows none.
+    assert!(build_row.contains("2m"), "build duration: {build_row:?}");
+    // `untimed` is the trailing unpaired check, so it sits alone on its row.
+    let untimed_row = rows
+        .iter()
+        .find(|r| r.contains("untimed"))
+        .unwrap_or_else(|| panic!("untimed row: {rows:?}"));
+    assert!(
+        !untimed_row.contains("build") && !untimed_row.contains("lint"),
+        "trailing unpaired check sits alone: {untimed_row:?}"
+    );
+    // No digit-followed-by-s/m duration token on the untimed row.
+    let has_duration_token = untimed_row
+        .as_bytes()
+        .windows(2)
+        .any(|w| w[0].is_ascii_digit() && (w[1] == b's' || w[1] == b'm'));
+    assert!(
+        !has_duration_token,
+        "untimed check shows no duration: {untimed_row:?}"
+    );
+}
+
+#[test]
+fn checks_summary_panel_gives_a_wide_check_its_own_row() {
+    // A check too wide to leave room for a partner takes a full-width row, while
+    // the short checks around it still pair two-up. Distinct durations fix the
+    // order: s-one, s-two, the long check, s-three, s-four.
+    let mut model = model_with_selected(sample_pr(42, "Add the thing"));
+    with_checks(
+        &mut model,
+        "abc123",
+        vec![
+            timed_check("s-one", "success", 500),
+            timed_check("s-two", "success", 400),
+            timed_check("this-is-a-very-long-check-name", "success", 300),
+            timed_check("s-three", "success", 200),
+            timed_check("s-four", "success", 100),
+        ],
+    );
+
+    let rows = panel_rows(&model, 140, 30);
+    // The long check is alone on its row — no short check shares it.
+    let long_row = rows
+        .iter()
+        .find(|r| r.contains("this-is-a-very-long-check-name"))
+        .unwrap_or_else(|| panic!("long check row: {rows:?}"));
+    assert!(
+        ["s-one", "s-two", "s-three", "s-four"]
+            .iter()
+            .all(|s| !long_row.contains(s)),
+        "wide check sits on its own row: {long_row:?}"
+    );
+    // The short checks on either side still pair: s-one with s-two.
+    let pair_row = rows
+        .iter()
+        .find(|r| r.contains("s-one"))
+        .unwrap_or_else(|| panic!("s-one row: {rows:?}"));
+    assert!(
+        pair_row.contains("s-two"),
+        "short checks still pair around the wide one: {pair_row:?}"
+    );
+}
+
+#[test]
+fn checks_summary_panel_caps_at_eight_rows_with_overflow() {
+    let mut model = model_with_selected(sample_pr(42, "Add the thing"));
+    let checks: Vec<crate::github::types::CheckRun> = (0..20)
+        .map(|i| check(&format!("check-{i:02}"), "completed", Some("success")))
+        .collect();
+    with_checks(&mut model, "abc123", checks);
+
+    let rows = panel_rows(&model, 140, 40);
+    let joined = rows.join("\n");
+    // The cap is eight ROWS. These short checks all pair two-up, so eight rows
+    // hold sixteen checks; the remaining four collapse into the overflow line.
+    let rendered = (0..20)
+        .filter(|i| joined.contains(&format!("check-{i:02}")))
+        .count();
+    assert_eq!(rendered, 16, "eight rows of two checks render: {rows:?}");
+    assert!(joined.contains("+4 more"), "overflow line: {rows:?}");
 }
 
 #[test]

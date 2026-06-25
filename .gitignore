@@ -17,4 +17,7 @@
 # tmux dev sockets for TUI testing (see AGENTS.md)
 .tmux/
 
+# Claude Code agent worktrees
+.claude/worktrees/
+
 docs/superpowers

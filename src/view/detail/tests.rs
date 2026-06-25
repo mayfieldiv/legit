@@ -3,11 +3,12 @@ use ratatui::{Terminal, backend::TestBackend};
 
 use crate::{
     app::detail_items::{DetailFocus, DetailItems},
+    app::detail_layout::MAX_GRID_COLUMNS,
     app::model::{DetailState, Model, RepoDetection, ViewMode},
     git_remote::RepoInfo,
     github::rest::{Label, PR},
     github::types::{CheckRun, FullReviewThread, IssueComment, PRState, ReviewComment},
-    test_fixtures::{self, review_comment},
+    test_fixtures::{self, check, review_comment, timed_check},
     view,
     worktree::WorktreeEntry,
 };
@@ -153,14 +154,6 @@ fn model_in_detail_with_checks(pr: PR, body: &str, checks: Vec<CheckRun>) -> Mod
     });
     model.enrichment.checks.insert((repo_slug, sha), checks);
     model
-}
-
-fn check(name: &str, status: &str, conclusion: Option<&str>) -> CheckRun {
-    CheckRun {
-        name: name.to_owned(),
-        status: status.to_owned(),
-        conclusion: conclusion.map(str::to_owned),
-    }
 }
 
 /// The shared fixture thread with this module's explicit location knobs (the
@@ -505,6 +498,183 @@ fn detail_with_checks_shows_summary_and_rows() {
     assert!(
         rows.iter().any(|r| r.contains("deploy")),
         "deploy check must render: {rows:?}"
+    );
+}
+
+#[test]
+fn detail_checks_grid_lays_checks_row_major_with_durations() {
+    // Four passing checks with distinct durations, so they sort slowest-first
+    // and lay out row-major. At width 80 these short names share one grid row.
+    let checks = vec![
+        timed_check("alpha", "success", 600), // 10m
+        timed_check("bravo", "success", 300), // 5m
+        timed_check("charlie", "success", 120),
+        check("delta", "completed", Some("success")), // untimed
+    ];
+    let model = model_in_detail_with_checks(sample_pr(), "", checks);
+
+    let terminal = render_snapshot(&model, 80, 20);
+    let rows = buffer_text(&terminal);
+
+    // The slower checks share the first grid row (multiple columns side by side).
+    let first_grid_row = rows
+        .iter()
+        .find(|r| r.contains("alpha"))
+        .unwrap_or_else(|| panic!("alpha row: {rows:?}"));
+    assert!(
+        first_grid_row.contains("bravo"),
+        "checks share a grid row (multiple columns): {first_grid_row:?}"
+    );
+    // A timed check shows its duration; the untimed one shows none. `delta` is
+    // the trailing (untimed) cell, so the text from its name to end of row must
+    // carry no duration token (a leading digit + s/m).
+    assert!(first_grid_row.contains("10m"), "alpha duration: {rows:?}");
+    let delta_row = rows
+        .iter()
+        .find(|r| r.contains("delta"))
+        .unwrap_or_else(|| panic!("delta row: {rows:?}"));
+    let after_delta = &delta_row[delta_row.find("delta").unwrap()..];
+    let delta_has_duration = after_delta
+        .as_bytes()
+        .windows(2)
+        .any(|w| w[0].is_ascii_digit() && (w[1] == b's' || w[1] == b'm'));
+    assert!(
+        !delta_has_duration,
+        "untimed check shows no duration after its name: {after_delta:?}"
+    );
+}
+
+#[test]
+fn detail_checks_grid_columns_pack_to_content_not_half_width() {
+    // Two short checks on one row. The column boundary is the widest cell plus a
+    // gap, so the second column sits a few columns past the first — NOT flung to
+    // half the terminal width. Regression guard: the grid once split the body
+    // evenly in two, so on a wide terminal the second column landed near
+    // width/2 (column ~60 here) instead of packed beside the first.
+    let checks = vec![
+        timed_check("alpha", "success", 600), // 10m, the widest cell
+        timed_check("bravo", "success", 300), // 5m
+    ];
+    let model = model_in_detail_with_checks(sample_pr(), "", checks);
+
+    let terminal = render_snapshot(&model, 120, 12);
+    let rows = buffer_text(&terminal);
+
+    let grid_row = rows
+        .iter()
+        .find(|r| r.contains("alpha"))
+        .unwrap_or_else(|| panic!("alpha row: {rows:?}"));
+    // Cell index == column for this ASCII + single-width-icon content.
+    let icon_cols: Vec<usize> = grid_row
+        .chars()
+        .enumerate()
+        .filter(|(_, c)| *c == '✓')
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(
+        icon_cols.len(),
+        2,
+        "two columns share the row: {grid_row:?}"
+    );
+    // First column carries the two-space indent; the second begins two columns
+    // (the grid gap) past the widest cell `  ✓ alpha 10m` (ends at column 13).
+    assert_eq!(icon_cols[0], 2, "first column indent: {grid_row:?}");
+    assert_eq!(
+        icon_cols[1], 15,
+        "second column packs to content, not half width: {grid_row:?}"
+    );
+}
+
+#[test]
+fn detail_checks_grid_grows_columns_with_the_terminal_width() {
+    // Twelve short checks. The grid grows columns to fill the width: at a narrow
+    // body it packs few per row, at a wider body more — this is the "use the
+    // space" behaviour. The cell is `✓ chkNN` (width 7), so the column stride is
+    // 9: width 27 fits three columns, width 45 fits five.
+    let checks: Vec<CheckRun> = (0..12)
+        .map(|i| check(&format!("chk{i:02}"), "completed", Some("success")))
+        .collect();
+    let model = model_in_detail_with_checks(sample_pr(), "", checks);
+
+    let icons_in_first_grid_row = |width: u16| {
+        let terminal = render_snapshot(&model, width, 20);
+        let rows = buffer_text(&terminal);
+        rows.iter()
+            .find(|r| r.contains("chk00"))
+            .unwrap_or_else(|| panic!("first grid row at width {width}: {rows:?}"))
+            .chars()
+            .filter(|c| *c == '✓')
+            .count()
+    };
+
+    let narrow = icons_in_first_grid_row(27);
+    let wide = icons_in_first_grid_row(45);
+    assert_eq!(narrow, 3, "three columns at width 27");
+    assert_eq!(wide, 5, "five columns at width 45");
+    assert!(wide > narrow, "a wider body shows more columns per row");
+}
+
+#[test]
+fn detail_checks_grid_shows_every_check_with_no_overflow() {
+    // The detail view is the exhaustive one: it lists every check across as many
+    // rows as needed, with no row cap and no `+N more` overflow (unlike the
+    // summary panel). Seed well past the summary's eight to prove it.
+    let total = MAX_GRID_COLUMNS * 4 + 6;
+    let checks: Vec<CheckRun> = (0..total)
+        .map(|i| check(&format!("chk{i:02}"), "completed", Some("success")))
+        .collect();
+    let model = model_in_detail_with_checks(sample_pr(), "", checks);
+
+    // Width 120 packs the short `✓ chkNN` cells (stride 9) to MAX_GRID_COLUMNS;
+    // a tall body holds every grid row without scrolling.
+    let terminal = render_snapshot(&model, 120, 40);
+    let rows = buffer_text(&terminal);
+    let joined = rows.join("\n");
+
+    let rendered = (0..total)
+        .filter(|i| joined.contains(&format!("chk{i:02}")))
+        .count();
+    assert!(total > 8, "more checks than the summary panel's eight");
+    assert_eq!(rendered, total, "every check renders: {rows:?}");
+    assert!(
+        !rows.iter().any(|r| r.contains("more")),
+        "no overflow line in the exhaustive detail grid: {rows:?}"
+    );
+}
+
+#[test]
+fn detail_check_rows_carry_the_two_space_indent() {
+    // The grid's first column sits two spaces in from the "CI Checks" header so
+    // the detail checks read at the same depth as the summary panel (the shared
+    // `CHECK_INDENT`). Pin the leading column explicitly — `contains` assertions
+    // elsewhere never check the indent.
+    let checks: Vec<CheckRun> = (0..6)
+        .map(|i| check(&format!("chk{i:02}"), "completed", Some("success")))
+        .collect();
+    let model = model_in_detail_with_checks(sample_pr(), "", checks);
+
+    let terminal = render_snapshot(&model, 120, 24);
+    let rows = buffer_text(&terminal);
+
+    // The header line's start column (the `## ` markdown prefix). The section is
+    // part of the unframed body, so it carries no card gutter — only the body's
+    // own left margin. The two-space check indent is measured from here.
+    let header_row = rows
+        .iter()
+        .find(|r| r.contains("CI Checks"))
+        .unwrap_or_else(|| panic!("CI Checks header row: {rows:?}"));
+    let header_col = header_row.find("##").unwrap();
+
+    // The first grid check icon must sit exactly two columns past the header.
+    // `chk00` is the first check, so its row's leading `✓` is the first column.
+    let icon_row = rows
+        .iter()
+        .find(|r| r.contains("chk00"))
+        .unwrap_or_else(|| panic!("first check row: {rows:?}"));
+    assert_eq!(
+        icon_row.find('✓').unwrap(),
+        header_col + 2,
+        "first grid column carries the two-space indent: {icon_row:?}"
     );
 }
 

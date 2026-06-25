@@ -10,6 +10,7 @@ use crate::{
     github::limiter::NetworkLimiter,
     github::rest::OctocrabRest,
     github::rest::PrKey,
+    github::rest::WorkflowNameCache,
     github::types::ReviewStatus,
     secret::Secret,
     worktree,
@@ -25,6 +26,10 @@ pub struct RequestContext {
     pub repo: RepoInfo,
     pub token: Secret<String>,
     pub bot_logins: Vec<String>,
+    /// Memo of the repo's Actions `workflow_id → name` map, shared across the
+    /// fan-out so the repo-global workflow list is fetched once per list-load
+    /// rather than once per PR check fetch. See [`WorkflowNameCache`].
+    pub workflow_cache: WorkflowNameCache,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -258,7 +263,12 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                 "fetch check runs",
                 async move {
                     let checks = OctocrabRest::new(&ctx.token)?
-                        .list_check_runs(&ctx.repo.owner, &ctx.repo.repo, &head_sha)
+                        .list_check_runs(
+                            &ctx.repo.owner,
+                            &ctx.repo.repo,
+                            &head_sha,
+                            &ctx.workflow_cache,
+                        )
                         .await?;
                     Ok((head_sha, checks))
                 },
