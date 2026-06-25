@@ -943,3 +943,40 @@ fn label_chips_wrap_onto_multiple_rows_at_narrow_widths() {
         .count();
     assert!(chip_rows >= 2, "chips wrapped onto >=2 rows: {rows:?}");
 }
+
+// ── Fetch Age ───────────────────────────────────────────────────────────────
+
+#[test]
+fn renders_fetched_age_through_the_relative_formatter() {
+    let mut model = model_with_selected(sample_pr(42, "Add the thing"));
+    let key = model.list.selected_pr().expect("a PR is selected").key();
+    // Stamped three minutes before the render clock.
+    model.stamp_fetched(key, fixed_now() - chrono::Duration::minutes(3));
+
+    let rows = panel_rows(&model, 140, 24);
+    let joined = rows.join("\n");
+
+    assert!(
+        joined.contains("fetched 3m ago"),
+        "Fetch Age uses the relative-age formatter: {rows:?}"
+    );
+    // Textually distinct from GitHub's "updated Y" activity time — both appear,
+    // and "updated" stays reserved for the GitHub timestamp.
+    assert!(
+        joined.contains("created 5h updated 2h"),
+        "the GitHub created/updated line is unchanged: {rows:?}"
+    );
+}
+
+#[test]
+fn omits_the_fetch_age_line_until_the_pr_is_stamped() {
+    let model = model_with_selected(sample_pr(42, "Add the thing"));
+
+    let rows = panel_rows(&model, 140, 24);
+    let joined = rows.join("\n");
+
+    assert!(
+        !joined.contains("fetched"),
+        "an unfetched PR shows no Fetch Age line — no misleading age: {rows:?}"
+    );
+}

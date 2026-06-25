@@ -31,7 +31,7 @@ use crate::{
     app::model::{DetailState, Model},
     chip::label_lines,
     color::repo_color,
-    format::{format_age, format_merge_status, format_size},
+    format::{fetched_age_spans, format_age, format_merge_status, format_size},
     github::rest::PR,
     markdown::Block,
     palette::Palette,
@@ -111,7 +111,7 @@ fn render_header(
         Style::default().add_modifier(Modifier::BOLD),
     ));
 
-    // Row 1: author · repo · created X · updated Y · +A/-D [draft]
+    // Row 1: author · repo · created X · updated Y · +A/-D [draft] [· fetched Z]
     let mut meta_spans = vec![
         Span::styled(pr.author.clone(), Style::default().fg(palette.author)),
         Span::styled(" · ", Style::default().fg(palette.separator)),
@@ -130,6 +130,19 @@ fn render_header(
     ];
     if pr.is_draft {
         meta_spans.push(Span::styled(" draft", Style::default().fg(palette.draft)));
+    }
+    // Fetch Age: how stale legit's copy of this PR is. It rides the meta row
+    // (rather than its own line) so the pinned header height is unchanged.
+    // `fetched_age_spans` owns the label/value/None-guard rationale; the detail
+    // header prepends its own ` · ` separator (an empty Vec is an unfetched PR,
+    // which adds neither the separator nor the cell). Appended *after* `draft`
+    // so that when the meta row overflows a narrow terminal — the header
+    // Paragraph does not wrap, so ratatui truncates the line's tail — the
+    // lower-signal staleness cell is what drops off the end, never `draft`.
+    let fetched_spans = fetched_age_spans(model.fetched_at(&pr.key()), now, palette);
+    if !fetched_spans.is_empty() {
+        meta_spans.push(Span::styled(" · ", Style::default().fg(palette.separator)));
+        meta_spans.extend(fetched_spans);
     }
     let meta_line = Line::from(meta_spans);
 

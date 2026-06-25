@@ -23,9 +23,9 @@ use ratatui::{
 use crate::app::model::{FilesState, Model};
 use crate::chip::label_lines;
 use crate::format::{
-    checks_summary, checks_two_column_lines, comment_counts, format_age, format_merge_status,
-    format_review_state, format_size, overflow_line, review_icon, reviews_summary,
-    sorted_check_runs, truncate,
+    checks_summary, checks_two_column_lines, comment_counts, fetched_age_spans, format_age,
+    format_merge_status, format_review_state, format_size, overflow_line, review_icon,
+    reviews_summary, sorted_check_runs, truncate,
 };
 use crate::github::rest::PR;
 use crate::palette::Palette;
@@ -111,6 +111,15 @@ fn identity_lines(
         Span::styled(" updated ", Style::default().fg(palette.muted)),
         Span::raw(format_age(pr.updated_at, now)),
     ]));
+
+    // Fetch Age: how stale legit's copy of this PR is, on its own line below
+    // GitHub's created/updated activity times. `fetched_age_spans` owns the
+    // label/value/None-guard rationale; the summary wraps the spans in their
+    // own line (an empty Vec is an unfetched PR, which adds no line).
+    let fetched_spans = fetched_age_spans(model.fetched_at(&pr.key()), now, palette);
+    if !fetched_spans.is_empty() {
+        lines.push(Line::from(fetched_spans));
+    }
 
     lines
 }

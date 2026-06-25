@@ -1,7 +1,8 @@
 use ratatui::crossterm::event::KeyCode;
 
+use super::update;
 use crate::{
-    app::{cmd::Cmd, model::ViewMode, msg::Msg, update::update},
+    app::{cmd::Cmd, model::ViewMode, msg::Msg},
     git_remote::RepoInfo,
     github::rest::PrKey,
     github::types::{IssueComment, PRState, ReviewComment, ReviewStatus},

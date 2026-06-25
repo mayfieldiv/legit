@@ -470,6 +470,77 @@ fn refresh_complete_on_an_unknown_pr_is_harmless() {
 }
 
 #[test]
+fn refresh_complete_does_not_stamp_fetch_age() {
+    // `run_refresh_pr` fires `RefreshComplete` unconditionally — even when every
+    // sub-fetch failed and no `*Arrived` landed. Stamping here would show
+    // "fetched just now" over untouched stale data, so completing a refresh must
+    // NOT touch the clock; the per-arrival stamps carry the refresh path.
+    let mut model = list_model(&[1]);
+    assert_eq!(model.fetched_at(&key(1)), None, "no stamp before any fetch");
+
+    update_at(&mut model, Msg::RefreshComplete { pr: key(1) }, fixed_now());
+
+    assert_eq!(
+        model.fetched_at(&key(1)),
+        None,
+        "RefreshComplete alone (no data arrival) leaves the clock unstamped",
+    );
+}
+
+#[test]
+fn review_status_arrival_stamps_fetch_age() {
+    // A review-status arrival overwrites the PR's displayed fields, so it stamps
+    // the clock like its trio siblings — and it is the lone re-arrival on the
+    // mergeable-retry path, which would otherwise leave fresh data under a stale
+    // clock.
+    let mut model = list_model(&[1]);
+    let now = fixed_now();
+
+    update_at(
+        &mut model,
+        Msg::ReviewStatusArrived {
+            pr: key(1),
+            status: mergeable_status("abc123"),
+        },
+        now,
+    );
+
+    assert_eq!(
+        model.fetched_at(&key(1)),
+        Some(now),
+        "a review-status arrival stamps the PR's Fetch Age",
+    );
+}
+
+#[test]
+fn data_arrival_stamps_only_that_prs_fetch_age() {
+    // The signal is strictly per-PR: an arrival stamps its own PR's clock and a
+    // later arrival resets only that one, never another's.
+    let mut model = list_model(&[1, 2]);
+    let early = fixed_now();
+    let later = early + chrono::Duration::minutes(10);
+
+    let threads = |n| Msg::ThreadsArrived {
+        pr: key(n),
+        threads: Vec::new(),
+    };
+    update_at(&mut model, threads(1), early);
+    update_at(&mut model, threads(2), early);
+    update_at(&mut model, threads(1), later);
+
+    assert_eq!(
+        model.fetched_at(&key(1)),
+        Some(later),
+        "#1's later arrival resets its Fetch Age",
+    );
+    assert_eq!(
+        model.fetched_at(&key(2)),
+        Some(early),
+        "and leaves #2's Fetch Age untouched — the signal is strictly per-PR",
+    );
+}
+
+#[test]
 fn refresh_refetches_checks_even_when_head_sha_is_unchanged() {
     // The prime refresh case: CI re-ran on the same commit. Evicting the cached
     // checks on refresh lets the canonical `maybe_fetch_checks` re-fetch them

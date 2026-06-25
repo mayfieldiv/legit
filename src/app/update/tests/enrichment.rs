@@ -333,3 +333,51 @@ fn enrichment_failure_records_error_and_keeps_data() {
     // The error message is scheduled to auto-clear.
     assert!(matches!(cmds.as_slice(), [Cmd::ScheduleStatusClear { .. }]));
 }
+
+#[test]
+fn enrichment_arrival_stamps_the_prs_fetch_age() {
+    let mut model = enriched_model(&[1, 2]);
+    assert_eq!(
+        model.fetched_at(&key(1)),
+        None,
+        "no stamp before the PR's enrichment lands"
+    );
+
+    let now = fixed_now();
+    update_at(
+        &mut model,
+        Msg::ThreadsArrived {
+            pr: key(1),
+            threads: Vec::new(),
+        },
+        now,
+    );
+
+    assert_eq!(
+        model.fetched_at(&key(1)),
+        Some(now),
+        "a PR's enrichment arriving stamps its Fetch Age"
+    );
+    assert_eq!(
+        model.fetched_at(&key(2)),
+        None,
+        "and only that PR's — Fetch Age is strictly per-PR"
+    );
+}
+
+#[test]
+fn reviews_arrival_also_stamps_fetch_age() {
+    let mut model = enriched_model(&[1]);
+    let now = fixed_now();
+
+    update_at(
+        &mut model,
+        Msg::ReviewsArrived {
+            pr: key(1),
+            reviews: Vec::new(),
+        },
+        now,
+    );
+
+    assert_eq!(model.fetched_at(&key(1)), Some(now));
+}

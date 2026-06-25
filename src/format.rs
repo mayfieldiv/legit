@@ -18,7 +18,7 @@ use ratatui::text::{Line, Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::github::types::{CheckRun, FullReviewThread, PRState, Review};
-use crate::palette::DARK;
+use crate::palette::{DARK, Palette};
 
 /// Conclusions that count as a failing check for display. `action_required`
 /// is included here so a completed check that needs follow-up gets an
@@ -26,12 +26,17 @@ use crate::palette::DARK;
 /// engine treats it as its own Next Action after hard CI failures.
 const FAILING_CONCLUSIONS: [&str; 4] = ["failure", "timed_out", "cancelled", "action_required"];
 
+/// Seconds below which an age reads as the sub-minute case: `format_age`'s "now"
+/// and `fetched_age_spans`'s "just now". Shared between the two so their
+/// sub-minute thresholds can never drift apart.
+const SUB_MINUTE_SECS: i64 = 60;
+
 /// Format a past instant as a compact age relative to `now`. Mirrors the TS
 /// `formatAge` in `src/lib/format.ts`: "now", "Nm", "Nh", "Nd", "Nmo",
 /// "NyNmo" / "Ny".
 pub fn format_age(then: DateTime<Utc>, now: DateTime<Utc>) -> String {
     let seconds = (now - then).num_seconds().max(0);
-    if seconds < 60 {
+    if seconds < SUB_MINUTE_SECS {
         return "now".to_owned();
     }
     let minutes = seconds / 60;
@@ -57,6 +62,41 @@ pub fn format_age(then: DateTime<Utc>, now: DateTime<Utc>) -> String {
     } else {
         format!("{years}y")
     }
+}
+
+/// The styled spans for a PR's Fetch Age — the muted `fetched ` label plus the
+/// `<age> ago` value (`fetched 2m ago`), or `fetched just now` within the first
+/// minute. The single source of truth for the staleness signal's painted
+/// content, shared by the summary panel (which wraps it in its own line) and the
+/// detail header (which prepends a ` · ` separator and extends its meta row).
+/// Mirrors `check_cell_spans`: the caller owns the surrounding layout, this owns
+/// the cell.
+///
+/// `None` (the PR has no Fetch Age stamp yet — see CONTEXT.md "Fetch Age")
+/// returns an empty `Vec`, so an unfetched PR shows no misleading "now". The
+/// wording stays distinct from GitHub's "updated Y" activity time so the local
+/// staleness signal is never confused with `updated_at`.
+pub fn fetched_age_spans(
+    fetched_at: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+    palette: &Palette,
+) -> Vec<Span<'static>> {
+    let Some(fetched_at) = fetched_at else {
+        return Vec::new();
+    };
+    // Under a minute reads "just now", never the ungrammatical "now ago". Branch
+    // on the elapsed seconds directly — the same `SUB_MINUTE_SECS` threshold
+    // `format_age` uses — rather than re-parsing its "now" output: no throwaway
+    // String and no literal-match coupling to that function's sub-minute wording.
+    let value = if (now - fetched_at).num_seconds() < SUB_MINUTE_SECS {
+        "just now".to_owned()
+    } else {
+        format!("{} ago", format_age(fetched_at, now))
+    };
+    vec![
+        Span::styled("fetched ", Style::default().fg(palette.muted)),
+        Span::raw(value),
+    ]
 }
 
 /// Format additions/deletions as `+A/-D`.
@@ -677,9 +717,9 @@ mod tests {
         CheckOutcome, ChecksSummary, CommentCounts, MIN_WORKFLOW_WIDTH, ReviewsSummary,
         abbreviate_home, abbreviate_home_with, check_cell_spans, check_icon, check_row,
         check_sort_group, checks_summary, checks_two_column_lines, comment_counts,
-        fit_workflow_label, format_age, format_duration, format_merge_status, format_mergeable,
-        format_repo_short, format_review_state, format_size, outcome, pad_to_width, review_icon,
-        reviews_summary, sort_check_runs, truncate, truncate_middle,
+        fetched_age_spans, fit_workflow_label, format_age, format_duration, format_merge_status,
+        format_mergeable, format_repo_short, format_review_state, format_size, outcome,
+        pad_to_width, review_icon, reviews_summary, sort_check_runs, truncate, truncate_middle,
     };
     use crate::github::types::{CheckRun, FullReviewThread, PRState, Review, ReviewComment};
     use crate::palette::DARK;
@@ -742,6 +782,35 @@ mod tests {
         assert_eq!(format_age(now() - chrono::Duration::hours(3), now()), "3h");
         assert_eq!(format_age(now() - chrono::Duration::hours(48), now()), "2d");
         assert_eq!(format_age(now() - chrono::Duration::days(45), now()), "1mo");
+    }
+
+    #[test]
+    fn fetched_age_spans_renders_muted_label_and_age_value() {
+        let fetched = now() - chrono::Duration::minutes(2);
+        let spans = fetched_age_spans(Some(fetched), now(), &DARK);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "fetched 2m ago");
+        // The label reads in the muted role; the value carries no override.
+        assert_eq!(spans[0].content.as_ref(), "fetched ");
+        assert_eq!(spans[0].style.fg, Some(DARK.muted));
+        assert_eq!(spans[1].style.fg, None);
+    }
+
+    #[test]
+    fn fetched_age_spans_reads_just_now_within_the_first_minute() {
+        // Under a minute old, format_age yields "now"; the line must read
+        // "fetched just now", never the ungrammatical "fetched now ago".
+        let fetched = now() - chrono::Duration::seconds(20);
+        let spans = fetched_age_spans(Some(fetched), now(), &DARK);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "fetched just now");
+    }
+
+    #[test]
+    fn fetched_age_spans_is_empty_without_a_stamp() {
+        // No Fetch Age stamp yet: an empty Vec so an unfetched PR shows no
+        // misleading "now".
+        assert!(fetched_age_spans(None, now(), &DARK).is_empty());
     }
 
     #[test]

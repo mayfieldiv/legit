@@ -1,4 +1,4 @@
-use chrono::TimeZone;
+use chrono::{DateTime, TimeZone, Utc};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::{
@@ -7,13 +7,28 @@ use crate::{
         model::{Model, RepoDetection, StatusKind},
         msg::Msg,
         pr_list::Phase,
-        update::update,
+        update::update as update_at,
     },
     git_remote::RepoInfo,
     github::rest::{PR, PrKey},
     github::types::PRState,
     secret::Secret,
 };
+
+/// The fixed processing clock these tests drive the reducer with. A constant
+/// so the vast majority of tests (which don't care about Fetch Age) stay
+/// deterministic without threading a clock; Fetch-Age tests call `update_at`
+/// directly with their own instant.
+pub(super) fn fixed_now() -> DateTime<Utc> {
+    Utc.with_ymd_and_hms(2026, 5, 20, 12, 0, 0).unwrap()
+}
+
+/// Drive the reducer at the shared `fixed_now`. Shadows `update::update` for
+/// the test suite so the existing `update(&mut model, msg)` call sites keep
+/// working unchanged after the reducer gained its `now` parameter.
+pub(super) fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
+    update_at(model, msg, fixed_now())
+}
 
 mod detail;
 mod enrichment;

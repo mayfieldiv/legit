@@ -1492,3 +1492,86 @@ fn detail_status_bar_shows_jk_focus_hint() {
         "status bar must mention j/k scroll hint: {status:?}"
     );
 }
+
+// ── Fetch Age ───────────────────────────────────────────────────────────────
+
+#[test]
+fn detail_header_renders_fetch_age_distinct_from_github_updated() {
+    let mut model = model_in_detail(sample_pr(), "");
+    let key = model.list.selected_pr().expect("a PR is selected").key();
+    // Stamped three minutes before the render clock.
+    model.stamp_fetched(key, fixed_now() - chrono::Duration::minutes(3));
+
+    let terminal = render_snapshot(&model, 120, 12);
+    let rows = buffer_text(&terminal);
+    let joined = rows.join("\n");
+
+    assert!(
+        joined.contains("fetched 3m ago"),
+        "the open PR's Fetch Age renders in the header: {rows:?}"
+    );
+    // GitHub's activity times are still present and "updated" stays reserved
+    // for them, so the two signals never read the same.
+    assert!(
+        joined.contains("created 5h") && joined.contains("updated 2h"),
+        "GitHub created/updated activity times are unchanged: {rows:?}"
+    );
+}
+
+#[test]
+fn detail_header_omits_fetch_age_until_stamped_and_keeps_its_height() {
+    // An unfetched PR shows no Fetch Age, and the header occupies the same rows
+    // either way — the Fetch Age rides the existing meta row, so it adds none.
+    let unstamped = model_in_detail(sample_pr(), "");
+    let unstamped_rows = buffer_text(&render_snapshot(&unstamped, 120, 12));
+
+    let mut stamped = model_in_detail(sample_pr(), "");
+    let key = stamped.list.selected_pr().expect("a PR is selected").key();
+    stamped.stamp_fetched(key, fixed_now() - chrono::Duration::minutes(3));
+    let stamped_rows = buffer_text(&render_snapshot(&stamped, 120, 12));
+
+    let unstamped_joined = unstamped_rows.join("\n");
+    assert!(
+        !unstamped_joined.contains("fetched"),
+        "no Fetch Age until the PR is fetched: {unstamped_rows:?}"
+    );
+    // The divider sits on the same row in both renders — the header height is
+    // unchanged whether or not the Fetch Age segment is present.
+    let divider_row = |rows: &[String]| {
+        rows.iter()
+            .position(|r| r.trim_start().starts_with('─'))
+            .expect("a header divider row")
+    };
+    assert_eq!(
+        divider_row(&unstamped_rows),
+        divider_row(&stamped_rows),
+        "the Fetch Age segment must not push the header taller",
+    );
+}
+
+#[test]
+fn detail_header_clips_fetch_age_before_the_draft_marker() {
+    // The header Paragraph does not wrap, so a meta row wider than the terminal
+    // is truncated at its tail. The lower-signal Fetch Age cell must be the part
+    // that drops, never the higher-signal `draft` marker — so it is appended
+    // after `draft`. Regression: it used to sit before `draft`, pushing `draft`
+    // off the end of a narrow header.
+    let mut pr = sample_pr();
+    pr.is_draft = true;
+    let mut model = model_in_detail(pr, "");
+    let key = model.list.selected_pr().expect("a PR is selected").key();
+    model.stamp_fetched(key, fixed_now() - chrono::Duration::minutes(3));
+
+    // Width 64: `…+10/-3 draft` fits (ends at col 58), but the trailing
+    // ` · fetched 3m ago` overflows — so `draft` survives and Fetch Age clips.
+    let rows = buffer_text(&render_snapshot(&model, 64, 12));
+    let joined = rows.join("\n");
+    assert!(
+        joined.contains("draft"),
+        "the draft marker survives a narrow header: {rows:?}"
+    );
+    assert!(
+        !joined.contains("fetched 3m ago"),
+        "the Fetch Age cell is the segment that truncates, not draft: {rows:?}"
+    );
+}
