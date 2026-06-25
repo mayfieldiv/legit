@@ -1548,3 +1548,30 @@ fn detail_header_omits_fetch_age_until_stamped_and_keeps_its_height() {
         "the Fetch Age segment must not push the header taller",
     );
 }
+
+#[test]
+fn detail_header_clips_fetch_age_before_the_draft_marker() {
+    // The header Paragraph does not wrap, so a meta row wider than the terminal
+    // is truncated at its tail. The lower-signal Fetch Age cell must be the part
+    // that drops, never the higher-signal `draft` marker — so it is appended
+    // after `draft`. Regression: it used to sit before `draft`, pushing `draft`
+    // off the end of a narrow header.
+    let mut pr = sample_pr();
+    pr.is_draft = true;
+    let mut model = model_in_detail(pr, "");
+    let key = model.list.selected_pr().expect("a PR is selected").key();
+    model.stamp_fetched(key, fixed_now() - chrono::Duration::minutes(3));
+
+    // Width 64: `…+10/-3 draft` fits (ends at col 58), but the trailing
+    // ` · fetched 3m ago` overflows — so `draft` survives and Fetch Age clips.
+    let rows = buffer_text(&render_snapshot(&model, 64, 12));
+    let joined = rows.join("\n");
+    assert!(
+        joined.contains("draft"),
+        "the draft marker survives a narrow header: {rows:?}"
+    );
+    assert!(
+        !joined.contains("fetched 3m ago"),
+        "the Fetch Age cell is the segment that truncates, not draft: {rows:?}"
+    );
+}
