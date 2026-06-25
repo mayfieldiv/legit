@@ -1056,6 +1056,12 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
                 // PR no longer in the list (e.g. filtered/refetched); drop it.
                 return Vec::new();
             }
+            // This arrival overwrote the PR's displayed fields with fresh data,
+            // so stamp its Fetch Age clock — like the threads/reviews/issue-comment
+            // siblings below. The mergeable-retry path (MergeableRetryDue) re-fetches
+            // review-status *alone* with no trio re-arrival, so without this the
+            // post-retry mergeable would show under a stale clock.
+            model.stamp_fetched(pr.clone(), now);
             // review_decision/mergeable feed the blocker rules, so re-derive.
             model.refresh_blockers();
             let mut cmds = maybe_fetch_checks(model, head_sha, &pr);
@@ -1064,21 +1070,24 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
             cmds.extend(refresh::maybe_retry_mergeable(model, &pr));
             cmds
         }
-        // The per-PR enrichment arrivals — threads, reviews, issue-comments —
-        // each stamp the PR's Fetch Age clock. They are the PrKey-keyed pieces
-        // of one PR's fan-out, but they arrive as independent async messages,
-        // each processed at its own `now` in `process_msg`, so the stamps do
-        // NOT coincide: the later arrival simply overwrites with its own `now`,
-        // and the displayed age tracks the last piece of the fetch to land.
+        // A PR's Fetch Age clock is stamped on data *receipt*: every arrival that
+        // overwrites fresh per-PR data — `ReviewStatusArrived` (above),
+        // `ThreadsArrived`, `ReviewsArrived`, `IssueCommentsArrived` — calls
+        // `stamp_fetched`. They are PrKey-keyed pieces of one PR's fan-out but
+        // arrive as independent async messages, each processed at its own `now`,
+        // so the stamps do NOT coincide: each overwrites with its own `now`
+        // (last-write-wins), and the displayed age tracks the last piece to land.
+        // This is also why `RefreshComplete` does not stamp — the arrivals do, so
+        // a refresh whose every sub-fetch failed (no arrival) correctly leaves the
+        // clock at its last genuine fetch instead of lying "fetched just now".
         //
-        // Two PrKey-keyed siblings deliberately do not stamp.
-        // `ChecksArrived` is keyed by (repo, head SHA) and shared across
-        // same-commit PRs, so it maps to no single PR and leaves the clock
-        // alone. `FilesArrived` is PrKey-keyed and part of the same RefreshPr
-        // fan-out, but it too leaves the clock alone: the threads/reviews/
-        // issue-comments trio already covers a PR's fetch arrival (and
-        // `RefreshComplete` covers the refresh path), so a fourth stamp would be
-        // redundant.
+        // Two PrKey-keyed siblings deliberately do not stamp, and neither loses
+        // data by abstaining. `ChecksArrived` is keyed by (repo, head SHA) and
+        // shared across same-commit PRs, so it maps to no single PR; it is also
+        // gated behind `ReviewStatusArrived` (the sole caller of
+        // `maybe_fetch_checks`), which already stamped, so a checks arrival is
+        // never a PR's only fresh data. `FilesArrived` rides the same fan-out the
+        // trio already covers, so a fourth stamp would be redundant.
         Msg::ThreadsArrived { pr, threads } => {
             model.stamp_fetched(pr.clone(), now);
             model.enrichment.store_threads(pr, threads);
@@ -1223,9 +1232,12 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
         Msg::RefreshSelected => refresh::refresh_selected_cmds(model),
         Msg::RefreshAll => refresh::refresh_all_cmds(model),
         Msg::RefreshComplete { pr } => {
-            // A Refresh settling is the other Fetch Age trigger: the PR's
-            // re-fetch fan-out has drained, so its data is as fresh as `now`.
-            model.stamp_fetched(pr.clone(), now);
+            // Clears the refresh indicator only — it does NOT stamp Fetch Age.
+            // `run_refresh_pr` fires this unconditionally, even when every
+            // sub-fetch failed, so stamping here would show "fetched just now"
+            // over untouched stale data. The data arrivals (review-status,
+            // threads, reviews) stamp on receipt instead, so an all-failed
+            // refresh leaves the clock at its last genuine fetch.
             refresh::complete_refresh(model, pr)
         }
         Msg::MergeableRetryDue { pr } => refresh::mergeable_retry_due_cmds(model, &pr),

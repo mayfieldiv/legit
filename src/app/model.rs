@@ -365,9 +365,11 @@ pub struct Model {
     /// initial enrichment or a Refresh settling. Keyed by `PrKey` (the same
     /// per-PR identity as `blockers`) because PRs are fetched and refreshed
     /// independently, so there is no single global "last updated" moment.
-    /// Stamped via `stamp_fetched` (last-write-wins, the most recent stamp) when
-    /// a PR's enrichment arrives and when its `RefreshComplete` fires, then read
-    /// by the summary panel and detail header through `fetched_at`. A PR absent
+    /// Stamped via `stamp_fetched` (last-write-wins, the most recent stamp) on
+    /// each per-PR data arrival — review-status, threads, reviews, issue-comments
+    /// — and not on `RefreshComplete` (which fires even when every sub-fetch
+    /// failed), then read by the summary panel and detail header through
+    /// `fetched_at`. A PR absent
     /// from the map has never been fetched, so the views omit its Fetch Age line
     /// rather than show a misleading "now". A stamp for a PR no longer present
     /// (filtered/pruned) is harmless — it is simply never read.
