@@ -2,6 +2,8 @@ use std::{path::Path, process::Command};
 
 use anyhow::{Context, Result, bail};
 
+use crate::subprocess::make_noninteractive;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoInfo {
     pub owner: String,
@@ -76,16 +78,19 @@ fn split_owner_repo(rest: &str) -> Option<(String, String)> {
 #[tracing::instrument(name = "detect_repo")]
 pub fn detect_repo(cwd: &Path) -> Result<RepoInfo> {
     tracing::info!(path = %cwd.display(), "detecting repo from git remote");
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    command
         .args(["remote", "get-url", "origin"])
-        .current_dir(cwd)
-        .output()
-        .with_context(|| {
-            format!(
-                "failed to run `git remote get-url origin` in {}",
-                cwd.display()
-            )
-        })?;
+        .current_dir(cwd);
+    // Reading the remote URL is a local operation that won't prompt, but harden
+    // it like every other subprocess we launch while the TUI owns the terminal.
+    make_noninteractive(&mut command);
+    let output = command.output().with_context(|| {
+        format!(
+            "failed to run `git remote get-url origin` in {}",
+            cwd.display()
+        )
+    })?;
 
     if !output.status.success() {
         bail!(
