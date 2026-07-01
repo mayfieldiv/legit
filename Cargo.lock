@@ -1276,6 +1276,7 @@ dependencies = [
  "chrono",
  "futures",
  "globset",
+ "libc",
  "octocrab",
  "pulldown-cmark",
  "ratatui",

@@ -1,9 +1,11 @@
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::{
     env,
     ffi::OsString,
     fs, io,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
 };
 
 use anyhow::{Context, bail};
@@ -186,11 +188,51 @@ fn scrub_git_env(command: &mut Command) -> &mut Command {
         .env_remove("GIT_PREFIX")
 }
 
+/// Make a worktree subprocess fully non-interactive so a prompt can never hang
+/// the TUI.
+///
+/// legit runs on the alternate screen with the terminal in raw mode. A child
+/// spawned here inherits our stdin and controlling terminal, so anything that
+/// stops to ask a question blocks reading the terminal we own — freezing the UI
+/// with no way to answer. And plenty in this path can ask: `git worktree add`
+/// and `gh pr checkout` both fire the repo's `post-checkout` hook (which may run
+/// `sudo`), and git/ssh can prompt for credentials. We can't service those
+/// prompts from inside the TUI, so we make them fail fast instead:
+///
+/// * `stdin(null)` hands anything reading stdin an immediate EOF.
+/// * `GIT_TERMINAL_PROMPT=0` turns git's own credential prompts into errors.
+/// * On Unix, `setsid()` in the forked child sheds the controlling terminal so
+///   `sudo`/`ssh` can't fall back to reading `/dev/tty`; they error out with "a
+///   terminal is required" rather than blocking on a prompt we can't answer.
+///
+/// A `post-checkout` hook's non-zero exit is ignored by git, so shedding the tty
+/// turns a hang into a created worktree (the hook's `sudo` step simply skipped);
+/// a genuine failure surfaces as an ordinary "create worktree" error status.
+fn make_noninteractive(command: &mut Command) -> &mut Command {
+    command.stdin(Stdio::null()).env("GIT_TERMINAL_PROMPT", "0");
+    #[cfg(unix)]
+    // SAFETY: the closure runs in the forked child before exec, where only
+    // async-signal-safe calls are allowed. `setsid(2)` is async-signal-safe and
+    // touches only the new child's session — no allocation, no shared state.
+    unsafe {
+        command.pre_exec(|| {
+            // A fresh session has no controlling terminal. EPERM (already a group
+            // leader) can't happen for a just-forked child and would only mean
+            // the tty is already shed, so the result is safe to ignore.
+            libc::setsid();
+            Ok(())
+        });
+    }
+    command
+}
+
 /// Build a `git` invocation scoped to the path we pass it, with the ambient git
-/// environment stripped (see [`scrub_git_env`]).
+/// environment stripped (see [`scrub_git_env`]) and no way to prompt (see
+/// [`make_noninteractive`]).
 fn git_command() -> Command {
     let mut command = Command::new("git");
     scrub_git_env(&mut command);
+    make_noninteractive(&mut command);
     command
 }
 
@@ -252,8 +294,11 @@ fn checkout_pr(target_path: &Path, pr_number: u64) -> anyhow::Result<()> {
         .env_remove("GITHUB_TOKEN")
         .env_remove("GH_TOKEN");
     // gh shells out to git; scrub the ambient git env so an inherited GIT_DIR
-    // can't redirect the checkout off target_path onto the wrong repository.
+    // can't redirect the checkout off target_path onto the wrong repository, and
+    // make it non-interactive so a checkout hook's `sudo` (or a credential
+    // prompt) can't hang the TUI.
     scrub_git_env(&mut gh);
+    make_noninteractive(&mut gh);
     run_command("gh pr checkout", &mut gh).map(|_| ())
 }
 
@@ -722,6 +767,107 @@ mod tests {
         assert!(
             !worktrees.contains(&target.to_string_lossy().to_string()),
             "partial worktree should be unregistered: {worktrees}"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn worktree_commands_disable_terminal_prompts() {
+        // The non-interactive contract: every worktree subprocess disables git's
+        // terminal credential prompt so a fetch/checkout can't stop to ask for a
+        // password on the terminal the TUI owns. Covers direct `git` calls and
+        // the `gh` checkout (which shells out to git).
+        let disables_prompt = |command: &Command| {
+            command.get_envs().any(|(key, value)| {
+                key == std::ffi::OsStr::new("GIT_TERMINAL_PROMPT")
+                    && value == Some(std::ffi::OsStr::new("0"))
+            })
+        };
+
+        assert!(
+            disables_prompt(&git_command()),
+            "git_command should set GIT_TERMINAL_PROMPT=0"
+        );
+
+        let mut gh = Command::new("gh");
+        make_noninteractive(&mut gh);
+        assert!(
+            disables_prompt(&gh),
+            "gh checkout command should set GIT_TERMINAL_PROMPT=0"
+        );
+    }
+
+    // A `post-checkout` hook that runs `sudo` (or git/ssh asking for a
+    // credential) would block reading the terminal the TUI owns and hang the
+    // whole app. `make_noninteractive` nulls stdin so such a read gets EOF
+    // instead of blocking. Model that with a hook that reads stdin before doing
+    // its work: with the fix it proceeds and leaves a marker; without it, this
+    // would hang (the timeout below turns a regression into a failure, not a
+    // hung suite). `git worktree add` ignores the hook's exit status, so
+    // creation still succeeds.
+    #[cfg(unix)]
+    #[test]
+    fn worktree_creation_does_not_block_on_a_hook_reading_stdin() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = temp_dir("hook-stdin");
+        let source = root.join("source");
+        let target = root.join("worktree");
+        let marker = root.join("hook-ran");
+        fs::create_dir_all(&source).expect("create source repo");
+        run_git(&["init"], &source);
+        run_git(
+            &[
+                "-c",
+                "user.name=Legit Test",
+                "-c",
+                "user.email=legit@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "initial",
+            ],
+            &source,
+        );
+
+        let hook = source.join(".git/hooks/post-checkout");
+        fs::create_dir_all(hook.parent().expect("hook parent")).expect("create hooks dir");
+        fs::write(
+            &hook,
+            format!(
+                "#!/bin/sh\nread _line\necho ran > \"{}\"\n",
+                marker.display()
+            ),
+        )
+        .expect("write hook");
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).expect("chmod hook");
+
+        // Run on a worker thread with a timeout so a regression (inherited stdin)
+        // surfaces as a failed assertion rather than hanging the whole suite.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker_source = source.clone();
+        let worker_target = target.clone();
+        let handle = std::thread::spawn(move || {
+            let result = create_worktree_for_pr_with_checkout(
+                &worker_source,
+                &worker_target,
+                42,
+                |_target, _number| Ok(()),
+            );
+            let _ = tx.send(result);
+        });
+
+        let result = rx
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .expect("worktree creation should not block on the hook's stdin read");
+        handle.join().expect("worker thread panicked");
+
+        result.expect("worktree creation should succeed");
+        assert!(target.exists(), "worktree directory should be created");
+        assert!(
+            marker.exists(),
+            "post-checkout hook should run to completion (stdin read returns EOF, not a block)"
         );
 
         let _ = fs::remove_dir_all(root);
