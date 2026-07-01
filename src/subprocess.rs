@@ -80,30 +80,42 @@ pub(crate) fn gh_command() -> Command {
     command
 }
 
-/// Put a to-be-spawned child in its own session, shedding the controlling
-/// terminal. [`run_command`] applies this to every child it spawns.
-///
-/// legit runs on the alternate screen with the terminal in raw mode, so a child
-/// that reaches for `/dev/tty` — `sudo` or `ssh` fired from a `post-checkout`
-/// hook, say — would block reading the terminal we own. A fresh session has no
-/// controlling terminal, so those calls error out with "a terminal is required"
-/// instead of hanging on a prompt we can't answer. `setsid` also makes the child
-/// a session/process-group leader, which is what lets [`run_command`] and
-/// [`terminate_all`] signal the whole group (the hook and its descendants) by
-/// PID.
-#[cfg(unix)]
-fn detach_into_new_session(command: &mut Command) {
-    // SAFETY: the closure runs in the forked child before exec, where only
-    // async-signal-safe calls are allowed. `setsid(2)` is async-signal-safe and
-    // touches only the new child's session — no allocation, no shared state.
-    unsafe {
-        command.pre_exec(|| {
-            // A fresh session has no controlling terminal. EPERM (already a group
-            // leader) can't happen for a just-forked child and would only mean
-            // the tty is already shed, so the result is safe to ignore.
-            libc::setsid();
-            Ok(())
-        });
+/// Extension trait that folds terminal-detachment into the [`Command`] builder
+/// chain, next to `.stdin`/`.stdout`/`.stderr`.
+trait DetachSessionExt {
+    /// Put the spawned child in its own session, shedding the controlling
+    /// terminal. [`run_command`] applies this to every child it spawns.
+    ///
+    /// legit runs on the alternate screen with the terminal in raw mode, so a
+    /// child that reaches for `/dev/tty` — `sudo` or `ssh` fired from a
+    /// `post-checkout` hook, say — would block reading the terminal we own. A
+    /// fresh session has no controlling terminal, so those calls error out with
+    /// "a terminal is required" instead of hanging on a prompt we can't answer.
+    /// `setsid` also makes the child a session/process-group leader, which is
+    /// what lets [`run_command`] and [`terminate_all`] signal the whole group
+    /// (the hook and its descendants) by PID.
+    ///
+    /// A no-op off Unix, where there is no `setsid`/process-group model.
+    fn detach_session(&mut self) -> &mut Self;
+}
+
+impl DetachSessionExt for Command {
+    fn detach_session(&mut self) -> &mut Self {
+        #[cfg(unix)]
+        // SAFETY: the closure runs in the forked child before exec, where only
+        // async-signal-safe calls are allowed. `setsid(2)` is async-signal-safe
+        // and touches only the new child's session — no allocation, no shared
+        // state.
+        unsafe {
+            self.pre_exec(|| {
+                // A fresh session has no controlling terminal. EPERM (already a
+                // group leader) can't happen for a just-forked child and would
+                // only mean the tty is already shed, so ignoring it is safe.
+                libc::setsid();
+                Ok(())
+            });
+        }
+        self
     }
 }
 
@@ -124,14 +136,13 @@ fn run_with_timeout(
     command: &mut Command,
     timeout: Duration,
 ) -> anyhow::Result<String> {
+    // Detach as part of the same builder chain, so a child we register is always
+    // a group leader signal-able by its PID (see the module docs).
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    // Own the process-group setup here so a child we register is always a group
-    // leader signal-able by its PID (see the module docs).
-    #[cfg(unix)]
-    detach_into_new_session(command);
+        .stderr(Stdio::piped())
+        .detach_session();
 
     let mut child = command
         .spawn()
@@ -428,10 +439,9 @@ mod tests {
     #[test]
     fn terminating_a_group_reaps_the_child() {
         let mut command = Command::new("sleep");
-        command.arg("600");
         // Spawned directly (not via `run_command`), so detach it here to make it
         // a group leader — otherwise `terminate_groups` has no group to signal.
-        detach_into_new_session(&mut command);
+        command.arg("600").detach_session();
         let mut child = command.spawn().expect("spawn sleep");
         let group = child.id() as i32;
 
