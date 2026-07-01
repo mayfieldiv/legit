@@ -11,7 +11,7 @@ use anyhow::{Context, bail};
 use crate::{
     config::{LegitConfig, RepoConfig},
     github::rest::PR,
-    subprocess::{make_noninteractive, run_command},
+    subprocess::{gh_command, run_command},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -188,12 +188,12 @@ fn scrub_git_env(command: &mut Command) -> &mut Command {
 }
 
 /// Build a `git` invocation scoped to the path we pass it, with the ambient git
-/// environment stripped (see [`scrub_git_env`]) and no way to prompt (see
-/// [`make_noninteractive`]).
+/// environment stripped (see [`scrub_git_env`]). Prompt hardening comes from
+/// [`crate::subprocess::git_command`]; stdin/session hardening is applied by
+/// [`run_command`] when the command is spawned.
 fn git_command() -> Command {
-    let mut command = Command::new("git");
+    let mut command = crate::subprocess::git_command();
     scrub_git_env(&mut command);
-    make_noninteractive(&mut command);
     command
 }
 
@@ -249,17 +249,13 @@ fn create_worktree_for_pr_with_checkout(
 }
 
 fn checkout_pr(target_path: &Path, pr_number: u64) -> anyhow::Result<()> {
-    let mut gh = Command::new("gh");
+    let mut gh = gh_command();
     gh.args(["pr", "checkout", &pr_number.to_string()])
-        .current_dir(target_path)
-        .env_remove("GITHUB_TOKEN")
-        .env_remove("GH_TOKEN");
+        .current_dir(target_path);
     // gh shells out to git; scrub the ambient git env so an inherited GIT_DIR
-    // can't redirect the checkout off target_path onto the wrong repository, and
-    // make it non-interactive so a checkout hook's `sudo` (or a credential
-    // prompt) can't hang the TUI.
+    // can't redirect the checkout off target_path onto the wrong repository.
+    // (Prompt/session hardening comes from `gh_command` + `run_command`.)
     scrub_git_env(&mut gh);
-    make_noninteractive(&mut gh);
     run_command("gh pr checkout", &mut gh).map(|_| ())
 }
 
@@ -718,17 +714,15 @@ mod tests {
             "git_command should set GIT_TERMINAL_PROMPT=0"
         );
 
-        let mut gh = Command::new("gh");
-        make_noninteractive(&mut gh);
         assert!(
-            disables_prompt(&gh),
-            "gh checkout command should set GIT_TERMINAL_PROMPT=0"
+            disables_prompt(&gh_command()),
+            "gh_command should set GIT_TERMINAL_PROMPT=0"
         );
     }
 
     // A `post-checkout` hook that runs `sudo` (or git/ssh asking for a
     // credential) would block reading the terminal the TUI owns and hang the
-    // whole app. `make_noninteractive` nulls stdin so such a read gets EOF
+    // whole app. `run_command` nulls the child's stdin so such a read gets EOF
     // instead of blocking. Model that with a hook that reads stdin before doing
     // its work: with the fix it proceeds and leaves a marker; without it, this
     // would hang (the timeout below turns a regression into a failure, not a
@@ -840,8 +834,9 @@ mod tests {
 
         assert_scrubbed("git_command", &git_command());
 
-        // gh shells out to git, so its command must be scrubbed too.
-        let mut gh = Command::new("gh");
+        // gh shells out to git, so its command must be scrubbed too — mirror the
+        // construction in `checkout_pr`.
+        let mut gh = gh_command();
         scrub_git_env(&mut gh);
         assert_scrubbed("scrubbed gh command", &gh);
     }

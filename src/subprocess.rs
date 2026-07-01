@@ -2,22 +2,32 @@
 //!
 //! legit runs on the alternate screen with the terminal in raw mode and spawns
 //! git/gh subprocesses on the blocking pool while the UI keeps drawing. Three
-//! hazards come with that, all handled here:
+//! hazards come with that, all handled here — so every git/gh child is built
+//! with [`git_command`]/[`gh_command`] and spawned through [`run_command`]
+//! rather than a bare [`Command`]:
 //!
 //! * A child that stops to ask a question blocks reading the terminal we own.
-//!   [`make_noninteractive`] makes any prompt fail fast instead.
+//!   [`run_command`] nulls stdin and (on Unix) sheds the controlling terminal,
+//!   while the builders set `GIT_TERMINAL_PROMPT=0`, so any prompt fails fast
+//!   instead of hanging the UI.
 //! * A `post-checkout` hook can background a process that inherits our captured
 //!   stdout/stderr pipe; a plain `.output()` would then read to EOF forever.
 //!   [`run_command`] bounds every call with a timeout and kills the process
 //!   group to force the pipes closed.
 //! * A child (and any hook-spawned `sudo`/`ssh`) outlives legit when the user
 //!   quits mid-operation. Every child is tracked while it runs and
-//!   [`terminate_all`] reaps the whole group on shutdown.
+//!   [`terminate_all`] signals the whole group on shutdown.
 //!
-//! The process-group machinery is Unix-only: it relies on `setsid` (see
-//! [`make_noninteractive`]) making each child a group leader, so its PID
-//! doubles as its process-group id. Off Unix the timeout still applies but only
-//! the direct child is signalled, and shutdown does not reap in-flight children.
+//! Splitting the concerns this way keeps the tracking sound: [`run_command`]
+//! owns the process-group setup, so a child it spawns is *always* a group
+//! leader and its PID is always a valid group id — there is no way to register a
+//! child that can't then be signalled. The builders only carry git's own prompt
+//! knob.
+//!
+//! The process-group machinery is Unix-only: [`run_command`] `setsid`s each
+//! child into its own session, making it a group leader so its PID doubles as
+//! its process-group id. Off Unix the timeout still applies but only the direct
+//! child is signalled, and shutdown does not reap in-flight children.
 
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -46,26 +56,43 @@ const DRAIN_GRACE: Duration = Duration::from_millis(500);
 /// How often to check whether the child has exited while waiting on the timeout.
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
-/// Make a subprocess fully non-interactive so a prompt can never hang the TUI.
+/// A `git` invocation that won't stop to prompt on the terminal the TUI owns.
 ///
-/// legit runs on the alternate screen with the terminal in raw mode. A child
-/// spawned here inherits our stdin and controlling terminal, so anything that
-/// stops to ask a question blocks reading the terminal we own — freezing the UI
-/// with no way to answer. And plenty in this path can ask: `git worktree add`
-/// and `gh pr checkout` both fire the repo's `post-checkout` hook (which may run
-/// `sudo`), and git/ssh can prompt for credentials. We can't service those
-/// prompts from inside the TUI, so we make them fail fast instead:
+/// `GIT_TERMINAL_PROMPT=0` turns git's own credential prompts into errors rather
+/// than a blocking read of the terminal we're drawing over. This sets only the
+/// command's *contents*; the stdin/session hardening is applied by
+/// [`run_command`] when the command is spawned.
+pub(crate) fn git_command() -> Command {
+    let mut command = Command::new("git");
+    command.env("GIT_TERMINAL_PROMPT", "0");
+    command
+}
+
+/// A `gh` invocation hardened like [`git_command`] (gh shells out to git), plus
+/// `GITHUB_TOKEN`/`GH_TOKEN` removed so gh reads its stored credentials rather
+/// than an ambient token inherited from our environment.
+pub(crate) fn gh_command() -> Command {
+    let mut command = Command::new("gh");
+    command
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env_remove("GITHUB_TOKEN")
+        .env_remove("GH_TOKEN");
+    command
+}
+
+/// Put a to-be-spawned child in its own session, shedding the controlling
+/// terminal. [`run_command`] applies this to every child it spawns.
 ///
-/// * `stdin(null)` hands anything reading stdin an immediate EOF.
-/// * `GIT_TERMINAL_PROMPT=0` turns git's own credential prompts into errors.
-/// * On Unix, `setsid()` in the forked child sheds the controlling terminal so
-///   `sudo`/`ssh` can't fall back to reading `/dev/tty`; they error out with "a
-///   terminal is required" rather than blocking on a prompt we can't answer. It
-///   also makes the child a session/process-group leader, which is what lets
-///   [`run_command`] and [`terminate_all`] signal the whole group by PID.
-pub(crate) fn make_noninteractive(command: &mut Command) -> &mut Command {
-    command.stdin(Stdio::null()).env("GIT_TERMINAL_PROMPT", "0");
-    #[cfg(unix)]
+/// legit runs on the alternate screen with the terminal in raw mode, so a child
+/// that reaches for `/dev/tty` — `sudo` or `ssh` fired from a `post-checkout`
+/// hook, say — would block reading the terminal we own. A fresh session has no
+/// controlling terminal, so those calls error out with "a terminal is required"
+/// instead of hanging on a prompt we can't answer. `setsid` also makes the child
+/// a session/process-group leader, which is what lets [`run_command`] and
+/// [`terminate_all`] signal the whole group (the hook and its descendants) by
+/// PID.
+#[cfg(unix)]
+fn detach_into_new_session(command: &mut Command) {
     // SAFETY: the closure runs in the forked child before exec, where only
     // async-signal-safe calls are allowed. `setsid(2)` is async-signal-safe and
     // touches only the new child's session — no allocation, no shared state.
@@ -78,16 +105,16 @@ pub(crate) fn make_noninteractive(command: &mut Command) -> &mut Command {
             Ok(())
         });
     }
-    command
 }
 
 /// Run `command`, returning its stdout on success.
 ///
 /// The command is spawned (not `.output()`d) so the child can be tracked and
-/// bounded: its process group is registered for [`terminate_all`], stdout/stderr
+/// bounded: stdin is nulled and — on Unix — the child is `setsid`'d into its own
+/// session, its process group is registered for [`terminate_all`], stdout/stderr
 /// are drained on background threads, and the whole thing is capped at
-/// [`COMMAND_TIMEOUT`]. Callers are expected to have applied
-/// [`make_noninteractive`]; stdin is nulled here regardless.
+/// [`COMMAND_TIMEOUT`]. Build `command` with [`git_command`]/[`gh_command`] so
+/// `GIT_TERMINAL_PROMPT` is set as well.
 pub(crate) fn run_command(label: &str, command: &mut Command) -> anyhow::Result<String> {
     run_with_timeout(label, command, COMMAND_TIMEOUT)
 }
@@ -101,6 +128,10 @@ fn run_with_timeout(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // Own the process-group setup here so a child we register is always a group
+    // leader signal-able by its PID (see the module docs).
+    #[cfg(unix)]
+    detach_into_new_session(command);
 
     let mut child = command
         .spawn()
@@ -220,7 +251,12 @@ fn collect(rx: &mpsc::Receiver<Vec<u8>>, child: &mut Child) -> Vec<u8> {
         return buf;
     }
     signal_tree(child, Signal::Kill);
-    rx.recv().unwrap_or_default()
+    // Bounded even after SIGKILL: a descendant that escaped the group (e.g. a
+    // hook daemon that `setsid`s itself) never receives the group signal and can
+    // hold the pipe open indefinitely. Give up on the drain and return what we
+    // have — the reader thread leaks, but the operation doesn't wedge, which is
+    // the whole point of the timeout.
+    rx.recv_timeout(DRAIN_GRACE).unwrap_or_default()
 }
 
 enum Signal {
@@ -280,8 +316,8 @@ fn stderr_tail(stderr: &[u8]) -> String {
     format!("…{suffix}")
 }
 
-/// Live child process groups, tracked so [`terminate_all`] can reap whatever is
-/// still running at shutdown. Keyed by process-group id (== the child's PID).
+/// Live child process groups, tracked so [`terminate_all`] can signal whatever
+/// is still running at shutdown. Keyed by process-group id (== the child's PID).
 #[cfg(unix)]
 mod registry {
     use std::{
@@ -332,10 +368,11 @@ mod tests {
         rx.recv_timeout(limit).ok()
     }
 
+    // `run_command`/`run_with_timeout` apply the stdin/session hardening
+    // themselves, so a raw `sh -c` command is enough to exercise them.
     fn sh(script: &str) -> Command {
         let mut command = Command::new("sh");
         command.args(["-c", script]);
-        make_noninteractive(&mut command);
         command
     }
 
@@ -392,7 +429,9 @@ mod tests {
     fn terminating_a_group_reaps_the_child() {
         let mut command = Command::new("sleep");
         command.arg("600");
-        make_noninteractive(&mut command);
+        // Spawned directly (not via `run_command`), so detach it here to make it
+        // a group leader — otherwise `terminate_groups` has no group to signal.
+        detach_into_new_session(&mut command);
         let mut child = command.spawn().expect("spawn sleep");
         let group = child.id() as i32;
 

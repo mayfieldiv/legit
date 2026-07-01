@@ -1,8 +1,8 @@
-use std::{path::Path, process::Command};
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use crate::subprocess::make_noninteractive;
+use crate::subprocess::{git_command, run_command};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoInfo {
@@ -78,30 +78,16 @@ fn split_owner_repo(rest: &str) -> Option<(String, String)> {
 #[tracing::instrument(name = "detect_repo")]
 pub fn detect_repo(cwd: &Path) -> Result<RepoInfo> {
     tracing::info!(path = %cwd.display(), "detecting repo from git remote");
-    let mut command = Command::new("git");
+    // Reading the remote URL is a local operation that won't prompt, but run it
+    // through the hardened path (non-interactive, timeout, shutdown-tracked) like
+    // every other git child. Note this intentionally does *not* scrub the git
+    // env: unlike the worktree commands, it operates on the user's real cwd repo.
+    let mut command = git_command();
     command
         .args(["remote", "get-url", "origin"])
         .current_dir(cwd);
-    // Reading the remote URL is a local operation that won't prompt, but harden
-    // it like every other subprocess we launch while the TUI owns the terminal.
-    make_noninteractive(&mut command);
-    let output = command.output().with_context(|| {
-        format!(
-            "failed to run `git remote get-url origin` in {}",
-            cwd.display()
-        )
-    })?;
-
-    if !output.status.success() {
-        bail!(
-            "No git remote 'origin' found in {} (`git remote get-url origin` exited {})",
-            cwd.display(),
-            output.status,
-        );
-    }
-
-    let url = String::from_utf8(output.stdout)
-        .context("`git remote get-url origin` returned non-utf8 output")?
+    let url = run_command("git remote get-url origin", &mut command)
+        .with_context(|| format!("no git remote 'origin' found in {}", cwd.display()))?
         .trim()
         .to_owned();
 
