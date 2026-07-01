@@ -13,6 +13,7 @@ mod markdown;
 mod palette;
 mod runtime;
 mod secret;
+mod subprocess;
 #[cfg(test)]
 mod test_fixtures;
 mod tracing_setup;

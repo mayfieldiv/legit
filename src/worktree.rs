@@ -1,11 +1,9 @@
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
 use std::{
     env,
     ffi::OsString,
     fs, io,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
 };
 
 use anyhow::{Context, bail};
@@ -13,6 +11,7 @@ use anyhow::{Context, bail};
 use crate::{
     config::{LegitConfig, RepoConfig},
     github::rest::PR,
+    subprocess::{make_noninteractive, run_command},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -188,44 +187,6 @@ fn scrub_git_env(command: &mut Command) -> &mut Command {
         .env_remove("GIT_PREFIX")
 }
 
-/// Make a worktree subprocess fully non-interactive so a prompt can never hang
-/// the TUI.
-///
-/// legit runs on the alternate screen with the terminal in raw mode. A child
-/// spawned here inherits our stdin and controlling terminal, so anything that
-/// stops to ask a question blocks reading the terminal we own — freezing the UI
-/// with no way to answer. And plenty in this path can ask: `git worktree add`
-/// and `gh pr checkout` both fire the repo's `post-checkout` hook (which may run
-/// `sudo`), and git/ssh can prompt for credentials. We can't service those
-/// prompts from inside the TUI, so we make them fail fast instead:
-///
-/// * `stdin(null)` hands anything reading stdin an immediate EOF.
-/// * `GIT_TERMINAL_PROMPT=0` turns git's own credential prompts into errors.
-/// * On Unix, `setsid()` in the forked child sheds the controlling terminal so
-///   `sudo`/`ssh` can't fall back to reading `/dev/tty`; they error out with "a
-///   terminal is required" rather than blocking on a prompt we can't answer.
-///
-/// A `post-checkout` hook's non-zero exit is ignored by git, so shedding the tty
-/// turns a hang into a created worktree (the hook's `sudo` step simply skipped);
-/// a genuine failure surfaces as an ordinary "create worktree" error status.
-fn make_noninteractive(command: &mut Command) -> &mut Command {
-    command.stdin(Stdio::null()).env("GIT_TERMINAL_PROMPT", "0");
-    #[cfg(unix)]
-    // SAFETY: the closure runs in the forked child before exec, where only
-    // async-signal-safe calls are allowed. `setsid(2)` is async-signal-safe and
-    // touches only the new child's session — no allocation, no shared state.
-    unsafe {
-        command.pre_exec(|| {
-            // A fresh session has no controlling terminal. EPERM (already a group
-            // leader) can't happen for a just-forked child and would only mean
-            // the tty is already shed, so the result is safe to ignore.
-            libc::setsid();
-            Ok(())
-        });
-    }
-    command
-}
-
 /// Build a `git` invocation scoped to the path we pass it, with the ambient git
 /// environment stripped (see [`scrub_git_env`]) and no way to prompt (see
 /// [`make_noninteractive`]).
@@ -371,39 +332,6 @@ fn ensure_source_clone(source_clone: &Path) -> anyhow::Result<()> {
     run_command("git rev-parse --git-dir", &mut command)
         .with_context(|| format!("source clone {} is not a git repo", source_clone.display()))?;
     Ok(())
-}
-
-fn run_command(label: &str, command: &mut Command) -> anyhow::Result<String> {
-    let output = command
-        .output()
-        .with_context(|| format!("failed to run `{label}`"))?;
-
-    if !output.status.success() {
-        let stderr = stderr_tail(&output.stderr);
-        if stderr.is_empty() {
-            bail!("`{label}` exited with {}", output.status);
-        }
-        bail!("`{label}` failed: {stderr}");
-    }
-
-    String::from_utf8(output.stdout).with_context(|| format!("`{label}` returned non-utf8 output"))
-}
-
-fn stderr_tail(stderr: &[u8]) -> String {
-    let stderr = String::from_utf8_lossy(stderr).trim().to_owned();
-    const MAX: usize = 1_000;
-    if stderr.chars().count() <= MAX {
-        return stderr;
-    }
-    let suffix: String = stderr
-        .chars()
-        .rev()
-        .take(MAX.saturating_sub(1))
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    format!("…{suffix}")
 }
 
 #[cfg(test)]

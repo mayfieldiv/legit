@@ -35,6 +35,10 @@ const MAX_BACKGROUND_REQUESTS: usize = 8;
 #[tracing::instrument(name = "tui_runtime", skip_all)]
 pub async fn run() -> Result<()> {
     let _terminal_guard = TerminalGuard::enter()?;
+    // Reap any git/gh subprocess still running when the UI exits (drops on every
+    // return path, below the terminal guard), so quitting mid-worktree-creation
+    // doesn't orphan it — and any hook-spawned sudo/ssh — to init.
+    let _child_reaper = ChildReaper;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend).context("failed to create terminal")?;
 
@@ -159,6 +163,17 @@ fn spawn_event_reader(event_tx: mpsc::UnboundedSender<Event>) {
             }
         }
     });
+}
+
+/// Terminates any subprocess still tracked by [`crate::subprocess`] when the UI
+/// tears down, on every exit path (normal quit or an error bubbling out of the
+/// loop). See [`crate::subprocess::terminate_all`].
+struct ChildReaper;
+
+impl Drop for ChildReaper {
+    fn drop(&mut self) {
+        crate::subprocess::terminate_all();
+    }
 }
 
 struct TerminalGuard {
