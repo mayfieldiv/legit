@@ -254,14 +254,24 @@ fn create_worktree_for_pr_with_checkout(
 }
 
 fn checkout_pr(target_path: &Path, pr_number: u64) -> anyhow::Result<()> {
+    run_command(
+        "gh pr checkout",
+        &mut checkout_pr_command(target_path, pr_number),
+    )
+    .map(|_| ())
+}
+
+/// The `gh pr checkout` invocation for [`checkout_pr`], separate from the spawn
+/// so a test can pin its construction: built on [`gh_command`] (prompt/token
+/// hardening; stdin/session hardening comes from [`run_command`]) and scrubbed
+/// of the ambient git env — gh shells out to git, so an inherited GIT_DIR could
+/// otherwise redirect the checkout off `target_path` onto the wrong repository.
+fn checkout_pr_command(target_path: &Path, pr_number: u64) -> Command {
     let mut gh = gh_command();
     gh.args(["pr", "checkout", &pr_number.to_string()])
         .current_dir(target_path);
-    // gh shells out to git; scrub the ambient git env so an inherited GIT_DIR
-    // can't redirect the checkout off target_path onto the wrong repository.
-    // (Prompt/session hardening comes from `gh_command` + `run_command`.)
     scrub_git_env(&mut gh);
-    run_command("gh pr checkout", &mut gh).map(|_| ())
+    gh
 }
 
 fn remove_worktree(source_clone: &Path, target_path: &Path) -> anyhow::Result<()> {
@@ -901,10 +911,39 @@ mod tests {
 
         assert_scrubbed("git_command", &git_command());
 
-        // gh shells out to git, so its command must be scrubbed too — mirror the
-        // construction in `checkout_pr`.
-        let mut gh = gh_command();
-        scrub_git_env(&mut gh);
-        assert_scrubbed("scrubbed gh command", &gh);
+        // gh shells out to git, so the checkout invocation must be scrubbed too
+        // — assert on the command `checkout_pr` actually spawns.
+        assert_scrubbed(
+            "checkout_pr_command",
+            &checkout_pr_command(Path::new("/tmp/worktree"), 42),
+        );
+    }
+
+    #[test]
+    fn checkout_pr_command_is_hardened_and_scoped_to_the_worktree() {
+        let command = checkout_pr_command(Path::new("/somewhere/worktree"), 42);
+
+        assert_eq!(command.get_program(), "gh");
+        let args: Vec<&std::ffi::OsStr> = command.get_args().collect();
+        assert_eq!(args, ["pr", "checkout", "42"]);
+        assert_eq!(
+            command.get_current_dir(),
+            Some(Path::new("/somewhere/worktree"))
+        );
+
+        let envs: Vec<(&std::ffi::OsStr, Option<&std::ffi::OsStr>)> = command.get_envs().collect();
+        assert!(
+            envs.contains(&(
+                std::ffi::OsStr::new("GIT_TERMINAL_PROMPT"),
+                Some(std::ffi::OsStr::new("0"))
+            )),
+            "checkout should disable git terminal prompts, got {envs:?}"
+        );
+        for token in ["GITHUB_TOKEN", "GH_TOKEN"] {
+            assert!(
+                envs.contains(&(std::ffi::OsStr::new(token), None)),
+                "checkout should drop ambient {token}, got {envs:?}"
+            );
+        }
     }
 }
