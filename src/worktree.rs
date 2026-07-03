@@ -229,9 +229,14 @@ fn create_worktree_for_pr_with_checkout(
     }
 
     let mut git = git_command();
+    // --no-checkout: the PR checkout below immediately replaces the contents
+    // anyway, and it keeps `post-checkout` hooks out of this step — git
+    // propagates a hook's non-zero exit status, and a hook failure here would
+    // strand a registered worktree with no cleanup. The hook fires once,
+    // during `checkout`, whose failure path removes the partial worktree.
     git.arg("-C")
         .arg(source_clone)
-        .args(["worktree", "add", "-d"])
+        .args(["worktree", "add", "-d", "--no-checkout"])
         .arg(target_path);
     run_command("git worktree add", &mut git)?;
 
@@ -720,23 +725,13 @@ mod tests {
         );
     }
 
-    // A `post-checkout` hook that runs `sudo` (or git/ssh asking for a
-    // credential) would block reading the terminal the TUI owns and hang the
-    // whole app. `run_command` nulls the child's stdin so such a read gets EOF
-    // instead of blocking. Model that with a hook that reads stdin before doing
-    // its work: with the fix it proceeds and leaves a marker; without it, this
-    // would hang (the timeout below turns a regression into a failure, not a
-    // hung suite). `git worktree add` ignores the hook's exit status, so
-    // creation still succeeds.
+    /// A source repo under `root` with one commit and the given executable
+    /// `post-checkout` hook script.
     #[cfg(unix)]
-    #[test]
-    fn worktree_creation_does_not_block_on_a_hook_reading_stdin() {
+    fn source_repo_with_post_checkout_hook(root: &Path, hook_script: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
 
-        let root = temp_dir("hook-stdin");
         let source = root.join("source");
-        let target = root.join("worktree");
-        let marker = root.join("hook-ran");
         fs::create_dir_all(&source).expect("create source repo");
         run_git(&["init"], &source);
         run_git(
@@ -755,41 +750,113 @@ mod tests {
 
         let hook = source.join(".git/hooks/post-checkout");
         fs::create_dir_all(hook.parent().expect("hook parent")).expect("create hooks dir");
-        fs::write(
-            &hook,
-            format!(
-                "#!/bin/sh\nread _line\necho ran > \"{}\"\n",
-                marker.display()
-            ),
-        )
-        .expect("write hook");
+        fs::write(&hook, hook_script).expect("write hook");
         fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).expect("chmod hook");
+        source
+    }
 
-        // Run on a worker thread with a timeout so a regression (inherited stdin)
-        // surfaces as a failed assertion rather than hanging the whole suite.
+    /// Create a worktree with a checkout that mirrors `gh pr checkout` — a real
+    /// `git checkout` in the target, which fires the repo's `post-checkout`
+    /// hook — on a worker thread with a timeout, so a regression that blocks on
+    /// the hook surfaces as a failed assertion rather than a hung suite.
+    #[cfg(unix)]
+    fn create_worktree_bounded(source: &Path, target: &Path) -> anyhow::Result<()> {
         let (tx, rx) = std::sync::mpsc::channel();
-        let worker_source = source.clone();
-        let worker_target = target.clone();
+        let worker_source = source.to_path_buf();
+        let worker_target = target.to_path_buf();
         let handle = std::thread::spawn(move || {
             let result = create_worktree_for_pr_with_checkout(
                 &worker_source,
                 &worker_target,
                 42,
-                |_target, _number| Ok(()),
+                |target, _number| {
+                    let mut checkout = git_command();
+                    checkout
+                        .arg("-C")
+                        .arg(target)
+                        .args(["checkout", "--detach", "HEAD"]);
+                    run_command("git checkout", &mut checkout).map(|_| ())
+                },
             );
             let _ = tx.send(result);
         });
 
         let result = rx
             .recv_timeout(std::time::Duration::from_secs(30))
-            .expect("worktree creation should not block on the hook's stdin read");
+            .expect("worktree creation should not block on the hook");
+        // Reached only when the worker finished. On the timeout panic above the
+        // handle is deliberately dropped un-joined: the worker is stuck by
+        // definition, so joining would trade the fast failure for a hang. The
+        // suite still exits promptly — the child's stdin is nulled and
+        // `run_command` enforces its own timeout.
         handle.join().expect("worker thread panicked");
+        result
+    }
+
+    // A `post-checkout` hook that runs `sudo` (or git/ssh asking for a
+    // credential) would block reading the terminal the TUI owns and hang the
+    // whole app. `run_command` nulls the child's stdin so such a read gets EOF
+    // instead of blocking. Model that with a hook that reads stdin before doing
+    // its work: with the fix it proceeds and leaves a marker; without it, this
+    // would hang. (`worktree add` runs with --no-checkout, so the hook fires
+    // during the checkout step, as it would under `gh pr checkout`.)
+    #[cfg(unix)]
+    #[test]
+    fn worktree_creation_does_not_block_on_a_hook_reading_stdin() {
+        let root = temp_dir("hook-stdin");
+        let target = root.join("worktree");
+        let marker = root.join("hook-ran");
+        let source = source_repo_with_post_checkout_hook(
+            &root,
+            &format!(
+                "#!/bin/sh\nread _line\necho ran > \"{}\"\n",
+                marker.display()
+            ),
+        );
+
+        let result = create_worktree_bounded(&source, &target);
 
         result.expect("worktree creation should succeed");
         assert!(target.exists(), "worktree directory should be created");
         assert!(
             marker.exists(),
             "post-checkout hook should run to completion (stdin read returns EOF, not a block)"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    // The denied-prompt case: with the tty shed, the hook's `sudo`/`ssh` step
+    // fails and the hook exits non-zero. Git propagates that exit status
+    // through the checkout, so creation must fail with an ordinary error —
+    // never hang — and the failed checkout must not strand a half-made
+    // worktree.
+    #[cfg(unix)]
+    #[test]
+    fn a_failing_hook_fails_creation_and_removes_the_partial_worktree() {
+        let root = temp_dir("hook-denied");
+        let target = root.join("worktree");
+        let marker = root.join("hook-ran");
+        let source = source_repo_with_post_checkout_hook(
+            &root,
+            &format!(
+                "#!/bin/sh\nread _line\necho ran > \"{}\"\nexit 1\n",
+                marker.display()
+            ),
+        );
+
+        let result = create_worktree_bounded(&source, &target);
+
+        result.expect_err("a failing post-checkout hook should fail creation");
+        assert!(
+            marker.exists(),
+            "hook should run to its exit (stdin read returns EOF, not a block)"
+        );
+        assert!(!target.exists(), "partial worktree should be removed");
+        let worktrees = run_git(&["worktree", "list", "--porcelain"], &source);
+        assert!(
+            !worktrees.contains(&target.to_string_lossy().to_string()),
+            "partial worktree should be unregistered: {worktrees}"
         );
 
         let _ = fs::remove_dir_all(root);
