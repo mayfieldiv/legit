@@ -16,8 +16,8 @@
 //!   [`run_command`] bounds every call with a timeout and kills the process
 //!   group to force the pipes closed.
 //! * A child (and any hook-spawned `sudo`/`ssh`) outlives legit when the user
-//!   quits mid-operation. Every child is tracked while it runs and
-//!   [`terminate_all`] signals the whole group on shutdown, escalating
+//!   quits mid-operation. Every child is tracked while it runs and the
+//!   [`ShutdownSweep`] guard signals the whole group on shutdown, escalating
 //!   `SIGTERM` -> `SIGKILL` for anything that ignores the first ask. The
 //!   shutdown sweep also closes the registry, so a command task still in
 //!   flight when the user quits can't spawn a child *behind* the sweep — a
@@ -37,6 +37,7 @@
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::{
+    cell::Cell,
     ffi::OsStr,
     io::{ErrorKind, Read},
     path::Path,
@@ -60,7 +61,9 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(300);
 /// killing the group to force EOF.
 const DRAIN_GRACE: Duration = Duration::from_millis(500);
 
-/// How often to check whether the child has exited while waiting on the timeout.
+/// Ceiling on the child-exit poll interval ([`wait_with_timeout`] backs off
+/// exponentially up to this), and the cadence of the shutdown sweep's group
+/// liveness poll.
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// How long shutdown gives SIGTERM'd children to exit — long enough for a
@@ -175,8 +178,8 @@ trait DetachSessionExt {
     /// fresh session has no controlling terminal, so those calls error out with
     /// "a terminal is required" instead of hanging on a prompt we can't answer.
     /// `setsid` also makes the child a session/process-group leader, which is
-    /// what lets [`run_command`] and [`terminate_all`] signal the whole group
-    /// (the hook and its descendants) by PID.
+    /// what lets [`run_command`] and the [`ShutdownSweep`] signal the whole
+    /// group (the hook and its descendants) by PID.
     ///
     /// A no-op off Unix, where there is no `setsid`/process-group model.
     fn detach_session(&mut self) -> &mut Self;
@@ -211,10 +214,11 @@ impl DetachSessionExt for Command {
 ///
 /// The command is spawned (not `.output()`d) so the child can be tracked and
 /// bounded: stdin is nulled and — on Unix — the child is `setsid`'d into its own
-/// session, its process group is registered for [`terminate_all`], stdout/stderr
-/// are drained on background threads, and the whole thing is capped at
-/// [`COMMAND_TIMEOUT`]. The [`HardenedCommand`] type guarantees `command` came
-/// from [`git_command`]/[`gh_command`], so `GIT_TERMINAL_PROMPT` is set as well.
+/// session, its process group is registered for the [`ShutdownSweep`],
+/// stdout/stderr are drained on background threads, and the whole thing is
+/// capped at [`COMMAND_TIMEOUT`]. The [`HardenedCommand`] type guarantees
+/// `command` came from [`git_command`]/[`gh_command`], so `GIT_TERMINAL_PROMPT`
+/// is set as well.
 pub(crate) fn run_command(label: &str, command: &mut HardenedCommand) -> anyhow::Result<String> {
     run_with_timeout(label, command, COMMAND_TIMEOUT)
 }
@@ -238,24 +242,28 @@ fn run_with_timeout(
         .spawn()
         .with_context(|| format!("failed to run `{label}`"))?;
 
+    // Tracked for the shutdown sweep while the guard lives; it unregisters on
+    // every exit path below.
     #[cfg(unix)]
-    let group = child.id() as i32;
-    #[cfg(unix)]
-    if !registry::register(group) {
-        // The shutdown sweep already ran; this child spawned too late to be in
-        // it and would outlive the TUI. Kill it before returning so refusal
-        // keeps the sweep's guarantee instead of just reporting the breach.
-        signal_group(group, libc::SIGKILL);
-        let _ = child.wait();
-        bail!("`{label}` aborted: shutting down");
-    }
+    let _registration = match registry::Registration::track(child.id() as i32) {
+        Some(registration) => registration,
+        None => {
+            // The shutdown sweep already ran; this child spawned too late to be
+            // in it and would outlive the TUI. Kill it before returning so
+            // refusal keeps the sweep's guarantee instead of just reporting the
+            // breach.
+            signal_tree(&mut child, Signal::Kill);
+            let _ = child.wait();
+            bail!("`{label}` aborted: shutting down");
+        }
+    };
 
     // A pipe only hits EOF once every write-end is closed, so drain on separate
     // threads; a hook that backgrounds a process keeps a write-end open past
     // the child's own exit, which is why `collect` may have to kill the group
     // to force EOF.
-    let stdout_capture = spawn_reader(child.stdout.take());
-    let stderr_capture = spawn_reader(child.stderr.take());
+    let stdout_capture = spawn_reader(child.stdout.take().expect("stdout piped above"));
+    let stderr_capture = spawn_reader(child.stderr.take().expect("stderr piped above"));
 
     let outcome = wait_with_timeout(&mut child, timeout);
     if outcome.is_none() {
@@ -264,13 +272,9 @@ fn run_with_timeout(
         signal_tree(&mut child, Signal::Kill);
     }
 
-    let stdout = collect(&stdout_capture, &mut child);
-    let stderr = collect(&stderr_capture, &mut child);
+    let (stdout, stderr) = collect(&stdout_capture, &stderr_capture, &mut child);
     // Reap the (now-dead) child so it doesn't linger as a zombie.
     let _ = child.wait();
-
-    #[cfg(unix)]
-    registry::unregister(group);
 
     let status = match outcome {
         Some(status) => status,
@@ -291,18 +295,30 @@ fn run_with_timeout(
     String::from_utf8(stdout).with_context(|| format!("`{label}` returned non-utf8 output"))
 }
 
-/// Terminate every child (and its process group) still running when the UI
-/// exits, so quitting mid-operation doesn't orphan git/gh — and any
-/// hook-spawned `sudo`/`ssh` — to init. `SIGTERM` first so a mid-flight `git
-/// worktree add` can still drop its lock, then `SIGKILL` after [`TERM_GRACE`]
-/// for anything that ignored it. Blocks up to the grace period only while a
-/// child is actually still dying. Closes the registry first, so a command task
-/// racing this sweep can't spawn a child behind it — [`run_command`] refuses
-/// (and kills) any spawn that lands after the close. Unix-only; a no-op
-/// elsewhere, where we don't track process groups.
-pub(crate) fn terminate_all() {
-    #[cfg(unix)]
-    terminate_groups(&registry::close());
+/// Guard that runs the shutdown sweep when dropped: terminates every child
+/// (and its process group) still running when the UI exits, so quitting
+/// mid-operation doesn't orphan git/gh — and any hook-spawned `sudo`/`ssh` —
+/// to init. Arm one for the lifetime of the UI so the sweep runs on every exit
+/// path. `SIGTERM` first so a mid-flight `git worktree add` can still drop its
+/// lock, then `SIGKILL` after [`TERM_GRACE`] for anything that ignored it.
+/// Blocks up to the grace period only while a child is actually still dying.
+/// Closes the registry first, so a command task racing the sweep can't spawn a
+/// child behind it — [`run_command`] refuses (and kills) any spawn that lands
+/// after the close. Unix-only in effect; a no-op elsewhere, where we don't
+/// track process groups.
+pub(crate) struct ShutdownSweep;
+
+impl ShutdownSweep {
+    pub(crate) fn arm() -> Self {
+        Self
+    }
+}
+
+impl Drop for ShutdownSweep {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        terminate_groups(&registry::close());
+    }
 }
 
 #[cfg(unix)]
@@ -347,12 +363,23 @@ fn group_alive(group: i32) -> bool {
 struct PipeCapture {
     buf: Arc<Mutex<Vec<u8>>>,
     eof: mpsc::Receiver<()>,
+    /// Memoizes EOF: the reader sends exactly one message, so a second
+    /// `recv_timeout` after a successful one would wait out the full grace and
+    /// misreport an already-drained pipe as wedged.
+    drained: Cell<bool>,
 }
 
 impl PipeCapture {
-    /// Whether the reader reached EOF within `grace`.
-    fn drained(&self, grace: Duration) -> bool {
-        self.eof.recv_timeout(grace).is_ok()
+    /// Whether the reader reached EOF, waiting at most until `deadline`.
+    fn drained_by(&self, deadline: Instant) -> bool {
+        if self.drained.get() {
+            return true;
+        }
+        let wait = deadline.saturating_duration_since(Instant::now());
+        if self.eof.recv_timeout(wait).is_ok() {
+            self.drained.set(true);
+        }
+        self.drained.get()
     }
 
     /// The bytes read so far.
@@ -365,42 +392,41 @@ impl PipeCapture {
 }
 
 /// Spawn a thread that reads `pipe` until EOF (or a read error), appending into
-/// the returned capture's buffer as bytes arrive. The capture reports EOF
-/// immediately if there was no pipe.
-fn spawn_reader<R: Read + Send + 'static>(pipe: Option<R>) -> PipeCapture {
+/// the returned capture's buffer as bytes arrive.
+fn spawn_reader<R: Read + Send + 'static>(mut pipe: R) -> PipeCapture {
     let buf = Arc::new(Mutex::new(Vec::new()));
     let (tx, eof) = mpsc::channel();
-    match pipe {
-        Some(mut pipe) => {
-            let sink = Arc::clone(&buf);
-            thread::spawn(move || {
-                let mut chunk = [0u8; 8 * 1024];
-                loop {
-                    match pipe.read(&mut chunk) {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            if let Ok(mut sink) = sink.lock() {
-                                sink.extend_from_slice(&chunk[..n]);
-                            }
-                        }
-                        Err(error) if error.kind() == ErrorKind::Interrupted => {}
-                        Err(_) => break,
+    let sink = Arc::clone(&buf);
+    thread::spawn(move || {
+        let mut chunk = [0u8; 8 * 1024];
+        loop {
+            match pipe.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if let Ok(mut sink) = sink.lock() {
+                        sink.extend_from_slice(&chunk[..n]);
                     }
                 }
-                let _ = tx.send(());
-            });
+                Err(error) if error.kind() == ErrorKind::Interrupted => {}
+                Err(_) => break,
+            }
         }
-        None => {
-            let _ = tx.send(());
-        }
+        let _ = tx.send(());
+    });
+    PipeCapture {
+        buf,
+        eof,
+        drained: Cell::new(false),
     }
-    PipeCapture { buf, eof }
 }
 
 /// Poll the child until it exits or the timeout elapses. `None` means it was
-/// still running at the deadline (the caller kills it).
+/// still running at the deadline (the caller kills it). The poll backs off
+/// exponentially from 1ms to [`POLL_INTERVAL`], so a short-lived command is
+/// noticed within a few milliseconds without spinning on a long-running one.
 fn wait_with_timeout(child: &mut Child, timeout: Duration) -> Option<ExitStatus> {
     let deadline = Instant::now() + timeout;
+    let mut interval = Duration::from_millis(1);
     loop {
         match child.try_wait() {
             Ok(Some(status)) => return Some(status),
@@ -412,30 +438,42 @@ fn wait_with_timeout(child: &mut Child, timeout: Duration) -> Option<ExitStatus>
         if Instant::now() >= deadline {
             return None;
         }
-        thread::sleep(POLL_INTERVAL);
+        thread::sleep(interval);
+        interval = (interval * 2).min(POLL_INTERVAL);
     }
 }
 
-/// Take a reader's buffered output. If it doesn't drain within [`DRAIN_GRACE`],
-/// a backgrounded descendant is holding the pipe open past the child's exit;
-/// escalate `SIGTERM` -> `SIGKILL` on the group to force EOF, then take whatever
-/// was read.
-fn collect(capture: &PipeCapture, child: &mut Child) -> Vec<u8> {
-    if capture.drained(DRAIN_GRACE) {
-        return capture.take();
+/// Take both readers' buffered output. If either doesn't drain within
+/// [`DRAIN_GRACE`], a backgrounded descendant is holding a write-end open past
+/// the child's exit; escalate `SIGTERM` -> `SIGKILL` — once per stage on the
+/// child's group, which both pipes share, not once per pipe — to force EOF,
+/// then take whatever was read.
+fn collect(stdout: &PipeCapture, stderr: &PipeCapture, child: &mut Child) -> (Vec<u8>, Vec<u8>) {
+    if !drained_both(stdout, stderr) {
+        signal_tree(child, Signal::Term);
+        if !drained_both(stdout, stderr) {
+            signal_tree(child, Signal::Kill);
+            // Bounded even after SIGKILL: a descendant that escaped the group
+            // (e.g. a hook daemon that `setsid`s itself) never receives the
+            // group signal and can hold a pipe open indefinitely. Give up on
+            // the drain and take what the readers have buffered so far — the
+            // reader threads leak, but the operation doesn't wedge, which is
+            // the whole point of the timeout.
+            let _ = drained_both(stdout, stderr);
+        }
     }
-    signal_tree(child, Signal::Term);
-    if capture.drained(DRAIN_GRACE) {
-        return capture.take();
-    }
-    signal_tree(child, Signal::Kill);
-    // Bounded even after SIGKILL: a descendant that escaped the group (e.g. a
-    // hook daemon that `setsid`s itself) never receives the group signal and can
-    // hold the pipe open indefinitely. Give up on the drain and take what the
-    // reader has buffered so far — the reader thread leaks, but the operation
-    // doesn't wedge, which is the whole point of the timeout.
-    let _ = capture.drained(DRAIN_GRACE);
-    capture.take()
+    (stdout.take(), stderr.take())
+}
+
+/// Whether both readers reached EOF within one shared [`DRAIN_GRACE`] window.
+fn drained_both(stdout: &PipeCapture, stderr: &PipeCapture) -> bool {
+    let deadline = Instant::now() + DRAIN_GRACE;
+    // No `&&` short-circuit: even when stdout is wedged, stderr must still get
+    // its (possibly zero-wait) check so an already-sent EOF is consumed and
+    // memoized rather than re-awaited next stage.
+    let stdout_drained = stdout.drained_by(deadline);
+    let stderr_drained = stderr.drained_by(deadline);
+    stdout_drained && stderr_drained
 }
 
 enum Signal {
@@ -495,8 +533,9 @@ fn stderr_tail(stderr: &[u8]) -> String {
     format!("…{suffix}")
 }
 
-/// Live child process groups, tracked so [`terminate_all`] can signal whatever
-/// is still running at shutdown. Keyed by process-group id (== the child's PID).
+/// Live child process groups, tracked so the [`super::ShutdownSweep`] can
+/// signal whatever is still running at shutdown. Keyed by process-group id
+/// (== the child's PID).
 #[cfg(unix)]
 mod registry {
     use std::{
@@ -544,9 +583,9 @@ mod registry {
     /// The global registry, with lock poisoning recovered rather than papered
     /// over: the critical sections are trivial `HashSet`/flag updates that
     /// can't leave the `Registry` logically inconsistent, while any fallback
-    /// would silently lose tracking — an untracked child survives
-    /// [`super::terminate_all`], and a poisoned `close` would make the
-    /// shutdown sweep reap nothing at all.
+    /// would silently lose tracking — an untracked child survives the
+    /// shutdown sweep, and a poisoned `close` would make the sweep reap
+    /// nothing at all.
     fn lock() -> MutexGuard<'static, Registry> {
         static GLOBAL: OnceLock<Mutex<Registry>> = OnceLock::new();
         GLOBAL
@@ -555,12 +594,25 @@ mod registry {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    pub(super) fn register(group: i32) -> bool {
-        lock().register(group)
+    /// RAII tracking of one child's process group in the global registry:
+    /// registered while the guard lives, unregistered on drop — structurally,
+    /// on every exit path, so no early return can leak an entry for the
+    /// shutdown sweep to signal after the group id has been recycled.
+    pub(super) struct Registration(i32);
+
+    impl Registration {
+        /// Track `group`. `None` once the registry is closed: the shutdown
+        /// sweep has already signalled everything it could see, so the caller
+        /// must kill the child itself rather than let it run untracked.
+        pub(super) fn track(group: i32) -> Option<Self> {
+            lock().register(group).then_some(Self(group))
+        }
     }
 
-    pub(super) fn unregister(group: i32) {
-        lock().unregister(group);
+    impl Drop for Registration {
+        fn drop(&mut self) {
+            lock().unregister(self.0);
+        }
     }
 
     pub(super) fn close() -> Vec<i32> {
@@ -571,20 +623,9 @@ mod registry {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-
-    /// Run `f` on a worker thread, returning `None` if it doesn't finish within
-    /// `limit`. Every test below asserts on the returned value, so a regression
-    /// that reintroduces a hang fails the test instead of wedging the suite.
-    fn bounded<T: Send + 'static>(
-        limit: Duration,
-        f: impl FnOnce() -> T + Send + 'static,
-    ) -> Option<T> {
-        let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
-            let _ = tx.send(f());
-        });
-        rx.recv_timeout(limit).ok()
-    }
+    // Every test below asserts on `bounded`'s returned value, so a regression
+    // that reintroduces a hang fails the test instead of wedging the suite.
+    use crate::test_fixtures::bounded;
 
     // `run_command`/`run_with_timeout` apply the stdin/session hardening
     // themselves, so a raw `sh -c` command (wrapped through the test-only
@@ -593,6 +634,33 @@ mod tests {
         let mut command = Command::new("sh");
         command.args(["-c", script]);
         HardenedCommand::raw(command)
+    }
+
+    // The constructors' half of the hardening contract (the spawn-time half —
+    // stdin/session/timeout/tracking — is exercised by the tests below):
+    // neither builder may let git stop to prompt on the terminal the TUI owns,
+    // and gh must read its stored token rather than an ambient one.
+    #[test]
+    fn constructors_disable_prompts_and_gh_drops_ambient_tokens() {
+        let disables_prompt = |label: &str, command: &Command| {
+            assert!(
+                command.get_envs().any(|(key, value)| {
+                    key == OsStr::new("GIT_TERMINAL_PROMPT") && value == Some(OsStr::new("0"))
+                }),
+                "{label} should set GIT_TERMINAL_PROMPT=0"
+            );
+        };
+        disables_prompt("git_command", &git_command());
+        disables_prompt("gh_command", &gh_command());
+
+        let gh = gh_command();
+        for token in ["GITHUB_TOKEN", "GH_TOKEN"] {
+            assert!(
+                gh.get_envs()
+                    .any(|(key, value)| key == OsStr::new(token) && value.is_none()),
+                "gh_command should drop ambient {token}"
+            );
+        }
     }
 
     #[test]
