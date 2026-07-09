@@ -26,8 +26,8 @@
 //! Splitting the concerns this way keeps the tracking sound: [`run_command`]
 //! owns the process-group setup, so a child it spawns is *always* a group
 //! leader and its PID is always a valid group id — there is no way to register a
-//! child that can't then be signalled. The builders only carry git's own prompt
-//! knob.
+//! child that can't then be signalled. The builders only carry the command's
+//! *contents*: git's prompt/token knobs and the [`GitEnv`] repo-scoping policy.
 //!
 //! The process-group machinery is Unix-only: [`run_command`] `setsid`s each
 //! child into its own session, making it a group leader so its PID doubles as
@@ -106,32 +106,6 @@ impl HardenedCommand {
         self.0.current_dir(dir);
         self
     }
-
-    /// Strip the ambient git environment from the command.
-    ///
-    /// Git exports `GIT_DIR`/`GIT_WORK_TREE`/etc. to hook subprocesses, and our
-    /// `.hooks/pre-push` hook runs `cargo test`. Those variables override `-C`
-    /// and `current_dir` when git locates the repository, so without stripping
-    /// them a command that drives git against a throwaway sandbox repo would
-    /// instead operate on the real repository the hook is running inside
-    /// (appending stray commits, flipping `core.bare`). Applies both to direct
-    /// `git` calls and to `gh`, which shells out to `git` — both must be
-    /// scrubbed. Opt-in, because a command aimed at the user's real cwd repo
-    /// (e.g. remote detection) *wants* the ambient environment.
-    ///
-    /// This fixed list is the only env mutation callers get — deliberately not
-    /// a general `env_remove`, which could unset the hardening the constructors
-    /// applied.
-    pub(crate) fn scrub_git_env(&mut self) -> &mut Self {
-        self.0
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_INDEX_FILE")
-            .env_remove("GIT_OBJECT_DIRECTORY")
-            .env_remove("GIT_COMMON_DIR")
-            .env_remove("GIT_PREFIX");
-        self
-    }
 }
 
 impl std::ops::Deref for HardenedCommand {
@@ -142,27 +116,72 @@ impl std::ops::Deref for HardenedCommand {
     }
 }
 
-/// A `git` invocation that won't stop to prompt on the terminal the TUI owns.
+/// Which git environment a command runs under — a required constructor
+/// argument, so every call site decides the repo-scoping policy explicitly
+/// rather than remembering an opt-in scrub.
+///
+/// Git exports `GIT_DIR`/`GIT_WORK_TREE`/etc. to hook subprocesses, and our
+/// `.hooks/pre-push` hook runs `cargo test`. Those variables override `-C` and
+/// `current_dir` when git locates the repository, so under [`GitEnv::Ambient`]
+/// a command that drives git against a throwaway sandbox repo would instead
+/// operate on the real repository the hook is running inside (appending stray
+/// commits, flipping `core.bare`). Commands scoped to a path they are given —
+/// the worktree operations — must use [`GitEnv::Scrubbed`]; a command aimed at
+/// the user's real cwd repo (e.g. remote detection) *wants* [`GitEnv::Ambient`].
+/// The policy applies to `gh` too, which shells out to `git`.
+#[derive(Clone, Copy)]
+pub(crate) enum GitEnv {
+    /// Inherit the process's git environment untouched.
+    Ambient,
+    /// Strip the repo-locating variables so `-C`/`current_dir` alone decide
+    /// which repository the command operates on. This fixed list is the only
+    /// env mutation callers can express — deliberately not a general
+    /// `env_remove`, which could unset the hardening the constructors applied.
+    Scrubbed,
+}
+
+impl GitEnv {
+    fn apply(self, command: &mut Command) {
+        match self {
+            Self::Ambient => {}
+            Self::Scrubbed => {
+                command
+                    .env_remove("GIT_DIR")
+                    .env_remove("GIT_WORK_TREE")
+                    .env_remove("GIT_INDEX_FILE")
+                    .env_remove("GIT_OBJECT_DIRECTORY")
+                    .env_remove("GIT_COMMON_DIR")
+                    .env_remove("GIT_PREFIX");
+            }
+        }
+    }
+}
+
+/// A `git` invocation that won't stop to prompt on the terminal the TUI owns,
+/// running under the given [`GitEnv`].
 ///
 /// `GIT_TERMINAL_PROMPT=0` turns git's own credential prompts into errors rather
 /// than a blocking read of the terminal we're drawing over. This sets only the
 /// command's *contents*; the stdin/session hardening is applied by
 /// [`run_command`] when the command is spawned.
-pub(crate) fn git_command() -> HardenedCommand {
+pub(crate) fn git_command(env: GitEnv) -> HardenedCommand {
     let mut command = Command::new("git");
     command.env("GIT_TERMINAL_PROMPT", "0");
+    env.apply(&mut command);
     HardenedCommand(command)
 }
 
-/// A `gh` invocation hardened like [`git_command`] (gh shells out to git), plus
-/// `GITHUB_TOKEN`/`GH_TOKEN` removed so gh reads its stored credentials rather
-/// than an ambient token inherited from our environment.
-pub(crate) fn gh_command() -> HardenedCommand {
+/// A `gh` invocation hardened like [`git_command`] (gh shells out to git, so it
+/// gets the same prompt knob and [`GitEnv`] policy), plus `GITHUB_TOKEN`/
+/// `GH_TOKEN` removed so gh reads its stored credentials rather than an ambient
+/// token inherited from our environment.
+pub(crate) fn gh_command(env: GitEnv) -> HardenedCommand {
     let mut command = Command::new("gh");
     command
         .env("GIT_TERMINAL_PROMPT", "0")
         .env_remove("GITHUB_TOKEN")
         .env_remove("GH_TOKEN");
+    env.apply(&mut command);
     HardenedCommand(command)
 }
 
@@ -650,16 +669,63 @@ mod tests {
                 "{label} should set GIT_TERMINAL_PROMPT=0"
             );
         };
-        disables_prompt("git_command", &git_command());
-        disables_prompt("gh_command", &gh_command());
+        disables_prompt("git_command", &git_command(GitEnv::Ambient));
+        disables_prompt("gh_command", &gh_command(GitEnv::Ambient));
 
-        let gh = gh_command();
+        let gh = gh_command(GitEnv::Ambient);
         for token in ["GITHUB_TOKEN", "GH_TOKEN"] {
             assert!(
                 gh.get_envs()
                     .any(|(key, value)| key == OsStr::new(token) && value.is_none()),
                 "gh_command should drop ambient {token}"
             );
+        }
+    }
+
+    const SCRUBBED_VARS: [&str; 6] = [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_COMMON_DIR",
+        "GIT_PREFIX",
+    ];
+
+    // The repo-scoping half of the constructor contract: GitEnv::Scrubbed must
+    // mark every repo-locating variable for removal so a sandboxed call can't
+    // be redirected onto the repo a hook is running inside — for direct `git`
+    // calls and for `gh`, which shells out to git — while GitEnv::Ambient must
+    // leave them alone so cwd-repo operations keep working under a hook.
+    #[test]
+    fn git_env_policy_scrubs_or_preserves_the_repo_locating_variables() {
+        let marks_removed = |command: &Command, var: &str| {
+            command
+                .get_envs()
+                .any(|(key, value)| key == OsStr::new(var) && value.is_none())
+        };
+
+        for (label, command) in [
+            ("git_command", git_command(GitEnv::Scrubbed)),
+            ("gh_command", gh_command(GitEnv::Scrubbed)),
+        ] {
+            for var in SCRUBBED_VARS {
+                assert!(
+                    marks_removed(&command, var),
+                    "scrubbed {label} should mark {var} for removal"
+                );
+            }
+        }
+
+        for (label, command) in [
+            ("git_command", git_command(GitEnv::Ambient)),
+            ("gh_command", gh_command(GitEnv::Ambient)),
+        ] {
+            for var in SCRUBBED_VARS {
+                assert!(
+                    !marks_removed(&command, var),
+                    "ambient {label} should not touch {var}"
+                );
+            }
         }
     }
 

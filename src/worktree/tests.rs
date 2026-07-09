@@ -1,6 +1,5 @@
 use std::{
     path::Path,
-    process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -50,7 +49,7 @@ fn run_git(args: &[&str], cwd: &Path) -> String {
     // Drive the fixture git through the same hardened spawn path as production
     // rather than a raw `.output()`, so the test helper can't be the one place
     // that bypasses HardenedCommand's guarantees.
-    let mut command = git_command();
+    let mut command = git_command(GitEnv::Scrubbed);
     command.args(args).current_dir(cwd);
     run_command("git", &mut command)
         .unwrap_or_else(|error| panic!("git {} failed: {error:#}", args.join(" ")))
@@ -392,7 +391,7 @@ fn create_worktree_bounded(source: &Path, target: &Path) -> anyhow::Result<()> {
     let target = target.to_path_buf();
     bounded(std::time::Duration::from_secs(30), move || {
         create_worktree_for_pr_with_checkout(&source, &target, 42, |target, _number| {
-            let mut checkout = git_command();
+            let mut checkout = git_command(GitEnv::Scrubbed);
             checkout
                 .arg("-C")
                 .arg(target)
@@ -483,40 +482,6 @@ fn pr_key_url_stays_available_for_worktree_messages() {
 }
 
 #[test]
-fn git_env_is_scrubbed_for_git_and_gh_commands() {
-    // The hermeticity contract: every invocation that reaches git scrubs the
-    // inherited git environment so a sandboxed call can't be redirected onto
-    // the repo a hook is running inside. This covers direct `git` calls and
-    // `gh` (which shells out to git). Assert each variable is marked removed.
-    let assert_scrubbed = |label: &str, command: &Command| {
-        let envs: Vec<(OsString, Option<OsString>)> = command
-            .get_envs()
-            .map(|(key, value)| (key.to_owned(), value.map(|v| v.to_owned())))
-            .collect();
-        for var in [
-            "GIT_DIR",
-            "GIT_WORK_TREE",
-            "GIT_INDEX_FILE",
-            "GIT_OBJECT_DIRECTORY",
-            "GIT_COMMON_DIR",
-            "GIT_PREFIX",
-        ] {
-            assert!(
-                envs.iter()
-                    .any(|(key, value)| key == std::ffi::OsStr::new(var) && value.is_none()),
-                "{label} should mark {var} for removal, got {envs:?}"
-            );
-        }
-    };
-
-    assert_scrubbed("git_command", &git_command());
-
-    // gh shells out to git, so this module's gh builder must be scrubbed too —
-    // every gh call site (the PR checkout) is built on it.
-    assert_scrubbed("gh_command", &gh_command());
-}
-
-#[test]
 fn checkout_pr_command_is_hardened_and_scoped_to_the_worktree() {
     let command = checkout_pr_command(Path::new("/somewhere/worktree"), 42);
 
@@ -542,4 +507,11 @@ fn checkout_pr_command_is_hardened_and_scoped_to_the_worktree() {
             "checkout should drop ambient {token}, got {envs:?}"
         );
     }
+    // Built with GitEnv::Scrubbed (the full variable list is pinned by the
+    // constructor tests in subprocess.rs); an inherited GIT_DIR would redirect
+    // the checkout off the worktree we point it at.
+    assert!(
+        envs.contains(&(std::ffi::OsStr::new("GIT_DIR"), None)),
+        "checkout should scrub the ambient git env, got {envs:?}"
+    );
 }

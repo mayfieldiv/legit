@@ -2,7 +2,7 @@ use anyhow::{Result, bail};
 
 use crate::{
     secret::Secret,
-    subprocess::{gh_command, run_command},
+    subprocess::{GitEnv, gh_command, run_command},
 };
 
 #[tracing::instrument(name = "resolve_auth_token")]
@@ -12,7 +12,8 @@ pub fn resolve_token() -> Result<Secret<String>> {
     // hardened path as every other gh/git child: `gh_command` strips the ambient
     // GITHUB_TOKEN/GH_TOKEN (so it reads the *stored* token) and `run_command`
     // adds the non-interactive/timeout/shutdown-tracking hardening.
-    let mut command = gh_command();
+    // GitEnv::Ambient: no repository is involved, so there is nothing to scope.
+    let mut command = gh_command(GitEnv::Ambient);
     command.args(["auth", "token"]);
     let token = run_command("gh auth token", &mut command)?
         .trim()

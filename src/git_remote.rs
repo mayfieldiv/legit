@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use crate::subprocess::{git_command, run_command};
+use crate::subprocess::{GitEnv, git_command, run_command};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoInfo {
@@ -80,9 +80,9 @@ pub fn detect_repo(cwd: &Path) -> Result<RepoInfo> {
     tracing::info!(path = %cwd.display(), "detecting repo from git remote");
     // Reading the remote URL is a local operation that won't prompt, but run it
     // through the hardened path (non-interactive, timeout, shutdown-tracked) like
-    // every other git child. Note this intentionally does *not* scrub the git
-    // env: unlike the worktree commands, it operates on the user's real cwd repo.
-    let mut command = git_command();
+    // every other git child. GitEnv::Ambient because, unlike the worktree
+    // commands, this operates on the user's real cwd repo.
+    let mut command = git_command(GitEnv::Ambient);
     command
         .args(["remote", "get-url", "origin"])
         .current_dir(cwd);

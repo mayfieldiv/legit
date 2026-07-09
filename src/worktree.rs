@@ -10,7 +10,7 @@ use anyhow::{Context, bail};
 use crate::{
     config::{LegitConfig, RepoConfig},
     github::rest::PR,
-    subprocess::{HardenedCommand, run_command},
+    subprocess::{GitEnv, HardenedCommand, gh_command, git_command, run_command},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,30 +167,14 @@ pub fn match_worktree<'a>(
         .or_else(|| entries.iter().find(|entry| entry.path == expected_path))
 }
 
-/// Build a `git` invocation scoped to the path we pass it, with the ambient git
-/// environment stripped (see [`HardenedCommand::scrub_git_env`]). Prompt
-/// hardening comes from [`crate::subprocess::git_command`]; stdin/session
-/// hardening is applied by [`run_command`] when the command is spawned.
-fn git_command() -> HardenedCommand {
-    let mut command = crate::subprocess::git_command();
-    command.scrub_git_env();
-    command
-}
-
-/// Build a `gh` invocation for this module's sandboxed operations, mirroring
-/// [`git_command`] so no call site here can forget the scrub: prompt/token
-/// hardening from [`crate::subprocess::gh_command`], plus the ambient git env
-/// stripped — gh shells out to git, so an inherited `GIT_DIR` could otherwise
-/// redirect it off the directory we point it at and onto the wrong repository.
-fn gh_command() -> HardenedCommand {
-    let mut command = crate::subprocess::gh_command();
-    command.scrub_git_env();
-    command
-}
+// Every git/gh invocation in this module is scoped to a path it is given
+// (`-C`/`current_dir`), never the ambient cwd repo, so all of them run under
+// `GitEnv::Scrubbed` — an inherited `GIT_DIR` could otherwise redirect them
+// onto the repository a hook is running inside.
 
 pub fn list_worktrees(source_clone: &Path) -> anyhow::Result<Vec<WorktreeEntry>> {
     ensure_source_clone(source_clone)?;
-    let mut command = git_command();
+    let mut command = git_command(GitEnv::Scrubbed);
     command
         .arg("-C")
         .arg(source_clone)
@@ -219,7 +203,7 @@ fn create_worktree_for_pr_with_checkout(
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
 
-    let mut git = git_command();
+    let mut git = git_command(GitEnv::Scrubbed);
     // --no-checkout: the PR checkout below immediately replaces the contents
     // anyway, and it keeps `post-checkout` hooks out of this step — git
     // propagates a hook's non-zero exit status, and a hook failure here would
@@ -253,18 +237,18 @@ fn checkout_pr(target_path: &Path, pr_number: u64) -> anyhow::Result<()> {
 }
 
 /// The `gh pr checkout` invocation for [`checkout_pr`], separate from the spawn
-/// so a test can pin its construction. Built on this module's [`gh_command`]
-/// (prompt/token hardening plus the git-env scrub; stdin/session hardening
-/// comes from [`run_command`]).
+/// so a test can pin its construction. Built on [`gh_command`] (prompt/token
+/// hardening plus the scrubbed git env; stdin/session hardening comes from
+/// [`run_command`]).
 fn checkout_pr_command(target_path: &Path, pr_number: u64) -> HardenedCommand {
-    let mut gh = gh_command();
+    let mut gh = gh_command(GitEnv::Scrubbed);
     gh.args(["pr", "checkout", &pr_number.to_string()])
         .current_dir(target_path);
     gh
 }
 
 fn remove_worktree(source_clone: &Path, target_path: &Path) -> anyhow::Result<()> {
-    let mut command = git_command();
+    let mut command = git_command(GitEnv::Scrubbed);
     command
         .arg("-C")
         .arg(source_clone)
@@ -324,7 +308,7 @@ fn ensure_source_clone(source_clone: &Path) -> anyhow::Result<()> {
         bail!("source clone {} is not a directory", source_clone.display());
     }
 
-    let mut command = git_command();
+    let mut command = git_command(GitEnv::Scrubbed);
     command
         .arg("-C")
         .arg(source_clone)
