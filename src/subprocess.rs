@@ -272,18 +272,20 @@ fn run_with_timeout(
     let mut child = raw
         .spawn()
         .with_context(|| format!("failed to run `{label}`"))?;
+    #[cfg(unix)]
+    let group = ProcessGroupId::of(&child);
 
     // Tracked for the shutdown sweep while the guard lives; it unregisters on
     // every exit path below.
     #[cfg(unix)]
-    let _registration = match registry::Registration::track(child.id() as i32) {
+    let _registration = match registry::Registration::track(group) {
         Some(registration) => registration,
         None => {
             // The shutdown sweep already ran; this child spawned too late to be
             // in it and would outlive the TUI. Kill it before returning so
             // refusal keeps the sweep's guarantee instead of just reporting the
             // breach.
-            signal_group(child.id() as i32, libc::SIGKILL);
+            group.signal(libc::SIGKILL);
             let _ = child.wait();
             bail!("`{label}` aborted: shutting down");
         }
@@ -298,7 +300,7 @@ fn run_with_timeout(
         // waits out the full grace here — a fixed cost on a call that already
         // blew a far larger budget.
         #[cfg(unix)]
-        terminate_groups(&[child.id() as i32]);
+        terminate_groups(&[group]);
         #[cfg(not(unix))]
         let _ = child.kill();
     }
@@ -312,11 +314,8 @@ fn run_with_timeout(
     // the shutdown sweep could no longer see the group). Probed first so the
     // common no-straggler case pays one signal-0 syscall, not a poll cycle.
     #[cfg(unix)]
-    {
-        let group = child.id() as i32;
-        if group_alive(group) {
-            terminate_groups(&[group]);
-        }
+    if group.alive() {
+        terminate_groups(&[group]);
     }
 
     let stdout = read_capture(stdout_file);
@@ -378,36 +377,68 @@ impl Drop for ShutdownSweep {
 }
 
 #[cfg(unix)]
-fn terminate_groups(groups: &[i32]) {
+fn terminate_groups(groups: &[ProcessGroupId]) {
     for &group in groups {
-        signal_group(group, libc::SIGTERM);
+        group.signal(libc::SIGTERM);
     }
 
     // Bounded escalation: a descendant that ignores SIGTERM (a hook-spawned
     // daemon, say) would otherwise survive quit. Poll group liveness through
     // the grace period, then SIGKILL whatever remains.
     let deadline = Instant::now() + TERM_GRACE;
-    let mut alive: Vec<i32> = groups.to_vec();
+    let mut alive: Vec<ProcessGroupId> = groups.to_vec();
     while !alive.is_empty() && Instant::now() < deadline {
         thread::sleep(POLL_INTERVAL);
-        alive.retain(|&group| group_alive(group));
+        alive.retain(|group| group.alive());
     }
     for &group in &alive {
-        signal_group(group, libc::SIGKILL);
+        group.signal(libc::SIGKILL);
     }
 }
 
-/// Whether the process group led by `group` still has members, probed with the
-/// null signal. An exited child its `run_command` thread hasn't reaped yet
-/// counts as alive; the worst that costs is waiting out the grace and sending
-/// a harmless SIGKILL to a group of zombies.
+/// A process group [`run_command`] may signal: the one led by a `setsid`'d
+/// child, identified by that child's PID. Only constructible from a spawned
+/// [`Child`], so the signalling paths can't be handed an arbitrary integer and
+/// the "id exceeds 1" invariant is checked once, at construction — the
+/// negative-PID `kill(2)` form below can then never expand to "every process"
+/// (`kill(-1)`) or "our own group" (`kill(0)`).
 #[cfg(unix)]
-fn group_alive(group: i32) -> bool {
-    if group <= 1 {
-        return false;
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+struct ProcessGroupId(i32);
+
+#[cfg(unix)]
+impl ProcessGroupId {
+    /// The group led by `child`, which [`run_command`] `setsid`s at spawn so
+    /// its PID doubles as its group id.
+    fn of(child: &Child) -> Self {
+        let pid = child.id() as i32;
+        // A spawned child's PID can't be 0/1 (swapper/init) and pid_max keeps
+        // it far below i32::MAX, but the signalling below is only safe under
+        // that reasoning — assert it rather than trust it.
+        assert!(pid > 1, "a spawned child's PID must exceed 1, got {pid}");
+        Self(pid)
     }
-    // SAFETY: kill(2) with the null signal only probes for existence.
-    unsafe { libc::kill(-group, 0) == 0 }
+
+    /// Whether the group still has members, probed with the null signal. An
+    /// exited child its `run_command` thread hasn't reaped yet counts as
+    /// alive; the worst that costs is waiting out the grace and sending a
+    /// harmless SIGKILL to a group of zombies.
+    fn alive(self) -> bool {
+        // SAFETY: kill(2) with the null signal only probes for existence.
+        unsafe { libc::kill(-self.0, 0) == 0 }
+    }
+
+    /// Send `sig` to the whole group (the negative-PID form of `kill(2)`).
+    /// The leader may already be reaped, but the group persists while any
+    /// descendant lives, and a fresh fork inherits its parent's group rather
+    /// than becoming leader of this one, so PID reuse can't retarget an
+    /// unrelated process here.
+    fn signal(self, sig: i32) {
+        // SAFETY: kill(2) is a plain syscall with no memory effects.
+        unsafe {
+            libc::kill(-self.0, sig);
+        }
+    }
 }
 
 /// Everything the child (and anything that inherited its stdio) wrote to
@@ -444,21 +475,6 @@ fn wait_with_timeout(child: &mut Child, timeout: Duration) -> Option<ExitStatus>
     }
 }
 
-/// Send `sig` to the process group led by `group` (via the negative-PID form of
-/// `kill(2)`). The leader may already be reaped, but the group persists while
-/// any descendant lives, and a fresh fork inherits its parent's group rather
-/// than becoming leader of `group`, so PID reuse can't accidentally retarget an
-/// unrelated process here.
-#[cfg(unix)]
-fn signal_group(group: i32, sig: i32) {
-    if group > 1 {
-        // SAFETY: kill(2) is a plain syscall with no memory effects.
-        unsafe {
-            libc::kill(-group, sig);
-        }
-    }
-}
-
 fn stderr_tail(stderr: &[u8]) -> String {
     let stderr = String::from_utf8_lossy(stderr).trim().to_owned();
     const MAX: usize = 1_000;
@@ -477,8 +493,7 @@ fn stderr_tail(stderr: &[u8]) -> String {
 }
 
 /// Live child process groups, tracked so the [`super::ShutdownSweep`] can
-/// signal whatever is still running at shutdown. Keyed by process-group id
-/// (== the child's PID).
+/// signal whatever is still running at shutdown.
 #[cfg(unix)]
 mod registry {
     use std::{
@@ -486,13 +501,15 @@ mod registry {
         sync::{Mutex, MutexGuard, OnceLock, PoisonError},
     };
 
+    use super::ProcessGroupId;
+
     /// The state behind the module's global. A plain struct so the close /
     /// late-register handshake can be unit-tested on an owned instance —
     /// closing the *global* in a test would refuse spawns for every other
     /// test sharing the process.
     #[derive(Default)]
     pub(super) struct Registry {
-        groups: HashSet<i32>,
+        groups: HashSet<ProcessGroupId>,
         closed: bool,
     }
 
@@ -501,7 +518,7 @@ mod registry {
         /// shutdown sweep has already signalled everything it could see, so
         /// the caller must kill the child itself rather than let it run
         /// untracked.
-        pub(super) fn register(&mut self, group: i32) -> bool {
+        pub(super) fn register(&mut self, group: ProcessGroupId) -> bool {
             if self.closed {
                 return false;
             }
@@ -509,7 +526,7 @@ mod registry {
             true
         }
 
-        pub(super) fn unregister(&mut self, group: i32) {
+        pub(super) fn unregister(&mut self, group: ProcessGroupId) {
             self.groups.remove(&group);
         }
 
@@ -517,7 +534,7 @@ mod registry {
         /// `register` refuses from this point on (and refused callers kill
         /// their own child), the returned snapshot is complete — no spawn can
         /// slip in behind the shutdown sweep.
-        pub(super) fn close(&mut self) -> Vec<i32> {
+        pub(super) fn close(&mut self) -> Vec<ProcessGroupId> {
             self.closed = true;
             self.groups.drain().collect()
         }
@@ -551,13 +568,13 @@ mod registry {
     /// registered while the guard lives, unregistered on drop — structurally,
     /// on every exit path, so no early return can leak an entry for the
     /// shutdown sweep to signal after the group id has been recycled.
-    pub(super) struct Registration(i32);
+    pub(super) struct Registration(ProcessGroupId);
 
     impl Registration {
         /// Track `group`. `None` once the registry is closed: the shutdown
         /// sweep has already signalled everything it could see, so the caller
         /// must kill the child itself rather than let it run untracked.
-        pub(super) fn track(group: i32) -> Option<Self> {
+        pub(super) fn track(group: ProcessGroupId) -> Option<Self> {
             lock().register(group).then_some(Self(group))
         }
     }
@@ -568,7 +585,7 @@ mod registry {
         }
     }
 
-    pub(super) fn close() -> Vec<i32> {
+    pub(super) fn close() -> Vec<ProcessGroupId> {
         lock().close()
     }
 
@@ -768,7 +785,7 @@ mod tests {
         // a group leader — otherwise `terminate_groups` has no group to signal.
         command.arg("600").detach_session();
         let mut child = command.spawn().expect("spawn sleep");
-        let group = child.id() as i32;
+        let group = ProcessGroupId::of(&child);
 
         terminate_groups(&[group]);
 
@@ -801,7 +818,7 @@ mod tests {
             .expect("stdout piped")
             .read_exact(&mut ready)
             .expect("child should report ready");
-        let group = child.id() as i32;
+        let group = ProcessGroupId::of(&child);
 
         terminate_groups(&[group]);
 
@@ -816,18 +833,23 @@ mod tests {
 
     // Exercised on an owned instance, not the global — closing the global
     // would refuse spawns for every other test in this process. The group ids
-    // are pure bookkeeping here; nothing is signalled.
+    // are pure bookkeeping here (constructed directly, skipping `of`);
+    // nothing is signalled.
     #[test]
     fn registry_drains_on_close_and_refuses_late_registration() {
+        let group = ProcessGroupId;
         let mut registry = registry::Registry::default();
-        assert!(registry.register(7), "registration while open must succeed");
-        assert!(registry.register(8));
-        registry.unregister(8);
+        assert!(
+            registry.register(group(7)),
+            "registration while open must succeed"
+        );
+        assert!(registry.register(group(8)));
+        registry.unregister(group(8));
 
-        assert_eq!(registry.close(), vec![7]);
+        assert_eq!(registry.close(), vec![group(7)]);
 
         assert!(
-            !registry.register(9),
+            !registry.register(group(9)),
             "a group registered after close must be refused"
         );
         assert!(
@@ -839,9 +861,9 @@ mod tests {
         // new generation's close sees what was registered under it.
         registry.open();
         assert!(
-            registry.register(10),
+            registry.register(group(10)),
             "registration after reopen must succeed"
         );
-        assert_eq!(registry.close(), vec![10]);
+        assert_eq!(registry.close(), vec![group(10)]);
     }
 }
