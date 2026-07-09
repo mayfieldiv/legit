@@ -11,7 +11,7 @@ use anyhow::{Context, bail};
 use crate::{
     config::{LegitConfig, RepoConfig},
     github::rest::PR,
-    subprocess::{gh_command, run_command},
+    subprocess::{HardenedCommand, gh_command, run_command},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -191,7 +191,7 @@ fn scrub_git_env(command: &mut Command) -> &mut Command {
 /// environment stripped (see [`scrub_git_env`]). Prompt hardening comes from
 /// [`crate::subprocess::git_command`]; stdin/session hardening is applied by
 /// [`run_command`] when the command is spawned.
-fn git_command() -> Command {
+fn git_command() -> HardenedCommand {
     let mut command = crate::subprocess::git_command();
     scrub_git_env(&mut command);
     command
@@ -266,7 +266,7 @@ fn checkout_pr(target_path: &Path, pr_number: u64) -> anyhow::Result<()> {
 /// hardening; stdin/session hardening comes from [`run_command`]) and scrubbed
 /// of the ambient git env — gh shells out to git, so an inherited GIT_DIR could
 /// otherwise redirect the checkout off `target_path` onto the wrong repository.
-fn checkout_pr_command(target_path: &Path, pr_number: u64) -> Command {
+fn checkout_pr_command(target_path: &Path, pr_number: u64) -> HardenedCommand {
     let mut gh = gh_command();
     gh.args(["pr", "checkout", &pr_number.to_string()])
         .current_dir(target_path);

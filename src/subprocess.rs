@@ -3,8 +3,9 @@
 //! legit runs on the alternate screen with the terminal in raw mode and spawns
 //! git/gh subprocesses on the blocking pool while the UI keeps drawing. Three
 //! hazards come with that, all handled here — so every git/gh child is built
-//! with [`git_command`]/[`gh_command`] and spawned through [`run_command`]
-//! rather than a bare [`Command`]:
+//! with [`git_command`]/[`gh_command`] (the only production constructors of
+//! [`HardenedCommand`], the type [`run_command`] spawns) rather than a bare
+//! [`Command`]:
 //!
 //! * A child that stops to ask a question blocks reading the terminal we own.
 //!   [`run_command`] nulls stdin and (on Unix) sheds the controlling terminal,
@@ -65,28 +66,60 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// survivors so nothing outlives the TUI.
 const TERM_GRACE: Duration = Duration::from_secs(1);
 
+/// A [`Command`] built by this module's hardened constructors.
+///
+/// [`git_command`]/[`gh_command`] are the only production ways to obtain one,
+/// and [`run_command`] accepts nothing else, so a git/gh child that skipped the
+/// prompt/token hardening is unrepresentable rather than a convention callers
+/// must remember. Derefs to [`Command`], so args/env/cwd are configured through
+/// the ordinary builder methods.
+pub(crate) struct HardenedCommand(Command);
+
+impl HardenedCommand {
+    /// Wrap a raw [`Command`], bypassing the hardened constructors — for tests
+    /// that need to drive arbitrary scripts through [`run_command`].
+    #[cfg(test)]
+    fn raw(command: Command) -> Self {
+        Self(command)
+    }
+}
+
+impl std::ops::Deref for HardenedCommand {
+    type Target = Command;
+
+    fn deref(&self) -> &Command {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for HardenedCommand {
+    fn deref_mut(&mut self) -> &mut Command {
+        &mut self.0
+    }
+}
+
 /// A `git` invocation that won't stop to prompt on the terminal the TUI owns.
 ///
 /// `GIT_TERMINAL_PROMPT=0` turns git's own credential prompts into errors rather
 /// than a blocking read of the terminal we're drawing over. This sets only the
 /// command's *contents*; the stdin/session hardening is applied by
 /// [`run_command`] when the command is spawned.
-pub(crate) fn git_command() -> Command {
+pub(crate) fn git_command() -> HardenedCommand {
     let mut command = Command::new("git");
     command.env("GIT_TERMINAL_PROMPT", "0");
-    command
+    HardenedCommand(command)
 }
 
 /// A `gh` invocation hardened like [`git_command`] (gh shells out to git), plus
 /// `GITHUB_TOKEN`/`GH_TOKEN` removed so gh reads its stored credentials rather
 /// than an ambient token inherited from our environment.
-pub(crate) fn gh_command() -> Command {
+pub(crate) fn gh_command() -> HardenedCommand {
     let mut command = Command::new("gh");
     command
         .env("GIT_TERMINAL_PROMPT", "0")
         .env_remove("GITHUB_TOKEN")
         .env_remove("GH_TOKEN");
-    command
+    HardenedCommand(command)
 }
 
 /// Extension trait that folds terminal-detachment into the [`Command`] builder
@@ -139,15 +172,15 @@ impl DetachSessionExt for Command {
 /// bounded: stdin is nulled and — on Unix — the child is `setsid`'d into its own
 /// session, its process group is registered for [`terminate_all`], stdout/stderr
 /// are drained on background threads, and the whole thing is capped at
-/// [`COMMAND_TIMEOUT`]. Build `command` with [`git_command`]/[`gh_command`] so
-/// `GIT_TERMINAL_PROMPT` is set as well.
-pub(crate) fn run_command(label: &str, command: &mut Command) -> anyhow::Result<String> {
+/// [`COMMAND_TIMEOUT`]. The [`HardenedCommand`] type guarantees `command` came
+/// from [`git_command`]/[`gh_command`], so `GIT_TERMINAL_PROMPT` is set as well.
+pub(crate) fn run_command(label: &str, command: &mut HardenedCommand) -> anyhow::Result<String> {
     run_with_timeout(label, command, COMMAND_TIMEOUT)
 }
 
 fn run_with_timeout(
     label: &str,
-    command: &mut Command,
+    command: &mut HardenedCommand,
     timeout: Duration,
 ) -> anyhow::Result<String> {
     // Detach as part of the same builder chain, so a child we register is always
@@ -513,11 +546,12 @@ mod tests {
     }
 
     // `run_command`/`run_with_timeout` apply the stdin/session hardening
-    // themselves, so a raw `sh -c` command is enough to exercise them.
-    fn sh(script: &str) -> Command {
+    // themselves, so a raw `sh -c` command (wrapped through the test-only
+    // escape hatch) is enough to exercise them.
+    fn sh(script: &str) -> HardenedCommand {
         let mut command = Command::new("sh");
         command.args(["-c", script]);
-        command
+        HardenedCommand::raw(command)
     }
 
     #[test]
