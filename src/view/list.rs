@@ -92,7 +92,7 @@ const AUTHOR_COL: usize = 14;
 const REPO_COL: usize = 14;
 const SIZE_SIDE_COL_MIN: usize = 6;
 const SIZE_COL_MIN: usize = SIZE_SIDE_COL_MIN * 2 + 1;
-const AGE_COL: usize = 6;
+const AGE_COL: usize = 7;
 const REVIEW_COL: usize = 18;
 const ACTION_COL: usize = 26;
 const GAP: usize = 1;
@@ -297,7 +297,7 @@ fn header_row_line(layout: &RowLayout) -> Line<'static> {
     }
     if layout.visible.age {
         cells.push(Cell {
-            text: "Age".to_owned(),
+            text: "Updated".to_owned(),
             width: AGE_COL,
             style: bold,
         });
@@ -367,7 +367,7 @@ fn row_line(
     }
     if layout.visible.age {
         cells.push(Cell {
-            text: format_age(pr.created_at, now),
+            text: format_age(pr.updated_at, now),
             width: AGE_COL,
             style: Style::default(),
         });

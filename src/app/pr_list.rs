@@ -10,6 +10,7 @@
 //! header rows; keyboard navigation keeps the selected PR's row on-screen,
 //! while wheel scrolling can move the viewport independently of selection.
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 
@@ -61,6 +62,16 @@ fn filter_matches(pr: &PR, lowercase_needle: &str) -> bool {
     }
     pr.title.to_lowercase().contains(lowercase_needle)
         || pr.author.to_lowercase().contains(lowercase_needle)
+}
+
+/// Most recent GitHub activity first. Creation time keeps same-second updates
+/// chronological; identity makes the order total and independent of arrival.
+fn compare_recent_activity(a: &PR, b: &PR) -> Ordering {
+    b.updated_at
+        .cmp(&a.updated_at)
+        .then_with(|| b.created_at.cmp(&a.created_at))
+        .then_with(|| a.repo_slug.cmp(&b.repo_slug))
+        .then_with(|| a.number.cmp(&b.number))
 }
 
 /// Lifecycle of one Tracked Repo's open-PR fetch. A repo with no entry in
@@ -164,13 +175,11 @@ impl PrList {
             seen.insert(pr.number);
         }
         let key = pr.key();
-        if self.prs.iter().any(|p| p.key() == key) {
-            // Survivor: keep the pooled copy and discard this re-streamed listing
-            // object. That preserves the enrichment, but also drops any
-            // listing-level change (title, labels, draft, mergeable). Safe only
-            // because every re-list with survivors (`R`) also dispatches a per-PR
-            // `RefreshPr` that re-fetches those fields; the `r`-empty re-list has
-            // no survivors. A standalone re-list would have to update them here.
+        if let Some(existing) = self.prs.iter_mut().find(|p| p.key() == key) {
+            // Keep the pooled copy so its enrichment survives, but take the
+            // listing's fresh activity clock: RefreshPr's GraphQL status does
+            // not carry updated_at, and display order depends on this value.
+            existing.updated_at = pr.updated_at;
             return false;
         }
         self.push(pr);
@@ -200,20 +209,22 @@ impl PrList {
 
     /// Rebuild the display layout from the current PRs under the active
     /// grouping, showing only the PRs in `scope` (a Repo Tab's slug, or `None`
-    /// for the All tab). `tier_of(pr)` returns the Smart-status tier for a PR,
-    /// or `None` when its enrichment hasn't been derived yet; the repo-grouping
-    /// key is read straight off each PR's `repo_slug`. Selection sticks to the
-    /// same PR when it remains visible and snaps to the first visible PR
-    /// otherwise. If the same PR stays visible, preserve the current viewport
-    /// offset so enrichment refreshes do not undo wheel scrolling; if the
-    /// selection changes, scroll follows the new selection. Called by `update`
-    /// after PRs arrive, enrichment lands, or the grouping/scope changes.
+    /// for the All tab) and ordering each group by most recent GitHub activity.
+    /// `tier_of(pr)` returns the Smart-status tier for a PR, or `None` when its
+    /// enrichment hasn't been derived yet; the repo-grouping key is read
+    /// straight off each PR's `repo_slug`. Selection sticks to the same PR when
+    /// it remains visible and snaps to the first visible PR otherwise. If the
+    /// same PR stays visible, preserve the current viewport offset so enrichment
+    /// refreshes do not undo wheel scrolling; if the selection changes, scroll
+    /// follows the new selection. Called by `update` after PRs arrive,
+    /// enrichment lands, or the grouping/scope changes.
     pub fn relayout(&mut self, scope: Option<&str>, tier_of: impl Fn(&PR) -> Option<Tier>) {
         let needle = self.filter.text().to_lowercase();
-        let visible: Vec<usize> = (0..self.prs.len())
+        let mut visible: Vec<usize> = (0..self.prs.len())
             .filter(|&i| scope.is_none_or(|slug| self.prs[i].repo_slug == slug))
             .filter(|&i| filter_matches(&self.prs[i], &needle))
             .collect();
+        visible.sort_by(|&a, &b| compare_recent_activity(&self.prs[a], &self.prs[b]));
         // `display_rows` keys on PR index; adapt the &PR closure (and the slug
         // we own) into index closures. Build into a local so the index closures
         // can borrow `self.prs` while we hold `&mut self`, then store the rows.
@@ -635,6 +646,13 @@ mod tests {
             .collect()
     }
 
+    fn pr_numbers_in_display_order(list: &PrList) -> Vec<u64> {
+        visible_pr_indices(list)
+            .into_iter()
+            .map(|index| list.prs()[index].number)
+            .collect()
+    }
+
     #[test]
     fn pushed_pr_appears_in_the_list() {
         let mut list = PrList::new();
@@ -656,6 +674,36 @@ mod tests {
     fn new_list_defaults_to_smart_status_grouping() {
         let list = PrList::new();
         assert_eq!(list.grouping(), Grouping::SmartStatus);
+    }
+
+    #[test]
+    fn smart_status_groups_order_prs_by_most_recent_github_activity() {
+        let mut list = PrList::new();
+        for (number, day) in [(1, 1), (2, 3), (3, 2)] {
+            let mut pr = sample_pr(number);
+            pr.updated_at = chrono::Utc.with_ymd_and_hms(2026, 5, day, 0, 0, 0).unwrap();
+            list.push(pr);
+        }
+
+        list.relayout(None, |_| Some(Tier::NeedsReview));
+
+        assert_eq!(pr_numbers_in_display_order(&list), vec![2, 3, 1]);
+    }
+
+    #[test]
+    fn equal_activity_times_put_the_newer_pr_first() {
+        let mut list = PrList::new();
+        for (number, created_day) in [(1, 1), (2, 2)] {
+            let mut pr = sample_pr(number);
+            pr.created_at = chrono::Utc
+                .with_ymd_and_hms(2026, 5, created_day, 0, 0, 0)
+                .unwrap();
+            list.push(pr);
+        }
+
+        list.relayout(None, |_| Some(Tier::NeedsReview));
+
+        assert_eq!(pr_numbers_in_display_order(&list), vec![2, 1]);
     }
 
     #[test]

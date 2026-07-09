@@ -1012,8 +1012,10 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
                 model.relayout();
                 maybe_fetch_selected_files(model)
             } else {
-                // A re-list re-streamed a PR already pooled: keep the enriched
-                // copy as-is — no duplicate row, no relayout or file re-fetch.
+                // A re-list re-streamed a PR already pooled: its enrichment was
+                // preserved while its GitHub activity time was refreshed. Re-sort
+                // the rows, but do not re-fetch files or create a duplicate.
+                model.relayout();
                 Vec::new()
             }
         }

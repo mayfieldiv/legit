@@ -227,9 +227,9 @@ fn flat_list_renders_one_row_per_pull_request() {
     assert_eq!(
         list_rows(&terminal),
         vec![
-            "  #42     Add streaming PR list             octocat            +5/-3     3h    ",
-            "  #43     Wire FetchOpenPRs cmd             alice              +5/-3     1d    ",
-            "  #44     Render list view                  bob                +5/-3     7d    ",
+            "  #42     Add streaming PR list            octocat            +5/-3     3h     ",
+            "  #43     Wire FetchOpenPRs cmd            alice              +5/-3     1d     ",
+            "  #44     Render list view                 bob                +5/-3     7d     ",
         ]
     );
 }
@@ -722,6 +722,24 @@ fn list_and_summary_are_separated_by_a_divider_cell() {
             "list and summary should stay separated across row {y}"
         );
     }
+}
+
+#[test]
+fn list_labels_and_renders_last_updated_age() {
+    let mut active_pr = pr(1, "recent activity", "carol", 48);
+    active_pr.updated_at = fixed_now() - chrono::Duration::hours(2);
+    let model = model_with(vec![active_pr], Grouping::None, |_| Some(Tier::NeedsReview));
+
+    let terminal = render_snapshot(&model, 116, 5);
+    let rows = buffer_text(&terminal);
+
+    assert!(rows[2].contains("Updated"), "list header: {:?}", rows[2]);
+    assert!(rows[3].contains("2h"), "list row: {:?}", rows[3]);
+    assert!(
+        !rows[3].contains("2d"),
+        "creation age must not explain updated ordering: {:?}",
+        rows[3]
+    );
 }
 
 #[test]
@@ -1232,24 +1250,30 @@ fn large_diff_size_widens_size_column_for_all_rows() {
     // 130 total -> 89-col list region (panel takes the right 40 plus divider).
     let terminal = render_snapshot(&model, 130, 6);
     let rows = list_rows(&terminal);
+    let small = rows
+        .iter()
+        .find(|row| row.contains("small diff"))
+        .expect("small diff row");
+    let large = rows
+        .iter()
+        .find(|row| row.contains("huge diff"))
+        .expect("huge diff row");
 
     assert!(
-        rows[0].contains("+5/-3"),
-        "small-diff size must render in full: {:?}",
-        rows[0]
+        small.contains("+5/-3"),
+        "small-diff size must render in full: {small:?}",
     );
     assert!(
-        rows[1].contains("+123456/-567890"),
-        "large-diff size must render in full: {:?}",
-        rows[1]
+        large.contains("+123456/-567890"),
+        "large-diff size must render in full: {large:?}",
     );
     assert_eq!(
-        rows[0].find('/'),
-        rows[1].find('/'),
+        small.find('/'),
+        large.find('/'),
         "size slashes must align: {:?}",
         rows
     );
-    assert_eq!(rows[0].chars().count(), 89);
+    assert_eq!(small.chars().count(), 89);
     assert_eq!(rows[1].chars().count(), 89);
 }
 
