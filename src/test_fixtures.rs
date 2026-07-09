@@ -1,12 +1,40 @@
 //! Shared builders for the GitHub domain objects the detail-view tests
 //! construct over and over (`detail_items`, `detail_layout`/view snapshots,
-//! and the `update` reducer tests). One canonical shape per object; tests
+//! and the `update` reducer tests) — one canonical shape per object; tests
 //! needing a variation (bot author, custom path) use struct-update syntax on
-//! the result.
+//! the result — plus the [`bounded`] hang guard for tests that drive real
+//! subprocesses.
+
+use std::{sync::mpsc, thread, time::Duration};
 
 use chrono::{DateTime, TimeZone, Utc};
 
 use crate::github::types::{CheckRun, FullReviewThread, IssueComment, ReviewComment};
+
+/// Run `f` on a worker thread, returning `None` if it doesn't finish within
+/// `limit`, so a regression that reintroduces a hang fails the calling test
+/// instead of wedging the suite. On that timeout the worker leaks by design —
+/// it is stuck by definition, and joining it would trade the fast failure for
+/// the very hang being guarded against. A panic in `f` is resumed on the
+/// caller rather than misreported as a hang.
+pub fn bounded<T: Send + 'static>(
+    limit: Duration,
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Option<T> {
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    match rx.recv_timeout(limit) {
+        Ok(value) => Some(value),
+        Err(mpsc::RecvTimeoutError::Timeout) => None,
+        // The sender dropped without sending: `f` panicked.
+        Err(mpsc::RecvTimeoutError::Disconnected) => match handle.join() {
+            Err(panic) => std::panic::resume_unwind(panic),
+            Ok(()) => unreachable!("worker exited without sending or panicking"),
+        },
+    }
+}
 
 /// A fixed timestamp safely in the past relative to every test's `now`.
 pub fn fixed_created_at() -> DateTime<Utc> {

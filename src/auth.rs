@@ -1,30 +1,21 @@
-use std::process::Command;
+use anyhow::{Result, bail};
 
-use anyhow::{Context, Result, bail};
-
-use crate::secret::Secret;
+use crate::{
+    secret::Secret,
+    subprocess::{GitEnv, gh_command, run_command},
+};
 
 #[tracing::instrument(name = "resolve_auth_token")]
 pub fn resolve_token() -> Result<Secret<String>> {
     tracing::info!("resolving auth token with gh cli");
-    let output = Command::new("gh")
-        .args(["auth", "token"])
-        .env_remove("GITHUB_TOKEN")
-        .env_remove("GH_TOKEN")
-        .output()
-        .context("failed to run `gh auth token`")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stderr = stderr.trim();
-        if stderr.is_empty() {
-            bail!("`gh auth token` exited with {}", output.status);
-        }
-        bail!("`gh auth token` exited with {}: {}", output.status, stderr);
-    }
-
-    let token = String::from_utf8(output.stdout)
-        .context("`gh auth token` returned non-utf8 output")?
+    // `gh auth token` only reads the stored token, but run it through the same
+    // hardened path as every other gh/git child: `gh_command` strips the ambient
+    // GITHUB_TOKEN/GH_TOKEN (so it reads the *stored* token) and `run_command`
+    // adds the non-interactive/timeout/shutdown-tracking hardening.
+    // GitEnv::Ambient: no repository is involved, so there is nothing to scope.
+    let mut command = gh_command(GitEnv::Ambient);
+    command.args(["auth", "token"]);
+    let token = run_command("gh auth token", &mut command)?
         .trim()
         .to_owned();
 

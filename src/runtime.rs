@@ -35,6 +35,10 @@ const MAX_BACKGROUND_REQUESTS: usize = 8;
 #[tracing::instrument(name = "tui_runtime", skip_all)]
 pub async fn run() -> Result<()> {
     let _terminal_guard = TerminalGuard::enter()?;
+    // Reap any git/gh subprocess still running when the UI exits (drops on every
+    // return path, below the terminal guard), so quitting mid-worktree-creation
+    // doesn't orphan it — and any hook-spawned sudo/ssh — to init.
+    let _shutdown_sweep = crate::subprocess::ShutdownSweep::arm();
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend).context("failed to create terminal")?;
 
