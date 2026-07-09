@@ -28,8 +28,9 @@ tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Unix-only: `setsid(2)` for detaching worktree subprocesses from the
+# Unix-only: `setsid(2)` for detaching git/gh subprocesses from the
 # controlling terminal so a hook's `sudo`/`ssh` prompt can't hang the TUI
-# (see `make_noninteractive` in src/worktree.rs). std exposes no setsid.
+# (see `DetachSessionExt::detach_session` in src/subprocess.rs), plus
+# `kill(2)` for the process-group signalling built on it. std exposes neither.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
