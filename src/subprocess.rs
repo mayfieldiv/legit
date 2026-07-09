@@ -36,9 +36,9 @@
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::{
-    io::Read,
+    io::{ErrorKind, Read},
     process::{Child, Command, ExitStatus, Stdio},
-    sync::mpsc,
+    sync::{Arc, Mutex, mpsc},
     thread,
     time::{Duration, Instant},
 };
@@ -174,12 +174,12 @@ fn run_with_timeout(
         bail!("`{label}` aborted: shutting down");
     }
 
-    // read_to_end blocks until every write-end of the pipe is closed, so drain
-    // on separate threads; a hook that backgrounds a process keeps a write-end
-    // open past the child's own exit, which is why `collect` may have to kill
-    // the group to force EOF.
-    let stdout_rx = spawn_reader(child.stdout.take());
-    let stderr_rx = spawn_reader(child.stderr.take());
+    // A pipe only hits EOF once every write-end is closed, so drain on separate
+    // threads; a hook that backgrounds a process keeps a write-end open past
+    // the child's own exit, which is why `collect` may have to kill the group
+    // to force EOF.
+    let stdout_capture = spawn_reader(child.stdout.take());
+    let stderr_capture = spawn_reader(child.stderr.take());
 
     let outcome = wait_with_timeout(&mut child, timeout);
     if outcome.is_none() {
@@ -188,8 +188,8 @@ fn run_with_timeout(
         signal_tree(&mut child, Signal::Kill);
     }
 
-    let stdout = collect(&stdout_rx, &mut child);
-    let stderr = collect(&stderr_rx, &mut child);
+    let stdout = collect(&stdout_capture, &mut child);
+    let stderr = collect(&stderr_capture, &mut child);
     // Reap the (now-dead) child so it doesn't linger as a zombie.
     let _ = child.wait();
 
@@ -262,23 +262,63 @@ fn group_alive(group: i32) -> bool {
     unsafe { libc::kill(-group, 0) == 0 }
 }
 
-/// Spawn a thread that reads `pipe` to EOF and sends the bytes back. Returns a
-/// receiver that yields exactly once (an empty vec if there was no pipe).
-fn spawn_reader<R: Read + Send + 'static>(pipe: Option<R>) -> mpsc::Receiver<Vec<u8>> {
-    let (tx, rx) = mpsc::channel();
+/// One pipe's output, filled by a background reader thread.
+///
+/// The reader appends into the shared buffer as bytes arrive rather than
+/// handing everything over in one message at EOF — that is what lets
+/// [`collect`] salvage the output already read when EOF never comes (a
+/// descendant that escaped the process group holding the write-end open).
+struct PipeCapture {
+    buf: Arc<Mutex<Vec<u8>>>,
+    eof: mpsc::Receiver<()>,
+}
+
+impl PipeCapture {
+    /// Whether the reader reached EOF within `grace`.
+    fn drained(&self, grace: Duration) -> bool {
+        self.eof.recv_timeout(grace).is_ok()
+    }
+
+    /// The bytes read so far.
+    fn take(&self) -> Vec<u8> {
+        self.buf
+            .lock()
+            .map(|mut buf| std::mem::take(&mut *buf))
+            .unwrap_or_default()
+    }
+}
+
+/// Spawn a thread that reads `pipe` until EOF (or a read error), appending into
+/// the returned capture's buffer as bytes arrive. The capture reports EOF
+/// immediately if there was no pipe.
+fn spawn_reader<R: Read + Send + 'static>(pipe: Option<R>) -> PipeCapture {
+    let buf = Arc::new(Mutex::new(Vec::new()));
+    let (tx, eof) = mpsc::channel();
     match pipe {
         Some(mut pipe) => {
+            let sink = Arc::clone(&buf);
             thread::spawn(move || {
-                let mut buf = Vec::new();
-                let _ = pipe.read_to_end(&mut buf);
-                let _ = tx.send(buf);
+                let mut chunk = [0u8; 8 * 1024];
+                loop {
+                    match pipe.read(&mut chunk) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            if let Ok(mut sink) = sink.lock() {
+                                sink.extend_from_slice(&chunk[..n]);
+                            }
+                        }
+                        Err(error) if error.kind() == ErrorKind::Interrupted => {}
+                        Err(_) => break,
+                    }
+                }
+                let _ = tx.send(());
             });
         }
         None => {
-            let _ = tx.send(Vec::new());
+            let _ = tx.send(());
         }
     }
-    rx
+    PipeCapture { buf, eof }
 }
 
 /// Poll the child until it exits or the timeout elapses. `None` means it was
@@ -304,21 +344,22 @@ fn wait_with_timeout(child: &mut Child, timeout: Duration) -> Option<ExitStatus>
 /// a backgrounded descendant is holding the pipe open past the child's exit;
 /// escalate `SIGTERM` -> `SIGKILL` on the group to force EOF, then take whatever
 /// was read.
-fn collect(rx: &mpsc::Receiver<Vec<u8>>, child: &mut Child) -> Vec<u8> {
-    if let Ok(buf) = rx.recv_timeout(DRAIN_GRACE) {
-        return buf;
+fn collect(capture: &PipeCapture, child: &mut Child) -> Vec<u8> {
+    if capture.drained(DRAIN_GRACE) {
+        return capture.take();
     }
     signal_tree(child, Signal::Term);
-    if let Ok(buf) = rx.recv_timeout(DRAIN_GRACE) {
-        return buf;
+    if capture.drained(DRAIN_GRACE) {
+        return capture.take();
     }
     signal_tree(child, Signal::Kill);
     // Bounded even after SIGKILL: a descendant that escaped the group (e.g. a
     // hook daemon that `setsid`s itself) never receives the group signal and can
-    // hold the pipe open indefinitely. Give up on the drain and return what we
-    // have — the reader thread leaks, but the operation doesn't wedge, which is
-    // the whole point of the timeout.
-    rx.recv_timeout(DRAIN_GRACE).unwrap_or_default()
+    // hold the pipe open indefinitely. Give up on the drain and take what the
+    // reader has buffered so far — the reader thread leaks, but the operation
+    // doesn't wedge, which is the whole point of the timeout.
+    let _ = capture.drained(DRAIN_GRACE);
+    capture.take()
 }
 
 enum Signal {
@@ -512,6 +553,35 @@ mod tests {
         .expect("a backgrounded pipe holder must not wedge the call")
         .expect("command should succeed");
         assert_eq!(out.trim(), "done");
+    }
+
+    // The escaped-descendant edge: a process that `setsid`s itself out of the
+    // child's group never receives the group kill, so it can hold our pipe open
+    // indefinitely. The child's own output must still come back — buffered
+    // bytes must not be dropped along with the wedged pipe.
+    #[test]
+    fn returns_buffered_output_when_an_escaped_descendant_holds_the_pipe() {
+        // util-linux setsid(1); absent on e.g. macOS, where this edge can't be
+        // modelled from a shell one-liner.
+        let setsid_available = Command::new("setsid")
+            .arg("true")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        if !setsid_available {
+            eprintln!("skipping: setsid(1) not available");
+            return;
+        }
+
+        let out = bounded(Duration::from_secs(10), || {
+            run_command("escape", &mut sh("echo trapped; setsid -f sleep 30"))
+        })
+        .expect("an escaped pipe holder must not wedge the call")
+        .expect("command should succeed");
+        assert_eq!(out.trim(), "trapped");
     }
 
     // #3: a child that never exits must be killed at the deadline rather than
