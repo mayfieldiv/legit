@@ -3,7 +3,6 @@ use std::{
     ffi::OsString,
     fs, io,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use anyhow::{Context, bail};
@@ -168,32 +167,13 @@ pub fn match_worktree<'a>(
         .or_else(|| entries.iter().find(|entry| entry.path == expected_path))
 }
 
-/// Strip the ambient git environment from a command.
-///
-/// Git exports `GIT_DIR`/`GIT_WORK_TREE`/etc. to hook subprocesses, and our
-/// `.hooks/pre-push` hook runs `cargo test`. Those variables override `-C` and
-/// `current_dir` when git locates the repository, so without stripping them a
-/// command that drives git against a throwaway sandbox repo would instead operate
-/// on the real repository the hook is running inside (appending stray commits,
-/// flipping `core.bare`). This applies both to direct `git` calls and to `gh`,
-/// which shells out to `git` — both must be scrubbed.
-fn scrub_git_env(command: &mut Command) -> &mut Command {
-    command
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .env_remove("GIT_OBJECT_DIRECTORY")
-        .env_remove("GIT_COMMON_DIR")
-        .env_remove("GIT_PREFIX")
-}
-
 /// Build a `git` invocation scoped to the path we pass it, with the ambient git
-/// environment stripped (see [`scrub_git_env`]). Prompt hardening comes from
-/// [`crate::subprocess::git_command`]; stdin/session hardening is applied by
-/// [`run_command`] when the command is spawned.
+/// environment stripped (see [`HardenedCommand::scrub_git_env`]). Prompt
+/// hardening comes from [`crate::subprocess::git_command`]; stdin/session
+/// hardening is applied by [`run_command`] when the command is spawned.
 fn git_command() -> HardenedCommand {
     let mut command = crate::subprocess::git_command();
-    scrub_git_env(&mut command);
+    command.scrub_git_env();
     command
 }
 
@@ -269,8 +249,8 @@ fn checkout_pr(target_path: &Path, pr_number: u64) -> anyhow::Result<()> {
 fn checkout_pr_command(target_path: &Path, pr_number: u64) -> HardenedCommand {
     let mut gh = gh_command();
     gh.args(["pr", "checkout", &pr_number.to_string()])
-        .current_dir(target_path);
-    scrub_git_env(&mut gh);
+        .current_dir(target_path)
+        .scrub_git_env();
     gh
 }
 

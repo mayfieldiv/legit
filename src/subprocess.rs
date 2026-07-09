@@ -37,7 +37,9 @@
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::{
+    ffi::OsStr,
     io::{ErrorKind, Read},
+    path::Path,
     process::{Child, Command, ExitStatus, Stdio},
     sync::{Arc, Mutex, mpsc},
     thread,
@@ -69,10 +71,14 @@ const TERM_GRACE: Duration = Duration::from_secs(1);
 /// A [`Command`] built by this module's hardened constructors.
 ///
 /// [`git_command`]/[`gh_command`] are the only production ways to obtain one,
-/// and [`run_command`] accepts nothing else, so a git/gh child that skipped the
-/// prompt/token hardening is unrepresentable rather than a convention callers
-/// must remember. Derefs to [`Command`], so args/env/cwd are configured through
-/// the ordinary builder methods.
+/// and the wrapped [`Command`] stays private: the mutable surface is limited to
+/// the builder methods below, and only [`run_command`] can spawn it. So a git/gh
+/// child that skipped the prompt/token hardening — or the stdin/session/timeout
+/// /tracking hardening applied at spawn — is unrepresentable rather than a
+/// convention callers must remember; there is no `.spawn()`/`.output()` to reach
+/// and no way to unset what the constructors set. Derefs immutably to
+/// [`Command`] for read-only inspection (every spawning or mutating `Command`
+/// method takes `&mut self`, so the shared reference exposes no bypass).
 pub(crate) struct HardenedCommand(Command);
 
 impl HardenedCommand {
@@ -82,6 +88,47 @@ impl HardenedCommand {
     fn raw(command: Command) -> Self {
         Self(command)
     }
+
+    pub(crate) fn arg(&mut self, arg: impl AsRef<OsStr>) -> &mut Self {
+        self.0.arg(arg);
+        self
+    }
+
+    pub(crate) fn args(&mut self, args: impl IntoIterator<Item = impl AsRef<OsStr>>) -> &mut Self {
+        self.0.args(args);
+        self
+    }
+
+    pub(crate) fn current_dir(&mut self, dir: impl AsRef<Path>) -> &mut Self {
+        self.0.current_dir(dir);
+        self
+    }
+
+    /// Strip the ambient git environment from the command.
+    ///
+    /// Git exports `GIT_DIR`/`GIT_WORK_TREE`/etc. to hook subprocesses, and our
+    /// `.hooks/pre-push` hook runs `cargo test`. Those variables override `-C`
+    /// and `current_dir` when git locates the repository, so without stripping
+    /// them a command that drives git against a throwaway sandbox repo would
+    /// instead operate on the real repository the hook is running inside
+    /// (appending stray commits, flipping `core.bare`). Applies both to direct
+    /// `git` calls and to `gh`, which shells out to `git` — both must be
+    /// scrubbed. Opt-in, because a command aimed at the user's real cwd repo
+    /// (e.g. remote detection) *wants* the ambient environment.
+    ///
+    /// This fixed list is the only env mutation callers get — deliberately not
+    /// a general `env_remove`, which could unset the hardening the constructors
+    /// applied.
+    pub(crate) fn scrub_git_env(&mut self) -> &mut Self {
+        self.0
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_OBJECT_DIRECTORY")
+            .env_remove("GIT_COMMON_DIR")
+            .env_remove("GIT_PREFIX");
+        self
+    }
 }
 
 impl std::ops::Deref for HardenedCommand {
@@ -89,12 +136,6 @@ impl std::ops::Deref for HardenedCommand {
 
     fn deref(&self) -> &Command {
         &self.0
-    }
-}
-
-impl std::ops::DerefMut for HardenedCommand {
-    fn deref_mut(&mut self) -> &mut Command {
-        &mut self.0
     }
 }
 
@@ -183,15 +224,17 @@ fn run_with_timeout(
     command: &mut HardenedCommand,
     timeout: Duration,
 ) -> anyhow::Result<String> {
-    // Detach as part of the same builder chain, so a child we register is always
-    // a group leader signal-able by its PID (see the module docs).
-    command
-        .stdin(Stdio::null())
+    // Reach the wrapped Command directly: spawning is this module's job, so the
+    // stdio/session hardening lives here rather than on HardenedCommand's public
+    // surface. Detach as part of the same builder chain, so a child we register
+    // is always a group leader signal-able by its PID (see the module docs).
+    let raw = &mut command.0;
+    raw.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .detach_session();
 
-    let mut child = command
+    let mut child = raw
         .spawn()
         .with_context(|| format!("failed to run `{label}`"))?;
 
@@ -660,8 +703,9 @@ mod tests {
         // can't race the trap being installed (which would let plain SIGTERM
         // win and leave the escalation unexercised).
         let mut command = sh("trap '' TERM; echo ready; exec sleep 600");
-        command.stdout(Stdio::piped()).detach_session();
-        let mut child = command.spawn().expect("spawn trap child");
+        let raw = &mut command.0;
+        raw.stdout(Stdio::piped()).detach_session();
+        let mut child = raw.spawn().expect("spawn trap child");
         let mut ready = [0u8; 6];
         child
             .stdout

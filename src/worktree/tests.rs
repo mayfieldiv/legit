@@ -1,5 +1,6 @@
 use std::{
     path::Path,
+    process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -43,18 +44,13 @@ fn temp_dir(name: &str) -> PathBuf {
 }
 
 fn run_git(args: &[&str], cwd: &Path) -> String {
-    let output = git_command()
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .expect("run git");
-    assert!(
-        output.status.success(),
-        "git {} failed: {}",
-        args.join(" "),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).expect("git stdout")
+    // Drive the fixture git through the same hardened spawn path as production
+    // rather than a raw `.output()`, so the test helper can't be the one place
+    // that bypasses HardenedCommand's guarantees.
+    let mut command = git_command();
+    command.args(args).current_dir(cwd);
+    run_command("git", &mut command)
+        .unwrap_or_else(|error| panic!("git {} failed: {error:#}", args.join(" ")))
 }
 
 #[test]
