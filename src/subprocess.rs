@@ -325,10 +325,20 @@ fn run_with_timeout(
 /// child behind it — [`run_command`] refuses (and kills) any spawn that lands
 /// after the close. Unix-only in effect; a no-op elsewhere, where we don't
 /// track process groups.
+///
+/// Arm and drop bound one *generation* of the registry: [`arm`](Self::arm)
+/// (re)opens it, drop closes it. Closing is therefore not process-permanent —
+/// a later runtime invocation in the same process arms its own sweep and
+/// tracks afresh instead of failing every spawn as "shutting down". A
+/// stale-generation spawn that lands after a reopen is simply tracked — and
+/// swept — by the new generation, so the last sweep to drop still sees every
+/// live group.
 pub(crate) struct ShutdownSweep;
 
 impl ShutdownSweep {
     pub(crate) fn arm() -> Self {
+        #[cfg(unix)]
+        registry::open();
         Self
     }
 }
@@ -597,6 +607,16 @@ mod registry {
             self.closed = true;
             self.groups.drain().collect()
         }
+
+        /// Accept registrations again: the start of a new [`ShutdownSweep`]
+        /// generation after a previous sweep closed the registry. Anything
+        /// registered from here on belongs to — and is swept by — the new
+        /// generation.
+        ///
+        /// [`ShutdownSweep`]: super::ShutdownSweep
+        pub(super) fn open(&mut self) {
+            self.closed = false;
+        }
     }
 
     /// The global registry, with lock poisoning recovered rather than papered
@@ -636,6 +656,10 @@ mod registry {
 
     pub(super) fn close() -> Vec<i32> {
         lock().close()
+    }
+
+    pub(super) fn open() {
+        lock().open();
     }
 }
 
@@ -880,5 +904,14 @@ mod tests {
             registry.close().is_empty(),
             "a refused registration must not be tracked"
         );
+
+        // Reopening starts a new generation: registration works again, and the
+        // new generation's close sees what was registered under it.
+        registry.open();
+        assert!(
+            registry.register(10),
+            "registration after reopen must succeed"
+        );
+        assert_eq!(registry.close(), vec![10]);
     }
 }
