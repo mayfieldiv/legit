@@ -458,7 +458,7 @@ fn stderr_tail(stderr: &[u8]) -> String {
 mod registry {
     use std::{
         collections::HashSet,
-        sync::{Mutex, OnceLock},
+        sync::{Mutex, MutexGuard, OnceLock, PoisonError},
     };
 
     /// The state behind the module's global. A plain struct so the close /
@@ -498,32 +498,30 @@ mod registry {
         }
     }
 
-    fn global() -> &'static Mutex<Registry> {
+    /// The global registry, with lock poisoning recovered rather than papered
+    /// over: the critical sections are trivial `HashSet`/flag updates that
+    /// can't leave the `Registry` logically inconsistent, while any fallback
+    /// would silently lose tracking — an untracked child survives
+    /// [`super::terminate_all`], and a poisoned `close` would make the
+    /// shutdown sweep reap nothing at all.
+    fn lock() -> MutexGuard<'static, Registry> {
         static GLOBAL: OnceLock<Mutex<Registry>> = OnceLock::new();
-        GLOBAL.get_or_init(|| Mutex::new(Registry::default()))
+        GLOBAL
+            .get_or_init(|| Mutex::new(Registry::default()))
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     pub(super) fn register(group: i32) -> bool {
-        // A poisoned lock loses tracking (as before); proceed untracked rather
-        // than refusing to spawn, since a refusal here would kill a healthy
-        // child over a bookkeeping failure.
-        global()
-            .lock()
-            .map(|mut registry| registry.register(group))
-            .unwrap_or(true)
+        lock().register(group)
     }
 
     pub(super) fn unregister(group: i32) {
-        if let Ok(mut registry) = global().lock() {
-            registry.unregister(group);
-        }
+        lock().unregister(group);
     }
 
     pub(super) fn close() -> Vec<i32> {
-        global()
-            .lock()
-            .map(|mut registry| registry.close())
-            .unwrap_or_default()
+        lock().close()
     }
 }
 
