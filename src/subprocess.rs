@@ -283,7 +283,7 @@ fn run_with_timeout(
             // in it and would outlive the TUI. Kill it before returning so
             // refusal keeps the sweep's guarantee instead of just reporting the
             // breach.
-            kill_tree(&mut child);
+            signal_group(child.id() as i32, libc::SIGKILL);
             let _ = child.wait();
             bail!("`{label}` aborted: shutting down");
         }
@@ -291,9 +291,16 @@ fn run_with_timeout(
 
     let outcome = wait_with_timeout(&mut child, timeout);
     if outcome.is_none() {
-        // Wedged past the budget: take the whole group down hard so the child
-        // and any descendants die.
-        kill_tree(&mut child);
+        // Wedged past the budget: the same bounded TERM -> KILL escalation as
+        // shutdown, so a mid-flight git command can drop its locks before the
+        // group (the child and any descendants) is killed hard. The unreaped
+        // child keeps the group probe alive, so even a TERM-compliant child
+        // waits out the full grace here — a fixed cost on a call that already
+        // blew a far larger budget.
+        #[cfg(unix)]
+        terminate_groups(&[child.id() as i32]);
+        #[cfg(not(unix))]
+        let _ = child.kill();
     }
     // Reap the child so it doesn't linger as a zombie (and so the group probe
     // below doesn't count it as a live member).
@@ -435,17 +442,6 @@ fn wait_with_timeout(child: &mut Child, timeout: Duration) -> Option<ExitStatus>
         thread::sleep(interval);
         interval = (interval * 2).min(POLL_INTERVAL);
     }
-}
-
-/// SIGKILL the child's whole process group on Unix (the child leads its own
-/// group via `setsid`, so its descendants — the hook, a hook-spawned
-/// `sudo`/`ssh` — go with it); fall back to killing just the child elsewhere,
-/// where there is no process-group model.
-fn kill_tree(child: &mut Child) {
-    #[cfg(unix)]
-    signal_group(child.id() as i32, libc::SIGKILL);
-    #[cfg(not(unix))]
-    let _ = child.kill();
 }
 
 /// Send `sig` to the process group led by `group` (via the negative-PID form of
