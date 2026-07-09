@@ -17,7 +17,10 @@
 //! * A child (and any hook-spawned `sudo`/`ssh`) outlives legit when the user
 //!   quits mid-operation. Every child is tracked while it runs and
 //!   [`terminate_all`] signals the whole group on shutdown, escalating
-//!   `SIGTERM` -> `SIGKILL` for anything that ignores the first ask.
+//!   `SIGTERM` -> `SIGKILL` for anything that ignores the first ask. The
+//!   shutdown sweep also closes the registry, so a command task still in
+//!   flight when the user quits can't spawn a child *behind* the sweep — a
+//!   late spawn is killed on the spot and surfaces as an error.
 //!
 //! Splitting the concerns this way keeps the tracking sound: [`run_command`]
 //! owns the process-group setup, so a child it spawns is *always* a group
@@ -162,7 +165,14 @@ fn run_with_timeout(
     #[cfg(unix)]
     let group = child.id() as i32;
     #[cfg(unix)]
-    registry::register(group);
+    if !registry::register(group) {
+        // The shutdown sweep already ran; this child spawned too late to be in
+        // it and would outlive the TUI. Kill it before returning so refusal
+        // keeps the sweep's guarantee instead of just reporting the breach.
+        signal_group(group, libc::SIGKILL);
+        let _ = child.wait();
+        bail!("`{label}` aborted: shutting down");
+    }
 
     // read_to_end blocks until every write-end of the pipe is closed, so drain
     // on separate threads; a hook that backgrounds a process keeps a write-end
@@ -210,11 +220,13 @@ fn run_with_timeout(
 /// hook-spawned `sudo`/`ssh` — to init. `SIGTERM` first so a mid-flight `git
 /// worktree add` can still drop its lock, then `SIGKILL` after [`TERM_GRACE`]
 /// for anything that ignored it. Blocks up to the grace period only while a
-/// child is actually still dying. Unix-only; a no-op elsewhere, where we don't
-/// track process groups.
+/// child is actually still dying. Closes the registry first, so a command task
+/// racing this sweep can't spawn a child behind it — [`run_command`] refuses
+/// (and kills) any spawn that lands after the close. Unix-only; a no-op
+/// elsewhere, where we don't track process groups.
 pub(crate) fn terminate_all() {
     #[cfg(unix)]
-    terminate_groups(&registry::snapshot());
+    terminate_groups(&registry::close());
 }
 
 #[cfg(unix)]
@@ -375,28 +387,69 @@ mod registry {
         sync::{Mutex, OnceLock},
     };
 
-    fn groups() -> &'static Mutex<HashSet<i32>> {
-        static GROUPS: OnceLock<Mutex<HashSet<i32>>> = OnceLock::new();
-        GROUPS.get_or_init(|| Mutex::new(HashSet::new()))
+    /// The state behind the module's global. A plain struct so the close /
+    /// late-register handshake can be unit-tested on an owned instance —
+    /// closing the *global* in a test would refuse spawns for every other
+    /// test sharing the process.
+    #[derive(Default)]
+    pub(super) struct Registry {
+        groups: HashSet<i32>,
+        closed: bool,
     }
 
-    pub(super) fn register(group: i32) {
-        if let Ok(mut groups) = groups().lock() {
-            groups.insert(group);
+    impl Registry {
+        /// Track `group`. Returns `false` once the registry is closed: the
+        /// shutdown sweep has already signalled everything it could see, so
+        /// the caller must kill the child itself rather than let it run
+        /// untracked.
+        pub(super) fn register(&mut self, group: i32) -> bool {
+            if self.closed {
+                return false;
+            }
+            self.groups.insert(group);
+            true
         }
+
+        pub(super) fn unregister(&mut self, group: i32) {
+            self.groups.remove(&group);
+        }
+
+        /// Stop accepting registrations and drain the tracked groups. Because
+        /// `register` refuses from this point on (and refused callers kill
+        /// their own child), the returned snapshot is complete — no spawn can
+        /// slip in behind the shutdown sweep.
+        pub(super) fn close(&mut self) -> Vec<i32> {
+            self.closed = true;
+            self.groups.drain().collect()
+        }
+    }
+
+    fn global() -> &'static Mutex<Registry> {
+        static GLOBAL: OnceLock<Mutex<Registry>> = OnceLock::new();
+        GLOBAL.get_or_init(|| Mutex::new(Registry::default()))
+    }
+
+    pub(super) fn register(group: i32) -> bool {
+        // A poisoned lock loses tracking (as before); proceed untracked rather
+        // than refusing to spawn, since a refusal here would kill a healthy
+        // child over a bookkeeping failure.
+        global()
+            .lock()
+            .map(|mut registry| registry.register(group))
+            .unwrap_or(true)
     }
 
     pub(super) fn unregister(group: i32) {
-        if let Ok(mut groups) = groups().lock() {
-            groups.remove(&group);
+        if let Ok(mut registry) = global().lock() {
+            registry.unregister(group);
         }
     }
 
-    pub(super) fn snapshot() -> Vec<i32> {
-        match groups().lock() {
-            Ok(groups) => groups.iter().copied().collect(),
-            Err(_) => Vec::new(),
-        }
+    pub(super) fn close() -> Vec<i32> {
+        global()
+            .lock()
+            .map(|mut registry| registry.close())
+            .unwrap_or_default()
     }
 }
 
@@ -527,14 +580,25 @@ mod tests {
         );
     }
 
+    // Exercised on an owned instance, not the global — closing the global
+    // would refuse spawns for every other test in this process. The group ids
+    // are pure bookkeeping here; nothing is signalled.
     #[test]
-    fn registry_tracks_and_forgets_groups() {
-        // A value above Linux's max PID so it can never collide with a real
-        // group; this test only exercises the set bookkeeping, never signals it.
-        let sentinel = 12_345_678;
-        registry::register(sentinel);
-        assert!(registry::snapshot().contains(&sentinel));
-        registry::unregister(sentinel);
-        assert!(!registry::snapshot().contains(&sentinel));
+    fn registry_drains_on_close_and_refuses_late_registration() {
+        let mut registry = registry::Registry::default();
+        assert!(registry.register(7), "registration while open must succeed");
+        assert!(registry.register(8));
+        registry.unregister(8);
+
+        assert_eq!(registry.close(), vec![7]);
+
+        assert!(
+            !registry.register(9),
+            "a group registered after close must be refused"
+        );
+        assert!(
+            registry.close().is_empty(),
+            "a refused registration must not be tracked"
+        );
     }
 }
