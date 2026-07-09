@@ -12,9 +12,12 @@
 //!   while the builders set `GIT_TERMINAL_PROMPT=0`, so any prompt fails fast
 //!   instead of hanging the UI.
 //! * A `post-checkout` hook can background a process that inherits our captured
-//!   stdout/stderr pipe; a plain `.output()` would then read to EOF forever.
-//!   [`run_command`] bounds every call with a timeout and kills the process
-//!   group to force the pipes closed.
+//!   stdout/stderr; with piped capture a plain `.output()` would then read to
+//!   EOF forever. Output is captured into anonymous temp files instead — a file
+//!   read needs no EOF, so no inherited descriptor can wedge the capture —
+//!   while [`run_command`] bounds the call with a timeout in case the child
+//!   itself never exits, and sweeps any backgrounded straggler left in the
+//!   child's process group once the child is gone.
 //! * A child (and any hook-spawned `sudo`/`ssh`) outlives legit when the user
 //!   quits mid-operation. Every child is tracked while it runs and the
 //!   [`ShutdownSweep`] guard signals the whole group on shutdown, escalating
@@ -37,12 +40,11 @@
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::{
-    cell::Cell,
     ffi::OsStr,
-    io::{ErrorKind, Read},
+    fs::File,
+    io::{Read, Seek},
     path::Path,
     process::{Child, Command, ExitStatus, Stdio},
-    sync::{Arc, Mutex, mpsc},
     thread,
     time::{Duration, Instant},
 };
@@ -52,14 +54,8 @@ use anyhow::{Context, bail};
 /// Hard ceiling on how long a single git/gh invocation may run before we treat
 /// it as wedged and kill it. Generous enough for a slow `gh pr checkout` or a
 /// legitimate post-checkout hook on a large repo, but finite so a hook that
-/// never releases our output pipes (e.g. one that backgrounds a daemon) can't
-/// hang the operation forever.
+/// never exits can't hang the operation forever.
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(300);
-
-/// After the child exits, how long to wait for a pipe reader to drain before
-/// concluding a backgrounded descendant is still holding the write-end open and
-/// killing the group to force EOF.
-const DRAIN_GRACE: Duration = Duration::from_millis(500);
 
 /// Ceiling on the child-exit poll interval ([`wait_with_timeout`] backs off
 /// exponentially up to this), and the cadence of the shutdown sweep's group
@@ -234,7 +230,7 @@ impl DetachSessionExt for Command {
 /// The command is spawned (not `.output()`d) so the child can be tracked and
 /// bounded: stdin is nulled and — on Unix — the child is `setsid`'d into its own
 /// session, its process group is registered for the [`ShutdownSweep`],
-/// stdout/stderr are drained on background threads, and the whole thing is
+/// stdout/stderr are captured into anonymous temp files, and the whole thing is
 /// capped at [`COMMAND_TIMEOUT`]. The [`HardenedCommand`] type guarantees
 /// `command` came from [`git_command`]/[`gh_command`], so `GIT_TERMINAL_PROMPT`
 /// is set as well.
@@ -247,14 +243,30 @@ fn run_with_timeout(
     command: &mut HardenedCommand,
     timeout: Duration,
 ) -> anyhow::Result<String> {
+    // Capture into anonymous temp files rather than pipes. A pipe only hits
+    // EOF once every write-end closes, so a hook-backgrounded descendant that
+    // inherits the child's stdio could hold a read open past the child's own
+    // exit. A file read needs no EOF: once the child is gone we read whatever
+    // it wrote, and an inherited descriptor held by a straggler costs nothing.
+    let stdout_file = tempfile::tempfile().context("failed to create a capture file")?;
+    let stderr_file = tempfile::tempfile().context("failed to create a capture file")?;
+
     // Reach the wrapped Command directly: spawning is this module's job, so the
     // stdio/session hardening lives here rather than on HardenedCommand's public
     // surface. Detach as part of the same builder chain, so a child we register
     // is always a group leader signal-able by its PID (see the module docs).
     let raw = &mut command.0;
     raw.stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdout(Stdio::from(
+            stdout_file
+                .try_clone()
+                .context("failed to clone a capture handle")?,
+        ))
+        .stderr(Stdio::from(
+            stderr_file
+                .try_clone()
+                .context("failed to clone a capture handle")?,
+        ))
         .detach_session();
 
     let mut child = raw
@@ -271,29 +283,37 @@ fn run_with_timeout(
             // in it and would outlive the TUI. Kill it before returning so
             // refusal keeps the sweep's guarantee instead of just reporting the
             // breach.
-            signal_tree(&mut child, Signal::Kill);
+            kill_tree(&mut child);
             let _ = child.wait();
             bail!("`{label}` aborted: shutting down");
         }
     };
 
-    // A pipe only hits EOF once every write-end is closed, so drain on separate
-    // threads; a hook that backgrounds a process keeps a write-end open past
-    // the child's own exit, which is why `collect` may have to kill the group
-    // to force EOF.
-    let stdout_capture = spawn_reader(child.stdout.take().expect("stdout piped above"));
-    let stderr_capture = spawn_reader(child.stderr.take().expect("stderr piped above"));
-
     let outcome = wait_with_timeout(&mut child, timeout);
     if outcome.is_none() {
         // Wedged past the budget: take the whole group down hard so the child
-        // and any descendants die and release our pipes.
-        signal_tree(&mut child, Signal::Kill);
+        // and any descendants die.
+        kill_tree(&mut child);
+    }
+    // Reap the child so it doesn't linger as a zombie (and so the group probe
+    // below doesn't count it as a live member).
+    let _ = child.wait();
+
+    // A hook may have backgrounded a process into the child's group. Sweep it
+    // now — the bounded TERM -> KILL escalation — so nothing the command
+    // spawned outlives it (the registration above drops on return, after which
+    // the shutdown sweep could no longer see the group). Probed first so the
+    // common no-straggler case pays one signal-0 syscall, not a poll cycle.
+    #[cfg(unix)]
+    {
+        let group = child.id() as i32;
+        if group_alive(group) {
+            terminate_groups(&[group]);
+        }
     }
 
-    let (stdout, stderr) = collect(&stdout_capture, &stderr_capture, &mut child);
-    // Reap the (now-dead) child so it doesn't linger as a zombie.
-    let _ = child.wait();
+    let stdout = read_capture(stdout_file);
+    let stderr = read_capture(stderr_file);
 
     let status = match outcome {
         Some(status) => status,
@@ -383,70 +403,15 @@ fn group_alive(group: i32) -> bool {
     unsafe { libc::kill(-group, 0) == 0 }
 }
 
-/// One pipe's output, filled by a background reader thread.
-///
-/// The reader appends into the shared buffer as bytes arrive rather than
-/// handing everything over in one message at EOF — that is what lets
-/// [`collect`] salvage the output already read when EOF never comes (a
-/// descendant that escaped the process group holding the write-end open).
-struct PipeCapture {
-    buf: Arc<Mutex<Vec<u8>>>,
-    eof: mpsc::Receiver<()>,
-    /// Memoizes EOF: the reader sends exactly one message, so a second
-    /// `recv_timeout` after a successful one would wait out the full grace and
-    /// misreport an already-drained pipe as wedged.
-    drained: Cell<bool>,
-}
-
-impl PipeCapture {
-    /// Whether the reader reached EOF, waiting at most until `deadline`.
-    fn drained_by(&self, deadline: Instant) -> bool {
-        if self.drained.get() {
-            return true;
-        }
-        let wait = deadline.saturating_duration_since(Instant::now());
-        if self.eof.recv_timeout(wait).is_ok() {
-            self.drained.set(true);
-        }
-        self.drained.get()
+/// Everything the child (and anything that inherited its stdio) wrote to
+/// `file` so far. Read errors degrade to whatever was readable — the child's
+/// exit status, not the capture, decides whether the command succeeded.
+fn read_capture(mut file: File) -> Vec<u8> {
+    let mut buf = Vec::new();
+    if file.rewind().is_ok() {
+        let _ = file.read_to_end(&mut buf);
     }
-
-    /// The bytes read so far.
-    fn take(&self) -> Vec<u8> {
-        self.buf
-            .lock()
-            .map(|mut buf| std::mem::take(&mut *buf))
-            .unwrap_or_default()
-    }
-}
-
-/// Spawn a thread that reads `pipe` until EOF (or a read error), appending into
-/// the returned capture's buffer as bytes arrive.
-fn spawn_reader<R: Read + Send + 'static>(mut pipe: R) -> PipeCapture {
-    let buf = Arc::new(Mutex::new(Vec::new()));
-    let (tx, eof) = mpsc::channel();
-    let sink = Arc::clone(&buf);
-    thread::spawn(move || {
-        let mut chunk = [0u8; 8 * 1024];
-        loop {
-            match pipe.read(&mut chunk) {
-                Ok(0) => break,
-                Ok(n) => {
-                    if let Ok(mut sink) = sink.lock() {
-                        sink.extend_from_slice(&chunk[..n]);
-                    }
-                }
-                Err(error) if error.kind() == ErrorKind::Interrupted => {}
-                Err(_) => break,
-            }
-        }
-        let _ = tx.send(());
-    });
-    PipeCapture {
-        buf,
-        eof,
-        drained: Cell::new(false),
-    }
+    buf
 }
 
 /// Poll the child until it exits or the timeout elapses. `None` means it was
@@ -472,62 +437,15 @@ fn wait_with_timeout(child: &mut Child, timeout: Duration) -> Option<ExitStatus>
     }
 }
 
-/// Take both readers' buffered output. If either doesn't drain within
-/// [`DRAIN_GRACE`], a backgrounded descendant is holding a write-end open past
-/// the child's exit; escalate `SIGTERM` -> `SIGKILL` — once per stage on the
-/// child's group, which both pipes share, not once per pipe — to force EOF,
-/// then take whatever was read.
-fn collect(stdout: &PipeCapture, stderr: &PipeCapture, child: &mut Child) -> (Vec<u8>, Vec<u8>) {
-    if !drained_both(stdout, stderr) {
-        signal_tree(child, Signal::Term);
-        if !drained_both(stdout, stderr) {
-            signal_tree(child, Signal::Kill);
-            // Bounded even after SIGKILL: a descendant that escaped the group
-            // (e.g. a hook daemon that `setsid`s itself) never receives the
-            // group signal and can hold a pipe open indefinitely. Give up on
-            // the drain and take what the readers have buffered so far — the
-            // reader threads leak, but the operation doesn't wedge, which is
-            // the whole point of the timeout.
-            let _ = drained_both(stdout, stderr);
-        }
-    }
-    (stdout.take(), stderr.take())
-}
-
-/// Whether both readers reached EOF within one shared [`DRAIN_GRACE`] window.
-fn drained_both(stdout: &PipeCapture, stderr: &PipeCapture) -> bool {
-    let deadline = Instant::now() + DRAIN_GRACE;
-    // No `&&` short-circuit: even when stdout is wedged, stderr must still get
-    // its (possibly zero-wait) check so an already-sent EOF is consumed and
-    // memoized rather than re-awaited next stage.
-    let stdout_drained = stdout.drained_by(deadline);
-    let stderr_drained = stderr.drained_by(deadline);
-    stdout_drained && stderr_drained
-}
-
-enum Signal {
-    Term,
-    Kill,
-}
-
-/// Signal the child's whole process group on Unix (the child leads its own group
-/// via `setsid`, so its descendants — the hook, a hook-spawned `sudo`/`ssh` — go
-/// with it); fall back to signalling just the child elsewhere.
-fn signal_tree(child: &mut Child, signal: Signal) {
+/// SIGKILL the child's whole process group on Unix (the child leads its own
+/// group via `setsid`, so its descendants — the hook, a hook-spawned
+/// `sudo`/`ssh` — go with it); fall back to killing just the child elsewhere,
+/// where there is no process-group model.
+fn kill_tree(child: &mut Child) {
     #[cfg(unix)]
-    {
-        let sig = match signal {
-            Signal::Term => libc::SIGTERM,
-            Signal::Kill => libc::SIGKILL,
-        };
-        signal_group(child.id() as i32, sig);
-    }
+    signal_group(child.id() as i32, libc::SIGKILL);
     #[cfg(not(unix))]
-    {
-        // No process-group model without setsid; SIGKILL-equivalent only.
-        let _ = signal;
-        let _ = child.kill();
-    }
+    let _ = child.kill();
 }
 
 /// Send `sig` to the process group led by `group` (via the negative-PID form of
@@ -774,26 +692,42 @@ mod tests {
     }
 
     // #3: a post-checkout hook that backgrounds a process which inherits our
-    // stdout pipe would keep `read_to_end` blocked past the child's own exit. The
-    // child here exits immediately but leaves `sleep 30` holding the pipe; the
-    // call must still return the child's output promptly rather than block for
-    // 30s, by killing the group to force EOF.
+    // stdio would, under piped capture, block the read past the child's own
+    // exit. The child here exits immediately but leaves `sleep 30` holding its
+    // stdio: the call must return the child's output promptly (a capture file
+    // needs no EOF), and the straggler sweep must kill the backgrounded
+    // process rather than let it outlive the command that spawned it.
     #[test]
-    fn does_not_hang_when_a_backgrounded_process_holds_the_pipe() {
+    fn returns_promptly_and_sweeps_a_backgrounded_stdio_holder() {
         let out = bounded(Duration::from_secs(10), || {
-            run_command("bg", &mut sh("sleep 30 & echo done"))
+            run_command("bg", &mut sh("sleep 30 & echo $!"))
         })
-        .expect("a backgrounded pipe holder must not wedge the call")
+        .expect("a backgrounded stdio holder must not wedge the call")
         .expect("command should succeed");
-        assert_eq!(out.trim(), "done");
+        let straggler: i32 = out
+            .trim()
+            .parse()
+            .expect("child should print the backgrounded pid");
+
+        // The sweep signals before run_command returns, but init may not have
+        // reaped the orphan yet, so poll briefly for it to vanish.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        // SAFETY: kill(2) with the null signal only probes for existence.
+        while unsafe { libc::kill(straggler, 0) == 0 } {
+            assert!(
+                Instant::now() < deadline,
+                "the straggler sweep should have killed the backgrounded process"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     // The escaped-descendant edge: a process that `setsid`s itself out of the
-    // child's group never receives the group kill, so it can hold our pipe open
-    // indefinitely. The child's own output must still come back — buffered
-    // bytes must not be dropped along with the wedged pipe.
+    // child's group never receives the group signals, so it survives holding a
+    // capture-file descriptor indefinitely. That must cost nothing — the
+    // child's own output still comes back promptly.
     #[test]
-    fn returns_buffered_output_when_an_escaped_descendant_holds_the_pipe() {
+    fn returns_output_when_an_escaped_descendant_holds_the_capture_file() {
         // util-linux setsid(1); absent on e.g. macOS, where this edge can't be
         // modelled from a shell one-liner.
         let setsid_available = Command::new("setsid")
@@ -812,7 +746,7 @@ mod tests {
         let out = bounded(Duration::from_secs(10), || {
             run_command("escape", &mut sh("echo trapped; setsid -f sleep 30"))
         })
-        .expect("an escaped pipe holder must not wedge the call")
+        .expect("an escaped capture-file holder must not wedge the call")
         .expect("command should succeed");
         assert_eq!(out.trim(), "trapped");
     }

@@ -22,6 +22,10 @@ unicode-width = "0.2"
 # rustls-tls reuses the rustls stack octocrab already pulls in (no openssl).
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1.0", features = ["derive"] }
+# Anonymous temp files back subprocess stdout/stderr capture (src/subprocess.rs):
+# unlike a pipe, a file read needs no EOF, so a hook-backgrounded descendant
+# that inherits the child's stdio can't wedge the capture.
+tempfile = "3"
 serde_json = "1.0"
 tokio = { version = "1.48", features = ["full"] }
 tracing = "0.1"
