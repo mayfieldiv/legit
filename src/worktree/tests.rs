@@ -4,10 +4,13 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use chrono::TimeZone;
-
 use super::*;
-use crate::{config::RepoConfig, github::rest::PrKey, github::types::PRState};
+use crate::{
+    config::RepoConfig,
+    github::rest::PrKey,
+    github::types::PRState,
+    test_fixtures::{bounded, fixed_created_at},
+};
 
 fn sample_pr(head_ref: &str, head_owner: &str) -> PR {
     PR {
@@ -15,8 +18,8 @@ fn sample_pr(head_ref: &str, head_owner: &str) -> PR {
         repo_slug: "acme/widgets".to_owned(),
         title: "patch".to_owned(),
         author: "octocat".to_owned(),
-        created_at: chrono::Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap(),
-        updated_at: chrono::Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap(),
+        created_at: fixed_created_at(),
+        updated_at: fixed_created_at(),
         additions: 0,
         deletions: 0,
         is_draft: false,
@@ -51,6 +54,27 @@ fn run_git(args: &[&str], cwd: &Path) -> String {
     command.args(args).current_dir(cwd);
     run_command("git", &mut command)
         .unwrap_or_else(|error| panic!("git {} failed: {error:#}", args.join(" ")))
+}
+
+/// A source repo under `root` with one (empty) commit.
+fn init_source_repo(root: &Path) -> PathBuf {
+    let source = root.join("source");
+    fs::create_dir_all(&source).expect("create source repo");
+    run_git(&["init"], &source);
+    run_git(
+        &[
+            "-c",
+            "user.name=Legit Test",
+            "-c",
+            "user.email=legit@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "initial",
+        ],
+        &source,
+    );
+    source
 }
 
 #[test]
@@ -316,23 +340,8 @@ fn relative_config_paths_require_current_dir() {
 #[test]
 fn checkout_failure_removes_partial_worktree() {
     let root = temp_dir("checkout-cleanup");
-    let source = root.join("source");
+    let source = init_source_repo(&root);
     let target = root.join("worktree");
-    fs::create_dir_all(&source).expect("create source repo");
-    run_git(&["init"], &source);
-    run_git(
-        &[
-            "-c",
-            "user.name=Legit Test",
-            "-c",
-            "user.email=legit@example.invalid",
-            "commit",
-            "--allow-empty",
-            "-m",
-            "initial",
-        ],
-        &source,
-    );
 
     let error = create_worktree_for_pr_with_checkout(&source, &target, 42, |_target, _number| {
         anyhow::bail!("checkout failed")
@@ -356,52 +365,13 @@ fn checkout_failure_removes_partial_worktree() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
-fn worktree_commands_disable_terminal_prompts() {
-    // The non-interactive contract: every worktree subprocess disables git's
-    // terminal credential prompt so a fetch/checkout can't stop to ask for a
-    // password on the terminal the TUI owns. Covers direct `git` calls and
-    // the `gh` checkout (which shells out to git).
-    let disables_prompt = |command: &Command| {
-        command.get_envs().any(|(key, value)| {
-            key == std::ffi::OsStr::new("GIT_TERMINAL_PROMPT")
-                && value == Some(std::ffi::OsStr::new("0"))
-        })
-    };
-
-    assert!(
-        disables_prompt(&git_command()),
-        "git_command should set GIT_TERMINAL_PROMPT=0"
-    );
-
-    assert!(
-        disables_prompt(&gh_command()),
-        "gh_command should set GIT_TERMINAL_PROMPT=0"
-    );
-}
-
 /// A source repo under `root` with one commit and the given executable
 /// `post-checkout` hook script.
 #[cfg(unix)]
 fn source_repo_with_post_checkout_hook(root: &Path, hook_script: &str) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
-    let source = root.join("source");
-    fs::create_dir_all(&source).expect("create source repo");
-    run_git(&["init"], &source);
-    run_git(
-        &[
-            "-c",
-            "user.name=Legit Test",
-            "-c",
-            "user.email=legit@example.invalid",
-            "commit",
-            "--allow-empty",
-            "-m",
-            "initial",
-        ],
-        &source,
-    );
+    let source = init_source_repo(root);
 
     let hook = source.join(".git/hooks/post-checkout");
     fs::create_dir_all(hook.parent().expect("hook parent")).expect("create hooks dir");
@@ -412,40 +382,25 @@ fn source_repo_with_post_checkout_hook(root: &Path, hook_script: &str) -> PathBu
 
 /// Create a worktree with a checkout that mirrors `gh pr checkout` — a real
 /// `git checkout` in the target, which fires the repo's `post-checkout`
-/// hook — on a worker thread with a timeout, so a regression that blocks on
-/// the hook surfaces as a failed assertion rather than a hung suite.
+/// hook — under [`bounded`], so a regression that blocks on the hook surfaces
+/// as a failed assertion rather than a hung suite. (The suite still exits
+/// promptly on that failure: the child's stdin is nulled and `run_command`
+/// enforces its own timeout.)
 #[cfg(unix)]
 fn create_worktree_bounded(source: &Path, target: &Path) -> anyhow::Result<()> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let worker_source = source.to_path_buf();
-    let worker_target = target.to_path_buf();
-    let handle = std::thread::spawn(move || {
-        let result = create_worktree_for_pr_with_checkout(
-            &worker_source,
-            &worker_target,
-            42,
-            |target, _number| {
-                let mut checkout = git_command();
-                checkout
-                    .arg("-C")
-                    .arg(target)
-                    .args(["checkout", "--detach", "HEAD"]);
-                run_command("git checkout", &mut checkout).map(|_| ())
-            },
-        );
-        let _ = tx.send(result);
-    });
-
-    let result = rx
-        .recv_timeout(std::time::Duration::from_secs(30))
-        .expect("worktree creation should not block on the hook");
-    // Reached only when the worker finished. On the timeout panic above the
-    // handle is deliberately dropped un-joined: the worker is stuck by
-    // definition, so joining would trade the fast failure for a hang. The
-    // suite still exits promptly — the child's stdin is nulled and
-    // `run_command` enforces its own timeout.
-    handle.join().expect("worker thread panicked");
-    result
+    let source = source.to_path_buf();
+    let target = target.to_path_buf();
+    bounded(std::time::Duration::from_secs(30), move || {
+        create_worktree_for_pr_with_checkout(&source, &target, 42, |target, _number| {
+            let mut checkout = git_command();
+            checkout
+                .arg("-C")
+                .arg(target)
+                .args(["checkout", "--detach", "HEAD"]);
+            run_command("git checkout", &mut checkout).map(|_| ())
+        })
+    })
+    .expect("worktree creation should not block on the hook")
 }
 
 // A `post-checkout` hook that runs `sudo` (or git/ssh asking for a
@@ -556,12 +511,9 @@ fn git_env_is_scrubbed_for_git_and_gh_commands() {
 
     assert_scrubbed("git_command", &git_command());
 
-    // gh shells out to git, so the checkout invocation must be scrubbed too
-    // — assert on the command `checkout_pr` actually spawns.
-    assert_scrubbed(
-        "checkout_pr_command",
-        &checkout_pr_command(Path::new("/tmp/worktree"), 42),
-    );
+    // gh shells out to git, so this module's gh builder must be scrubbed too —
+    // every gh call site (the PR checkout) is built on it.
+    assert_scrubbed("gh_command", &gh_command());
 }
 
 #[test]

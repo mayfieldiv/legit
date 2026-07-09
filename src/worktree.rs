@@ -10,7 +10,7 @@ use anyhow::{Context, bail};
 use crate::{
     config::{LegitConfig, RepoConfig},
     github::rest::PR,
-    subprocess::{HardenedCommand, gh_command, run_command},
+    subprocess::{HardenedCommand, run_command},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -177,6 +177,17 @@ fn git_command() -> HardenedCommand {
     command
 }
 
+/// Build a `gh` invocation for this module's sandboxed operations, mirroring
+/// [`git_command`] so no call site here can forget the scrub: prompt/token
+/// hardening from [`crate::subprocess::gh_command`], plus the ambient git env
+/// stripped — gh shells out to git, so an inherited `GIT_DIR` could otherwise
+/// redirect it off the directory we point it at and onto the wrong repository.
+fn gh_command() -> HardenedCommand {
+    let mut command = crate::subprocess::gh_command();
+    command.scrub_git_env();
+    command
+}
+
 pub fn list_worktrees(source_clone: &Path) -> anyhow::Result<Vec<WorktreeEntry>> {
     ensure_source_clone(source_clone)?;
     let mut command = git_command();
@@ -242,15 +253,13 @@ fn checkout_pr(target_path: &Path, pr_number: u64) -> anyhow::Result<()> {
 }
 
 /// The `gh pr checkout` invocation for [`checkout_pr`], separate from the spawn
-/// so a test can pin its construction: built on [`gh_command`] (prompt/token
-/// hardening; stdin/session hardening comes from [`run_command`]) and scrubbed
-/// of the ambient git env — gh shells out to git, so an inherited GIT_DIR could
-/// otherwise redirect the checkout off `target_path` onto the wrong repository.
+/// so a test can pin its construction. Built on this module's [`gh_command`]
+/// (prompt/token hardening plus the git-env scrub; stdin/session hardening
+/// comes from [`run_command`]).
 fn checkout_pr_command(target_path: &Path, pr_number: u64) -> HardenedCommand {
     let mut gh = gh_command();
     gh.args(["pr", "checkout", &pr_number.to_string()])
-        .current_dir(target_path)
-        .scrub_git_env();
+        .current_dir(target_path);
     gh
 }
 
