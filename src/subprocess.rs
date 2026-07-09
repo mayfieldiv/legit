@@ -16,7 +16,8 @@
 //!   group to force the pipes closed.
 //! * A child (and any hook-spawned `sudo`/`ssh`) outlives legit when the user
 //!   quits mid-operation. Every child is tracked while it runs and
-//!   [`terminate_all`] signals the whole group on shutdown.
+//!   [`terminate_all`] signals the whole group on shutdown, escalating
+//!   `SIGTERM` -> `SIGKILL` for anything that ignores the first ask.
 //!
 //! Splitting the concerns this way keeps the tracking sound: [`run_command`]
 //! owns the process-group setup, so a child it spawns is *always* a group
@@ -55,6 +56,11 @@ const DRAIN_GRACE: Duration = Duration::from_millis(500);
 
 /// How often to check whether the child has exited while waiting on the timeout.
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// How long shutdown gives SIGTERM'd children to exit — long enough for a
+/// mid-flight `git worktree add` to drop its lock — before SIGKILLing the
+/// survivors so nothing outlives the TUI.
+const TERM_GRACE: Duration = Duration::from_secs(1);
 
 /// A `git` invocation that won't stop to prompt on the terminal the TUI owns.
 ///
@@ -109,9 +115,14 @@ impl DetachSessionExt for Command {
         unsafe {
             self.pre_exec(|| {
                 // A fresh session has no controlling terminal. EPERM (already a
-                // group leader) can't happen for a just-forked child and would
-                // only mean the tty is already shed, so ignoring it is safe.
-                libc::setsid();
+                // group leader) can't happen for a just-forked child — POSIX
+                // guarantees a fork child's PID matches no active process-group
+                // id — but the whole tracking scheme rests on the child being a
+                // group leader, so surface a failure as a spawn error rather
+                // than trusting that reasoning.
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
                 Ok(())
             });
         }
@@ -196,8 +207,10 @@ fn run_with_timeout(
 
 /// Terminate every child (and its process group) still running when the UI
 /// exits, so quitting mid-operation doesn't orphan git/gh — and any
-/// hook-spawned `sudo`/`ssh` — to init. `SIGTERM` so a mid-flight `git worktree
-/// add` can still drop its lock. Unix-only; a no-op elsewhere, where we don't
+/// hook-spawned `sudo`/`ssh` — to init. `SIGTERM` first so a mid-flight `git
+/// worktree add` can still drop its lock, then `SIGKILL` after [`TERM_GRACE`]
+/// for anything that ignored it. Blocks up to the grace period only while a
+/// child is actually still dying. Unix-only; a no-op elsewhere, where we don't
 /// track process groups.
 pub(crate) fn terminate_all() {
     #[cfg(unix)]
@@ -209,6 +222,32 @@ fn terminate_groups(groups: &[i32]) {
     for &group in groups {
         signal_group(group, libc::SIGTERM);
     }
+
+    // Bounded escalation: a descendant that ignores SIGTERM (a hook-spawned
+    // daemon, say) would otherwise survive quit. Poll group liveness through
+    // the grace period, then SIGKILL whatever remains.
+    let deadline = Instant::now() + TERM_GRACE;
+    let mut alive: Vec<i32> = groups.to_vec();
+    while !alive.is_empty() && Instant::now() < deadline {
+        thread::sleep(POLL_INTERVAL);
+        alive.retain(|&group| group_alive(group));
+    }
+    for &group in &alive {
+        signal_group(group, libc::SIGKILL);
+    }
+}
+
+/// Whether the process group led by `group` still has members, probed with the
+/// null signal. An exited child its `run_command` thread hasn't reaped yet
+/// counts as alive; the worst that costs is waiting out the grace and sending
+/// a harmless SIGKILL to a group of zombies.
+#[cfg(unix)]
+fn group_alive(group: i32) -> bool {
+    if group <= 1 {
+        return false;
+    }
+    // SAFETY: kill(2) with the null signal only probes for existence.
+    unsafe { libc::kill(-group, 0) == 0 }
 }
 
 /// Spawn a thread that reads `pipe` to EOF and sends the bytes back. Returns a
@@ -453,6 +492,38 @@ mod tests {
         assert!(
             !status.success(),
             "a terminated child should not exit success"
+        );
+    }
+
+    // #4 (shutdown escalation): a child that ignores SIGTERM must still be gone
+    // after `terminate_groups` returns, via the SIGKILL escalation.
+    #[test]
+    fn terminating_a_group_kills_a_sigterm_ignoring_child() {
+        // `trap '' TERM` marks SIGTERM ignored, and ignored dispositions
+        // survive exec(2), so the `sleep` runs immune to the first, polite
+        // signal. `echo ready` is read back before signalling so the test
+        // can't race the trap being installed (which would let plain SIGTERM
+        // win and leave the escalation unexercised).
+        let mut command = sh("trap '' TERM; echo ready; exec sleep 600");
+        command.stdout(Stdio::piped()).detach_session();
+        let mut child = command.spawn().expect("spawn trap child");
+        let mut ready = [0u8; 6];
+        child
+            .stdout
+            .take()
+            .expect("stdout piped")
+            .read_exact(&mut ready)
+            .expect("child should report ready");
+        let group = child.id() as i32;
+
+        terminate_groups(&[group]);
+
+        let status = bounded(Duration::from_secs(10), move || child.wait().ok())
+            .expect("wait should not hang after the group is killed")
+            .expect("child should be reaped");
+        assert!(
+            !status.success(),
+            "a SIGKILLed child should not exit success"
         );
     }
 
