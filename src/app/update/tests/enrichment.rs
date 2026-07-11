@@ -10,6 +10,7 @@ fn review_status(head_sha: Option<&str>) -> ReviewStatus {
         review_decision: "APPROVED".to_owned(),
         mergeable: "MERGEABLE".to_owned(),
         state: PRState::Open,
+        updated_at: None,
         last_commit_date: None,
         head_commit_sha: head_sha.map(str::to_owned),
     }

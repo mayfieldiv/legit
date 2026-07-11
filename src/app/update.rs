@@ -19,6 +19,7 @@ use super::{
     detail_items, detail_layout, list_layout,
     model::{DetailState, FilesState, Model, RepoDetection, StatusKind, StatusMessage, ViewMode},
     msg::Msg,
+    pr_list::MergeOutcome,
 };
 
 mod refresh;
@@ -1002,23 +1003,29 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
             // enough information to list them.
             maybe_fetch_open_prs(model)
         }
-        Msg::PrArrived(pr) => {
-            if model.list.merge_listed(pr) {
+        Msg::PrArrived(pr) => match model.list.merge_listed(pr) {
+            MergeOutcome::Added => {
                 // A newly-discovered PR has no enrichment yet, so it joins
                 // "Loading details…"; rebuild the layout so it renders
-                // immediately. The first PR to arrive becomes selected; fetch
-                // its files for the summary panel (deduped, so later arrivals
-                // that don't move the selection cost nothing).
+                // immediately. The selection follows the top row while the
+                // user hasn't navigated; fetch the selected PR's files for the
+                // summary panel (deduped, so arrivals that don't move the
+                // selection cost nothing).
                 model.relayout();
                 maybe_fetch_selected_files(model)
-            } else {
-                // A re-list re-streamed a PR already pooled: its enrichment was
-                // preserved while its GitHub activity time was refreshed. Re-sort
-                // the rows, but do not re-fetch files or create a duplicate.
+            }
+            MergeOutcome::Updated => {
+                // A re-list re-streamed a PR already pooled with fresh listing
+                // fields (title, labels, draft, activity time); its enrichment
+                // was preserved. Re-sort the rows, but do not re-fetch files.
                 model.relayout();
                 Vec::new()
             }
-        }
+            // The re-streamed copy matched the pooled one exactly — nothing to
+            // re-render, so skip the relayout (a re-list re-streams every
+            // pooled PR; most survivors are unchanged between refreshes).
+            MergeOutcome::Unchanged => Vec::new(),
+        },
         Msg::PrListLoaded { repo_slug } => {
             // Settle the listing and reconcile membership: a re-list prunes PRs
             // that closed since (the initial listing prunes nothing). Relayout
@@ -1053,6 +1060,14 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
                 entry.state = status.state;
                 entry.last_commit_date = status.last_commit_date;
                 entry.head_commit_sha = status.head_commit_sha;
+                // The activity clock drives the list's sort order and Updated
+                // column; without this a single-PR refresh (`r`) would fetch
+                // new activity yet leave the row misreporting it until the
+                // next full re-list. `refresh_blockers` below relayouts, so
+                // the row re-sorts in the same pass.
+                if let Some(updated_at) = status.updated_at {
+                    entry.updated_at = updated_at;
+                }
                 entry.review_status_loaded = true;
             } else {
                 // PR no longer in the list (e.g. filtered/refetched); drop it.

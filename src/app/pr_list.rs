@@ -74,6 +74,20 @@ fn compare_recent_activity(a: &PR, b: &PR) -> Ordering {
         .then_with(|| a.number.cmp(&b.number))
 }
 
+/// What pooling one streamed listing PR did — `merge_listed`'s result, which
+/// tells `update` how much work the arrival warrants (fetch files for a new
+/// PR, relayout for a changed one, nothing for an identical re-stream).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MergeOutcome {
+    /// A genuinely-new PR was appended.
+    Added,
+    /// An already-pooled PR took the listing's fresh fields; display order or
+    /// row content may have changed.
+    Updated,
+    /// An already-pooled PR matched the fresh listing exactly.
+    Unchanged,
+}
+
 /// Lifecycle of one Tracked Repo's open-PR fetch. A repo with no entry in
 /// `PrList::phases` hasn't had a fetch dispatched yet. At most one variant
 /// holds per repo, so the view never has to ask "are we loading AND failed?".
@@ -116,6 +130,13 @@ pub struct PrList {
     /// the user explicitly moves/selects again; background relayouts then
     /// preserve the viewport instead of snapping back to the selection.
     scroll_detached: bool,
+    /// False until the user navigates (j/k, click, wheel). While false,
+    /// `relayout` keeps the selection on the top display row: PRs stream in
+    /// and sort by recent activity, so the first-arrived PR is rarely the top
+    /// one — without this the startup cursor would park on an arbitrary
+    /// mid-list row. Tab switches and regrouping reset to the top and clear
+    /// this, restoring follow-the-top.
+    selection_committed: bool,
 }
 
 impl fmt::Debug for PrList {
@@ -161,13 +182,16 @@ impl PrList {
         self.prs.push(pr);
     }
 
-    /// Pool a PR streamed from a listing, deduping by key: an already-pooled PR
-    /// is left untouched — keeping the enrichment fetched for it — and `false`
-    /// is returned; a genuinely-new PR is appended and `true` returned. The
-    /// initial listing has no pooled PRs so every arrival is new; a re-list
-    /// (`R`) re-streams the pooled ones, which this dedupes so they neither
-    /// duplicate nor lose their enrichment.
-    pub fn merge_listed(&mut self, pr: PR) -> bool {
+    /// Pool a PR streamed from a listing, deduping by key. A genuinely-new PR
+    /// is appended (`Added`). An already-pooled PR adopts the fresh listing
+    /// object — it carries listing-level changes (title, labels, draft,
+    /// updated_at) that nothing else re-fetches — with the pooled copy's
+    /// enrichment fields grafted back on, since the REST list endpoint can't
+    /// supply those (`Updated`, or `Unchanged` when the result is identical).
+    /// The initial listing has no pooled PRs so every arrival is new; a
+    /// re-list (`R`) re-streams the pooled ones, which this reconciles so they
+    /// neither duplicate nor lose their enrichment.
+    pub fn merge_listed(&mut self, pr: PR) -> MergeOutcome {
         // Record the PR as present in this fetch cycle so `finish_listing` keeps
         // it, whether or not it was already pooled. Arrivals only occur while
         // the repo's listing is in flight, so its phase is always `Loading`.
@@ -176,14 +200,28 @@ impl PrList {
         }
         let key = pr.key();
         if let Some(existing) = self.prs.iter_mut().find(|p| p.key() == key) {
-            // Keep the pooled copy so its enrichment survives, but take the
-            // listing's fresh activity clock: RefreshPr's GraphQL status does
-            // not carry updated_at, and display order depends on this value.
-            existing.updated_at = pr.updated_at;
-            return false;
+            // `state` is grafted too: the enrichment refresh is what detects a
+            // MERGED/CLOSED transition, and the listing's default-Open must not
+            // relabel a PR a refresh already marked merged.
+            let pr = PR {
+                additions: existing.additions,
+                deletions: existing.deletions,
+                review_decision: existing.review_decision.clone(),
+                mergeable: existing.mergeable.clone(),
+                state: existing.state.clone(),
+                last_commit_date: existing.last_commit_date,
+                head_commit_sha: existing.head_commit_sha.clone(),
+                review_status_loaded: existing.review_status_loaded,
+                ..pr
+            };
+            if *existing == pr {
+                return MergeOutcome::Unchanged;
+            }
+            *existing = pr;
+            return MergeOutcome::Updated;
         }
         self.push(pr);
-        true
+        MergeOutcome::Added
     }
 
     /// Settle `repo_slug`'s listing: drop pooled PRs whose number didn't arrive
@@ -212,9 +250,11 @@ impl PrList {
     /// for the All tab) and ordering each group by most recent GitHub activity.
     /// `tier_of(pr)` returns the Smart-status tier for a PR, or `None` when its
     /// enrichment hasn't been derived yet; the repo-grouping key is read
-    /// straight off each PR's `repo_slug`. Selection sticks to the same PR when
-    /// it remains visible and snaps to the first visible PR otherwise. If the
-    /// same PR stays visible, preserve the current viewport offset so enrichment
+    /// straight off each PR's `repo_slug`. Once the user has navigated,
+    /// selection sticks to the same PR while it remains visible and snaps to
+    /// the top display row otherwise; until then it follows the top row as
+    /// arrivals re-sort the list (see `selection_committed`). If the selected
+    /// PR is unchanged, preserve the current viewport offset so enrichment
     /// refreshes do not undo wheel scrolling; if the selection changes, scroll
     /// follows the new selection. Called by `update` after PRs arrive,
     /// enrichment lands, or the grouping/scope changes.
@@ -236,14 +276,19 @@ impl PrList {
             |i| prs[i].repo_slug.clone(),
         );
         self.rows = rows;
-        if visible.contains(&self.selected) {
+        let target = if self.selection_committed && visible.contains(&self.selected) {
+            self.selected
+        } else {
+            self.visible_pr_indices().next().unwrap_or(0)
+        };
+        if target == self.selected {
             if self.scroll_detached {
                 self.clamp_scroll_offset();
             } else {
                 self.normalize_scroll();
             }
         } else {
-            self.selected = visible.first().copied().unwrap_or(0);
+            self.selected = target;
             self.scroll_detached = false;
             self.normalize_scroll();
         }
@@ -323,6 +368,15 @@ impl PrList {
         })
     }
 
+    /// PR numbers of the display rows, in display order — the assertion
+    /// ordering tests make. Test-only sugar over `visible_pr_indices`.
+    #[cfg(test)]
+    pub fn pr_numbers_in_display_order(&self) -> Vec<u64> {
+        self.visible_pr_indices()
+            .map(|i| self.prs[i].number)
+            .collect()
+    }
+
     pub fn grouping(&self) -> Grouping {
         self.grouping
     }
@@ -335,6 +389,7 @@ impl PrList {
         self.selected = 0;
         self.scroll_offset = 0;
         self.scroll_detached = false;
+        self.selection_committed = false;
     }
 
     /// Reset the selection to the first visible PR and scroll to the top. Used
@@ -345,6 +400,7 @@ impl PrList {
         self.selected = first;
         self.scroll_offset = 0;
         self.scroll_detached = false;
+        self.selection_committed = false;
         self.normalize_scroll();
     }
 
@@ -354,6 +410,7 @@ impl PrList {
             self.selected = next;
         }
         self.scroll_detached = false;
+        self.selection_committed = true;
         self.normalize_scroll();
     }
 
@@ -363,6 +420,7 @@ impl PrList {
             self.selected = prev;
         }
         self.scroll_detached = false;
+        self.selection_committed = true;
         self.normalize_scroll();
     }
 
@@ -385,12 +443,17 @@ impl PrList {
         let max_offset = self.rows.len().saturating_sub(self.viewport_height);
         self.scroll_offset = self.scroll_offset.saturating_add(rows).min(max_offset);
         self.scroll_detached = true;
+        // Wheel input is engagement too: without committing, a background
+        // relayout could yank the still-default selection (and the viewport
+        // with it) back to a re-sorted top row mid-browse.
+        self.selection_committed = true;
     }
 
     /// Scroll the visible display window up without changing the selected PR.
     pub fn scroll_up(&mut self, rows: usize) {
         self.scroll_offset = self.scroll_offset.saturating_sub(rows);
         self.scroll_detached = true;
+        self.selection_committed = true;
     }
 
     /// Select the PR row at `visible_row` within the current viewport. Headers
@@ -403,6 +466,7 @@ impl PrList {
         };
         self.selected = *index;
         self.scroll_detached = false;
+        self.selection_committed = true;
         true
     }
 
@@ -593,7 +657,7 @@ enum Direction {
 mod tests {
     use chrono::TimeZone;
 
-    use super::{DisplayRow, Grouping, PrList};
+    use super::{DisplayRow, Grouping, MergeOutcome, PrList};
     use crate::blocker::Tier;
     use crate::github::rest::PR;
     use crate::github::types::PRState;
@@ -646,13 +710,6 @@ mod tests {
             .collect()
     }
 
-    fn pr_numbers_in_display_order(list: &PrList) -> Vec<u64> {
-        visible_pr_indices(list)
-            .into_iter()
-            .map(|index| list.prs()[index].number)
-            .collect()
-    }
-
     #[test]
     fn pushed_pr_appears_in_the_list() {
         let mut list = PrList::new();
@@ -687,7 +744,7 @@ mod tests {
 
         list.relayout(None, |_| Some(Tier::NeedsReview));
 
-        assert_eq!(pr_numbers_in_display_order(&list), vec![2, 3, 1]);
+        assert_eq!(list.pr_numbers_in_display_order(), vec![2, 3, 1]);
     }
 
     #[test]
@@ -703,7 +760,56 @@ mod tests {
 
         list.relayout(None, |_| Some(Tier::NeedsReview));
 
-        assert_eq!(pr_numbers_in_display_order(&list), vec![2, 1]);
+        assert_eq!(list.pr_numbers_in_display_order(), vec![2, 1]);
+    }
+
+    #[test]
+    fn untouched_selection_follows_the_top_row_as_arrivals_resort() {
+        let mut list = PrList::new();
+        list.push(sample_pr(1));
+        list.relayout(None, |_| Some(Tier::NeedsReview));
+        assert_eq!(list.prs()[list.selected()].number, 1);
+
+        // A more recently active PR arrives and sorts above the first-streamed
+        // one; the never-touched cursor follows the top row.
+        let mut newer = sample_pr(2);
+        newer.updated_at = chrono::Utc.with_ymd_and_hms(2026, 5, 2, 0, 0, 0).unwrap();
+        list.push(newer);
+        list.relayout(None, |_| Some(Tier::NeedsReview));
+        assert_eq!(
+            list.prs()[list.selected()].number,
+            2,
+            "the default selection follows the top row"
+        );
+
+        // Once the user navigates, the selection sticks to its PR instead.
+        list.move_down();
+        assert_eq!(list.prs()[list.selected()].number, 1);
+        let mut newest = sample_pr(3);
+        newest.updated_at = chrono::Utc.with_ymd_and_hms(2026, 5, 3, 0, 0, 0).unwrap();
+        list.push(newest);
+        list.relayout(None, |_| Some(Tier::NeedsReview));
+        assert_eq!(
+            list.prs()[list.selected()].number,
+            1,
+            "a user-chosen selection sticks through re-sorts"
+        );
+    }
+
+    #[test]
+    fn merge_listed_reports_added_updated_and_unchanged() {
+        let mut list = PrList::new();
+        list.begin_fetch("owner/repo");
+        assert_eq!(list.merge_listed(sample_pr(1)), MergeOutcome::Added);
+        assert_eq!(list.merge_listed(sample_pr(1)), MergeOutcome::Unchanged);
+
+        // A listing-level change (retitle, draft flip) updates the survivor.
+        let mut retitled = sample_pr(1);
+        retitled.title = "New title".to_owned();
+        retitled.is_draft = true;
+        assert_eq!(list.merge_listed(retitled), MergeOutcome::Updated);
+        assert_eq!(list.prs()[0].title, "New title");
+        assert!(list.prs()[0].is_draft);
     }
 
     #[test]

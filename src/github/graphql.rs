@@ -96,6 +96,8 @@ struct RawReviewStatusNode {
     #[serde(default)]
     state: Option<String>,
     #[serde(default)]
+    updated_at: Option<DateTime<Utc>>,
+    #[serde(default)]
     commits: Option<RawCommitConnection>,
 }
 
@@ -158,6 +160,7 @@ fn parse_review_status(response: ReviewStatusResponse) -> Vec<(u64, ReviewStatus
                     review_decision: node.review_decision.unwrap_or_default(),
                     mergeable: node.mergeable.unwrap_or_else(|| "UNKNOWN".to_owned()),
                     state: parse_pr_state(node.state.as_deref()),
+                    updated_at: node.updated_at,
                     last_commit_date,
                     head_commit_sha,
                 },
@@ -391,8 +394,8 @@ impl GraphQlClient {
                 .map(|(i, number)| {
                     format!(
                         "pr{i}: pullRequest(number: {number}) {{ number additions deletions \
-                         reviewDecision mergeable state commits(last: 1) {{ nodes {{ commit {{ \
-                         committedDate oid }} }} }} }}"
+                         reviewDecision mergeable state updatedAt commits(last: 1) {{ nodes {{ \
+                         commit {{ committedDate oid }} }} }} }}"
                     )
                 })
                 .collect::<Vec<_>>()
@@ -469,6 +472,7 @@ mod tests {
                     "reviewDecision": "APPROVED",
                     "mergeable": "MERGEABLE",
                     "state": "OPEN",
+                    "updatedAt": "2026-05-11T09:00:00Z",
                     "commits": { "nodes": [ { "commit": {
                         "committedDate": "2026-05-10T12:00:00Z",
                         "oid": "deadbeef"
@@ -488,6 +492,10 @@ mod tests {
         assert_eq!(status.review_decision, "APPROVED");
         assert_eq!(status.mergeable, "MERGEABLE");
         assert_eq!(status.state, PRState::Open);
+        assert_eq!(
+            status.updated_at,
+            Some(chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 5, 11, 9, 0, 0).unwrap())
+        );
         assert_eq!(status.head_commit_sha.as_deref(), Some("deadbeef"));
         assert!(status.last_commit_date.is_some());
     }
@@ -527,6 +535,7 @@ mod tests {
         // An absent `state` defaults to Open — the safe direction (keep the PR
         // listed rather than treat a glitch as a merge).
         assert_eq!(status.state, PRState::Open);
+        assert_eq!(status.updated_at, None);
         assert_eq!(status.last_commit_date, None);
         assert_eq!(status.head_commit_sha, None);
     }
