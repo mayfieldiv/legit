@@ -97,20 +97,60 @@ impl PR {
     /// Returns whether anything changed.
     ///
     /// The kept set must mirror the fields `apply_review_status` writes, or a
-    /// re-list silently wipes one. `state` is kept too: the enrichment refresh
-    /// is what detects a MERGED/CLOSED transition, and the listing's
-    /// default-Open must not relabel a PR a refresh already marked merged.
+    /// re-list silently wipes one — so `fresh` is destructured exhaustively
+    /// (no `..` spread): adding a `PR` field fails to compile here, forcing an
+    /// explicit listing-vs-enrichment decision. `state` is kept too: the
+    /// enrichment refresh is what detects a MERGED/CLOSED transition, and the
+    /// listing's default-Open must not relabel a PR a refresh already marked
+    /// merged.
     pub fn adopt_listing(&mut self, fresh: PR) -> bool {
+        // Enrichment fields the listing can't supply bind to `_`; their pooled
+        // values are kept below.
+        let PR {
+            number,
+            repo_slug,
+            title,
+            author,
+            created_at,
+            updated_at,
+            additions: _,
+            deletions: _,
+            is_draft,
+            labels,
+            requested_reviewers,
+            assignees,
+            review_decision: _,
+            mergeable: _,
+            last_commit_date: _,
+            head_commit_sha: _,
+            review_status_loaded: _,
+            head_ref,
+            base_ref,
+            head_repository_owner,
+            state: _,
+        } = fresh;
         let merged = PR {
+            number,
+            repo_slug,
+            title,
+            author,
+            created_at,
+            updated_at,
             additions: self.additions,
             deletions: self.deletions,
+            is_draft,
+            labels,
+            requested_reviewers,
+            assignees,
             review_decision: self.review_decision.clone(),
             mergeable: self.mergeable.clone(),
-            state: self.state.clone(),
             last_commit_date: self.last_commit_date,
             head_commit_sha: self.head_commit_sha.clone(),
             review_status_loaded: self.review_status_loaded,
-            ..fresh
+            head_ref,
+            base_ref,
+            head_repository_owner,
+            state: self.state.clone(),
         };
         if *self == merged {
             return false;
@@ -121,24 +161,36 @@ impl PR {
 
     /// Overwrite the enrichment fields with a fresh GraphQL review status —
     /// the fields the REST list endpoint couldn't supply. The write side of
-    /// the partition `adopt_listing` keeps across re-lists.
+    /// the partition `adopt_listing` keeps across re-lists; `status` is
+    /// destructured exhaustively so adding a `ReviewStatus` field fails to
+    /// compile until it's applied here (and kept in `adopt_listing`).
     pub fn apply_review_status(&mut self, status: ReviewStatus) {
-        self.additions = status.additions;
-        self.deletions = status.deletions;
-        self.review_decision = status.review_decision;
-        self.mergeable = status.mergeable;
+        let ReviewStatus {
+            additions,
+            deletions,
+            review_decision,
+            mergeable,
+            state,
+            updated_at,
+            last_commit_date,
+            head_commit_sha,
+        } = status;
+        self.additions = additions;
+        self.deletions = deletions;
+        self.review_decision = review_decision;
+        self.mergeable = mergeable;
         // A refresh is the only thing that detects a MERGED/CLOSED transition
         // since the list was fetched (the list endpoint only yields OPEN).
         // Applying it lets the row show the real lifecycle state instead of a
         // merged PR's permanent UNKNOWN mergeable.
-        self.state = status.state;
-        self.last_commit_date = status.last_commit_date;
-        self.head_commit_sha = status.head_commit_sha;
+        self.state = state;
+        self.last_commit_date = last_commit_date;
+        self.head_commit_sha = head_commit_sha;
         // The activity clock drives the list's sort order and Updated column;
         // a single-PR refresh (`r`) never re-runs the REST listing that
         // otherwise supplies it. An absent value (permissive parse) leaves
         // the clock untouched.
-        if let Some(updated_at) = status.updated_at {
+        if let Some(updated_at) = updated_at {
             self.updated_at = updated_at;
         }
         self.review_status_loaded = true;
