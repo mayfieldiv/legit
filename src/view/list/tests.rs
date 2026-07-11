@@ -426,8 +426,8 @@ fn title_width_for_visible_columns(
         fixed_width += size_col;
         fixed_cells += 1;
     }
-    if visible.age {
-        fixed_width += super::AGE_COL;
+    if visible.updated {
+        fixed_width += super::UPDATED_COL;
         fixed_cells += 1;
     }
     if visible.review {
@@ -449,7 +449,7 @@ fn visible_column_budget_accounts_for_gaps_before_enabling_size() {
     let show_repo = true;
     let visible = super::compute_visible_columns(width, show_repo, pr_num_col, super::SIZE_COL_MIN);
 
-    assert!(visible.age, "age should still fit");
+    assert!(visible.updated, "updated should still fit");
     assert!(visible.author, "author should still fit");
     assert!(!visible.size, "size plus its gap would shrink the title");
     assert!(
@@ -465,7 +465,7 @@ fn visible_column_budget_uses_the_actual_size_column_width() {
     let size_col = 20;
     let visible = super::compute_visible_columns(width, false, pr_num_col, size_col);
 
-    assert!(visible.age, "age should still fit");
+    assert!(visible.updated, "updated should still fit");
     assert!(visible.author, "author should still fit");
     assert!(
         !visible.size,
@@ -772,11 +772,11 @@ fn list_cells_use_distinct_ts_parity_colours() {
         "author names should use the author role"
     );
 
-    let age_x = row.find("2h").expect("age rendered") as u16;
+    let updated_x = row.find("2h").expect("updated age rendered") as u16;
     assert_eq!(
-        buffer[(age_x, 4)].fg,
+        buffer[(updated_x, 4)].fg,
         Color::Reset,
-        "age should use the default foreground (the text role) like the TS list"
+        "the updated age should use the default foreground (the text role) like the TS list"
     );
 }
 
@@ -1185,7 +1185,7 @@ fn long_titles_truncate_with_ellipsis_to_fit_column() {
     );
     assert!(
         rows[0].contains("2h"),
-        "age column must remain intact: {:?}",
+        "updated column must remain intact: {:?}",
         rows[0]
     );
     assert_eq!(
@@ -1274,7 +1274,7 @@ fn large_diff_size_widens_size_column_for_all_rows() {
         rows
     );
     assert_eq!(small.chars().count(), 89);
-    assert_eq!(rows[1].chars().count(), 89);
+    assert_eq!(large.chars().count(), 89);
 }
 
 #[test]
@@ -1453,7 +1453,7 @@ fn narrow_width_clamps_title_rather_than_overflowing_the_row() {
         + pr_num_col
         + super::AUTHOR_COL
         + size_col
-        + super::AGE_COL
+        + super::UPDATED_COL
         + super::REVIEW_COL
         + super::ACTION_COL
         + gaps
@@ -1466,7 +1466,7 @@ fn narrow_width_clamps_title_rather_than_overflowing_the_row() {
         visible: super::VisibleColumns {
             author: true,
             size: true,
-            age: true,
+            updated: true,
             review: true,
             action: true,
         },

@@ -92,7 +92,7 @@ const AUTHOR_COL: usize = 14;
 const REPO_COL: usize = 14;
 const SIZE_SIDE_COL_MIN: usize = 6;
 const SIZE_COL_MIN: usize = SIZE_SIDE_COL_MIN * 2 + 1;
-const AGE_COL: usize = 7;
+const UPDATED_COL: usize = 7;
 const REVIEW_COL: usize = 18;
 const ACTION_COL: usize = 26;
 const GAP: usize = 1;
@@ -203,14 +203,14 @@ struct RowLayout {
 struct VisibleColumns {
     author: bool,
     size: bool,
-    age: bool,
+    updated: bool,
     review: bool,
     action: bool,
 }
 
 /// Compute optional list-column visibility from the available list width.
 /// Columns are added from most to least important, which means shrinking hides
-/// them in the TS priority order: action -> review -> size -> author -> age.
+/// them in the TS priority order: action -> review -> size -> author -> updated.
 fn compute_visible_columns(
     width: usize,
     show_repo: bool,
@@ -225,15 +225,15 @@ fn compute_visible_columns(
         + usize::from(show_repo) * (REPO_COL + GAP);
     let mut budget = width.saturating_sub(base);
     let mut columns = VisibleColumns {
-        age: false,
+        updated: false,
         author: false,
         size: false,
         review: false,
         action: false,
     };
 
-    if reserve_visible_column(&mut budget, AGE_COL) {
-        columns.age = true;
+    if reserve_visible_column(&mut budget, UPDATED_COL) {
+        columns.updated = true;
     }
     if reserve_visible_column(&mut budget, AUTHOR_COL) {
         columns.author = true;
@@ -295,10 +295,10 @@ fn header_row_line(layout: &RowLayout) -> Line<'static> {
             style: bold,
         });
     }
-    if layout.visible.age {
+    if layout.visible.updated {
         cells.push(Cell {
             text: "Updated".to_owned(),
-            width: AGE_COL,
+            width: UPDATED_COL,
             style: bold,
         });
     }
@@ -365,10 +365,10 @@ fn row_line(
             style: Style::default(),
         });
     }
-    if layout.visible.age {
+    if layout.visible.updated {
         cells.push(Cell {
             text: format_age(pr.updated_at, now),
-            width: AGE_COL,
+            width: UPDATED_COL,
             style: Style::default(),
         });
     }
