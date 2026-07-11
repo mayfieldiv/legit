@@ -74,18 +74,25 @@ fn compare_recent_activity(a: &PR, b: &PR) -> Ordering {
         .then_with(|| a.number.cmp(&b.number))
 }
 
-/// What pooling one streamed listing PR did — `merge_listed`'s result, which
-/// tells `update` how much work the arrival warrants (fetch files for a new
-/// PR, relayout for a changed one, nothing for an identical re-stream).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MergeOutcome {
-    /// A genuinely-new PR was appended.
-    Added,
-    /// An already-pooled PR took the listing's fresh fields; display order or
-    /// row content may have changed.
-    Updated,
-    /// An already-pooled PR matched the fresh listing exactly.
-    Unchanged,
+/// How the selection cursor relates to user intent — one value instead of
+/// parallel booleans, so "viewport detached from a selection the user never
+/// made" is unrepresentable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum SelectionMode {
+    /// The user hasn't navigated yet (or a tab switch/regroup reset to the
+    /// top): `relayout` keeps the selection on the top display row. PRs
+    /// stream in and sort by recent activity, so the first-arrived PR is
+    /// rarely the top one — without this the startup cursor would park on an
+    /// arbitrary mid-list row.
+    #[default]
+    FollowTop,
+    /// The user picked a PR (j/k, click): the selection sticks to that PR
+    /// through re-sorts, and the viewport follows it.
+    Pinned,
+    /// Wheel scrolling moved the viewport away from the pinned selection;
+    /// background relayouts preserve the viewport instead of snapping back,
+    /// until the user explicitly moves/selects again.
+    Detached,
 }
 
 /// Lifecycle of one Tracked Repo's open-PR fetch. A repo with no entry in
@@ -126,17 +133,9 @@ pub struct PrList {
     /// First visible display row (headers count toward the offset).
     scroll_offset: usize,
     viewport_height: usize,
-    /// Mouse-wheel scrolling detaches the viewport from the selected PR until
-    /// the user explicitly moves/selects again; background relayouts then
-    /// preserve the viewport instead of snapping back to the selection.
-    scroll_detached: bool,
-    /// False until the user navigates (j/k, click, wheel). While false,
-    /// `relayout` keeps the selection on the top display row: PRs stream in
-    /// and sort by recent activity, so the first-arrived PR is rarely the top
-    /// one — without this the startup cursor would park on an arbitrary
-    /// mid-list row. Tab switches and regrouping reset to the top and clear
-    /// this, restoring follow-the-top.
-    selection_committed: bool,
+    /// Whether the selection follows the top row, sticks to a user-chosen PR,
+    /// or has a wheel-detached viewport (see `SelectionMode`).
+    selection_mode: SelectionMode,
 }
 
 impl fmt::Debug for PrList {
@@ -150,7 +149,7 @@ impl fmt::Debug for PrList {
             .field("selected", &self.selected)
             .field("scroll_offset", &self.scroll_offset)
             .field("viewport_height", &self.viewport_height)
-            .field("scroll_detached", &self.scroll_detached)
+            .field("selection_mode", &self.selection_mode)
             .finish()
     }
 }
@@ -183,45 +182,25 @@ impl PrList {
     }
 
     /// Pool a PR streamed from a listing, deduping by key. A genuinely-new PR
-    /// is appended (`Added`). An already-pooled PR adopts the fresh listing
-    /// object — it carries listing-level changes (title, labels, draft,
-    /// updated_at) that nothing else re-fetches — with the pooled copy's
-    /// enrichment fields grafted back on, since the REST list endpoint can't
-    /// supply those (`Updated`, or `Unchanged` when the result is identical).
-    /// The initial listing has no pooled PRs so every arrival is new; a
-    /// re-list (`R`) re-streams the pooled ones, which this reconciles so they
-    /// neither duplicate nor lose their enrichment.
-    pub fn merge_listed(&mut self, pr: PR) -> MergeOutcome {
+    /// is appended; an already-pooled PR adopts the fresh listing object with
+    /// its enrichment grafted back on (see `PR::adopt_listing`). Returns
+    /// whether the pool changed — false when the re-streamed copy matched the
+    /// pooled one exactly, so the caller can skip relaying out. The initial
+    /// listing has no pooled PRs so every arrival is new; a re-list (`R`)
+    /// re-streams the pooled ones, which this reconciles so they neither
+    /// duplicate nor lose their enrichment.
+    pub fn merge_listed(&mut self, pr: PR) -> bool {
         // Record the PR as present in this fetch cycle so `finish_listing` keeps
         // it, whether or not it was already pooled. Arrivals only occur while
         // the repo's listing is in flight, so its phase is always `Loading`.
         if let Some(Phase::Loading(seen)) = self.phases.get_mut(&pr.repo_slug) {
             seen.insert(pr.number);
         }
-        let key = pr.key();
-        if let Some(existing) = self.prs.iter_mut().find(|p| p.key() == key) {
-            // `state` is grafted too: the enrichment refresh is what detects a
-            // MERGED/CLOSED transition, and the listing's default-Open must not
-            // relabel a PR a refresh already marked merged.
-            let pr = PR {
-                additions: existing.additions,
-                deletions: existing.deletions,
-                review_decision: existing.review_decision.clone(),
-                mergeable: existing.mergeable.clone(),
-                state: existing.state.clone(),
-                last_commit_date: existing.last_commit_date,
-                head_commit_sha: existing.head_commit_sha.clone(),
-                review_status_loaded: existing.review_status_loaded,
-                ..pr
-            };
-            if *existing == pr {
-                return MergeOutcome::Unchanged;
-            }
-            *existing = pr;
-            return MergeOutcome::Updated;
+        if let Some(existing) = self.pr_mut(&pr.key()) {
+            return existing.adopt_listing(pr);
         }
         self.push(pr);
-        MergeOutcome::Added
+        true
     }
 
     /// Settle `repo_slug`'s listing: drop pooled PRs whose number didn't arrive
@@ -253,7 +232,7 @@ impl PrList {
     /// straight off each PR's `repo_slug`. Once the user has navigated,
     /// selection sticks to the same PR while it remains visible and snaps to
     /// the top display row otherwise; until then it follows the top row as
-    /// arrivals re-sort the list (see `selection_committed`). If the selected
+    /// arrivals re-sort the list (see `SelectionMode`). If the selected
     /// PR is unchanged, preserve the current viewport offset so enrichment
     /// refreshes do not undo wheel scrolling; if the selection changes, scroll
     /// follows the new selection. Called by `update` after PRs arrive,
@@ -276,20 +255,26 @@ impl PrList {
             |i| prs[i].repo_slug.clone(),
         );
         self.rows = rows;
-        let target = if self.selection_committed && visible.contains(&self.selected) {
+        let target = if self.selection_mode != SelectionMode::FollowTop
+            && visible.contains(&self.selected)
+        {
             self.selected
         } else {
             self.visible_pr_indices().next().unwrap_or(0)
         };
         if target == self.selected {
-            if self.scroll_detached {
+            if self.selection_mode == SelectionMode::Detached {
                 self.clamp_scroll_offset();
             } else {
                 self.normalize_scroll();
             }
         } else {
             self.selected = target;
-            self.scroll_detached = false;
+            if self.selection_mode == SelectionMode::Detached {
+                // The pinned PR vanished; re-pin to the snapped-to row rather
+                // than keep a detached viewport aimed at nothing.
+                self.selection_mode = SelectionMode::Pinned;
+            }
             self.normalize_scroll();
         }
     }
@@ -388,8 +373,7 @@ impl PrList {
         self.grouping = self.grouping.next();
         self.selected = 0;
         self.scroll_offset = 0;
-        self.scroll_detached = false;
-        self.selection_committed = false;
+        self.selection_mode = SelectionMode::FollowTop;
     }
 
     /// Reset the selection to the first visible PR and scroll to the top. Used
@@ -399,8 +383,7 @@ impl PrList {
         let first = self.visible_pr_indices().next().unwrap_or(0);
         self.selected = first;
         self.scroll_offset = 0;
-        self.scroll_detached = false;
-        self.selection_committed = false;
+        self.selection_mode = SelectionMode::FollowTop;
         self.normalize_scroll();
     }
 
@@ -409,8 +392,7 @@ impl PrList {
         if let Some(next) = self.adjacent_pr(self.selected, Direction::Down) {
             self.selected = next;
         }
-        self.scroll_detached = false;
-        self.selection_committed = true;
+        self.selection_mode = SelectionMode::Pinned;
         self.normalize_scroll();
     }
 
@@ -419,14 +401,13 @@ impl PrList {
         if let Some(prev) = self.adjacent_pr(self.selected, Direction::Up) {
             self.selected = prev;
         }
-        self.scroll_detached = false;
-        self.selection_committed = true;
+        self.selection_mode = SelectionMode::Pinned;
         self.normalize_scroll();
     }
 
     pub fn resize(&mut self, viewport_height: usize) {
         self.viewport_height = viewport_height;
-        if self.scroll_detached {
+        if self.selection_mode == SelectionMode::Detached {
             self.clamp_scroll_offset();
         } else {
             self.normalize_scroll();
@@ -442,18 +423,16 @@ impl PrList {
         }
         let max_offset = self.rows.len().saturating_sub(self.viewport_height);
         self.scroll_offset = self.scroll_offset.saturating_add(rows).min(max_offset);
-        self.scroll_detached = true;
-        // Wheel input is engagement too: without committing, a background
-        // relayout could yank the still-default selection (and the viewport
-        // with it) back to a re-sorted top row mid-browse.
-        self.selection_committed = true;
+        // Wheel input is engagement too: leaving `FollowTop` would let a
+        // background relayout yank the still-default selection (and the
+        // viewport with it) back to a re-sorted top row mid-browse.
+        self.selection_mode = SelectionMode::Detached;
     }
 
     /// Scroll the visible display window up without changing the selected PR.
     pub fn scroll_up(&mut self, rows: usize) {
         self.scroll_offset = self.scroll_offset.saturating_sub(rows);
-        self.scroll_detached = true;
-        self.selection_committed = true;
+        self.selection_mode = SelectionMode::Detached;
     }
 
     /// Select the PR row at `visible_row` within the current viewport. Headers
@@ -465,8 +444,7 @@ impl PrList {
             return false;
         };
         self.selected = *index;
-        self.scroll_detached = false;
-        self.selection_committed = true;
+        self.selection_mode = SelectionMode::Pinned;
         true
     }
 
@@ -657,7 +635,7 @@ enum Direction {
 mod tests {
     use chrono::TimeZone;
 
-    use super::{DisplayRow, Grouping, MergeOutcome, PrList};
+    use super::{DisplayRow, Grouping, PrList};
     use crate::blocker::Tier;
     use crate::github::rest::PR;
     use crate::github::types::PRState;
@@ -797,17 +775,23 @@ mod tests {
     }
 
     #[test]
-    fn merge_listed_reports_added_updated_and_unchanged() {
+    fn merge_listed_reports_whether_the_pool_changed() {
         let mut list = PrList::new();
         list.begin_fetch("owner/repo");
-        assert_eq!(list.merge_listed(sample_pr(1)), MergeOutcome::Added);
-        assert_eq!(list.merge_listed(sample_pr(1)), MergeOutcome::Unchanged);
+        assert!(list.merge_listed(sample_pr(1)), "a new PR changes the pool");
+        assert!(
+            !list.merge_listed(sample_pr(1)),
+            "an identical re-stream changes nothing"
+        );
 
         // A listing-level change (retitle, draft flip) updates the survivor.
         let mut retitled = sample_pr(1);
         retitled.title = "New title".to_owned();
         retitled.is_draft = true;
-        assert_eq!(list.merge_listed(retitled), MergeOutcome::Updated);
+        assert!(
+            list.merge_listed(retitled),
+            "a survivor taking fresh fields changes the pool"
+        );
         assert_eq!(list.prs()[0].title, "New title");
         assert!(list.prs()[0].is_draft);
     }

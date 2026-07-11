@@ -8,7 +8,7 @@ use tokio::sync::{OnceCell, mpsc};
 
 use crate::{
     file_category::FileChange,
-    github::types::{CheckRun, IssueComment, PRState, Review, is_bot},
+    github::types::{CheckRun, IssueComment, PRState, Review, ReviewStatus, is_bot},
     secret::Secret,
 };
 
@@ -89,6 +89,59 @@ impl PR {
             repo_slug: self.repo_slug.clone(),
             number: self.number,
         }
+    }
+
+    /// Adopt a fresh listing copy of this PR — it carries listing-level changes
+    /// (title, labels, draft, updated_at) that nothing else re-fetches — while
+    /// keeping the enrichment fields the REST list endpoint can't supply.
+    /// Returns whether anything changed.
+    ///
+    /// The kept set must mirror the fields `apply_review_status` writes, or a
+    /// re-list silently wipes one. `state` is kept too: the enrichment refresh
+    /// is what detects a MERGED/CLOSED transition, and the listing's
+    /// default-Open must not relabel a PR a refresh already marked merged.
+    pub fn adopt_listing(&mut self, fresh: PR) -> bool {
+        let merged = PR {
+            additions: self.additions,
+            deletions: self.deletions,
+            review_decision: self.review_decision.clone(),
+            mergeable: self.mergeable.clone(),
+            state: self.state.clone(),
+            last_commit_date: self.last_commit_date,
+            head_commit_sha: self.head_commit_sha.clone(),
+            review_status_loaded: self.review_status_loaded,
+            ..fresh
+        };
+        if *self == merged {
+            return false;
+        }
+        *self = merged;
+        true
+    }
+
+    /// Overwrite the enrichment fields with a fresh GraphQL review status —
+    /// the fields the REST list endpoint couldn't supply. The write side of
+    /// the partition `adopt_listing` keeps across re-lists.
+    pub fn apply_review_status(&mut self, status: ReviewStatus) {
+        self.additions = status.additions;
+        self.deletions = status.deletions;
+        self.review_decision = status.review_decision;
+        self.mergeable = status.mergeable;
+        // A refresh is the only thing that detects a MERGED/CLOSED transition
+        // since the list was fetched (the list endpoint only yields OPEN).
+        // Applying it lets the row show the real lifecycle state instead of a
+        // merged PR's permanent UNKNOWN mergeable.
+        self.state = status.state;
+        self.last_commit_date = status.last_commit_date;
+        self.head_commit_sha = status.head_commit_sha;
+        // The activity clock drives the list's sort order and Updated column;
+        // a single-PR refresh (`r`) never re-runs the REST listing that
+        // otherwise supplies it. An absent value (permissive parse) leaves
+        // the clock untouched.
+        if let Some(updated_at) = status.updated_at {
+            self.updated_at = updated_at;
+        }
+        self.review_status_loaded = true;
     }
 }
 
