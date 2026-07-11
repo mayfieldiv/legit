@@ -431,6 +431,12 @@ impl PrList {
 
     /// Scroll the visible display window up without changing the selected PR.
     pub fn scroll_up(&mut self, rows: usize) {
+        // Mirror `scroll_down`'s guard: a wheel event over an empty list is a
+        // no-op, not engagement — leaving `FollowTop` here would pin the
+        // still-default selection to whichever PR happens to arrive first.
+        if self.viewport_height == 0 || self.rows.is_empty() {
+            return;
+        }
         self.scroll_offset = self.scroll_offset.saturating_sub(rows);
         self.selection_mode = SelectionMode::Detached;
     }
@@ -771,6 +777,31 @@ mod tests {
             list.prs()[list.selected()].number,
             1,
             "a user-chosen selection sticks through re-sorts"
+        );
+    }
+
+    #[test]
+    fn wheel_up_on_empty_list_does_not_detach_default_selection() {
+        let mut list = PrList::new();
+        list.resize(10);
+        list.relayout(None, |_| None);
+
+        list.scroll_up(3);
+
+        // PRs stream in oldest-first; the second sorts above the first. A
+        // wheel-up over the empty list must not have pinned the selection to
+        // the first arrival.
+        list.push(sample_pr(1));
+        list.relayout(None, |_| Some(Tier::NeedsReview));
+        let mut newer = sample_pr(2);
+        newer.updated_at = chrono::Utc.with_ymd_and_hms(2026, 5, 2, 0, 0, 0).unwrap();
+        list.push(newer);
+        list.relayout(None, |_| Some(Tier::NeedsReview));
+
+        assert_eq!(
+            list.prs()[list.selected()].number,
+            2,
+            "the default selection still follows the top row"
         );
     }
 
