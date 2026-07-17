@@ -209,8 +209,9 @@ struct VisibleColumns {
 }
 
 /// Compute optional list-column visibility from the available list width.
-/// Columns are added from most to least important, which means shrinking hides
-/// them in the TS priority order: action -> review -> size -> author -> updated.
+/// Columns are enabled in descending priority (updated, author, size, review,
+/// action), so shrinking hides the least important first: action, then
+/// review, size, author, and finally updated.
 fn compute_visible_columns(
     width: usize,
     show_repo: bool,
