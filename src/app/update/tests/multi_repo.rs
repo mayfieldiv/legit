@@ -131,16 +131,33 @@ fn relisting_a_pooled_pr_keeps_one_copy_and_its_enrichment() {
     model.list.pr_mut(&key(1)).unwrap().review_status_loaded = true;
     model.relayout();
 
-    update(&mut model, Msg::PrArrived(sample_pr(1, "re-listed")));
+    let refreshed_at = fixed_now();
+    let mut relisted = sample_pr(1, "re-listed");
+    relisted.updated_at = refreshed_at;
+    relisted.is_draft = true;
+    update(&mut model, Msg::PrArrived(relisted));
 
     assert_eq!(
         model.list.prs().iter().filter(|p| p.number == 1).count(),
         1,
         "the re-streamed PR must not duplicate the pooled one",
     );
+    let survivor = model.list.pr(&key(1)).unwrap();
     assert!(
-        model.list.pr(&key(1)).unwrap().review_status_loaded,
+        survivor.review_status_loaded,
         "the pooled PR keeps the enrichment fetched before the re-list",
+    );
+    assert_eq!(
+        survivor.updated_at, refreshed_at,
+        "the pooled PR takes the fresh listing's GitHub activity time",
+    );
+    assert_eq!(
+        survivor.title, "re-listed",
+        "the pooled PR takes the fresh listing's title",
+    );
+    assert!(
+        survivor.is_draft,
+        "the pooled PR takes the fresh listing's draft state",
     );
 }
 

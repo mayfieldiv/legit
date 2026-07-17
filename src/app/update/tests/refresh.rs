@@ -16,6 +16,7 @@ fn unknown_status(head_sha: Option<&str>) -> ReviewStatus {
         review_decision: String::new(),
         mergeable: "UNKNOWN".to_owned(),
         state: PRState::Open,
+        updated_at: None,
         last_commit_date: None,
         head_commit_sha: head_sha.map(str::to_owned),
     }
@@ -77,8 +78,8 @@ fn list_model(numbers: &[u64]) -> Model {
     model
 }
 
-/// Flatten grouping so the visible order is insertion order — distinct from any
-/// tier ordering, which lets a test prove dispatch reorders by tier.
+/// Flatten grouping so no tier headers affect the visible activity order; this
+/// lets a test prove refresh dispatch independently reorders by tier.
 fn flatten(model: &mut Model) {
     model.list.cycle_grouping(); // SmartStatus -> Repo
     model.list.cycle_grouping(); // Repo -> None
@@ -228,7 +229,9 @@ fn shift_r_discovers_new_prs_and_prunes_closed_ones_while_keeping_enrichment() {
 
     // The re-list streams #1 (unchanged) and #3 (new), then settles.
     update(&mut model, Msg::PrArrived(sample_pr(1, "still open")));
-    update(&mut model, Msg::PrArrived(sample_pr(3, "newly opened")));
+    let mut newly_opened = sample_pr(3, "newly opened");
+    newly_opened.updated_at = fixed_now();
+    update(&mut model, Msg::PrArrived(newly_opened));
     update(
         &mut model,
         Msg::PrListLoaded {
@@ -246,6 +249,11 @@ fn shift_r_discovers_new_prs_and_prunes_closed_ones_while_keeping_enrichment() {
     assert!(
         model.list.pr(&key(1)).unwrap().review_status_loaded,
         "the surviving PR keeps the enrichment it had before the re-list",
+    );
+    assert_eq!(
+        model.list.pr_numbers_in_display_order(),
+        [3, 1],
+        "the newly discovered PR slots into activity order instead of staying appended",
     );
 }
 
@@ -537,6 +545,52 @@ fn data_arrival_stamps_only_that_prs_fetch_age() {
         model.fetched_at(&key(2)),
         Some(early),
         "and leaves #2's Fetch Age untouched — the signal is strictly per-PR",
+    );
+}
+
+#[test]
+fn review_status_arrival_updates_the_prs_activity_clock() {
+    // The single-PR refresh (`r`) never re-runs the REST listing, so the
+    // GraphQL status is the only carrier of fresh activity: without applying
+    // it, the Updated column and sort position would misreport the activity
+    // the refresh just fetched until the next full re-list.
+    let mut model = list_model(&[1]);
+    let stale = model.list.pr(&key(1)).unwrap().updated_at;
+    let fresh = fixed_now();
+    assert_ne!(
+        stale, fresh,
+        "precondition: the refresh carries new activity"
+    );
+
+    update(
+        &mut model,
+        Msg::ReviewStatusArrived {
+            pr: key(1),
+            status: ReviewStatus {
+                updated_at: Some(fresh),
+                ..mergeable_status("abc123")
+            },
+        },
+    );
+
+    assert_eq!(
+        model.list.pr(&key(1)).unwrap().updated_at,
+        fresh,
+        "a review-status arrival refreshes the PR's activity clock",
+    );
+
+    // A status without the field (permissive parse) leaves the clock alone.
+    update(
+        &mut model,
+        Msg::ReviewStatusArrived {
+            pr: key(1),
+            status: mergeable_status("abc123"),
+        },
+    );
+    assert_eq!(
+        model.list.pr(&key(1)).unwrap().updated_at,
+        fresh,
+        "an absent updated_at must not clobber the clock",
     );
 }
 

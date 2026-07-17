@@ -418,6 +418,7 @@ fn refresh_in_detail_relabels_a_merged_pr_without_leaving_the_view() {
                 review_decision: String::new(),
                 mergeable: "UNKNOWN".to_owned(),
                 state: PRState::Merged,
+                updated_at: None,
                 last_commit_date: None,
                 head_commit_sha: Some("abc123".to_owned()),
             },

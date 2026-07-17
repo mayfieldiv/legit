@@ -10,6 +10,7 @@
 //! header rows; keyboard navigation keeps the selected PR's row on-screen,
 //! while wheel scrolling can move the viewport independently of selection.
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 
@@ -63,6 +64,37 @@ fn filter_matches(pr: &PR, lowercase_needle: &str) -> bool {
         || pr.author.to_lowercase().contains(lowercase_needle)
 }
 
+/// Most recent GitHub activity first. Creation time keeps same-second updates
+/// chronological; identity makes the order total and independent of arrival.
+fn compare_recent_activity(a: &PR, b: &PR) -> Ordering {
+    b.updated_at
+        .cmp(&a.updated_at)
+        .then_with(|| b.created_at.cmp(&a.created_at))
+        .then_with(|| a.repo_slug.cmp(&b.repo_slug))
+        .then_with(|| a.number.cmp(&b.number))
+}
+
+/// How the selection cursor relates to user intent — one value instead of
+/// parallel booleans, so "viewport detached from a selection the user never
+/// made" is unrepresentable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum SelectionMode {
+    /// The user hasn't navigated yet (or a tab switch/regroup reset to the
+    /// top): `relayout` keeps the selection on the top display row. PRs
+    /// stream in and sort by recent activity, so the first-arrived PR is
+    /// rarely the top one — without this the startup cursor would park on an
+    /// arbitrary mid-list row.
+    #[default]
+    FollowTop,
+    /// The user picked a PR (j/k, click): the selection sticks to that PR
+    /// through re-sorts, and the viewport follows it.
+    Pinned,
+    /// Wheel scrolling moved the viewport away from the pinned selection;
+    /// background relayouts preserve the viewport instead of snapping back,
+    /// until the user explicitly moves/selects again.
+    Detached,
+}
+
 /// Lifecycle of one Tracked Repo's open-PR fetch. A repo with no entry in
 /// `PrList::phases` hasn't had a fetch dispatched yet. At most one variant
 /// holds per repo, so the view never has to ask "are we loading AND failed?".
@@ -101,10 +133,9 @@ pub struct PrList {
     /// First visible display row (headers count toward the offset).
     scroll_offset: usize,
     viewport_height: usize,
-    /// Mouse-wheel scrolling detaches the viewport from the selected PR until
-    /// the user explicitly moves/selects again; background relayouts then
-    /// preserve the viewport instead of snapping back to the selection.
-    scroll_detached: bool,
+    /// Whether the selection follows the top row, sticks to a user-chosen PR,
+    /// or has a wheel-detached viewport (see `SelectionMode`).
+    selection_mode: SelectionMode,
 }
 
 impl fmt::Debug for PrList {
@@ -118,7 +149,7 @@ impl fmt::Debug for PrList {
             .field("selected", &self.selected)
             .field("scroll_offset", &self.scroll_offset)
             .field("viewport_height", &self.viewport_height)
-            .field("scroll_detached", &self.scroll_detached)
+            .field("selection_mode", &self.selection_mode)
             .finish()
     }
 }
@@ -150,11 +181,13 @@ impl PrList {
         self.prs.push(pr);
     }
 
-    /// Pool a PR streamed from a listing, deduping by key: an already-pooled PR
-    /// is left untouched — keeping the enrichment fetched for it — and `false`
-    /// is returned; a genuinely-new PR is appended and `true` returned. The
-    /// initial listing has no pooled PRs so every arrival is new; a re-list
-    /// (`R`) re-streams the pooled ones, which this dedupes so they neither
+    /// Pool a PR streamed from a listing, deduping by key. A genuinely-new PR
+    /// is appended; an already-pooled PR adopts the fresh listing object with
+    /// its enrichment grafted back on (see `PR::adopt_listing`). Returns
+    /// whether the pool changed — false when the re-streamed copy matched the
+    /// pooled one exactly, so the caller can skip relaying out. The initial
+    /// listing has no pooled PRs so every arrival is new; a re-list (`R`)
+    /// re-streams the pooled ones, which this reconciles so they neither
     /// duplicate nor lose their enrichment.
     pub fn merge_listed(&mut self, pr: PR) -> bool {
         // Record the PR as present in this fetch cycle so `finish_listing` keeps
@@ -163,15 +196,8 @@ impl PrList {
         if let Some(Phase::Loading(seen)) = self.phases.get_mut(&pr.repo_slug) {
             seen.insert(pr.number);
         }
-        let key = pr.key();
-        if self.prs.iter().any(|p| p.key() == key) {
-            // Survivor: keep the pooled copy and discard this re-streamed listing
-            // object. That preserves the enrichment, but also drops any
-            // listing-level change (title, labels, draft, mergeable). Safe only
-            // because every re-list with survivors (`R`) also dispatches a per-PR
-            // `RefreshPr` that re-fetches those fields; the `r`-empty re-list has
-            // no survivors. A standalone re-list would have to update them here.
-            return false;
+        if let Some(existing) = self.pr_mut(&pr.key()) {
+            return existing.adopt_listing(pr);
         }
         self.push(pr);
         true
@@ -200,20 +226,24 @@ impl PrList {
 
     /// Rebuild the display layout from the current PRs under the active
     /// grouping, showing only the PRs in `scope` (a Repo Tab's slug, or `None`
-    /// for the All tab). `tier_of(pr)` returns the Smart-status tier for a PR,
-    /// or `None` when its enrichment hasn't been derived yet; the repo-grouping
-    /// key is read straight off each PR's `repo_slug`. Selection sticks to the
-    /// same PR when it remains visible and snaps to the first visible PR
-    /// otherwise. If the same PR stays visible, preserve the current viewport
-    /// offset so enrichment refreshes do not undo wheel scrolling; if the
-    /// selection changes, scroll follows the new selection. Called by `update`
-    /// after PRs arrive, enrichment lands, or the grouping/scope changes.
+    /// for the All tab) and ordering each group by most recent GitHub activity.
+    /// `tier_of(pr)` returns the Smart-status tier for a PR, or `None` when its
+    /// enrichment hasn't been derived yet; the repo-grouping key is read
+    /// straight off each PR's `repo_slug`. Once the user has navigated,
+    /// selection sticks to the same PR while it remains visible and snaps to
+    /// the top display row otherwise; until then it follows the top row as
+    /// arrivals re-sort the list (see `SelectionMode`). If the selected
+    /// PR is unchanged, preserve the current viewport offset so enrichment
+    /// refreshes do not undo wheel scrolling; if the selection changes, scroll
+    /// follows the new selection. Called by `update` after PRs arrive,
+    /// enrichment lands, or the grouping/scope changes.
     pub fn relayout(&mut self, scope: Option<&str>, tier_of: impl Fn(&PR) -> Option<Tier>) {
         let needle = self.filter.text().to_lowercase();
-        let visible: Vec<usize> = (0..self.prs.len())
+        let mut visible: Vec<usize> = (0..self.prs.len())
             .filter(|&i| scope.is_none_or(|slug| self.prs[i].repo_slug == slug))
             .filter(|&i| filter_matches(&self.prs[i], &needle))
             .collect();
+        visible.sort_by(|&a, &b| compare_recent_activity(&self.prs[a], &self.prs[b]));
         // `display_rows` keys on PR index; adapt the &PR closure (and the slug
         // we own) into index closures. Build into a local so the index closures
         // can borrow `self.prs` while we hold `&mut self`, then store the rows.
@@ -225,15 +255,26 @@ impl PrList {
             |i| prs[i].repo_slug.clone(),
         );
         self.rows = rows;
-        if visible.contains(&self.selected) {
-            if self.scroll_detached {
+        let target = if self.selection_mode != SelectionMode::FollowTop
+            && visible.contains(&self.selected)
+        {
+            self.selected
+        } else {
+            self.visible_pr_indices().next().unwrap_or(0)
+        };
+        if target == self.selected {
+            if self.selection_mode == SelectionMode::Detached {
                 self.clamp_scroll_offset();
             } else {
                 self.normalize_scroll();
             }
         } else {
-            self.selected = visible.first().copied().unwrap_or(0);
-            self.scroll_detached = false;
+            self.selected = target;
+            if self.selection_mode == SelectionMode::Detached {
+                // The pinned PR vanished; re-pin to the snapped-to row rather
+                // than keep a detached viewport aimed at nothing.
+                self.selection_mode = SelectionMode::Pinned;
+            }
             self.normalize_scroll();
         }
     }
@@ -312,6 +353,15 @@ impl PrList {
         })
     }
 
+    /// PR numbers of the display rows, in display order — the assertion
+    /// ordering tests make. Test-only sugar over `visible_pr_indices`.
+    #[cfg(test)]
+    pub fn pr_numbers_in_display_order(&self) -> Vec<u64> {
+        self.visible_pr_indices()
+            .map(|i| self.prs[i].number)
+            .collect()
+    }
+
     pub fn grouping(&self) -> Grouping {
         self.grouping
     }
@@ -323,7 +373,7 @@ impl PrList {
         self.grouping = self.grouping.next();
         self.selected = 0;
         self.scroll_offset = 0;
-        self.scroll_detached = false;
+        self.selection_mode = SelectionMode::FollowTop;
     }
 
     /// Reset the selection to the first visible PR and scroll to the top. Used
@@ -333,7 +383,7 @@ impl PrList {
         let first = self.visible_pr_indices().next().unwrap_or(0);
         self.selected = first;
         self.scroll_offset = 0;
-        self.scroll_detached = false;
+        self.selection_mode = SelectionMode::FollowTop;
         self.normalize_scroll();
     }
 
@@ -342,7 +392,7 @@ impl PrList {
         if let Some(next) = self.adjacent_pr(self.selected, Direction::Down) {
             self.selected = next;
         }
-        self.scroll_detached = false;
+        self.selection_mode = SelectionMode::Pinned;
         self.normalize_scroll();
     }
 
@@ -351,13 +401,13 @@ impl PrList {
         if let Some(prev) = self.adjacent_pr(self.selected, Direction::Up) {
             self.selected = prev;
         }
-        self.scroll_detached = false;
+        self.selection_mode = SelectionMode::Pinned;
         self.normalize_scroll();
     }
 
     pub fn resize(&mut self, viewport_height: usize) {
         self.viewport_height = viewport_height;
-        if self.scroll_detached {
+        if self.selection_mode == SelectionMode::Detached {
             self.clamp_scroll_offset();
         } else {
             self.normalize_scroll();
@@ -373,13 +423,22 @@ impl PrList {
         }
         let max_offset = self.rows.len().saturating_sub(self.viewport_height);
         self.scroll_offset = self.scroll_offset.saturating_add(rows).min(max_offset);
-        self.scroll_detached = true;
+        // Wheel input is engagement too: leaving `FollowTop` would let a
+        // background relayout yank the still-default selection (and the
+        // viewport with it) back to a re-sorted top row mid-browse.
+        self.selection_mode = SelectionMode::Detached;
     }
 
     /// Scroll the visible display window up without changing the selected PR.
     pub fn scroll_up(&mut self, rows: usize) {
+        // Mirror `scroll_down`'s guard: a wheel event over an empty list is a
+        // no-op, not engagement — leaving `FollowTop` here would pin the
+        // still-default selection to whichever PR happens to arrive first.
+        if self.viewport_height == 0 || self.rows.is_empty() {
+            return;
+        }
         self.scroll_offset = self.scroll_offset.saturating_sub(rows);
-        self.scroll_detached = true;
+        self.selection_mode = SelectionMode::Detached;
     }
 
     /// Select the PR row at `visible_row` within the current viewport. Headers
@@ -391,7 +450,7 @@ impl PrList {
             return false;
         };
         self.selected = *index;
-        self.scroll_detached = false;
+        self.selection_mode = SelectionMode::Pinned;
         true
     }
 
@@ -579,287 +638,4 @@ enum Direction {
 }
 
 #[cfg(test)]
-mod tests {
-    use chrono::TimeZone;
-
-    use super::{DisplayRow, Grouping, PrList};
-    use crate::blocker::Tier;
-    use crate::github::rest::PR;
-    use crate::github::types::PRState;
-
-    fn sample_pr(number: u64) -> PR {
-        PR {
-            number,
-            repo_slug: "owner/repo".to_owned(),
-            title: format!("PR #{number}"),
-            author: "octocat".to_owned(),
-            created_at: chrono::Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap(),
-            updated_at: chrono::Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap(),
-            additions: 0,
-            deletions: 0,
-            is_draft: false,
-            labels: Vec::new(),
-            requested_reviewers: Vec::new(),
-            assignees: Vec::new(),
-            review_decision: String::new(),
-            mergeable: "UNKNOWN".to_owned(),
-            last_commit_date: None,
-            head_commit_sha: None,
-            review_status_loaded: false,
-            head_ref: format!("feature/{number}"),
-            base_ref: "main".to_owned(),
-            head_repository_owner: "mayfieldiv".to_owned(),
-            state: PRState::Open,
-        }
-    }
-
-    /// Build a list with `n` PRs, laid out flat (no grouping) so navigation and
-    /// scroll tests exercise the row mechanics without headers in the way.
-    fn flat_list(n: u64) -> PrList {
-        let mut list = PrList::new();
-        for i in 1..=n {
-            list.push(sample_pr(i));
-        }
-        list.grouping = Grouping::None;
-        list.relayout(None, |_| None);
-        list
-    }
-
-    /// PR indices among the currently visible display rows.
-    fn visible_pr_indices(list: &PrList) -> Vec<usize> {
-        list.visible_rows()
-            .filter_map(|(row, _)| match row {
-                DisplayRow::Pr(i) => Some(*i),
-                DisplayRow::Header(_) => None,
-            })
-            .collect()
-    }
-
-    #[test]
-    fn pushed_pr_appears_in_the_list() {
-        let mut list = PrList::new();
-
-        list.push(sample_pr(42));
-
-        assert_eq!(list.prs().len(), 1);
-        assert_eq!(list.prs()[0].number, 42);
-    }
-
-    #[test]
-    fn new_list_has_no_fetch_in_flight_and_no_failure() {
-        let list = PrList::new();
-        assert!(!list.is_loading(None));
-        assert_eq!(list.failure(), None);
-    }
-
-    #[test]
-    fn new_list_defaults_to_smart_status_grouping() {
-        let list = PrList::new();
-        assert_eq!(list.grouping(), Grouping::SmartStatus);
-    }
-
-    #[test]
-    fn begin_fetch_marks_only_that_repo_loading() {
-        let mut list = PrList::new();
-        list.begin_fetch("acme/web");
-
-        assert!(list.is_loading(None), "any-repo scope sees the fetch");
-        assert!(list.is_loading(Some("acme/web")));
-        assert!(
-            !list.is_loading(Some("acme/api")),
-            "an untouched repo is not loading"
-        );
-    }
-
-    #[test]
-    fn complete_fetch_clears_loading_for_that_repo_only() {
-        let mut list = PrList::new();
-        list.begin_fetch("acme/web");
-        list.begin_fetch("acme/api");
-
-        list.complete_fetch("acme/web");
-
-        assert!(!list.is_loading(Some("acme/web")));
-        assert!(list.is_loading(Some("acme/api")));
-        assert!(list.is_loading(None), "another repo is still in flight");
-        assert_eq!(list.phase_of("acme/web"), Some(&super::Phase::Loaded));
-    }
-
-    #[test]
-    fn move_down_advances_selection_within_bounds() {
-        let mut list = flat_list(3);
-
-        list.move_down();
-        assert_eq!(list.selected(), 1);
-        list.move_down();
-        list.move_down();
-        list.move_down();
-        // Last PR is index 2; further moves clamp.
-        assert_eq!(list.selected(), 2);
-    }
-
-    #[test]
-    fn move_up_retreats_selection_and_clamps_at_zero() {
-        let mut list = flat_list(3);
-        list.move_down();
-        list.move_down();
-        assert_eq!(list.selected(), 2);
-
-        list.move_up();
-        list.move_up();
-        list.move_up();
-        assert_eq!(list.selected(), 0);
-    }
-
-    #[test]
-    fn navigation_skips_group_headers() {
-        // Two tiers: me-blocking (PR #1) and waiting-on-author (PR #2).
-        // Layout: [Header, Pr(0), Header, Pr(1)]. j must step Pr(0) -> Pr(1).
-        let mut list = PrList::new();
-        list.push(sample_pr(1));
-        list.push(sample_pr(2));
-        list.relayout(None, |pr| {
-            Some(if pr.number == 1 {
-                Tier::MeBlocking
-            } else {
-                Tier::WaitingOnAuthor
-            })
-        });
-
-        assert_eq!(list.selected(), 0);
-        list.move_down();
-        assert_eq!(list.selected(), 1, "j steps over the second group's header");
-        list.move_up();
-        assert_eq!(list.selected(), 0, "k steps back over the header");
-    }
-
-    #[test]
-    fn cycle_grouping_advances_mode_and_resets_selection() {
-        let mut list = flat_list(3);
-        list.move_down();
-        list.move_down();
-        assert_eq!(list.selected(), 2);
-
-        // flat_list set grouping to None; cycling wraps None -> SmartStatus.
-        list.cycle_grouping();
-        assert_eq!(list.grouping(), Grouping::SmartStatus);
-        assert_eq!(list.selected(), 0, "selection resets on regroup");
-    }
-
-    #[test]
-    fn visible_rows_yields_window_starting_at_scroll_offset() {
-        let mut list = flat_list(20);
-        list.resize(5);
-        for _ in 0..10 {
-            list.move_down();
-        }
-        let offset = list.scroll_offset();
-
-        let indices = visible_pr_indices(&list);
-
-        assert_eq!(indices.len(), 5);
-        // Flat layout: display row N is PR index N, so the first visible PR
-        // index equals the scroll offset.
-        assert_eq!(indices[0], offset);
-        assert_eq!(indices[4], offset + 4);
-    }
-
-    #[test]
-    fn visible_rows_caps_at_list_length_when_window_extends_past_end() {
-        let mut list = flat_list(3);
-        list.resize(10);
-
-        let count = list.visible_rows().count();
-
-        assert_eq!(
-            count, 3,
-            "viewport is larger than list; should yield all rows"
-        );
-    }
-
-    #[test]
-    fn moving_below_bottom_margin_advances_scroll() {
-        let mut list = flat_list(20);
-        list.resize(10);
-
-        for _ in 0..9 {
-            list.move_down();
-        }
-
-        assert!(
-            list.scroll_offset() >= 1,
-            "scroll should advance into the bottom margin, got {}",
-            list.scroll_offset(),
-        );
-    }
-
-    #[test]
-    fn shrinking_viewport_re_clamps_scroll_to_keep_selection_visible() {
-        let mut list = flat_list(30);
-        list.resize(20);
-        for _ in 0..25 {
-            list.move_down();
-        }
-        let selected_row = list.selected(); // flat: row == index
-        assert!(selected_row < list.scroll_offset() + 20);
-
-        list.resize(5);
-
-        assert!(
-            list.selected() >= list.scroll_offset() && list.selected() < list.scroll_offset() + 5,
-            "selection {} must stay within window {}..{} after shrink",
-            list.selected(),
-            list.scroll_offset(),
-            list.scroll_offset() + 5,
-        );
-    }
-
-    #[test]
-    fn single_row_viewport_keeps_selection_visible() {
-        let mut list = flat_list(10);
-        list.resize(1);
-
-        // At viewport_height = 1 the margin must collapse to 0, otherwise the
-        // top and bottom margins are jointly unsatisfiable and the selected row
-        // scrolls out of the single visible line.
-        for _ in 0..5 {
-            list.move_down();
-        }
-
-        // Flat layout: selected PR index == its display row.
-        assert_eq!(
-            list.scroll_offset(),
-            list.selected(),
-            "the only visible row must be the selected one",
-        );
-    }
-
-    #[test]
-    fn fail_fetch_records_failure_without_masking_other_repos() {
-        let mut list = PrList::new();
-        list.begin_fetch("acme/web");
-        list.begin_fetch("acme/api");
-
-        list.fail_fetch("acme/web", "network down".to_owned());
-
-        assert_eq!(list.failure(), Some("network down"));
-        assert!(
-            list.is_loading(Some("acme/api")),
-            "the other repo's fetch keeps going"
-        );
-        assert!(!list.is_loading(Some("acme/web")));
-    }
-
-    #[test]
-    fn failure_reports_first_failed_repo_in_slug_order() {
-        let mut list = PrList::new();
-        list.fail_fetch("zeta/repo", "zeta down".to_owned());
-        list.fail_fetch("acme/web", "acme down".to_owned());
-
-        assert_eq!(
-            list.failure(),
-            Some("acme down"),
-            "BTreeMap order makes the report deterministic"
-        );
-    }
-}
+mod tests;

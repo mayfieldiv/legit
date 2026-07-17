@@ -30,6 +30,12 @@ pub struct ReviewStatus {
     /// transition since the list was fetched (CONTEXT.md "Lifecycle State"), so
     /// the row can stop showing a merged PR's permanent `UNKNOWN` mergeable.
     pub state: PRState,
+    /// The PR's last-activity time as of this fetch. Keeps the list's
+    /// activity sort and Updated column fresh on a single-PR refresh (`r`),
+    /// which never re-runs the REST listing that otherwise supplies it.
+    /// Optional under the same permissive-parse posture as the other fields;
+    /// an absent value leaves the PR's clock untouched.
+    pub updated_at: Option<DateTime<Utc>>,
     pub last_commit_date: Option<DateTime<Utc>>,
     pub head_commit_sha: Option<String>,
 }

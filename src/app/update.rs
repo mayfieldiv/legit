@@ -1004,16 +1004,19 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
         }
         Msg::PrArrived(pr) => {
             if model.list.merge_listed(pr) {
-                // A newly-discovered PR has no enrichment yet, so it joins
-                // "Loading details…"; rebuild the layout so it renders
-                // immediately. The first PR to arrive becomes selected; fetch
-                // its files for the summary panel (deduped, so later arrivals
-                // that don't move the selection cost nothing).
+                // A new PR joins "Loading details…"; a re-streamed one took
+                // fresh listing fields (title, labels, draft, activity time)
+                // with its enrichment preserved. Either way the rows re-sort,
+                // which can move the follow-the-top selection — fetch the
+                // selected PR's files for the summary panel (deduped, so
+                // arrivals that don't move the selection cost nothing).
                 model.relayout();
                 maybe_fetch_selected_files(model)
             } else {
-                // A re-list re-streamed a PR already pooled: keep the enriched
-                // copy as-is — no duplicate row, no relayout or file re-fetch.
+                // The re-streamed copy matched the pooled one exactly — nothing
+                // to re-render, so skip the relayout (a re-list re-streams
+                // every pooled PR; most survivors are unchanged between
+                // refreshes).
                 Vec::new()
             }
         }
@@ -1037,21 +1040,13 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
             // — once we know the head SHA — fan out the checks fetch for it.
             let head_sha = status.head_commit_sha.clone();
             if let Some(entry) = model.list.pr_mut(&pr) {
-                entry.additions = status.additions;
-                entry.deletions = status.deletions;
-                entry.review_decision = status.review_decision;
-                entry.mergeable = status.mergeable;
-                // A refresh is the only thing that detects a MERGED/CLOSED
-                // transition since the list was fetched (the list endpoint only
-                // yields OPEN). Applying it lets the row show the real lifecycle
-                // state instead of a merged PR's permanent UNKNOWN mergeable, and
-                // suppresses the one-shot mergeable retry below (which only fires
-                // for OPEN PRs). The Open PR List still prunes the PR on the next
-                // re-list, not here — refresh relabels, re-list reconciles.
-                entry.state = status.state;
-                entry.last_commit_date = status.last_commit_date;
-                entry.head_commit_sha = status.head_commit_sha;
-                entry.review_status_loaded = true;
+                // A MERGED/CLOSED state relabels the row but does not prune it
+                // — that suppresses the one-shot mergeable retry below (which
+                // only fires for OPEN PRs); the Open PR List still prunes on
+                // the next re-list — refresh relabels, re-list reconciles. A
+                // fresh activity clock re-sorts the row: `refresh_blockers`
+                // below relayouts in the same pass.
+                entry.apply_review_status(status);
             } else {
                 // PR no longer in the list (e.g. filtered/refetched); drop it.
                 return Vec::new();

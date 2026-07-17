@@ -54,8 +54,9 @@ pub enum DisplayRow {
 /// - `slug_of` returns a PR's Tracked Repo slug, used as its repo-grouping key
 ///   (so the All tab groups under one header per repo).
 ///
-/// PR order within a group preserves input order (the REST stream order). Empty
-/// groups are never emitted.
+/// PR order within a group preserves the caller-provided display order (the
+/// Open PR List supplies most-recently-updated first). Empty groups are never
+/// emitted.
 pub fn display_rows(
     visible: &[usize],
     grouping: Grouping,
