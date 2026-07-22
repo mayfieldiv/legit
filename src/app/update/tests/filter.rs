@@ -45,6 +45,34 @@ fn filter_matches_title_and_author_case_insensitively() {
 }
 
 #[test]
+fn filter_matches_pr_number() {
+    // tabbed_model PRs: index 0 is #10 "web pr", index 1 is #1 "legit pr".
+    let mut model = tabbed_model();
+
+    update(&mut model, key_event(KeyCode::Char('/')));
+    type_filter(&mut model, "10");
+    assert_eq!(visible(&model), vec![0], "digits match the PR number");
+
+    update(&mut model, key_event(KeyCode::Esc));
+    update(&mut model, key_event(KeyCode::Char('/')));
+    type_filter(&mut model, "#10");
+    assert_eq!(
+        visible(&model),
+        vec![0],
+        "a leading # is accepted with the number"
+    );
+
+    update(&mut model, key_event(KeyCode::Esc));
+    update(&mut model, key_event(KeyCode::Char('/')));
+    type_filter(&mut model, "1");
+    assert_eq!(
+        visible(&model),
+        vec![0, 1],
+        "partial number is a substring match (#1 and #10)"
+    );
+}
+
+#[test]
 fn editing_consumes_every_key_instead_of_dispatching_normal_mode() {
     let mut model = tabbed_model();
     update(&mut model, key_event(KeyCode::Char('/')));

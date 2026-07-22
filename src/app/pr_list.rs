@@ -53,15 +53,18 @@ impl Filter {
     }
 }
 
-/// Case-insensitive substring match over a PR's title and author. An empty
+/// Case-insensitive substring match over a PR's title, author, and number.
+/// The number matches as digits (`42`) or with a leading `#` (`#42`). An empty
 /// needle matches everything. The needle must already be lowercased (done
 /// once per relayout, not per PR).
 fn filter_matches(pr: &PR, lowercase_needle: &str) -> bool {
     if lowercase_needle.is_empty() {
         return true;
     }
+    let number_needle = lowercase_needle.strip_prefix('#').unwrap_or(lowercase_needle);
     pr.title.to_lowercase().contains(lowercase_needle)
         || pr.author.to_lowercase().contains(lowercase_needle)
+        || (!number_needle.is_empty() && pr.number.to_string().contains(number_needle))
 }
 
 /// Most recent GitHub activity first. Creation time keeps same-second updates
