@@ -53,18 +53,91 @@ impl Filter {
     }
 }
 
-/// Case-insensitive substring match over a PR's title, author, and number.
-/// The number matches as digits (`42`) or with a leading `#` (`#42`). An empty
-/// needle matches everything. The needle must already be lowercased (done
-/// once per relayout, not per PR).
-fn filter_matches(pr: &PR, lowercase_needle: &str) -> bool {
-    if lowercase_needle.is_empty() {
-        return true;
+/// The filter text, classified once per relayout (not per PR) into the shape
+/// it matches by:
+///
+/// - GitHub PR URL — `https://github.com/owner/repo/pull/N` with optional
+///   scheme, `www.`, and trailing segments (`/changes`, `/files`, …). Matches
+///   that exact `owner/repo` + number.
+/// - Worktree path — any string containing `/` whose leaf is `{N}-{branch}`
+///   (legit's worktree directory naming). Matches by PR number. Requiring a
+///   separator keeps a title search like `1-click` on the substring path.
+/// - Otherwise, a case-insensitive substring over title, author, and number;
+///   the number also matches with a leading `#` (`#42`).
+///
+/// Both paste shapes fall back to `Substring` while incomplete, so ordinary
+/// matching still applies as the user types.
+#[derive(Debug, PartialEq, Eq)]
+enum FilterQuery {
+    /// Empty filter: everything matches.
+    All,
+    PrUrl {
+        slug: String,
+        number: u64,
+    },
+    WorktreePath(u64),
+    Substring(String),
+}
+
+impl FilterQuery {
+    fn parse(text: &str) -> Self {
+        let needle = text.trim().to_lowercase();
+        if needle.is_empty() {
+            return Self::All;
+        }
+        if let Some((slug, number)) = parse_github_pr_url_filter(&needle) {
+            return Self::PrUrl { slug, number };
+        }
+        if let Some(number) = parse_worktree_path_filter(&needle) {
+            return Self::WorktreePath(number);
+        }
+        Self::Substring(needle)
     }
-    let number_needle = lowercase_needle.strip_prefix('#').unwrap_or(lowercase_needle);
-    pr.title.to_lowercase().contains(lowercase_needle)
-        || pr.author.to_lowercase().contains(lowercase_needle)
-        || (!number_needle.is_empty() && pr.number.to_string().contains(number_needle))
+
+    fn matches(&self, pr: &PR) -> bool {
+        match self {
+            Self::All => true,
+            Self::PrUrl { slug, number } => {
+                pr.repo_slug.eq_ignore_ascii_case(slug) && pr.number == *number
+            }
+            Self::WorktreePath(number) => pr.number == *number,
+            Self::Substring(needle) => {
+                let number_needle = needle.strip_prefix('#').unwrap_or(needle);
+                pr.title.to_lowercase().contains(needle)
+                    || pr.author.to_lowercase().contains(needle)
+                    || (!number_needle.is_empty() && pr.number.to_string().contains(number_needle))
+            }
+        }
+    }
+}
+
+/// Parse a pasted GitHub PR URL into `(owner/repo, number)`. `needle` is
+/// already lowercased. Returns `None` for incomplete or non-URL text.
+fn parse_github_pr_url_filter(needle: &str) -> Option<(String, u64)> {
+    let rest = needle
+        .strip_prefix("https://")
+        .or_else(|| needle.strip_prefix("http://"))
+        .unwrap_or(needle);
+    let rest = rest.strip_prefix("www.").unwrap_or(rest);
+    let rest = rest.strip_prefix("github.com/")?;
+    let mut parts = rest.split('/');
+    let owner = parts.next().filter(|s| !s.is_empty())?;
+    let repo = parts.next().filter(|s| !s.is_empty())?;
+    if parts.next() != Some("pull") {
+        return None;
+    }
+    // Trailing query/fragment on the number segment (unusual, but cheap).
+    let number = parts.next()?.split(['#', '?']).next()?.parse().ok()?;
+    Some((format!("{owner}/{repo}"), number))
+}
+
+/// Parse a pasted worktree path into the PR number named by its leaf.
+fn parse_worktree_path_filter(needle: &str) -> Option<u64> {
+    if !needle.contains('/') {
+        return None;
+    }
+    let leaf = needle.trim_end_matches('/').rsplit('/').next()?;
+    crate::worktree::parse_worktree_leaf(leaf)
 }
 
 /// Most recent GitHub activity first. Creation time keeps same-second updates
@@ -241,10 +314,10 @@ impl PrList {
     /// follows the new selection. Called by `update` after PRs arrive,
     /// enrichment lands, or the grouping/scope changes.
     pub fn relayout(&mut self, scope: Option<&str>, tier_of: impl Fn(&PR) -> Option<Tier>) {
-        let needle = self.filter.text().to_lowercase();
+        let query = FilterQuery::parse(self.filter.text());
         let mut visible: Vec<usize> = (0..self.prs.len())
             .filter(|&i| scope.is_none_or(|slug| self.prs[i].repo_slug == slug))
-            .filter(|&i| filter_matches(&self.prs[i], &needle))
+            .filter(|&i| query.matches(&self.prs[i]))
             .collect();
         visible.sort_by(|&a, &b| compare_recent_activity(&self.prs[a], &self.prs[b]));
         // `display_rows` keys on PR index; adapt the &PR closure (and the slug

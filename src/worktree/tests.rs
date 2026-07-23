@@ -264,6 +264,26 @@ fn resolves_worktree_paths_from_config() {
 }
 
 #[test]
+fn parse_worktree_leaf_round_trips_resolve_worktree_path_naming() {
+    let config = LegitConfig {
+        repos: vec![RepoConfig {
+            slug: "acme/widgets".to_owned(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let path = resolve_worktree_path(&config, "acme/widgets", 9248, "research/generic-thing")
+        .expect("worktree path");
+    let leaf = path.file_name().and_then(|n| n.to_str()).expect("leaf");
+
+    assert_eq!(parse_worktree_leaf(leaf), Some(9248));
+
+    assert_eq!(parse_worktree_leaf("no-number"), None);
+    assert_eq!(parse_worktree_leaf("42"), None, "no branch suffix");
+    assert_eq!(parse_worktree_leaf("42-"), None, "empty branch suffix");
+}
+
+#[test]
 fn resolves_source_clone_from_config() {
     let config = LegitConfig {
         repos: vec![

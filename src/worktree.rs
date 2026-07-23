@@ -148,6 +148,17 @@ pub fn resolve_worktree_path(
     )))
 }
 
+/// The inverse of `resolve_worktree_path`'s leaf naming: extract the PR number
+/// from a `{N}-{branch}` directory name. `None` when the name doesn't have
+/// that shape. Kept beside the format so the two evolve together.
+pub fn parse_worktree_leaf(leaf: &str) -> Option<u64> {
+    let (num_str, rest) = leaf.split_once('-')?;
+    if rest.is_empty() || !num_str.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    num_str.parse().ok()
+}
+
 pub fn expected_branch_for_pr(pr: &PR, repo_owner: &str) -> String {
     if pr.head_repository_owner.is_empty() || pr.head_repository_owner == repo_owner {
         pr.head_ref.clone()

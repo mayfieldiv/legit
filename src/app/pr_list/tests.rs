@@ -390,3 +390,127 @@ fn failure_reports_first_failed_repo_in_slug_order() {
         "BTreeMap order makes the report deterministic"
     );
 }
+
+/// Apply `text` as an active filter and relayout over the whole pool.
+fn apply_filter(list: &mut PrList, text: &str) {
+    list.filter_open();
+    for c in text.chars() {
+        list.filter_push(c);
+    }
+    list.filter_submit();
+    list.relayout(None, |_| None);
+}
+
+fn multi_repo_list() -> PrList {
+    let mut list = PrList::new();
+    let mut immy = sample_pr(9248);
+    immy.repo_slug = "immense/immybot".to_owned();
+    immy.title = "research generic ImmyRadioGroup".to_owned();
+    let mut other = sample_pr(100);
+    other.repo_slug = "immense/immybot".to_owned();
+    other.title = "unrelated".to_owned();
+    let mut manager = sample_pr(9248);
+    manager.repo_slug = "immense/immybot-manager".to_owned();
+    manager.title = "same number different repo".to_owned();
+    list.push(immy);
+    list.push(other);
+    list.push(manager);
+    list.grouping = Grouping::None;
+    list.relayout(None, |_| None);
+    list
+}
+
+#[test]
+fn filter_matches_full_github_pr_url_including_trailing_segment() {
+    let mut list = multi_repo_list();
+
+    apply_filter(
+        &mut list,
+        "https://github.com/immense/immybot/pull/9248/changes",
+    );
+
+    assert_eq!(
+        list.pr_numbers_in_display_order(),
+        vec![9248],
+        "URL pins the PR number"
+    );
+    assert_eq!(
+        list.selected_pr().map(|pr| pr.repo_slug.as_str()),
+        Some("immense/immybot"),
+        "URL also pins the repo, so the manager PR with the same number is out"
+    );
+}
+
+#[test]
+fn filter_matches_github_pr_url_without_scheme() {
+    let mut list = multi_repo_list();
+
+    apply_filter(&mut list, "github.com/immense/immybot/pull/9248");
+
+    assert_eq!(
+        list.selected_pr()
+            .map(|pr| (pr.repo_slug.as_str(), pr.number)),
+        Some(("immense/immybot", 9248)),
+    );
+}
+
+#[test]
+fn filter_github_pr_url_ignores_wrong_repo() {
+    let mut list = multi_repo_list();
+
+    apply_filter(&mut list, "https://github.com/immense/other-repo/pull/9248");
+
+    assert!(
+        list.pr_numbers_in_display_order().is_empty(),
+        "slug must match exactly"
+    );
+}
+
+#[test]
+fn filter_matches_worktree_path_by_pr_number_leaf() {
+    let mut list = multi_repo_list();
+
+    apply_filter(
+        &mut list,
+        "~/dev/immytrees/9248-research-generic-immyradiogroup",
+    );
+
+    let numbers = list.pr_numbers_in_display_order();
+    assert_eq!(
+        numbers,
+        vec![9248, 9248],
+        "path leaf yields the number; both repos' #9248 match without a slug"
+    );
+}
+
+#[test]
+fn filter_worktree_path_does_not_match_wrong_number() {
+    let mut list = multi_repo_list();
+
+    apply_filter(&mut list, "~/dev/immytrees/9999-does-not-exist");
+
+    assert!(list.pr_numbers_in_display_order().is_empty());
+}
+
+#[test]
+fn filter_bare_hyphenated_text_still_uses_substring_not_path_parse() {
+    // Without path separators, `1-click` must not hijack number matching —
+    // it should still substring-match titles (none here) rather than mean PR #1.
+    let mut list = PrList::new();
+    let mut pr = sample_pr(1);
+    pr.title = "add 1-click signup".to_owned();
+    list.push(pr);
+    let mut other = sample_pr(2);
+    other.title = "unrelated".to_owned();
+    list.push(other);
+    list.grouping = Grouping::None;
+    list.relayout(None, |_| None);
+
+    apply_filter(&mut list, "1-click");
+
+    assert_eq!(
+        list.pr_numbers_in_display_order(),
+        vec![1],
+        "bare `N-…` stays a title substring, not a worktree-path parse"
+    );
+}
