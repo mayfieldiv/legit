@@ -89,25 +89,30 @@ fn maybe_fetch_open_prs(model: &mut Model) -> Vec<Cmd> {
     cmds
 }
 
+/// List worktrees for one Tracked Repo when it has a configured source clone.
+/// Missing source clones are expected (worktree support is opt-in); an invalid
+/// path was already rejected while loading config, but remains a harmless
+/// no-op here if a synthetic model reaches this helper in a test.
+fn list_worktree_cmd(model: &Model, repo_slug: &str) -> Option<Cmd> {
+    match worktree::resolve_source_clone(&model.config, repo_slug) {
+        Ok(Some(source_clone)) => Some(Cmd::ListWorktrees {
+            repo_slug: repo_slug.to_owned(),
+            source_clone,
+        }),
+        Ok(None) => None,
+        Err(error) => {
+            tracing::warn!(%repo_slug, %error, "failed to resolve worktree source clone");
+            None
+        }
+    }
+}
+
 /// List worktrees for every configured Tracked Repo that has a source clone.
 fn list_worktree_cmds(model: &Model) -> Vec<Cmd> {
     model
         .tracked_repos()
         .into_iter()
-        .filter_map(|repo| {
-            let repo_slug = repo.slug();
-            match worktree::resolve_source_clone(&model.config, &repo_slug) {
-                Ok(Some(source_clone)) => Some(Cmd::ListWorktrees {
-                    repo_slug,
-                    source_clone,
-                }),
-                Ok(None) => None,
-                Err(error) => {
-                    tracing::warn!(%repo_slug, %error, "failed to resolve worktree source clone");
-                    None
-                }
-            }
-        })
+        .filter_map(|repo| list_worktree_cmd(model, &repo.slug()))
         .collect()
 }
 
@@ -975,13 +980,21 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
         }
         Msg::TerminalEvent(_) => Vec::new(),
         Msg::ConfigLoaded(config) => {
+            let initial_load = !model.config_loaded;
             model.config = config;
             // Releasing the fetch gate here lets the PR fetch fire if auth + repo
             // already landed — config (a local file read) usually wins the
             // startup race, but when it arrives last it must kick off the fetch.
             model.config_loaded = true;
             let mut cmds = maybe_fetch_open_prs(model);
-            cmds.extend(list_worktree_cmds(model));
+            // Initial discovery belongs to startup. Later ConfigLoaded messages
+            // come from `R`, which explicitly re-lists worktrees when it is
+            // dispatched; doing it again here would race two identical
+            // ListWorktrees commands and make reconciliation an incidental
+            // config-reload side effect.
+            if initial_load {
+                cmds.extend(list_worktree_cmds(model));
+            }
             cmds
         }
         Msg::AuthTokenResolved(token) => {

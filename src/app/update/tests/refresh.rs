@@ -3,6 +3,7 @@
 use super::*;
 use crate::{
     blocker::{BlockerResult, Tier},
+    config::{LegitConfig, RepoConfig},
     github::types::{PRState, ReviewStatus},
 };
 
@@ -178,6 +179,83 @@ fn fetched_open_pr_slugs(cmds: &[Cmd]) -> Vec<String> {
             _ => None,
         })
         .collect()
+}
+
+/// The repo slugs of every `ListWorktrees` in `cmds`, in dispatch order.
+fn listed_worktree_slugs(cmds: &[Cmd]) -> Vec<String> {
+    cmds.iter()
+        .filter_map(|c| match c {
+            Cmd::ListWorktrees { repo_slug, .. } => Some(repo_slug.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn config_with_source_clones(slugs: &[&str]) -> LegitConfig {
+    LegitConfig {
+        repos: slugs
+            .iter()
+            .map(|slug| RepoConfig {
+                slug: (*slug).to_owned(),
+                source_clone: Some(format!("/src/{slug}")),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn r_relists_worktrees_only_for_the_selected_prs_repo() {
+    let mut model = two_repo_model();
+    model.config = config_with_source_clones(&["acme/web", "mayfieldiv/legit"]);
+    model.config_loaded = true;
+    update(&mut model, key_event(KeyCode::Char('2'))); // mayfieldiv/legit tab
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('r')));
+
+    assert_eq!(refreshed_keys(&cmds), [key(1)]);
+    assert_eq!(
+        listed_worktree_slugs(&cmds),
+        ["mayfieldiv/legit"],
+        "r must reconcile only the selected PR's repository: {cmds:?}",
+    );
+}
+
+#[test]
+fn r_without_a_source_clone_skips_worktree_listing() {
+    let mut model = list_model(&[1]);
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('r')));
+
+    assert_eq!(refreshed_keys(&cmds), [key(1)]);
+    assert!(
+        listed_worktree_slugs(&cmds).is_empty(),
+        "a repo without sourceClone remains a harmless no-op: {cmds:?}",
+    );
+}
+
+#[test]
+fn shift_r_explicitly_relists_each_source_clone_without_config_reload_duplicates() {
+    let mut model = two_repo_model();
+    let config = config_with_source_clones(&["acme/web", "mayfieldiv/legit"]);
+    model.config = config.clone();
+    model.config_loaded = true;
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('R')));
+    let mut slugs = listed_worktree_slugs(&cmds);
+    slugs.sort();
+    assert_eq!(
+        slugs,
+        ["acme/web", "mayfieldiv/legit"],
+        "R explicitly reconciles every configured source clone: {cmds:?}",
+    );
+
+    let reload_cmds = update(&mut model, Msg::ConfigLoaded(config));
+    assert!(
+        listed_worktree_slugs(&reload_cmds).is_empty(),
+        "the R-driven config response must not dispatch duplicate listings: {reload_cmds:?}",
+    );
 }
 
 #[test]
