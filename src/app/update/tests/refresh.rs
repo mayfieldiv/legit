@@ -1,5 +1,7 @@
 // ── refresh: direct dispatch, tier order, indicator, drain, checks, retry ───
 
+use std::path::PathBuf;
+
 use super::*;
 use crate::{
     blocker::{BlockerResult, Tier},
@@ -181,13 +183,24 @@ fn fetched_open_pr_slugs(cmds: &[Cmd]) -> Vec<String> {
         .collect()
 }
 
-/// The repo slugs of every `ListWorktrees` in `cmds`, in dispatch order.
-fn listed_worktree_slugs(cmds: &[Cmd]) -> Vec<String> {
+/// The repo slug and source clone of every `ListWorktrees` in `cmds`, in
+/// dispatch order.
+fn listed_worktrees(cmds: &[Cmd]) -> Vec<(String, PathBuf)> {
     cmds.iter()
         .filter_map(|c| match c {
-            Cmd::ListWorktrees { repo_slug, .. } => Some(repo_slug.clone()),
+            Cmd::ListWorktrees {
+                repo_slug,
+                source_clone,
+            } => Some((repo_slug.clone(), source_clone.clone())),
             _ => None,
         })
+        .collect()
+}
+
+fn listed_worktree_slugs(cmds: &[Cmd]) -> Vec<String> {
+    listed_worktrees(cmds)
+        .into_iter()
+        .map(|(repo_slug, _)| repo_slug)
         .collect()
 }
 
@@ -236,25 +249,31 @@ fn r_without_a_source_clone_skips_worktree_listing() {
 }
 
 #[test]
-fn shift_r_explicitly_relists_each_source_clone_without_config_reload_duplicates() {
+fn shift_r_relists_each_source_clone_from_the_reloaded_config_once() {
     let mut model = two_repo_model();
-    let config = config_with_source_clones(&["acme/web", "mayfieldiv/legit"]);
-    model.config = config.clone();
+    model.config = config_with_source_clones(&["acme/web", "mayfieldiv/legit"]);
     model.config_loaded = true;
 
     let cmds = update(&mut model, key_event(KeyCode::Char('R')));
-    let mut slugs = listed_worktree_slugs(&cmds);
-    slugs.sort();
-    assert_eq!(
-        slugs,
-        ["acme/web", "mayfieldiv/legit"],
-        "R explicitly reconciles every configured source clone: {cmds:?}",
+    assert!(
+        listed_worktrees(&cmds).is_empty(),
+        "R must wait for the fresh config before resolving source clones: {cmds:?}",
     );
 
-    let reload_cmds = update(&mut model, Msg::ConfigLoaded(config));
-    assert!(
-        listed_worktree_slugs(&reload_cmds).is_empty(),
-        "the R-driven config response must not dispatch duplicate listings: {reload_cmds:?}",
+    let mut reloaded = config_with_source_clones(&["acme/web", "mayfieldiv/legit"]);
+    reloaded.repos[0].source_clone = Some("/new/acme-web".to_owned());
+    reloaded.repos[1].source_clone = Some("/new/legit".to_owned());
+    let reload_cmds = update(&mut model, Msg::ConfigLoaded(reloaded));
+    let mut worktrees = listed_worktrees(&reload_cmds);
+    worktrees.sort();
+    assert_eq!(
+        worktrees,
+        [
+            ("acme/web".to_owned(), PathBuf::from("/new/acme-web")),
+            ("mayfieldiv/legit".to_owned(), PathBuf::from("/new/legit")),
+        ],
+        "the config response must reconcile every freshly loaded source clone exactly once: \
+         {reload_cmds:?}",
     );
 }
 

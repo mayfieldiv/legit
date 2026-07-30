@@ -980,21 +980,16 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
         }
         Msg::TerminalEvent(_) => Vec::new(),
         Msg::ConfigLoaded(config) => {
-            let initial_load = !model.config_loaded;
             model.config = config;
             // Releasing the fetch gate here lets the PR fetch fire if auth + repo
             // already landed — config (a local file read) usually wins the
             // startup race, but when it arrives last it must kick off the fetch.
             model.config_loaded = true;
             let mut cmds = maybe_fetch_open_prs(model);
-            // Initial discovery belongs to startup. Later ConfigLoaded messages
-            // come from `R`, which explicitly re-lists worktrees when it is
-            // dispatched; doing it again here would race two identical
-            // ListWorktrees commands and make reconciliation an incidental
-            // config-reload side effect.
-            if initial_load {
-                cmds.extend(list_worktree_cmds(model));
-            }
+            // Source Clones are config-derived, so reconcile them only after the
+            // fresh config is installed. This serves both startup and `R`
+            // without resolving paths from stale config or dispatching duplicates.
+            cmds.extend(list_worktree_cmds(model));
             cmds
         }
         Msg::AuthTokenResolved(token) => {
