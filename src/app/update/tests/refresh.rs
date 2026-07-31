@@ -510,14 +510,20 @@ fn r_on_a_repo_tab_whose_prs_are_all_filtered_out_does_not_relist() {
 #[test]
 fn re_pressing_r_while_refreshing_is_deduped() {
     let mut model = list_model(&[1]);
+    model.config = config_with_source_clones(&["mayfieldiv/legit"]);
     let first = update(&mut model, key_event(KeyCode::Char('r')));
     assert_eq!(refreshed_keys(&first), [key(1)], "first press dispatches");
+    assert_eq!(
+        listed_worktree_slugs(&first),
+        ["mayfieldiv/legit"],
+        "precondition: the first refresh reconciles its worktrees",
+    );
 
     // The PR is still in flight (no RefreshComplete yet), so a second press is
-    // a no-op rather than a duplicate fan-out.
+    // a whole-action no-op rather than duplicating either command.
     let second = update(&mut model, key_event(KeyCode::Char('r')));
     assert!(
-        refreshed_keys(&second).is_empty(),
+        second.is_empty(),
         "re-pressing r while refreshing dispatches nothing: {second:?}",
     );
 }

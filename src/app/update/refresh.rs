@@ -31,6 +31,8 @@ pub(super) fn refresh_selected_cmds(model: &mut Model) -> Vec<Cmd> {
         return relist_empty_repo_cmds(model);
     };
     let Some(refresh) = begin_refresh(model, key.clone(), true) else {
+        // Keep a deduped re-press a whole-action no-op: its local worktree
+        // reconciliation belongs to the refresh that is already in flight.
         return Vec::new();
     };
     let mut cmds = vec![refresh];

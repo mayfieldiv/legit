@@ -918,7 +918,11 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
                 handle_filter_editing_key(model, key.code);
             } else {
                 let cmds = handle_list_key(model, key.code, now);
-                if !cmds.is_empty() {
+                // Refresh owns the whole keypress even when deduplication makes
+                // it commandless; falling through would dispatch FetchFiles
+                // and turn the documented no-op into a partial refresh.
+                let refresh_key = matches!(key.code, KeyCode::Char('r' | 'R'));
+                if !cmds.is_empty() || refresh_key {
                     return cmds;
                 }
             }
