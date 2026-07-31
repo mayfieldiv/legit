@@ -338,6 +338,15 @@ pub struct Model {
     /// offset live inside that variant). `Esc` in the detail view returns to
     /// `List`.
     pub view_mode: ViewMode,
+    /// Selected PR whose summary-panel scroll offset belongs to. Kept beside
+    /// `summary_scroll` so the reducer can reset the offset whenever list
+    /// selection changes, regardless of whether the change came from a key,
+    /// click, filter, tab, grouping, or streamed list update.
+    summary_pr: Option<PrKey>,
+    /// Lines scrolled past the top of the list-mode summary panel. The
+    /// reducer clamps it to the panel content's last screenful after every
+    /// update; the view only reads it.
+    summary_scroll: usize,
     /// Detail-view filter: show resolved threads (`t` toggles; default false).
     /// Lives on the `Model`, not `DetailState`, so the preference survives
     /// closing and reopening detail views (mirrors the TS app-level ui-state).
@@ -397,6 +406,8 @@ impl Model {
                 worktrees_by_repo: HashMap::new(),
                 blockers: HashMap::new(),
                 view_mode: ViewMode::List,
+                summary_pr: None,
+                summary_scroll: 0,
                 show_resolved: false,
                 show_bot_comments: true,
                 refreshing: HashSet::new(),
@@ -475,6 +486,38 @@ impl Model {
             ViewMode::Detail(detail) => Some(detail.key.clone()),
             ViewMode::List => self.list.selected_pr().map(PR::key),
         }
+    }
+
+    /// Current list-mode summary-panel scroll offset.
+    pub fn summary_scroll(&self) -> usize {
+        self.summary_scroll
+    }
+
+    /// Reset the summary to the top when it starts showing a different PR.
+    /// Returns whether the selected identity changed.
+    pub(crate) fn sync_summary_pr(&mut self, key: Option<PrKey>) -> bool {
+        if self.summary_pr == key {
+            return false;
+        }
+        self.summary_pr = key;
+        self.summary_scroll = 0;
+        true
+    }
+
+    /// Scroll the summary down by `lines`; the post-update normalization pass
+    /// clamps the tentative offset against the measured content.
+    pub(crate) fn scroll_summary_down(&mut self, lines: usize) {
+        self.summary_scroll = self.summary_scroll.saturating_add(lines);
+    }
+
+    /// Scroll the summary toward the top without underflow.
+    pub(crate) fn scroll_summary_up(&mut self, lines: usize) {
+        self.summary_scroll = self.summary_scroll.saturating_sub(lines);
+    }
+
+    /// Clamp the stored summary offset to its measured last screenful.
+    pub(crate) fn clamp_summary_scroll(&mut self, max_scroll: usize) {
+        self.summary_scroll = self.summary_scroll.min(max_scroll);
     }
 
     /// The worktree currently attached to `pr`, matched by expected branch

@@ -24,8 +24,8 @@ use crate::app::model::{FilesState, Model};
 use crate::chip::label_lines;
 use crate::format::{
     checks_summary, checks_two_column_lines, comment_counts, fetched_age_spans, format_age,
-    format_merge_status, format_review_state, format_size, overflow_line, review_icon,
-    reviews_summary, sorted_check_runs, truncate,
+    format_merge_status, format_review_state, format_size, overflow_line, pad_to_width,
+    review_icon, reviews_summary, sorted_check_runs, truncate,
 };
 use crate::github::rest::PR;
 use crate::palette::Palette;
@@ -60,24 +60,61 @@ pub fn render(
         return;
     };
 
+    let lines = content_lines(model, pr, now, usize::from(area.width), palette);
+    let content_height = lines.len();
+    let viewport = usize::from(area.height);
+    let max_scroll = content_height.saturating_sub(viewport);
+    let scroll = model.summary_scroll().min(max_scroll);
+    let paragraph_scroll = u16::try_from(scroll).unwrap_or(u16::MAX);
+
+    frame.render_widget(Paragraph::new(lines).scroll((paragraph_scroll, 0)), area);
+
+    // Replace the last visible content row with an explicit affordance while
+    // anything remains below it. Count the overwritten row too: it is hidden
+    // until the user scrolls, just like the content originally below the
+    // viewport. At the last screenful every content row is visible and the
+    // affordance disappears.
+    if scroll < max_scroll && area.height > 0 {
+        let visible_content_rows = viewport.saturating_sub(1);
+        let remaining = content_height.saturating_sub(scroll + visible_content_rows);
+        let indicator_area = Rect {
+            y: area.y + area.height - 1,
+            height: 1,
+            ..area
+        };
+        let indicator_text = pad_to_width(
+            &format!("+{remaining} more ↓"),
+            usize::from(indicator_area.width),
+        );
+        let indicator = Line::from(Span::styled(
+            indicator_text,
+            Style::default().fg(palette.muted),
+        ));
+        frame.render_widget(Paragraph::new(indicator), indicator_area);
+    }
+}
+
+/// Build the complete summary content before viewport clipping. Shared with
+/// the reducer so its stored scroll offset is clamped against exactly the same
+/// rows the view renders.
+pub(crate) fn content_lines(
+    model: &Model,
+    pr: &PR,
+    now: DateTime<Utc>,
+    width: usize,
+    palette: &Palette,
+) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.extend(identity_lines(
-        model,
-        pr,
-        now,
-        usize::from(area.width),
-        palette,
-    ));
+    lines.extend(identity_lines(model, pr, now, width, palette));
     lines.push(next_action_line(model, pr, palette));
     lines.push(threads_line(model, pr, palette));
     lines.extend(reviews_lines(model, pr, palette));
     lines.extend(requested_reviewers_lines(pr, palette));
-    lines.extend(checks_lines(model, pr, usize::from(area.width), palette));
+    lines.extend(checks_lines(model, pr, width, palette));
     lines.extend(files_lines(model, pr, palette));
-    lines.extend(label_lines(&pr.labels, usize::from(area.width), palette));
-    lines.extend(assignees_lines(pr, usize::from(area.width), palette));
-
-    frame.render_widget(Paragraph::new(lines), area);
+    lines.extend(label_lines(&pr.labels, width, palette));
+    lines.extend(assignees_lines(pr, width, palette));
+    lines
 }
 
 fn identity_lines(

@@ -9,7 +9,9 @@ use crate::{
     format::abbreviate_home,
     git_remote::RepoInfo,
     github::rest::{PrKey, WorkflowNameCache},
+    palette::DARK,
     secret::Secret,
+    view::summary,
     worktree,
 };
 
@@ -416,6 +418,8 @@ fn handle_list_key(model: &mut Model, code: KeyCode, now: DateTime<Utc>) -> Vec<
         KeyCode::Char('q') => model.should_quit = true,
         KeyCode::Char('j') | KeyCode::Down => model.list.move_down(),
         KeyCode::Char('k') | KeyCode::Up => model.list.move_up(),
+        KeyCode::PageDown => model.scroll_summary_down(DETAIL_SCROLL_PAGE),
+        KeyCode::PageUp => model.scroll_summary_up(DETAIL_SCROLL_PAGE),
         KeyCode::Char('g') => {
             // Cycle smart-status -> repo -> none -> smart-status, resetting
             // selection, then rebuild the layout under the new grouping.
@@ -851,6 +855,32 @@ fn normalize_detail(model: &mut Model) {
     detail.followed = Some(anchor);
 }
 
+/// Re-establish the list-mode summary panel's scroll invariants after every
+/// update: a different selected PR starts at the top, and an existing offset
+/// never sits past the content's last screenful.
+fn normalize_summary(model: &mut Model, now: DateTime<Utc>) {
+    if !matches!(model.view_mode, ViewMode::List) {
+        return;
+    }
+
+    let selected = model.list.selected_pr().map(|pr| pr.key());
+    if model.sync_summary_pr(selected) || model.summary_scroll() == 0 {
+        return;
+    }
+
+    let Some(width) = list_layout::panel_width(model.terminal_width) else {
+        model.clamp_summary_scroll(0);
+        return;
+    };
+    let Some(pr) = model.list.selected_pr() else {
+        model.clamp_summary_scroll(0);
+        return;
+    };
+    let content_height = summary::content_lines(model, pr, now, usize::from(width), &DARK).len();
+    let max_scroll = content_height.saturating_sub(list_layout::summary_viewport_rows(model));
+    model.clamp_summary_scroll(max_scroll);
+}
+
 /// True for messages that provably can't change the open detail view's
 /// content, Focus Sequence, or viewport, letting `update` skip the
 /// `normalize_detail` layout build. An explicit skip-list, so any new message
@@ -889,6 +919,7 @@ pub fn update(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
     if !skip_normalize {
         normalize_detail(model);
     }
+    normalize_summary(model, now);
     cmds
 }
 
@@ -955,6 +986,7 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
             ) =>
         {
             let down = mouse.kind == MouseEventKind::ScrollDown;
+            let over_summary = list_layout::summary_contains(model, mouse.column, mouse.row);
             match &mut model.view_mode {
                 ViewMode::Detail(detail) => {
                     detail.scroll = if down {
@@ -965,7 +997,11 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
                     Vec::new()
                 }
                 ViewMode::List => {
-                    if down {
+                    if over_summary && down {
+                        model.scroll_summary_down(DETAIL_SCROLL_WHEEL);
+                    } else if over_summary {
+                        model.scroll_summary_up(DETAIL_SCROLL_WHEEL);
+                    } else if down {
                         model.list.scroll_down(LIST_SCROLL_WHEEL);
                     } else {
                         model.list.scroll_up(LIST_SCROLL_WHEEL);
