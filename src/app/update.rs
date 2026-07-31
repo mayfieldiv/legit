@@ -417,8 +417,8 @@ fn handle_list_key(model: &mut Model, code: KeyCode, now: DateTime<Utc>) -> Vec<
         KeyCode::Char('q') => model.should_quit = true,
         KeyCode::Char('j') | KeyCode::Down => model.list.move_down(),
         KeyCode::Char('k') | KeyCode::Up => model.list.move_up(),
-        KeyCode::PageDown => model.summary.scroll_by(DETAIL_SCROLL_PAGE as isize),
-        KeyCode::PageUp => model.summary.scroll_by(-(DETAIL_SCROLL_PAGE as isize)),
+        KeyCode::PageDown => model.summary.scroll_down(DETAIL_SCROLL_PAGE),
+        KeyCode::PageUp => model.summary.scroll_up(DETAIL_SCROLL_PAGE),
         KeyCode::Char('g') => {
             // Cycle smart-status -> repo -> none -> smart-status, resetting
             // selection, then rebuild the layout under the new grouping.
@@ -997,9 +997,9 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
                 }
                 ViewMode::List => {
                     if over_summary && down {
-                        model.summary.scroll_by(DETAIL_SCROLL_WHEEL as isize);
+                        model.summary.scroll_down(DETAIL_SCROLL_WHEEL);
                     } else if over_summary {
-                        model.summary.scroll_by(-(DETAIL_SCROLL_WHEEL as isize));
+                        model.summary.scroll_up(DETAIL_SCROLL_WHEEL);
                     } else if down {
                         model.list.scroll_down(LIST_SCROLL_WHEEL);
                     } else {

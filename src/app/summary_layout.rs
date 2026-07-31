@@ -55,9 +55,15 @@ impl SummaryState {
         true
     }
 
-    /// Move by a signed number of lines, saturating at the top and numeric end.
-    pub(crate) fn scroll_by(&mut self, lines: isize) {
-        self.offset = self.offset.saturating_add_signed(lines);
+    /// Scroll down by `lines`; the post-update normalization pass clamps the
+    /// tentative offset against the measured content.
+    pub(crate) fn scroll_down(&mut self, lines: usize) {
+        self.offset = self.offset.saturating_add(lines);
+    }
+
+    /// Scroll toward the top without underflow.
+    pub(crate) fn scroll_up(&mut self, lines: usize) {
+        self.offset = self.offset.saturating_sub(lines);
     }
 
     /// Keep the offset within the content's measured last screenful.
