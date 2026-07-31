@@ -156,11 +156,11 @@ fn render_header(
     if let Some(entry) = model.worktree_for_pr(pr) {
         branch_spans.push(Span::styled(" · ", Style::default().fg(palette.separator)));
         let reserved_width = spans_display_width(&branch_spans)
-            + super::WORKTREE_GLYPH.width()
+            + crate::format::WORKTREE_GLYPH.width()
             + " worktree: ".width()
             + " · ".width()
             + merge_text.width();
-        let mut worktree_line = super::worktree_line(
+        let mut worktree_line = crate::format::worktree_line(
             &entry.path,
             usize::from(area.width).saturating_sub(reserved_width),
             palette,

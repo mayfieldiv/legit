@@ -9,9 +9,7 @@ use crate::{
     format::abbreviate_home,
     git_remote::RepoInfo,
     github::rest::{PrKey, WorkflowNameCache},
-    palette::DARK,
     secret::Secret,
-    view::summary,
     worktree,
 };
 
@@ -21,6 +19,7 @@ use super::{
     detail_items, detail_layout, list_layout,
     model::{DetailState, FilesState, Model, RepoDetection, StatusKind, StatusMessage, ViewMode},
     msg::Msg,
+    summary_layout,
 };
 
 mod refresh;
@@ -418,8 +417,8 @@ fn handle_list_key(model: &mut Model, code: KeyCode, now: DateTime<Utc>) -> Vec<
         KeyCode::Char('q') => model.should_quit = true,
         KeyCode::Char('j') | KeyCode::Down => model.list.move_down(),
         KeyCode::Char('k') | KeyCode::Up => model.list.move_up(),
-        KeyCode::PageDown => model.scroll_summary_down(DETAIL_SCROLL_PAGE),
-        KeyCode::PageUp => model.scroll_summary_up(DETAIL_SCROLL_PAGE),
+        KeyCode::PageDown => model.summary.scroll_by(DETAIL_SCROLL_PAGE as isize),
+        KeyCode::PageUp => model.summary.scroll_by(-(DETAIL_SCROLL_PAGE as isize)),
         KeyCode::Char('g') => {
             // Cycle smart-status -> repo -> none -> smart-status, resetting
             // selection, then rebuild the layout under the new grouping.
@@ -864,21 +863,21 @@ fn normalize_summary(model: &mut Model, now: DateTime<Utc>) {
     }
 
     let selected = model.list.selected_pr().map(|pr| pr.key());
-    if model.sync_summary_pr(selected) || model.summary_scroll() == 0 {
+    if model.summary.sync_pr(selected) || model.summary.offset() == 0 {
         return;
     }
 
     let Some(width) = list_layout::panel_width(model.terminal_width) else {
-        model.clamp_summary_scroll(0);
+        model.summary.clamp(0);
         return;
     };
     let Some(pr) = model.list.selected_pr() else {
-        model.clamp_summary_scroll(0);
+        model.summary.clamp(0);
         return;
     };
-    let content_height = summary::content_lines(model, pr, now, usize::from(width), &DARK).len();
+    let content_height = summary_layout::content_lines(model, pr, now, usize::from(width)).len();
     let max_scroll = content_height.saturating_sub(list_layout::summary_viewport_rows(model));
-    model.clamp_summary_scroll(max_scroll);
+    model.summary.clamp(max_scroll);
 }
 
 /// True for messages that provably can't change the open detail view's
@@ -998,9 +997,9 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
                 }
                 ViewMode::List => {
                     if over_summary && down {
-                        model.scroll_summary_down(DETAIL_SCROLL_WHEEL);
+                        model.summary.scroll_by(DETAIL_SCROLL_WHEEL as isize);
                     } else if over_summary {
-                        model.scroll_summary_up(DETAIL_SCROLL_WHEEL);
+                        model.summary.scroll_by(-(DETAIL_SCROLL_WHEEL as isize));
                     } else if down {
                         model.list.scroll_down(LIST_SCROLL_WHEEL);
                     } else {

@@ -265,7 +265,7 @@ fn worktree_gutter_shows_branch_glyph_for_matched_pr() {
     let rows = list_rows(&terminal);
 
     assert!(
-        rows[0].starts_with(super::super::WORKTREE_GLYPH),
+        rows[0].starts_with(crate::format::WORKTREE_GLYPH),
         "matched worktree should render the glyph in the gutter: {rows:?}"
     );
     assert!(rows[0].contains("#42"), "{rows:?}");

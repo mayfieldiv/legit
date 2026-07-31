@@ -416,7 +416,10 @@ fn leading_glyph(pr: &PR, model: &Model, palette: &Palette) -> (&'static str, St
     if model.is_refreshing(pr) {
         (super::REFRESH_GLYPH, Style::default().fg(palette.accent))
     } else if model.worktree_for_pr(pr).is_some() {
-        (super::WORKTREE_GLYPH, Style::default().fg(palette.accent))
+        (
+            crate::format::WORKTREE_GLYPH,
+            Style::default().fg(palette.accent),
+        )
     } else {
         ("", Style::default())
     }
