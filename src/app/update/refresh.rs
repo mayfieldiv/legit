@@ -36,7 +36,7 @@ pub(super) fn refresh_selected_cmds(model: &mut Model) -> Vec<Cmd> {
         return Vec::new();
     };
     let mut cmds = vec![refresh];
-    cmds.extend(list_worktree_cmd(model, &key.repo_slug));
+    cmds.extend(list_worktree_cmd(model, key.repo_slug));
     cmds
 }
 

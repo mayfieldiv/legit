@@ -93,10 +93,10 @@ fn maybe_fetch_open_prs(model: &mut Model) -> Vec<Cmd> {
 /// Missing source clones are expected (worktree support is opt-in); an invalid
 /// path was already rejected while loading config, but remains a harmless
 /// no-op here if a synthetic model reaches this helper in a test.
-fn list_worktree_cmd(model: &Model, repo_slug: &str) -> Option<Cmd> {
-    match worktree::resolve_source_clone(&model.config, repo_slug) {
+fn list_worktree_cmd(model: &Model, repo_slug: String) -> Option<Cmd> {
+    match worktree::resolve_source_clone(&model.config, &repo_slug) {
         Ok(Some(source_clone)) => Some(Cmd::ListWorktrees {
-            repo_slug: repo_slug.to_owned(),
+            repo_slug,
             source_clone,
         }),
         Ok(None) => None,
@@ -112,7 +112,7 @@ fn list_worktree_cmds(model: &Model) -> Vec<Cmd> {
     model
         .tracked_repos()
         .into_iter()
-        .filter_map(|repo| list_worktree_cmd(model, &repo.slug()))
+        .filter_map(|repo| list_worktree_cmd(model, repo.slug()))
         .collect()
 }
 
