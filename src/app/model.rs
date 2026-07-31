@@ -19,6 +19,7 @@ use super::{
     cmd::Cmd,
     detail_items::{DetailFilters, DetailFocus},
     pr_list::PrList,
+    summary_layout::SummaryState,
 };
 
 /// Which top-level view is active. `List` is the default PR list; `Detail`
@@ -338,6 +339,10 @@ pub struct Model {
     /// offset live inside that variant). `Esc` in the detail view returns to
     /// `List`.
     pub view_mode: ViewMode,
+    /// Selected PR identity plus the list-mode summary panel's scroll intent.
+    /// The state object owns reset/clamp invariants; the reducer normalizes it
+    /// after every update and the view only reads its offset.
+    pub(crate) summary: SummaryState,
     /// Detail-view filter: show resolved threads (`t` toggles; default false).
     /// Lives on the `Model`, not `DetailState`, so the preference survives
     /// closing and reopening detail views (mirrors the TS app-level ui-state).
@@ -397,6 +402,7 @@ impl Model {
                 worktrees_by_repo: HashMap::new(),
                 blockers: HashMap::new(),
                 view_mode: ViewMode::List,
+                summary: SummaryState::default(),
                 show_resolved: false,
                 show_bot_comments: true,
                 refreshing: HashSet::new(),

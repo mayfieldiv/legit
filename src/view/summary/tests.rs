@@ -13,6 +13,8 @@ use crate::{
     worktree::WorktreeEntry,
 };
 
+mod scroll;
+
 fn fixed_now() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 5, 20, 12, 0, 0).unwrap()
 }

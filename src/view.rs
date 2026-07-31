@@ -11,31 +11,12 @@ use crate::app::grouping::Grouping;
 use crate::app::list_layout;
 use crate::app::model::{Model, StatusKind, ViewMode};
 use crate::color::repo_color;
-use crate::format::{abbreviate_home, truncate_middle};
 use crate::git_remote::RepoInfo;
 use crate::palette::{DARK, Palette};
 
 pub mod detail;
 pub mod list;
 pub mod summary;
-
-pub(crate) const WORKTREE_GLYPH: &str = "\u{e725}";
-
-/// Per-row indicator for a PR whose `r`/`R` refresh is in flight. Shares the
-/// leading one-column glyph slot with `WORKTREE_GLYPH`, taking precedence while
-/// a refresh is in flight so the activity is visible.
-pub(crate) const REFRESH_GLYPH: &str = "\u{21bb}";
-
-pub(crate) fn worktree_line(path: &str, max_path_width: usize, palette: &Palette) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(WORKTREE_GLYPH, Style::default().fg(palette.accent)),
-        Span::styled(" worktree: ", Style::default().fg(palette.muted)),
-        Span::raw(truncate_middle(
-            &abbreviate_home(path),
-            max_path_width.max(1),
-        )),
-    ])
-}
 
 /// Short label for the active grouping mode, shown in the status-bar `g` hint.
 fn grouping_label(model: &Model) -> &'static str {

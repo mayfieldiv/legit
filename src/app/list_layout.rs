@@ -66,6 +66,30 @@ pub fn chrome_rows(filter_visible: bool) -> usize {
     usize::from(rows_above_list(filter_visible) + STATUS_ROWS)
 }
 
+/// Visible rows in the summary panel. Unlike the Open PR List viewport this
+/// includes the row parallel to the list's table header: the summary starts
+/// immediately below the app header / tabs / optional filter chip and ends
+/// above the status bar.
+pub fn summary_viewport_rows(model: &Model) -> usize {
+    let rows_outside_panel =
+        APP_HEADER_ROWS + TAB_ROWS + u16::from(model.list.filter().is_visible()) + STATUS_ROWS;
+    usize::from(model.terminal_height.saturating_sub(rows_outside_panel))
+}
+
+/// Whether a terminal cell lies inside the visible summary-panel viewport.
+/// Uses the same width and chrome constants as the renderer and list-row
+/// hit-testing, so wheel routing cannot drift from the painted panel.
+pub fn summary_contains(model: &Model, column: u16, row: u16) -> bool {
+    let Some(panel_width) = panel_width(model.terminal_width) else {
+        return false;
+    };
+    let panel_left = model.terminal_width.saturating_sub(panel_width);
+    let panel_top = APP_HEADER_ROWS + TAB_ROWS + u16::from(model.list.filter().is_visible());
+    let status_row = model.terminal_height.saturating_sub(STATUS_ROWS);
+
+    column >= panel_left && column < model.terminal_width && row >= panel_top && row < status_row
+}
+
 /// The list visible-row index under a click at (`column`, `row`), or `None`
 /// when the click lands outside the list region — on the chrome rows, the
 /// divider, or the summary panel.

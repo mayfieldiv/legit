@@ -31,7 +31,10 @@ use crate::{
     app::model::{DetailState, Model},
     chip::label_lines,
     color::repo_color,
-    format::{fetched_age_spans, format_age, format_merge_status, format_size},
+    format::{
+        fetched_age_spans, format_age, format_merge_status, format_size, worktree_label_width,
+        worktree_line,
+    },
     github::rest::PR,
     markdown::Block,
     palette::Palette,
@@ -156,16 +159,15 @@ fn render_header(
     if let Some(entry) = model.worktree_for_pr(pr) {
         branch_spans.push(Span::styled(" · ", Style::default().fg(palette.separator)));
         let reserved_width = spans_display_width(&branch_spans)
-            + super::WORKTREE_GLYPH.width()
-            + " worktree: ".width()
+            + worktree_label_width()
             + " · ".width()
             + merge_text.width();
-        let mut worktree_line = super::worktree_line(
+        let mut worktree = worktree_line(
             &entry.path,
             usize::from(area.width).saturating_sub(reserved_width),
             palette,
         );
-        branch_spans.append(&mut worktree_line.spans);
+        branch_spans.append(&mut worktree.spans);
     }
     branch_spans.extend([
         Span::styled(" · ", Style::default().fg(palette.separator)),

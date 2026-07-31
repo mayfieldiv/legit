@@ -20,6 +20,14 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::github::types::{CheckRun, FullReviewThread, PRState, Review};
 use crate::palette::{DARK, Palette};
 
+/// Branch/worktree marker shared by list rows and the summary/detail layouts.
+pub(crate) const WORKTREE_GLYPH: &str = "\u{e725}";
+
+/// Per-row indicator for a PR whose `r`/`R` refresh is in flight. Shares the
+/// leading one-column glyph slot with `WORKTREE_GLYPH`, taking precedence while
+/// a refresh is in flight so the activity is visible.
+pub(crate) const REFRESH_GLYPH: &str = "\u{21bb}";
+
 /// Conclusions that count as a failing check for display. `action_required`
 /// is included here so a completed check that needs follow-up gets an
 /// individual row instead of hiding behind the passed count. The blocker
@@ -189,6 +197,25 @@ pub fn pad_to_width(s: &str, width: usize) -> String {
         return s.to_owned();
     }
     format!("{s}{}", " ".repeat(width - used))
+}
+
+/// Display columns `worktree_line`'s glyph + `" worktree: "` prefix occupies
+/// before the path — what callers subtract from their row budget when sizing
+/// `max_path_width`, kept beside `worktree_line` so the two can't drift.
+pub(crate) fn worktree_label_width() -> usize {
+    WORKTREE_GLYPH.width() + " worktree: ".width()
+}
+
+/// A ready-to-paint worktree path with the shared glyph and label.
+pub(crate) fn worktree_line(path: &str, max_path_width: usize, palette: &Palette) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(WORKTREE_GLYPH, Style::default().fg(palette.accent)),
+        Span::styled(" worktree: ", Style::default().fg(palette.muted)),
+        Span::raw(truncate_middle(
+            &abbreviate_home(path),
+            max_path_width.max(1),
+        )),
+    ])
 }
 
 /// Replace a leading `$HOME` with `~` for compact path display.

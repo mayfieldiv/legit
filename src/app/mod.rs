@@ -7,4 +7,5 @@ pub mod list_layout;
 pub mod model;
 pub mod msg;
 pub mod pr_list;
+pub mod summary_layout;
 pub mod update;

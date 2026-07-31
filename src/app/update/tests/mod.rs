@@ -36,6 +36,7 @@ mod files;
 mod filter;
 mod multi_repo;
 mod refresh;
+mod summary;
 mod tabs;
 mod worktree;
 
@@ -89,6 +90,11 @@ pub(super) fn modified_key_event(code: KeyCode, modifiers: KeyModifiers) -> Msg 
 
 /// A mouse-wheel tick as the runtime delivers it (mouse capture enabled).
 pub(super) fn wheel_event(down: bool) -> Msg {
+    wheel_event_at(down, 0, 0)
+}
+
+/// A mouse-wheel tick at a particular terminal cell.
+pub(super) fn wheel_event_at(down: bool, column: u16, row: u16) -> Msg {
     use ratatui::crossterm::event::{Event, KeyModifiers, MouseEvent, MouseEventKind};
     Msg::TerminalEvent(Event::Mouse(MouseEvent {
         kind: if down {
@@ -96,8 +102,8 @@ pub(super) fn wheel_event(down: bool) -> Msg {
         } else {
             MouseEventKind::ScrollUp
         },
-        column: 0,
-        row: 0,
+        column,
+        row,
         modifiers: KeyModifiers::NONE,
     }))
 }
