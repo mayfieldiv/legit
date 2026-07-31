@@ -72,6 +72,14 @@ impl SummaryState {
     }
 }
 
+/// The largest scroll offset that still fills the viewport with content: the
+/// content's last screenful. Zero when the content fits without scrolling. The
+/// shared arithmetic between the reducer's stored-offset clamp and the render's
+/// backstop clamp, so the two can't disagree about where the end is.
+pub(crate) fn max_scroll(content_height: usize, viewport_rows: usize) -> usize {
+    content_height.saturating_sub(viewport_rows)
+}
+
 /// Placeholder text for a section whose enrichment hasn't arrived yet.
 const LOADING: &str = "Loading…";
 

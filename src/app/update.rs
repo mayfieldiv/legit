@@ -876,8 +876,10 @@ fn normalize_summary(model: &mut Model, now: DateTime<Utc>) {
         return;
     };
     let content_height = summary_layout::content_lines(model, pr, now, usize::from(width)).len();
-    let max_scroll = content_height.saturating_sub(list_layout::summary_viewport_rows(model));
-    model.summary.clamp(max_scroll);
+    model.summary.clamp(summary_layout::max_scroll(
+        content_height,
+        list_layout::summary_viewport_rows(model),
+    ));
 }
 
 /// True for messages that provably can't change the open detail view's

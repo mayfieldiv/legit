@@ -41,7 +41,7 @@ pub fn render(
     let lines = summary_layout::content_lines(model, pr, now, usize::from(area.width));
     let content_height = lines.len();
     let viewport = usize::from(area.height);
-    let max_scroll = content_height.saturating_sub(viewport);
+    let max_scroll = summary_layout::max_scroll(content_height, viewport);
     let scroll = model.summary.offset().min(max_scroll);
     let paragraph_scroll = u16::try_from(scroll).unwrap_or(u16::MAX);
 
