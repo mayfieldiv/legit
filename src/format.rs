@@ -199,6 +199,13 @@ pub fn pad_to_width(s: &str, width: usize) -> String {
     format!("{s}{}", " ".repeat(width - used))
 }
 
+/// Display columns `worktree_line`'s glyph + `" worktree: "` prefix occupies
+/// before the path — what callers subtract from their row budget when sizing
+/// `max_path_width`, kept beside `worktree_line` so the two can't drift.
+pub(crate) fn worktree_label_width() -> usize {
+    WORKTREE_GLYPH.width() + " worktree: ".width()
+}
+
 /// A ready-to-paint worktree path with the shared glyph and label.
 pub(crate) fn worktree_line(path: &str, max_path_width: usize, palette: &Palette) -> Line<'static> {
     Line::from(vec![

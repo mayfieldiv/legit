@@ -22,7 +22,7 @@ use crate::chip::label_lines;
 use crate::format::{
     checks_summary, checks_two_column_lines, comment_counts, fetched_age_spans, format_age,
     format_merge_status, format_review_state, format_size, overflow_line, review_icon,
-    reviews_summary, sorted_check_runs, truncate, worktree_line,
+    reviews_summary, sorted_check_runs, truncate, worktree_label_width, worktree_line,
 };
 use crate::github::rest::{PR, PrKey};
 use crate::palette::{DARK, Palette};
@@ -185,10 +185,6 @@ fn branch_spans(pr: &PR, palette: &Palette) -> Vec<Span<'static>> {
     ]
 }
 
-fn worktree_label_width() -> usize {
-    1 + " worktree: ".len()
-}
-
 /// The merge/lifecycle-state line. Delegates to `format::format_merge_status` —
 /// the lifecycle-aware helper shared with the detail view, so a merged/closed
 /// PR shows its state rather than a permanent "? merge unknown".
@@ -201,11 +197,10 @@ fn assignees_lines(pr: &PR, width: usize, palette: &Palette) -> Vec<Line<'static
     if pr.assignees.is_empty() {
         return Vec::new();
     }
-    let text = format!("assignees: {}", pr.assignees.join(", "));
     vec![Line::from(vec![
         Span::styled("assignees: ", Style::default().fg(palette.muted)),
         Span::raw(truncate(
-            text.strip_prefix("assignees: ").unwrap_or(&text),
+            &pr.assignees.join(", "),
             width.saturating_sub("assignees: ".len()).max(1),
         )),
     ])]

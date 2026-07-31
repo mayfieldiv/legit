@@ -32,7 +32,7 @@ use crate::{
     chip::label_lines,
     color::repo_color,
     format::{
-        WORKTREE_GLYPH, fetched_age_spans, format_age, format_merge_status, format_size,
+        fetched_age_spans, format_age, format_merge_status, format_size, worktree_label_width,
         worktree_line,
     },
     github::rest::PR,
@@ -159,8 +159,7 @@ fn render_header(
     if let Some(entry) = model.worktree_for_pr(pr) {
         branch_spans.push(Span::styled(" · ", Style::default().fg(palette.separator)));
         let reserved_width = spans_display_width(&branch_spans)
-            + WORKTREE_GLYPH.width()
-            + " worktree: ".width()
+            + worktree_label_width()
             + " · ".width()
             + merge_text.width();
         let mut worktree = worktree_line(
