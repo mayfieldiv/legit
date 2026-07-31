@@ -16,7 +16,7 @@ use crate::{
     secret::Secret,
 };
 
-use super::{request_context, set_status};
+use super::{list_worktree_cmd, request_context, set_status};
 
 /// Delay before the one-shot re-fetch of a PR whose `OPEN` mergeable came back
 /// `UNKNOWN`, giving GitHub time to finish its lazy mergeability computation.
@@ -30,15 +30,23 @@ pub(super) fn refresh_selected_cmds(model: &mut Model) -> Vec<Cmd> {
     let Some(key) = model.list.selected_pr().map(PR::key) else {
         return relist_empty_repo_cmds(model);
     };
-    begin_refresh(model, key, true).into_iter().collect()
+    let Some(refresh) = begin_refresh(model, key.clone(), true) else {
+        // Keep a deduped re-press a whole-action no-op: its local worktree
+        // reconciliation belongs to the refresh that is already in flight.
+        return Vec::new();
+    };
+    let mut cmds = vec![refresh];
+    cmds.extend(list_worktree_cmd(model, key.repo_slug));
+    cmds
 }
 
 /// `R`: refresh every visible PR, dispatched in smart-status tier order so the
 /// limiter's FIFO background lane drains `me-blocking` first; re-read the config
-/// so repos added since launch are picked up. `count` is the PRs actually
+/// so repos added since launch are picked up and `ConfigLoaded` reconciles
+/// worktrees from the fresh Source Clone paths. `count` is the PRs actually
 /// dispatched — already-refreshing ones dedupe to no-ops. Then re-list (for
-/// discovery) the in-scope repos so newly-opened PRs surface and closed ones
-/// are pruned — always, not only when nothing was re-enriched.
+/// discovery) the in-scope repos so newly-opened PRs surface and closed ones are
+/// pruned — always, not only when nothing was re-enriched.
 pub(super) fn refresh_all_cmds(model: &mut Model) -> Vec<Cmd> {
     let mut keys: Vec<PrKey> = model
         .list

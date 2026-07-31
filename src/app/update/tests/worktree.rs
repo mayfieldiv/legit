@@ -80,6 +80,36 @@ fn worktrees_arrived_stores_entries_and_matches_selected_pr_by_branch() {
 }
 
 #[test]
+fn worktrees_arrived_replaces_externally_deleted_entries() {
+    let mut model = model_with_selected_pr(config_with_source_clone());
+    model.worktrees_by_repo.insert(
+        "mayfieldiv/legit".to_owned(),
+        vec![worktree_entry("/tmp/deleted-legit-1", Some("feature/1"))],
+    );
+    assert!(
+        model
+            .worktree_for_pr(model.list.selected_pr().expect("selected PR"))
+            .is_some(),
+        "precondition: the cached worktree is visible",
+    );
+
+    update(
+        &mut model,
+        Msg::WorktreesArrived {
+            repo_slug: "mayfieldiv/legit".to_owned(),
+            entries: Vec::new(),
+        },
+    );
+
+    assert!(
+        model
+            .worktree_for_pr(model.list.selected_pr().expect("selected PR"))
+            .is_none(),
+        "a fresh empty listing removes the externally deleted worktree",
+    );
+}
+
+#[test]
 fn w_in_list_creates_the_selected_pr_worktree() {
     let mut model = model_with_selected_pr(config_with_source_clone());
 

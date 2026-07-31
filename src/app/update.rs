@@ -89,25 +89,30 @@ fn maybe_fetch_open_prs(model: &mut Model) -> Vec<Cmd> {
     cmds
 }
 
+/// List worktrees for one Tracked Repo when it has a configured source clone.
+/// Missing source clones are expected (worktree support is opt-in); an invalid
+/// path was already rejected while loading config, but remains a harmless
+/// no-op here if a synthetic model reaches this helper in a test.
+fn list_worktree_cmd(model: &Model, repo_slug: String) -> Option<Cmd> {
+    match worktree::resolve_source_clone(&model.config, &repo_slug) {
+        Ok(Some(source_clone)) => Some(Cmd::ListWorktrees {
+            repo_slug,
+            source_clone,
+        }),
+        Ok(None) => None,
+        Err(error) => {
+            tracing::warn!(%repo_slug, %error, "failed to resolve worktree source clone");
+            None
+        }
+    }
+}
+
 /// List worktrees for every configured Tracked Repo that has a source clone.
 fn list_worktree_cmds(model: &Model) -> Vec<Cmd> {
     model
         .tracked_repos()
         .into_iter()
-        .filter_map(|repo| {
-            let repo_slug = repo.slug();
-            match worktree::resolve_source_clone(&model.config, &repo_slug) {
-                Ok(Some(source_clone)) => Some(Cmd::ListWorktrees {
-                    repo_slug,
-                    source_clone,
-                }),
-                Ok(None) => None,
-                Err(error) => {
-                    tracing::warn!(%repo_slug, %error, "failed to resolve worktree source clone");
-                    None
-                }
-            }
-        })
+        .filter_map(|repo| list_worktree_cmd(model, repo.slug()))
         .collect()
 }
 
@@ -913,7 +918,11 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
                 handle_filter_editing_key(model, key.code);
             } else {
                 let cmds = handle_list_key(model, key.code, now);
-                if !cmds.is_empty() {
+                // Refresh owns the whole keypress even when deduplication makes
+                // it commandless; falling through would dispatch FetchFiles
+                // and turn the documented no-op into a partial refresh.
+                let refresh_key = matches!(key.code, KeyCode::Char('r' | 'R'));
+                if !cmds.is_empty() || refresh_key {
                     return cmds;
                 }
             }
@@ -981,6 +990,9 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
             // startup race, but when it arrives last it must kick off the fetch.
             model.config_loaded = true;
             let mut cmds = maybe_fetch_open_prs(model);
+            // Source Clones are config-derived, so reconcile them only after the
+            // fresh config is installed. This serves both startup and `R`
+            // without resolving paths from stale config or dispatching duplicates.
             cmds.extend(list_worktree_cmds(model));
             cmds
         }

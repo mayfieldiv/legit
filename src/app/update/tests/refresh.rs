@@ -1,8 +1,11 @@
 // ── refresh: direct dispatch, tier order, indicator, drain, checks, retry ───
 
+use std::path::PathBuf;
+
 use super::*;
 use crate::{
     blocker::{BlockerResult, Tier},
+    config::{LegitConfig, RepoConfig},
     github::types::{PRState, ReviewStatus},
 };
 
@@ -178,6 +181,100 @@ fn fetched_open_pr_slugs(cmds: &[Cmd]) -> Vec<String> {
             _ => None,
         })
         .collect()
+}
+
+/// The repo slug and source clone of every `ListWorktrees` in `cmds`, in
+/// dispatch order.
+fn listed_worktrees(cmds: &[Cmd]) -> Vec<(String, PathBuf)> {
+    cmds.iter()
+        .filter_map(|c| match c {
+            Cmd::ListWorktrees {
+                repo_slug,
+                source_clone,
+            } => Some((repo_slug.clone(), source_clone.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+fn listed_worktree_slugs(cmds: &[Cmd]) -> Vec<String> {
+    listed_worktrees(cmds)
+        .into_iter()
+        .map(|(repo_slug, _)| repo_slug)
+        .collect()
+}
+
+fn config_with_source_clones(slugs: &[&str]) -> LegitConfig {
+    LegitConfig {
+        repos: slugs
+            .iter()
+            .map(|slug| RepoConfig {
+                slug: (*slug).to_owned(),
+                source_clone: Some(format!("/src/{slug}")),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn r_relists_worktrees_only_for_the_selected_prs_repo() {
+    let mut model = two_repo_model();
+    model.config = config_with_source_clones(&["acme/web", "mayfieldiv/legit"]);
+    model.config_loaded = true;
+    update(&mut model, key_event(KeyCode::Char('2'))); // mayfieldiv/legit tab
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('r')));
+
+    assert_eq!(refreshed_keys(&cmds), [key(1)]);
+    assert_eq!(
+        listed_worktree_slugs(&cmds),
+        ["mayfieldiv/legit"],
+        "r must reconcile only the selected PR's repository: {cmds:?}",
+    );
+}
+
+#[test]
+fn r_without_a_source_clone_skips_worktree_listing() {
+    let mut model = list_model(&[1]);
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('r')));
+
+    assert_eq!(refreshed_keys(&cmds), [key(1)]);
+    assert!(
+        listed_worktree_slugs(&cmds).is_empty(),
+        "a repo without sourceClone remains a harmless no-op: {cmds:?}",
+    );
+}
+
+#[test]
+fn shift_r_relists_each_source_clone_from_the_reloaded_config_once() {
+    let mut model = two_repo_model();
+    model.config = config_with_source_clones(&["acme/web", "mayfieldiv/legit"]);
+    model.config_loaded = true;
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('R')));
+    assert!(
+        listed_worktrees(&cmds).is_empty(),
+        "R must wait for the fresh config before resolving source clones: {cmds:?}",
+    );
+
+    let mut reloaded = config_with_source_clones(&["acme/web", "mayfieldiv/legit"]);
+    reloaded.repos[0].source_clone = Some("/new/acme-web".to_owned());
+    reloaded.repos[1].source_clone = Some("/new/legit".to_owned());
+    let reload_cmds = update(&mut model, Msg::ConfigLoaded(reloaded));
+    let mut worktrees = listed_worktrees(&reload_cmds);
+    worktrees.sort();
+    assert_eq!(
+        worktrees,
+        [
+            ("acme/web".to_owned(), PathBuf::from("/new/acme-web")),
+            ("mayfieldiv/legit".to_owned(), PathBuf::from("/new/legit")),
+        ],
+        "the config response must reconcile every freshly loaded source clone exactly once: \
+         {reload_cmds:?}",
+    );
 }
 
 #[test]
@@ -413,14 +510,20 @@ fn r_on_a_repo_tab_whose_prs_are_all_filtered_out_does_not_relist() {
 #[test]
 fn re_pressing_r_while_refreshing_is_deduped() {
     let mut model = list_model(&[1]);
+    model.config = config_with_source_clones(&["mayfieldiv/legit"]);
     let first = update(&mut model, key_event(KeyCode::Char('r')));
     assert_eq!(refreshed_keys(&first), [key(1)], "first press dispatches");
+    assert_eq!(
+        listed_worktree_slugs(&first),
+        ["mayfieldiv/legit"],
+        "precondition: the first refresh reconciles its worktrees",
+    );
 
     // The PR is still in flight (no RefreshComplete yet), so a second press is
-    // a no-op rather than a duplicate fan-out.
+    // a whole-action no-op rather than duplicating either command.
     let second = update(&mut model, key_event(KeyCode::Char('r')));
     assert!(
-        refreshed_keys(&second).is_empty(),
+        second.is_empty(),
         "re-pressing r while refreshing dispatches nothing: {second:?}",
     );
 }
