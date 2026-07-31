@@ -948,13 +948,18 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
             // -> FetchPRDetail), in which case dispatch it and stop.
             if model.list.filter().is_editing() {
                 handle_filter_editing_key(model, key.code);
+                return Vec::new();
             } else {
                 let cmds = handle_list_key(model, key.code, now);
                 // Refresh owns the whole keypress even when deduplication makes
                 // it commandless; falling through would dispatch FetchFiles
                 // and turn the documented no-op into a partial refresh.
                 let refresh_key = matches!(key.code, KeyCode::Char('r' | 'R'));
-                if !cmds.is_empty() || refresh_key {
+                // Opening the filter is also a pure in-memory action. It can
+                // relayout to a different selected PR, but that must not turn
+                // `/` into an implicit enrichment fetch.
+                let filter_opened = model.list.filter().is_editing();
+                if !cmds.is_empty() || refresh_key || filter_opened {
                     return cmds;
                 }
             }
@@ -1171,6 +1176,7 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
                 .enrichment
                 .files
                 .insert(pr, FilesState::Loaded(categorization));
+            model.relayout();
             Vec::new()
         }
         Msg::FilesFetchFailed { pr } => {
@@ -1263,14 +1269,16 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
             // Parse the markdown description to blocks exactly once, here on
             // arrival, and cache the result — the view then flattens it (per the
             // body's `<details>` expansion) every frame instead of re-parsing.
-            // Store it only when the view is still open for this PR; discard it
-            // if the user already navigated back to the list or entered a
-            // different PR's detail.
+            // The open detail keeps only its own parsed blocks, while the raw
+            // description stays in enrichment so the list filter can search it
+            // after the user navigates back.
             if let ViewMode::Detail(detail) = &mut model.view_mode
                 && detail.key == pr
             {
                 detail.body = Some(detail_layout::render_description_blocks(&body));
             }
+            model.enrichment.store_description(pr, body);
+            model.relayout();
             Vec::new()
         }
         Msg::RefreshSelected => refresh::refresh_selected_cmds(model),

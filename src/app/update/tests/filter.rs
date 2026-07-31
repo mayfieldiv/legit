@@ -44,6 +44,144 @@ fn filter_matches_title_and_author_case_insensitively() {
     );
 }
 
+fn model_with_all_search_fields_loaded() -> Model {
+    let mut model = tabbed_model();
+    let pr = model.list.pr_mut(&key(1)).expect("target PR");
+    pr.labels.push(crate::github::rest::Label {
+        name: "backend".to_owned(),
+        color: None,
+    });
+    pr.requested_reviewers.push("alice".to_owned());
+    update(
+        &mut model,
+        Msg::ReviewsArrived {
+            pr: key(1),
+            reviews: vec![crate::github::types::Review {
+                user: "carol".to_owned(),
+                state: "APPROVED".to_owned(),
+            }],
+        },
+    );
+    update(
+        &mut model,
+        Msg::FilesArrived {
+            pr: key(1),
+            files: vec![crate::file_category::FileChange {
+                path: "src/search.rs".to_owned(),
+                additions: 12,
+                deletions: 3,
+            }],
+        },
+    );
+    update(
+        &mut model,
+        Msg::PRDetailArrived {
+            pr: key(1),
+            body: "Ready for the release train".to_owned(),
+        },
+    );
+    model
+}
+
+#[test]
+fn filter_matches_each_loaded_full_text_field() {
+    for (field, needle, expected) in [
+        ("label", "BACKEND", vec![1]),
+        ("requested reviewer", "ALICE", vec![1]),
+        ("reviewer", "CAROL", vec![1]),
+        ("changed file path", "SRC/SEARCH.RS", vec![1]),
+        ("description", "RELEASE TRAIN", vec![1]),
+        ("no field", "not present", vec![]),
+        ("empty needle", "", vec![0, 1]),
+    ] {
+        let mut model = model_with_all_search_fields_loaded();
+        update(&mut model, key_event(KeyCode::Char('/')));
+        type_filter(&mut model, needle);
+
+        assert_eq!(visible(&model), expected, "{field} match");
+    }
+}
+
+#[test]
+fn filter_starts_matching_changed_paths_when_files_arrive() {
+    let mut model = tabbed_model();
+    update(&mut model, key_event(KeyCode::Char('/')));
+    type_filter(&mut model, "migrations/123-add-users.sql");
+    assert!(
+        visible(&model).is_empty(),
+        "unloaded files do not contribute"
+    );
+
+    update(
+        &mut model,
+        Msg::FilesArrived {
+            pr: key(1),
+            files: vec![crate::file_category::FileChange {
+                path: "migrations/123-add-users.sql".to_owned(),
+                additions: 12,
+                deletions: 3,
+            }],
+        },
+    );
+
+    assert_eq!(
+        visible(&model),
+        vec![1],
+        "the active filter relayouts when files arrive"
+    );
+}
+
+#[test]
+fn filter_starts_matching_description_when_body_arrives() {
+    let mut model = tabbed_model();
+    update(&mut model, key_event(KeyCode::Char('2')));
+    update(&mut model, key_event(KeyCode::Enter));
+    update(&mut model, key_event(KeyCode::Esc));
+
+    update(&mut model, key_event(KeyCode::Char('/')));
+    type_filter(&mut model, "release train");
+    assert!(
+        visible(&model).is_empty(),
+        "an unloaded description does not contribute"
+    );
+
+    update(
+        &mut model,
+        Msg::PRDetailArrived {
+            pr: key(1),
+            body: "Ready for the Release Train".to_owned(),
+        },
+    );
+
+    assert_eq!(
+        visible(&model),
+        vec![1],
+        "the active filter relayouts when the description arrives"
+    );
+}
+
+#[test]
+fn typing_filter_text_never_fetches_enrichment() {
+    let mut model = enriched_model(&[1, 2]);
+    model.list.pr_mut(&key(1)).expect("PR 1").title = "alpha".to_owned();
+    model.list.pr_mut(&key(2)).expect("PR 2").title = "beta".to_owned();
+    model.relayout();
+
+    let open_cmds = update(&mut model, key_event(KeyCode::Char('/')));
+    assert!(
+        open_cmds.is_empty(),
+        "opening the in-memory filter must not fetch: {open_cmds:?}"
+    );
+
+    let cmds = update(&mut model, key_event(KeyCode::Char('b')));
+
+    assert_eq!(visible(&model), vec![1], "the typed filter still relayouts");
+    assert!(
+        cmds.is_empty(),
+        "typing must remain a pure in-memory operation: {cmds:?}"
+    );
+}
+
 #[test]
 fn filter_matches_pr_number() {
     // tabbed_model PRs: index 0 is #10 "web pr", index 1 is #1 "legit pr".

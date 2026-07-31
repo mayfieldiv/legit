@@ -18,6 +18,13 @@ use crate::app::grouping::{DisplayRow, Grouping, display_rows};
 use crate::blocker::Tier;
 use crate::github::rest::{PR, PrKey};
 
+/// Case-insensitive substring comparison shared by the PR-owned and
+/// enrichment-owned fields of the Substring Filter. `needle` is already
+/// lowercased once per relayout.
+pub(super) fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
+    haystack.to_lowercase().contains(needle)
+}
+
 /// The substring filter over the Open PR List. `/` opens editing; Enter locks
 /// the text in; Esc clears. `Applied("")` is unrepresentable — submitting an
 /// empty filter returns to `Inactive` — so "filter active" is exactly
@@ -62,8 +69,9 @@ impl Filter {
 /// - Worktree path — any string containing `/` whose leaf is `{N}-{branch}`
 ///   (legit's worktree directory naming). Matches by PR number. Requiring a
 ///   separator keeps a title search like `1-click` on the substring path.
-/// - Otherwise, a case-insensitive substring over title, author, and number;
-///   the number also matches with a leading `#` (`#42`).
+/// - Otherwise, a case-insensitive substring over title, author, labels,
+///   requested reviewers, already-loaded enrichment, and number; the number
+///   also matches with a leading `#` (`#42`).
 ///
 /// Both paste shapes fall back to `Substring` while incomplete, so ordinary
 /// matching still applies as the user types.
@@ -75,7 +83,10 @@ enum FilterQuery {
         slug: String,
         number: u64,
     },
-    WorktreePath(u64),
+    WorktreePath {
+        number: u64,
+        needle: String,
+    },
     Substring(String),
 }
 
@@ -89,23 +100,34 @@ impl FilterQuery {
             return Self::PrUrl { slug, number };
         }
         if let Some(number) = parse_worktree_path_filter(&needle) {
-            return Self::WorktreePath(number);
+            return Self::WorktreePath { number, needle };
         }
         Self::Substring(needle)
     }
 
-    fn matches(&self, pr: &PR) -> bool {
+    fn matches(&self, pr: &PR, loaded_fields_match: impl FnOnce(&str) -> bool) -> bool {
         match self {
             Self::All => true,
             Self::PrUrl { slug, number } => {
                 pr.repo_slug.eq_ignore_ascii_case(slug) && pr.number == *number
             }
-            Self::WorktreePath(number) => pr.number == *number,
+            Self::WorktreePath { number, needle } => {
+                pr.number == *number || loaded_fields_match(needle)
+            }
             Self::Substring(needle) => {
                 let number_needle = needle.strip_prefix('#').unwrap_or(needle);
-                pr.title.to_lowercase().contains(needle)
-                    || pr.author.to_lowercase().contains(needle)
+                contains_case_insensitive(&pr.title, needle)
+                    || contains_case_insensitive(&pr.author, needle)
+                    || pr
+                        .labels
+                        .iter()
+                        .any(|label| contains_case_insensitive(&label.name, needle))
+                    || pr
+                        .requested_reviewers
+                        .iter()
+                        .any(|reviewer| contains_case_insensitive(reviewer, needle))
                     || (!number_needle.is_empty() && pr.number.to_string().contains(number_needle))
+                    || loaded_fields_match(needle)
             }
         }
     }
@@ -304,7 +326,8 @@ impl PrList {
     /// grouping, showing only the PRs in `scope` (a Repo Tab's slug, or `None`
     /// for the All tab) and ordering each group by most recent GitHub activity.
     /// `tier_of(pr)` returns the Smart-status tier for a PR, or `None` when its
-    /// enrichment hasn't been derived yet; the repo-grouping key is read
+    /// enrichment hasn't been derived yet; `loaded_fields_match` searches only
+    /// enrichment already held by the model. The repo-grouping key is read
     /// straight off each PR's `repo_slug`. Once the user has navigated,
     /// selection sticks to the same PR while it remains visible and snaps to
     /// the top display row otherwise; until then it follows the top row as
@@ -313,11 +336,20 @@ impl PrList {
     /// refreshes do not undo wheel scrolling; if the selection changes, scroll
     /// follows the new selection. Called by `update` after PRs arrive,
     /// enrichment lands, or the grouping/scope changes.
-    pub fn relayout(&mut self, scope: Option<&str>, tier_of: impl Fn(&PR) -> Option<Tier>) {
+    pub fn relayout(
+        &mut self,
+        scope: Option<&str>,
+        tier_of: impl Fn(&PR) -> Option<Tier>,
+        loaded_fields_match: impl Fn(&PR, &str) -> bool,
+    ) {
         let query = FilterQuery::parse(self.filter.text());
         let mut visible: Vec<usize> = (0..self.prs.len())
             .filter(|&i| scope.is_none_or(|slug| self.prs[i].repo_slug == slug))
-            .filter(|&i| query.matches(&self.prs[i]))
+            .filter(|&i| {
+                query.matches(&self.prs[i], |needle| {
+                    loaded_fields_match(&self.prs[i], needle)
+                })
+            })
             .collect();
         visible.sort_by(|&a, &b| compare_recent_activity(&self.prs[a], &self.prs[b]));
         // `display_rows` keys on PR index; adapt the &PR closure (and the slug

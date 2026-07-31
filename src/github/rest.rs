@@ -54,8 +54,8 @@ pub struct PR {
 /// its Label Chip. The colour rides in on the existing label payload (no new
 /// request); it is optional because GitHub may leave it blank, in which case the
 /// chip falls back to a stable hashed colour. Mirrors the TS `PullRequestLabel`
-/// (`{ name, color }`). Labels stay domain-inert — purely contextual metadata
-/// with no sort, filter, or Smart-status effect.
+/// (`{ name, color }`). Labels stay domain-inert — contextual metadata with no
+/// sort or Smart-status effect — while their names remain searchable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Label {
     pub name: String,
