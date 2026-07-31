@@ -18,11 +18,6 @@ pub mod detail;
 pub mod list;
 pub mod summary;
 
-/// Per-row indicator for a PR whose `r`/`R` refresh is in flight. Shares the
-/// leading one-column glyph slot with `WORKTREE_GLYPH`, taking precedence while
-/// a refresh is in flight so the activity is visible.
-pub(crate) const REFRESH_GLYPH: &str = "\u{21bb}";
-
 /// Short label for the active grouping mode, shown in the status-bar `g` hint.
 fn grouping_label(model: &Model) -> &'static str {
     match model.list.grouping() {

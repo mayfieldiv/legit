@@ -23,6 +23,11 @@ use crate::palette::{DARK, Palette};
 /// Branch/worktree marker shared by list rows and the summary/detail layouts.
 pub(crate) const WORKTREE_GLYPH: &str = "\u{e725}";
 
+/// Per-row indicator for a PR whose `r`/`R` refresh is in flight. Shares the
+/// leading one-column glyph slot with `WORKTREE_GLYPH`, taking precedence while
+/// a refresh is in flight so the activity is visible.
+pub(crate) const REFRESH_GLYPH: &str = "\u{21bb}";
+
 /// Conclusions that count as a failing check for display. `action_required`
 /// is included here so a completed check that needs follow-up gets an
 /// individual row instead of hiding behind the passed count. The blocker

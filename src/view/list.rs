@@ -13,8 +13,8 @@ use crate::{
     blocker::{BlockerResult, compact_next_action},
     color::repo_color,
     format::{
-        CheckOutcome, comment_counts, format_age, format_repo_short, format_review_state, outcome,
-        pad_to_width, truncate, truncate_middle,
+        CheckOutcome, REFRESH_GLYPH, WORKTREE_GLYPH, comment_counts, format_age, format_repo_short,
+        format_review_state, outcome, pad_to_width, truncate, truncate_middle,
     },
     github::rest::PR,
     github::types::Review,
@@ -414,12 +414,9 @@ fn row_line(
 /// refresh is visible even on a PR that also has a worktree.
 fn leading_glyph(pr: &PR, model: &Model, palette: &Palette) -> (&'static str, Style) {
     if model.is_refreshing(pr) {
-        (super::REFRESH_GLYPH, Style::default().fg(palette.accent))
+        (REFRESH_GLYPH, Style::default().fg(palette.accent))
     } else if model.worktree_for_pr(pr).is_some() {
-        (
-            crate::format::WORKTREE_GLYPH,
-            Style::default().fg(palette.accent),
-        )
+        (WORKTREE_GLYPH, Style::default().fg(palette.accent))
     } else {
         ("", Style::default())
     }
