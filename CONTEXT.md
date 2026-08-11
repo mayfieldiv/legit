@@ -139,6 +139,48 @@ The single PR whose pending work the limiter prioritises: the open **PR Detail**
 **Focus Promotion**:
 Re-ranking the **Priority Queue** when the **Focused PR** changes, so the focused PR's still-pending fetches (its threads, reviews, checks, files, detail body) jump ahead of the rest of the fan-out — and the previously-focused PR's pending fetches demote back to `Background`. Only pending requests re-rank; one already in flight keeps running.
 
+### Wayfinder tickets
+
+**Effort**:
+A unit of wayfinding work: one **Map** plus its **Tickets**. Belongs to exactly one **Tracked Repo**; whether its data comes from the repo's GitHub tracker or a local wayfinder directory is an attribute of the Effort, not a different kind of container.
+_Avoid_: project, initiative.
+
+**Map**:
+The index artifact anchoring an Effort — a GitHub issue labelled `wayfinder:map` or a local `map.md`. Carries the **Destination** and the record of decisions; open Tickets are its children, never listed in its body.
+
+**Destination**:
+What reaching the end of an Effort looks like, stated on its Map. The Map closes when nothing is left to decide.
+
+**Ticket**:
+A single decision or investigation belonging to an Effort — a GitHub sub-issue of the Map, or a local ticket file. Open or Closed; Closed covers both resolved and closed-as-out-of-scope, which no dialect encodes structurally.
+_Avoid_: issue (the GitHub artifact that may host a Ticket), task (a **Type**).
+
+**Type**:
+A Ticket's kind: `research`, `prototype`, `grilling`, or `task` — the `wayfinder:<type>` label or the dialect's type field. Unknown Types are shown verbatim, never hidden.
+
+**Mode**:
+Which kind of session can take a Ticket, derived from **Type**, never stored: `AFK` (agent alone — research), `HITL` (human in the loop — prototype, grilling), or `Either` (task, and unknown Types). The AFK/HITL filter tests Mode; `Either` matches both views, visibly tagged.
+
+**Claim**:
+The in-progress marker on an open Ticket — the GitHub assignee, or the dialect's claim field. A claimed Ticket is off the **Frontier**. Claims are taken and released by wayfinder sessions; legit only renders them.
+
+**Dependency**:
+A directed edge between Tickets: this Ticket waits on that one. A Ticket with any open Dependency is off the **Frontier**. "Blocked by" is ordinary prose for it. A person who must act before a Ticket is takeable is modelled as a Dependency on a `task` Ticket they've claimed — never as a new state.
+
+**External Dependency**:
+A Dependency whose target lives in another Effort.
+
+**Unknown Dependency**:
+A Dependency whose target legit cannot find or read. A Ticket with one is never on the **Frontier**, regardless of everything else legit can see.
+_Avoid_: unresolved dependency (unresolved is a review-thread word).
+
+**Blocks**:
+The reverse read of **Dependency** — the open Tickets whose Dependencies include this one. Shown in the summary/detail views.
+_Avoid_: blocking (as the field name; fine as prose).
+
+**Frontier**:
+The takeable set: open, unclaimed Tickets whose every Dependency target is closed and none of whose Dependencies is Unknown. The Ticket analog of **Smart-status** — Tickets never carry Smart-status, **Next Action**, or a PR-sense **Blocker**.
+
 ### File categorisation
 
 **File Category**:
@@ -186,6 +228,10 @@ _Avoid_: last updated, updated at (reserved for GitHub's activity time).
 - A **Worktree** belongs to one **PR** and one **Source Clone**.
 - The **Blocker** of a `waiting-on-author` PR is the **Effective Author**; the **Blocker** of a `me-blocking` PR is the current user.
 - A **Refresh** sends each of its fetches through the **Priority Queue**, each with a **Fetch Priority**.
+- An **Effort** belongs to exactly one **Tracked Repo**, has exactly one **Map**, and has many **Tickets**.
+- A **Ticket**'s **Mode** is derived from its **Type**; unknown **Types** get Mode `Either`.
+- A **Ticket** is on the **Frontier** iff it is open, unclaimed, and has no open or **Unknown Dependency**.
+- **Efforts** and **Tickets** are read-only to legit: claiming and resolving happen in wayfinder sessions.
 
 ## Example dialogue
 
@@ -197,6 +243,12 @@ _Avoid_: last updated, updated at (reserved for GitHub's activity time).
 
 > **Dev:** "What if there are five unresolved **Review Threads**, all `awaiting-reviewer`, and one of them is awaiting me?"
 > **Domain expert:** "Pick the reviewer with the most awaiting threads as the **Blocker**. Ties go to the longest-waiting one. If that's me, the PR's **Smart-status** is `me-blocking`."
+
+> **Dev:** "A `task` **Ticket** shows in both the AFK and HITL views — is its **Mode** both?"
+> **Domain expert:** "`Either` — takeable by either kind of session, not needing both."
+
+> **Dev:** "Ticket #12 can't start until someone provisions the sandbox — where does that live?"
+> **Domain expert:** "A `task` **Ticket** they claim; #12 takes a **Dependency** on it."
 
 ## Flagged ambiguities
 
