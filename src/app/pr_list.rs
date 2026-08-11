@@ -67,8 +67,11 @@ impl Filter {
 ///   scheme, `www.`, and trailing segments (`/changes`, `/files`, …). Matches
 ///   that exact `owner/repo` + number.
 /// - Worktree path — any string containing `/` whose leaf is `{N}-{branch}`
-///   (legit's worktree directory naming). Matches by PR number. Requiring a
-///   separator keeps a title search like `1-click` on the substring path.
+///   (legit's worktree directory naming). Matches by PR number, falling back
+///   to the loaded-enrichment substring match so a changed-file path that is
+///   worktree-shaped by accident (`migrations/123-add-users.sql`) still
+///   matches. Requiring a separator keeps a title search like `1-click` on
+///   the substring path.
 /// - Otherwise, a case-insensitive substring over title, author, labels,
 ///   requested reviewers, already-loaded enrichment, and number; the number
 ///   also matches with a leading `#` (`#42`).
