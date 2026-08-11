@@ -179,7 +179,8 @@ The reverse read of **Dependency** — the open Tickets whose Dependencies inclu
 _Avoid_: blocking (as the field name; fine as prose).
 
 **Frontier**:
-The takeable set: open, unclaimed Tickets whose every Dependency target is closed and none of whose Dependencies is Unknown. The Ticket analog of **Smart-status** — Tickets never carry Smart-status, **Next Action**, or a PR-sense **Blocker**.
+The Tickets a session can take right now: open, unclaimed, every Dependency target closed, and no **Unknown Dependency**. The Ticket analog of **Smart-status** — Tickets never carry Smart-status, **Next Action**, or a PR-sense **Blocker**.
+_Avoid_: takeable (in UI labels and counts too — say "Frontier" / "on the Frontier").
 
 ### File categorisation
 
