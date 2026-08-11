@@ -183,6 +183,44 @@ fn typing_filter_text_never_fetches_enrichment() {
 }
 
 #[test]
+fn closing_the_editor_fetches_the_selected_prs_files() {
+    // Typing narrows the list and moves the follow-top selection with no
+    // fetches; closing the editor is when the landed-on PR's files load.
+    let mut model = enriched_model(&[1, 2]);
+    model.list.pr_mut(&key(1)).expect("PR 1").title = "alpha".to_owned();
+    model.list.pr_mut(&key(2)).expect("PR 2").title = "beta".to_owned();
+    model.relayout();
+
+    update(&mut model, key_event(KeyCode::Char('/')));
+    type_filter(&mut model, "beta");
+
+    let cmds = update(&mut model, key_event(KeyCode::Enter));
+    assert!(
+        matches!(cmds.as_slice(), [Cmd::FetchFiles { number: 2, .. }]),
+        "Enter fetches the filtered-to PR's files: {cmds:?}"
+    );
+}
+
+#[test]
+fn esc_closing_the_editor_fetches_the_reselected_prs_files() {
+    let mut model = enriched_model(&[1, 2]);
+    model.list.pr_mut(&key(1)).expect("PR 1").title = "alpha".to_owned();
+    model.list.pr_mut(&key(2)).expect("PR 2").title = "beta".to_owned();
+    model.relayout();
+
+    update(&mut model, key_event(KeyCode::Char('/')));
+    type_filter(&mut model, "beta");
+
+    // Esc restores the full list, which snaps the follow-top selection back
+    // to its top PR — the fetch must target that PR, not the filtered one.
+    let cmds = update(&mut model, key_event(KeyCode::Esc));
+    assert!(
+        matches!(cmds.as_slice(), [Cmd::FetchFiles { number: 1, .. }]),
+        "Esc fetches the reselected PR's files: {cmds:?}"
+    );
+}
+
+#[test]
 fn filter_matches_pr_number() {
     // tabbed_model PRs: index 0 is #10 "web pr", index 1 is #1 "legit pr".
     let mut model = tabbed_model();

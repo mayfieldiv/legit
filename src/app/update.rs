@@ -948,6 +948,15 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
             // -> FetchPRDetail), in which case dispatch it and stop.
             if model.list.filter().is_editing() {
                 handle_filter_editing_key(model, key.code);
+                // Typing stays a pure in-memory operation — mid-edit
+                // selections are transient, so fetching per keystroke would
+                // spam requests. But Esc/Enter close the editor (Esc's
+                // relayout can also move the selection), landing on a PR
+                // whose files may never have been requested; fetch them once
+                // so the summary panel doesn't sit on its placeholder.
+                if !model.list.filter().is_editing() {
+                    return maybe_fetch_selected_files(model);
+                }
                 return Vec::new();
             } else {
                 let cmds = handle_list_key(model, key.code, now);
