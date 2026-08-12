@@ -19,11 +19,12 @@ The list of open PRs for the current Tracked Repo, plus the user's selection cur
 **Repo Tab**:
 A UI tab showing PRs from a single configured repo (or `All` showing every tracked repo combined).
 
-**Source Clone**:
-A local git clone of a repo, configured per-repo, from which legit creates worktrees. Without one, worktree features are unavailable for that repo.
+**Main Worktree**:
+A repo's main working copy — git's main worktree, the one its linked worktrees hang off. Configured per-repo; legit creates **Worktree**s from it and starts local wayfinder Effort discovery there, fanning out across its linked worktrees. Without one, worktree features and local Effort discovery are unavailable for that repo.
+_Avoid_: source clone (the term this replaces), path.
 
 **Tracked Repo**:
-A repo present in `~/.legit/config.json` plus the repo detected from the CWD. The set of repos legit fetches PRs from.
+A repo present in `~/.legit/config.json` plus the repo detected from the CWD — the set of repos legit tracks. One with a GitHub slug is PR-capable; a slug-less local repo (a **Main Worktree** alone) participates only in the ticket surface and gets no Repo Tab.
 
 ### Blocker engine
 
@@ -109,7 +110,7 @@ GitHub's aggregate: `APPROVED`, `CHANGES_REQUESTED`, `REVIEW_REQUIRED`, or empty
 ### Worktree
 
 **Worktree**:
-A git worktree on disk under the user's `worktreeRoot` (defaulting to `~/.legit/worktrees/<owner>/<repo>/<number>-<branch>`), checked out to a PR's head branch by `gh pr checkout`. legit can create one for any PR whose repo has a configured `sourceClone`, and detects whether one already exists for any PR shown in the list/detail views.
+A git worktree on disk under the user's `worktreeRoot` (defaulting to `~/.legit/worktrees/<owner>/<repo>/<number>-<branch>`), checked out to a PR's head branch by `gh pr checkout`. legit can create one for any PR whose repo has a configured **Main Worktree**, and detects whether one already exists for any PR shown in the list/detail views.
 
 **Expected Branch**:
 The local branch name `gh pr checkout` would produce for a PR. Same-repo PRs keep `headRef` verbatim; fork PRs get prefixed with `<forkOwner>-` to avoid collisions across forks of the same branch name.
@@ -182,6 +183,9 @@ _Avoid_: blocking (as the field name; fine as prose).
 The Tickets a session can take right now: open, unclaimed, every Dependency target closed, and no **Unknown Dependency**. The Ticket analog of **Smart-status** — Tickets never carry Smart-status, **Next Action**, or a PR-sense **Blocker**.
 _Avoid_: takeable (in UI labels and counts too — say "Frontier" / "on the Frontier").
 
+**Wayfinder Root**:
+A directory probed for local Efforts — a root either is a single Effort itself or holds Effort subdirectories. Default roots are probed in a repo's **Main Worktree** and every worktree linked to it, and at each level from the cwd up to its git toplevel; a repo's configured roots replace the defaults for it.
+
 ### File categorisation
 
 **File Category**:
@@ -226,13 +230,14 @@ _Avoid_: last updated, updated at (reserved for GitHub's activity time).
 - The selected PR summary is action-first: identity, **Next Action**, mergeability, threads, reviews/requested reviewers, checks, files, contextual metadata, worktree, then URL.
 - Assignees are contextual metadata unless they make the current user the **Effective Author**; labels are contextual metadata until legit gives specific labels domain meaning.
 - The PR list keeps review state, unresolved thread counts, and **Next Action** as separate scanning signals when width allows.
-- A **Worktree** belongs to one **PR** and one **Source Clone**.
+- A **Worktree** belongs to one **PR** and one **Main Worktree**.
 - The **Blocker** of a `waiting-on-author` PR is the **Effective Author**; the **Blocker** of a `me-blocking` PR is the current user.
 - A **Refresh** sends each of its fetches through the **Priority Queue**, each with a **Fetch Priority**.
 - An **Effort** belongs to exactly one **Tracked Repo**, has exactly one **Map**, and has many **Tickets**.
 - A **Ticket**'s **Mode** is derived from its **Type**; unknown **Types** get Mode `Either`.
 - A **Ticket** is on the **Frontier** iff it is open, unclaimed, and has no open or **Unknown Dependency**.
 - **Efforts** and **Tickets** are read-only to legit: claiming and resolving happen in wayfinder sessions.
+- Where an **Effort**'s data is found (discovery — a **Wayfinder Root** or a GitHub tracker) and which **Tracked Repo** it belongs to (attribution) are distinct steps; today attribution follows discovery, as a default rather than a definition.
 
 ## Example dialogue
 
