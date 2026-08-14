@@ -117,8 +117,12 @@ The local branch name `gh pr checkout` would produce for a PR. Same-repo PRs kee
 
 ### Refresh
 
+**Fetch Unit**:
+The batch of data one read fetches, stamps, and refreshes together — a **PR**'s enrichment, or an **Effort**'s ticket data (one GitHub map read or one local probe). **Fetch Age**, the refresh indicator, and `r`/`R` are keyed by Fetch Unit, never by a larger container: `r` refreshes the unit backing the selected row, `R` every unit backing the current view scope. A future ticket source brings its own Fetch Unit and inherits these semantics unchanged.
+_Avoid_: fetch scope (collides with view scope).
+
 **Refresh**:
-Re-fetching one PR (`r` — the selected or open PR) or every visible PR (`R`). A refresh updates the PR list entry plus all enrichment queries (threads, checks, reviews, files). Each PR's refresh is one `Cmd::RefreshPr` dispatched straight through the [[Priority Queue]]: the focused PR is promoted, and `R` dispatches in **Smart-status** tier order so `me-blocking` PRs refresh first (ADR 0004). An in-flight refresh shows a per-row indicator; re-pressing while it is in flight is a no-op. In list view, refresh also reconciles local **Worktrees**: `r` lists only the selected PR's **Source Clone**, while `R` lists every configured **Source Clone**. Both keys also trigger a [[Re-list]] for discovery: `R` always re-lists the in-scope repos, and `r` re-lists when the active Repo Tab has no PRs (nothing to refresh, so "check GitHub for new PRs" instead).
+Re-fetching one PR (`r` — the selected or open PR) or every visible PR (`R`). A refresh updates the PR list entry plus all enrichment queries (threads, checks, reviews, files). Each PR's refresh is one `Cmd::RefreshPr` dispatched straight through the [[Priority Queue]]: the focused PR is promoted, and `R` dispatches in **Smart-status** tier order so `me-blocking` PRs refresh first (ADR 0004). An in-flight refresh shows a per-row indicator; re-pressing while it is in flight is a no-op. In list view, refresh also reconciles local **Worktrees**: `r` lists only the selected PR's **Main Worktree**, while `R` lists every configured **Main Worktree**. Both keys also trigger a [[Re-list]] for discovery: `R` always re-lists the in-scope repos, and `r` re-lists when the active Repo Tab has no PRs (nothing to refresh, so "check GitHub for new PRs" instead). On the ticket surface, `r` re-reads the **Fetch Unit** backing the selected **Ticket** (the detail view's `r` also re-fetches the open Ticket's body and comments) and `R` re-reads every unit in the current view scope; Tickets have no separate **Re-list** — one map read reconciles membership and enrichment together.
 
 **Re-list**:
 Re-fetching a repo's [[Open PR List]] to reconcile _membership_ — surfacing PRs opened since the last listing and pruning ones closed or merged since — as distinct from a **Refresh**, which re-fetches the enrichment of PRs already pooled. A re-list re-streams the listing on top of the pooled PRs rather than clearing them first: each arrival is deduped by key, so a surviving PR keeps the enrichment fetched for it and a newly-opened PR is appended, and once the listing settles any pooled PR whose number didn't reappear is dropped. `R` re-lists every in-scope repo (the active Repo Tab's repo, or all Tracked Repos on the All tab); `r` re-lists only an empty Repo Tab.
@@ -127,15 +131,15 @@ Re-fetching a repo's [[Open PR List]] to reconcile _membership_ — surfacing PR
 The shared network limiter's queue of pending fetches. Requests are granted highest-priority-first: interactive-effective ones (see [[Fetch Priority]]) ahead of background ones, FIFO within a lane. Smart-status tier does not influence the limiter's internal order; instead a tier-ordered **Refresh** (`R`) dispatches its requests in tier order so the background FIFO lane drains `me-blocking` first (ADR 0004), rather than the limiter sorting by tier (ADR 0003).
 
 **Fetch Priority**:
-Which lane a network request takes through the shared concurrency limiter — fully derived from focus, never declared at dispatch. A request carries the PR it serves (or none, for repo-wide work like the open-PR listing) and is:
+Which lane a network request takes through the shared concurrency limiter — fully derived from focus, never declared at dispatch. A request carries the PR or **Ticket** it serves (or none, for unit-wide work like the open-PR listing or an **Effort**'s map read) and is:
 
-- `Interactive` while that PR is the **Focused PR** — so the fetches the user is actively waiting on (the detail body on drill-in or `r`, the selected PR's files and enrichment) take precedence over the list-wide backlog.
-- `Background` otherwise: speculative, list-wide work (the open-PR listing, the enrichment fan-out, `R` refresh-all) and any fetch for a PR the user has moved away from.
+- `Interactive` while that PR or Ticket is the **Focused PR** — so the fetches the user is actively waiting on (the detail body on drill-in or `r`, the selected PR's files and enrichment) take precedence over the list-wide backlog.
+- `Background` otherwise: speculative, list-wide work (the open-PR listing, the enrichment fan-out, a map read, `R` refresh-all) and any fetch for a PR or Ticket the user has moved away from.
 
 Because priority is derived, it shifts while a request is still queued (see [[Focus Promotion]]).
 
 **Focused PR**:
-The single PR whose pending work the limiter prioritises: the open **PR Detail**, or — in the list view — the selected PR. Changing the selection or drilling in/out moves the focus.
+The single PR whose pending work the limiter prioritises: the open **PR Detail**, or — in the list view — the selected PR. Changing the selection or drilling in/out moves the focus. The limiter tracks one focused entity across surfaces: on the ticket surface it is the open or selected **Ticket**, and toggling surfaces moves the focus there, demoting the other surface's pending fetches.
 
 **Focus Promotion**:
 Re-ranking the **Priority Queue** when the **Focused PR** changes, so the focused PR's still-pending fetches (its threads, reviews, checks, files, detail body) jump ahead of the rest of the fan-out — and the previously-focused PR's pending fetches demote back to `Background`. Only pending requests re-rank; one already in flight keeps running.
@@ -209,7 +213,7 @@ _Avoid_: repo accent, repo tint.
 A check run's wall-clock time (`completed_at − started_at`), read from the same check-runs fetch that yields name and conclusion — best-effort, so only completed runs have one (queued/in-progress runs, and older commit statuses outside the check-runs endpoint, do not). Surfaced beside each completed check row and used as the secondary sort key after outcome.
 
 **Fetch Age**:
-How long ago legit last received a given PR's data — its initial enrichment or a **Refresh** settling — shown per PR in the summary panel and detail header as a relative age ("fetched 2m ago"). A per-PR staleness signal, deliberately not global: PRs are fetched and refreshed independently (see [[Fetch Priority]], [[Refresh]]), so there is no single moment "the data" was loaded. Distinct from the PR's GitHub `updated_at` (its last activity, shown as "updated Y") and from the live network indicator's in-flight/waiting counts.
+How long ago legit last received a given **Fetch Unit**'s data — a PR's initial enrichment or **Refresh** settling, or an **Effort**'s map read or probe settling — shown as a relative age ("fetched 2m ago") per PR in the summary panel and detail header, and per Effort-backed unit on the effort card and ticket detail header. A per-unit staleness signal, deliberately not global: Fetch Units are fetched and refreshed independently (see [[Fetch Priority]], [[Refresh]]), so there is no single moment "the data" was loaded. Distinct from the PR's GitHub `updated_at` (its last activity, shown as "updated Y") and from the live network indicator's in-flight/waiting counts.
 _Avoid_: last updated, updated at (reserved for GitHub's activity time).
 
 ## Relationships
