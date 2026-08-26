@@ -262,7 +262,7 @@ fn repo_object_with_unknown_field_fails() {
     );
 
     assert!(
-        error.contains("repos[1]: unknown field `mainWorktreePth`"),
+        error.contains("repos[1].mainWorktreePth: unknown field `mainWorktreePth`"),
         "{error}"
     );
     assert!(

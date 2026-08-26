@@ -29,8 +29,9 @@ pub struct FileRule {
 /// a local-only repo — no Repo Tab, no PR machinery — so `worktree_root` is
 /// rejected on it.
 ///
-/// Deserialized by [`RepoEntry`]'s hand-written visitor, not a derive — a new
-/// field must also be added to its `visit_map` match and to `REPO_FIELDS`.
+/// [`Deserialize`] is hand-written (see the impl below): an entry may be a
+/// bare `"owner/repo"` string, and the retired `sourceClone` key errors by
+/// name. A new field must also be added to the `RepoObject` wire struct there.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoConfig {
@@ -176,7 +177,7 @@ impl UiConfig {
 pub struct LegitConfig {
     #[serde(default)]
     pub user: String,
-    #[serde(default, deserialize_with = "deserialize_repos")]
+    #[serde(default)]
     pub repos: Vec<RepoConfig>,
     #[serde(default = "default_bot_logins")]
     pub bot_logins: Vec<String>,
@@ -280,106 +281,76 @@ fn default_bot_logins() -> Vec<String> {
     ]
 }
 
-fn deserialize_repos<'de, D>(deserializer: D) -> Result<Vec<RepoConfig>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    // Each `RepoEntry` already normalises the two accepted shapes (bare-string
-    // legacy slug vs structured object) into a `RepoConfig`. Validation is
-    // intentionally left to `LegitConfig::validate`, run in `load_from_path`,
-    // so every invalid entry surfaces one consistent "failed to validate"
-    // error rather than being silently dropped; `parse_config`'s path tracking
-    // prefixes shape errors with the entry's index.
-    let entries = Vec::<RepoEntry>::deserialize(deserializer)?;
-    Ok(entries.into_iter().map(|RepoEntry(repo)| repo).collect())
+/// `RepoConfig`'s wire shape: the real fields plus the retired `sourceClone`
+/// key, accepted here only so the impl below can report it as a rename — that
+/// one-line error is the migration path — instead of serde's generic `unknown
+/// field`. (This also lists `sourceClone` in the unknown-field error's expected
+/// keys; harmless, since writing it leads straight to the rename error.)
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RepoObject {
+    slug: Option<String>,
+    main_worktree_path: Option<String>,
+    worktree_root: Option<String>,
+    wayfinder_roots: Option<Vec<String>>,
+    #[serde(rename = "sourceClone")]
+    legacy_source_clone: Option<serde::de::IgnoredAny>,
 }
 
-/// The pre-rename key for `mainWorktreePath`, still reported by name so an old
-/// config fails with a precise migration error.
-const LEGACY_MAIN_WORKTREE_KEY: &str = "sourceClone";
-
-/// The object keys a `repos` entry accepts, in the order serde lists them in an
-/// `unknown field` error.
-const REPO_FIELDS: &[&str] = &["slug", "mainWorktreePath", "worktreeRoot", "wayfinderRoots"];
-
-/// A single `repos` entry: either a bare `"owner/repo"` string (legacy form)
-/// or a structured object, normalised to `RepoConfig` either way. Hand-written
+/// A `repos` entry is either a bare `"owner/repo"` string (legacy form) or a
+/// structured object, normalised to one `RepoConfig` either way. Hand-written
 /// instead of `#[serde(untagged)]` so a typo'd object key surfaces serde's
-/// precise `unknown field` error rather than the untagged enum's opaque "did
-/// not match any variant". The object case walks the map itself, rather than
-/// delegating to a derived `RepoConfig` impl, so the retired `sourceClone` key
-/// can be reported as a rename — that one-line error is the migration path —
-/// while duplicate keys still fail as they would under a derive.
-struct RepoEntry(RepoConfig);
-
-impl<'de> Deserialize<'de> for RepoEntry {
+/// precise `unknown field` error (via `RepoObject`'s `deny_unknown_fields`)
+/// rather than the untagged enum's opaque "did not match any variant".
+/// Validation is intentionally left to `LegitConfig::validate`, run in
+/// `load_from_path`, so every invalid entry surfaces one consistent "failed to
+/// validate" error rather than being silently dropped; `parse_config`'s path
+/// tracking prefixes shape errors with the entry's index.
+impl<'de> Deserialize<'de> for RepoConfig {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        struct RepoEntryVisitor;
+        struct RepoConfigVisitor;
 
-        impl<'de> serde::de::Visitor<'de> for RepoEntryVisitor {
-            type Value = RepoEntry;
+        impl<'de> serde::de::Visitor<'de> for RepoConfigVisitor {
+            type Value = RepoConfig;
 
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 f.write_str("an \"owner/repo\" string or a repo object")
             }
 
-            fn visit_str<E>(self, value: &str) -> Result<RepoEntry, E>
+            fn visit_str<E>(self, value: &str) -> Result<RepoConfig, E>
             where
                 E: serde::de::Error,
             {
-                Ok(RepoEntry(RepoConfig {
+                Ok(RepoConfig {
                     slug: Some(value.to_owned()),
                     ..RepoConfig::default()
-                }))
+                })
             }
 
-            fn visit_map<A>(self, mut map: A) -> Result<RepoEntry, A::Error>
+            fn visit_map<A>(self, map: A) -> Result<RepoConfig, A::Error>
             where
                 A: serde::de::MapAccess<'de>,
             {
-                fn set<'de, A, T>(
-                    slot: &mut Option<T>,
-                    field: &'static str,
-                    map: &mut A,
-                ) -> Result<(), A::Error>
-                where
-                    A: serde::de::MapAccess<'de>,
-                    T: Deserialize<'de>,
-                {
-                    if slot.is_some() {
-                        return Err(A::Error::duplicate_field(field));
-                    }
-                    *slot = Some(map.next_value()?);
-                    Ok(())
+                let object =
+                    RepoObject::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+                if object.legacy_source_clone.is_some() {
+                    return Err(A::Error::custom(
+                        "`sourceClone` was renamed to `mainWorktreePath`; update the key and reload",
+                    ));
                 }
-
-                let mut repo = RepoConfig::default();
-                while let Some(key) = map.next_key::<String>()? {
-                    match key.as_str() {
-                        "slug" => set(&mut repo.slug, "slug", &mut map)?,
-                        "mainWorktreePath" => {
-                            set(&mut repo.main_worktree_path, "mainWorktreePath", &mut map)?
-                        }
-                        "worktreeRoot" => set(&mut repo.worktree_root, "worktreeRoot", &mut map)?,
-                        "wayfinderRoots" => {
-                            set(&mut repo.wayfinder_roots, "wayfinderRoots", &mut map)?
-                        }
-                        LEGACY_MAIN_WORKTREE_KEY => {
-                            return Err(A::Error::custom(format!(
-                                "`{LEGACY_MAIN_WORKTREE_KEY}` was renamed to `mainWorktreePath`; update the key and reload"
-                            )));
-                        }
-                        other => return Err(A::Error::unknown_field(other, REPO_FIELDS)),
-                    }
-                }
-                Ok(RepoEntry(repo))
+                Ok(RepoConfig {
+                    slug: object.slug,
+                    main_worktree_path: object.main_worktree_path,
+                    worktree_root: object.worktree_root,
+                    wayfinder_roots: object.wayfinder_roots,
+                })
             }
         }
 
-        deserializer.deserialize_any(RepoEntryVisitor)
+        deserializer.deserialize_any(RepoConfigVisitor)
     }
 }
 
