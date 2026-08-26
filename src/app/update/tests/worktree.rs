@@ -55,14 +55,54 @@ fn config_loaded_lists_worktrees_for_repos_with_main_worktree_path() {
         [
             Cmd::ListWorktrees {
                 repo_slug,
-                main_worktree_path,
+                main_worktree,
             },
         ] => {
             assert_eq!(repo_slug, "mayfieldiv/legit");
-            assert_eq!(main_worktree_path, &PathBuf::from("/src/legit"));
+            assert_eq!(main_worktree, &PathBuf::from("/src/legit"));
         }
         other => panic!("expected one ListWorktrees cmd, got {other:?}"),
     }
+}
+
+#[test]
+fn slug_less_repo_gets_no_repo_tab_and_no_worktree_listing() {
+    let (mut model, _) = Model::new();
+    let config = LegitConfig {
+        repos: vec![
+            RepoConfig {
+                slug: Some("mayfieldiv/legit".to_owned()),
+                main_worktree_path: Some("/src/legit".to_owned()),
+                ..Default::default()
+            },
+            RepoConfig {
+                main_worktree_path: Some("/src/local-only".to_owned()),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+
+    let cmds = update(&mut model, Msg::ConfigLoaded(config));
+
+    let tabs: Vec<String> = model
+        .tracked_repos()
+        .iter()
+        .map(|repo| repo.slug())
+        .collect();
+    assert_eq!(tabs, vec!["mayfieldiv/legit".to_owned()]);
+    let listed: Vec<&PathBuf> = cmds
+        .iter()
+        .filter_map(|cmd| match cmd {
+            Cmd::ListWorktrees { main_worktree, .. } => Some(main_worktree),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        listed,
+        vec![&PathBuf::from("/src/legit")],
+        "a slug-less repo has no PRs, so no worktree machinery runs for it: {cmds:?}"
+    );
 }
 
 #[test]
@@ -125,12 +165,12 @@ fn w_in_list_creates_the_selected_pr_worktree() {
         [
             Cmd::CreateWorktree {
                 pr,
-                main_worktree_path,
+                main_worktree,
                 target_path,
             },
         ] => {
             assert_eq!(pr, &key(1));
-            assert_eq!(main_worktree_path, &PathBuf::from("/src/legit"));
+            assert_eq!(main_worktree, &PathBuf::from("/src/legit"));
             assert!(
                 target_path.ends_with(".legit/worktrees/mayfieldiv/legit/1-feature-1"),
                 "target path should be deterministic, got {}",

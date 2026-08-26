@@ -190,8 +190,8 @@ fn listed_worktrees(cmds: &[Cmd]) -> Vec<(String, PathBuf)> {
         .filter_map(|c| match c {
             Cmd::ListWorktrees {
                 repo_slug,
-                main_worktree_path,
-            } => Some((repo_slug.clone(), main_worktree_path.clone())),
+                main_worktree,
+            } => Some((repo_slug.clone(), main_worktree.clone())),
             _ => None,
         })
         .collect()

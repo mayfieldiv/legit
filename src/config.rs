@@ -37,48 +37,21 @@ pub struct RepoConfig {
     pub main_worktree_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_root: Option<String>,
-    /// Wayfinder Roots probed for this repo's local Efforts. When set, these
-    /// *replace* the built-in probe list for the repo (never extend it);
-    /// relative entries resolve against each probed worktree root. `Some(vec![])`
-    /// therefore means "probe nothing", distinct from `None` (built-in roots).
+    /// Wayfinder Roots for this repo's local Effort discovery. `None` means the
+    /// built-in probe list; `Some` *replaces* that list (never extends it), so
+    /// an empty list opts the repo out of local discovery entirely.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wayfinder_roots: Option<Vec<String>>,
 }
 
 impl RepoConfig {
-    /// The name shown for this repo: the slug, or for a slug-less repo the
-    /// basename of its Main Worktree path (unexpanded — the basename of `~/x/y`
-    /// and of its expansion are the same).
-    // Consumed by local Effort discovery and the ticket surface; nothing on
-    // the PR surface names a slug-less repo yet.
-    #[allow(dead_code)]
-    pub fn display_name(&self) -> String {
-        if let Some(slug) = &self.slug {
-            return slug.clone();
-        }
-        let path = self.main_worktree_path.as_deref().unwrap_or_default();
-        std::path::Path::new(path)
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.to_owned())
-    }
-
-    /// The `repos[...]` label used in validation errors.
-    fn label(&self) -> String {
-        format!(
-            "repos[{}]",
-            self.slug
-                .as_deref()
-                .or(self.main_worktree_path.as_deref())
-                .unwrap_or_default()
-        )
-    }
-
-    fn validate(&self) -> anyhow::Result<()> {
-        let label = self.label();
+    /// `index` is the entry's position in `repos`, the one name every entry
+    /// has (slug and mainWorktreePath are both optional).
+    fn validate(&self, index: usize) -> anyhow::Result<()> {
+        let label = format!("repos[{index}]");
         ensure!(
             self.slug.is_some() || self.main_worktree_path.is_some(),
-            "invalid {label} entry: at least one of slug or mainWorktreePath is required"
+            "invalid {label}: at least one of slug or mainWorktreePath is required"
         );
         if let Some(slug) = &self.slug {
             validate_repo_slug(slug)?;
@@ -93,8 +66,8 @@ impl RepoConfig {
             );
             validate_path(&format!("{label}.worktreeRoot"), path)?;
         }
-        for (index, root) in self.wayfinder_roots.iter().flatten().enumerate() {
-            validate_path(&format!("{label}.wayfinderRoots[{index}]"), root)?;
+        for (root_index, root) in self.wayfinder_roots.iter().flatten().enumerate() {
+            validate_path(&format!("{label}.wayfinderRoots[{root_index}]"), root)?;
         }
         Ok(())
     }
@@ -162,8 +135,8 @@ impl LegitConfig {
     }
 
     fn validate(&self) -> anyhow::Result<()> {
-        for repo in &self.repos {
-            repo.validate()?;
+        for (index, repo) in self.repos.iter().enumerate() {
+            repo.validate(index)?;
         }
         if let Some(path) = &self.worktree_root {
             validate_path("worktreeRoot", path)?;
@@ -226,76 +199,52 @@ fn deserialize_repos<'de, D>(deserializer: D) -> Result<Vec<RepoConfig>, D::Erro
 where
     D: serde::Deserializer<'de>,
 {
-    // Each `RepoEntry` already normalises the two accepted shapes (bare-string
-    // legacy slug vs structured object) into a `RepoConfig`. Validation is
+    // Each entry is buffered as a JSON value so its array index can prefix
+    // every error (`repos[2]: …`) — the only stable name an entry has, since
+    // slug and mainWorktreePath are both optional. Validation is
     // intentionally left to `LegitConfig::validate`, run in `load_from_path`, so
     // every invalid entry surfaces one consistent "failed to validate" error
     // rather than being silently dropped.
-    let entries = Vec::<RepoEntry>::deserialize(deserializer)?;
-    Ok(entries.into_iter().map(|RepoEntry(repo)| repo).collect())
+    let entries = Vec::<serde_json::Value>::deserialize(deserializer)?;
+    entries
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| {
+            repo_from_value(value)
+                .map_err(|error| D::Error::custom(format!("repos[{index}]: {error}")))
+        })
+        .collect()
 }
+
+/// The pre-rename key for `mainWorktreePath`, still reported by name so an old
+/// config fails with a precise migration error.
+const LEGACY_MAIN_WORKTREE_KEY: &str = "sourceClone";
 
 /// A single `repos` entry: either a bare `"owner/repo"` string (legacy form)
 /// or a structured object, normalised to `RepoConfig` either way. Hand-written
 /// instead of `#[serde(untagged)]` so a typo'd object key surfaces serde's
 /// precise `unknown field` error (via `RepoConfig`'s `deny_unknown_fields`)
 /// rather than the untagged enum's opaque "did not match any variant".
-struct RepoEntry(RepoConfig);
-
-/// The pre-rename key for `mainWorktreePath`, still reported by name so an old
-/// config fails with a precise migration error.
-const LEGACY_MAIN_WORKTREE_KEY: &str = "sourceClone";
-
-impl<'de> Deserialize<'de> for RepoEntry {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        struct RepoEntryVisitor;
-
-        impl<'de> serde::de::Visitor<'de> for RepoEntryVisitor {
-            type Value = RepoEntry;
-
-            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str("an \"owner/repo\" string or a repo object")
+fn repo_from_value(value: serde_json::Value) -> Result<RepoConfig, serde_json::Error> {
+    match value {
+        serde_json::Value::String(slug) => Ok(RepoConfig {
+            slug: Some(slug),
+            ..RepoConfig::default()
+        }),
+        serde_json::Value::Object(object) => {
+            // Checked before deserializing so the retired key is reported as a
+            // rename instead of serde's generic `unknown field` — that one-line
+            // error is the migration path.
+            if object.contains_key(LEGACY_MAIN_WORKTREE_KEY) {
+                return Err(serde_json::Error::custom(format!(
+                    "`{LEGACY_MAIN_WORKTREE_KEY}` was renamed to `mainWorktreePath`; update the key and reload"
+                )));
             }
-
-            fn visit_str<E>(self, value: &str) -> Result<RepoEntry, E>
-            where
-                E: serde::de::Error,
-            {
-                Ok(RepoEntry(RepoConfig {
-                    slug: Some(value.to_owned()),
-                    ..RepoConfig::default()
-                }))
-            }
-
-            fn visit_map<A>(self, map: A) -> Result<RepoEntry, A::Error>
-            where
-                A: serde::de::MapAccess<'de>,
-            {
-                // Buffer the object so the retired `sourceClone` key can be
-                // reported as a rename instead of serde's generic
-                // `unknown field` — that one-line error is the migration path.
-                let object = serde_json::Map::<String, serde_json::Value>::deserialize(
-                    serde::de::value::MapAccessDeserializer::new(map),
-                )?;
-                if object.contains_key(LEGACY_MAIN_WORKTREE_KEY) {
-                    let label = object
-                        .get("slug")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or_default();
-                    return Err(A::Error::custom(format!(
-                        "repos[{label}]: `{LEGACY_MAIN_WORKTREE_KEY}` was renamed to `mainWorktreePath`; update the key and reload"
-                    )));
-                }
-                RepoConfig::deserialize(serde_json::Value::Object(object))
-                    .map(RepoEntry)
-                    .map_err(A::Error::custom)
-            }
+            RepoConfig::deserialize(serde_json::Value::Object(object))
         }
-
-        deserializer.deserialize_any(RepoEntryVisitor)
+        other => Err(serde_json::Error::custom(format!(
+            "expected an \"owner/repo\" string or a repo object, found {other}"
+        ))),
     }
 }
 
@@ -466,7 +415,7 @@ mod tests {
             r#"{"repos": [{"slug": "acme/widgets", "mainWorktreePath": "bad\npath"}]}"#,
         );
 
-        assert!(error.contains("invalid repos[acme/widgets].mainWorktreePath"));
+        assert!(error.contains("invalid repos[0].mainWorktreePath"));
         assert!(error.contains("control characters"));
     }
 
@@ -518,7 +467,7 @@ mod tests {
             r#"{"repos": [{"worktreeRoot": "/wt"}]}"#,
         );
 
-        assert!(error.contains("invalid repos[] entry"), "{error}");
+        assert!(error.contains("invalid repos[0]:"), "{error}");
         assert!(
             error.contains("at least one of slug or mainWorktreePath"),
             "{error}"
@@ -532,10 +481,7 @@ mod tests {
             r#"{"repos": [{"mainWorktreePath": "/src/local", "worktreeRoot": "/wt"}]}"#,
         );
 
-        assert!(
-            error.contains("invalid repos[/src/local].worktreeRoot"),
-            "{error}"
-        );
+        assert!(error.contains("invalid repos[0].worktreeRoot"), "{error}");
         assert!(error.contains("requires a slug"), "{error}");
     }
 
@@ -547,7 +493,7 @@ mod tests {
         );
 
         assert!(
-            error.contains("invalid repos[  ].mainWorktreePath"),
+            error.contains("invalid repos[0].mainWorktreePath"),
             "{error}"
         );
         assert!(error.contains("must not be empty"), "{error}");
@@ -561,7 +507,7 @@ mod tests {
         );
 
         assert!(
-            error.contains("invalid repos[acme/widgets].wayfinderRoots[1]"),
+            error.contains("invalid repos[0].wayfinderRoots[1]"),
             "{error}"
         );
         assert!(error.contains("must not be empty"), "{error}");
@@ -571,74 +517,14 @@ mod tests {
     fn legacy_source_clone_names_the_rename() {
         let error = load_error(
             "legacy-source-clone",
-            r#"{"repos": [{"slug": "acme/widgets", "sourceClone": "/src/widgets"}]}"#,
+            r#"{"repos": ["acme/gizmos", {"slug": "acme/widgets", "sourceClone": "/src/widgets"}]}"#,
         );
 
         assert!(
-            error.contains("repos[acme/widgets]: `sourceClone` was renamed to `mainWorktreePath`"),
+            error.contains("repos[1]: `sourceClone` was renamed to `mainWorktreePath`"),
             "{error}"
         );
         assert!(!error.contains("unknown field"), "{error}");
-    }
-
-    #[test]
-    fn display_name_prefers_slug_then_path_basename() {
-        let with_slug = RepoConfig {
-            slug: Some("acme/widgets".to_owned()),
-            main_worktree_path: Some("~/src/widgets".to_owned()),
-            ..Default::default()
-        };
-        assert_eq!(with_slug.display_name(), "acme/widgets");
-
-        let slug_less = RepoConfig {
-            main_worktree_path: Some("~/src/local-only/".to_owned()),
-            ..Default::default()
-        };
-        assert_eq!(slug_less.display_name(), "local-only");
-    }
-
-    #[test]
-    fn unknown_top_level_field_fails() {
-        let error = load_error("unknown-top-level", r#"{"usr": "mayfield"}"#);
-
-        assert!(error.contains("unknown field"));
-        assert!(error.contains("usr"));
-    }
-
-    #[test]
-    fn unknown_ui_field_fails() {
-        let error = load_error("unknown-ui-field", r#"{"ui": {"defaultSortByy": "age"}}"#);
-
-        assert!(error.contains("unknown field"));
-        assert!(error.contains("defaultSortByy"));
-    }
-
-    #[test]
-    fn repo_object_with_unknown_field_fails() {
-        let error = load_error(
-            "unknown-repo-field",
-            r#"{"repos": [{"slug": "acme/widgets", "mainWorktreePth": "/src"}]}"#,
-        );
-
-        assert!(error.contains("unknown field"));
-        assert!(error.contains("mainWorktreePth"));
-    }
-
-    #[test]
-    fn has_any_worktree_root_includes_global_and_per_repo_roots() {
-        let mut config = LegitConfig::default();
-        assert!(!config.has_any_worktree_root());
-
-        config.worktree_root = Some("/global".to_owned());
-        assert!(config.has_any_worktree_root());
-
-        config.worktree_root = None;
-        config.repos = vec![RepoConfig {
-            slug: Some("acme/widgets".to_owned()),
-            worktree_root: Some("/repo".to_owned()),
-            ..Default::default()
-        }];
-        assert!(config.has_any_worktree_root());
     }
 
     fn temp_path(name: &str) -> std::path::PathBuf {

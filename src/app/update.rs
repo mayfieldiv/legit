@@ -95,10 +95,10 @@ fn maybe_fetch_open_prs(model: &mut Model) -> Vec<Cmd> {
 /// path was already rejected while loading config, but remains a harmless
 /// no-op here if a synthetic model reaches this helper in a test.
 fn list_worktree_cmd(model: &Model, repo_slug: String) -> Option<Cmd> {
-    match worktree::resolve_main_worktree_path(&model.config, &repo_slug) {
-        Ok(Some(main_worktree_path)) => Some(Cmd::ListWorktrees {
+    match worktree::resolve_main_worktree(&model.config, &repo_slug) {
+        Ok(Some(main_worktree)) => Some(Cmd::ListWorktrees {
             repo_slug,
-            main_worktree_path,
+            main_worktree,
         }),
         Ok(None) => None,
         Err(error) => {
@@ -269,30 +269,29 @@ fn create_worktree_cmds(model: &mut Model, pr: crate::github::rest::PR) -> Vec<C
         return copy_worktree_path_cmds(model, path);
     }
 
-    let main_worktree_path =
-        match worktree::resolve_main_worktree_path(&model.config, &pr.repo_slug) {
-            Ok(Some(main_worktree_path)) => main_worktree_path,
-            Ok(None) => {
-                return set_status(
-                    model,
-                    StatusKind::Error,
-                    format!(
-                        "No mainWorktreePath configured for {}; edit ~/.legit/config.json",
-                        pr.repo_slug
-                    ),
-                );
-            }
-            Err(error) => {
-                return set_status(
-                    model,
-                    StatusKind::Error,
-                    format!(
-                        "Failed to resolve mainWorktreePath for {}: {error:#}",
-                        pr.repo_slug
-                    ),
-                );
-            }
-        };
+    let main_worktree = match worktree::resolve_main_worktree(&model.config, &pr.repo_slug) {
+        Ok(Some(main_worktree)) => main_worktree,
+        Ok(None) => {
+            return set_status(
+                model,
+                StatusKind::Error,
+                format!(
+                    "No mainWorktreePath configured for {}; edit ~/.legit/config.json",
+                    pr.repo_slug
+                ),
+            );
+        }
+        Err(error) => {
+            return set_status(
+                model,
+                StatusKind::Error,
+                format!(
+                    "Failed to resolve mainWorktreePath for {}: {error:#}",
+                    pr.repo_slug
+                ),
+            );
+        }
+    };
     let target_path = match worktree::resolve_worktree_path(
         &model.config,
         &pr.repo_slug,
@@ -314,7 +313,7 @@ fn create_worktree_cmds(model: &mut Model, pr: crate::github::rest::PR) -> Vec<C
     let mut cmds = set_status(model, StatusKind::Info, "Creating worktree…".to_owned());
     cmds.push(Cmd::CreateWorktree {
         pr: pr.key(),
-        main_worktree_path,
+        main_worktree,
         target_path,
     });
     cmds
