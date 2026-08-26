@@ -99,15 +99,15 @@ pub enum Cmd {
     OpenUrl {
         url: String,
     },
-    /// List worktrees for a repo's configured source clone.
+    /// List worktrees for a repo's configured Main Worktree.
     ListWorktrees {
         repo_slug: String,
-        source_clone: PathBuf,
+        main_worktree_path: PathBuf,
     },
     /// Create the deterministic worktree for one PR.
     CreateWorktree {
         pr: PrKey,
-        source_clone: PathBuf,
+        main_worktree_path: PathBuf,
         target_path: PathBuf,
     },
     /// Copy text to the user's terminal clipboard via OSC 52.
@@ -327,9 +327,9 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
         }
         Cmd::ListWorktrees {
             repo_slug,
-            source_clone,
+            main_worktree_path,
         } => {
-            let msg = match blocking(move || worktree::list_worktrees(&source_clone)).await {
+            let msg = match blocking(move || worktree::list_worktrees(&main_worktree_path)).await {
                 Ok(entries) => Msg::WorktreesArrived { repo_slug, entries },
                 Err(error) => command_failed("list worktrees", error),
             };
@@ -337,12 +337,12 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
         }
         Cmd::CreateWorktree {
             pr,
-            source_clone,
+            main_worktree_path,
             target_path,
         } => {
             let path = target_path.to_string_lossy().to_string();
             let msg = match blocking(move || {
-                worktree::create_worktree_for_pr(&source_clone, &target_path, pr.number)
+                worktree::create_worktree_for_pr(&main_worktree_path, &target_path, pr.number)
             })
             .await
             {

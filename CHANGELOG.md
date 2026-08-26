@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Config: `repos[].sourceClone` is renamed to `mainWorktreePath` (hard rename — an old config fails to load with a one-line error naming the rename). A `repos` object may now omit `slug` when it sets `mainWorktreePath` (a local-only repo for the upcoming ticket surface: no Repo Tab, no PRs; `worktreeRoot` is rejected on it), and may set `wayfinderRoots` to replace the built-in local Effort probe roots for that repo (#115)
 - Cutover to the Rust + ratatui rewrite: the TUI is now a single Rust crate at the repo root (run with `cargo run`), and the TypeScript/SolidJS implementation has been deleted. `~/.legit/config.json` is unchanged; logs now write to `~/.legit/log/legit.log` instead of `legit-rs.log` (#53)
 
 ### Fixed

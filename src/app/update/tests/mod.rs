@@ -254,7 +254,7 @@ pub(super) fn config_with_repos(slugs: &[&str]) -> crate::config::LegitConfig {
         repos: slugs
             .iter()
             .map(|slug| crate::config::RepoConfig {
-                slug: (*slug).to_owned(),
+                slug: Some((*slug).to_owned()),
                 ..Default::default()
             })
             .collect(),

@@ -325,7 +325,7 @@ pub struct Model {
     pub network_stats: NetworkStats,
     pub enrichment: Enrichment,
     /// Latest `git worktree list --porcelain` entries per Tracked Repo whose
-    /// config has a source clone. Filled at startup and after worktree
+    /// config has a Main Worktree. Filled at startup and after worktree
     /// creation; summary/detail views derive per-PR matches from this cache.
     pub worktrees_by_repo: HashMap<String, Vec<WorktreeEntry>>,
     /// Per-PR Smart-status, derived from `enrichment` + the current user and
@@ -451,8 +451,9 @@ impl Model {
                 repos.push(repo);
             }
         };
+        // Slug-less repos are local-only: no Repo Tab, no PR machinery.
         for repo in &self.config.repos {
-            if let Some(info) = RepoInfo::from_slug(&repo.slug) {
+            if let Some(info) = repo.slug.as_deref().and_then(RepoInfo::from_slug) {
                 push_unique(info, &mut repos);
             }
         }

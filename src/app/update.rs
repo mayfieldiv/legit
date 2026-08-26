@@ -90,25 +90,25 @@ fn maybe_fetch_open_prs(model: &mut Model) -> Vec<Cmd> {
     cmds
 }
 
-/// List worktrees for one Tracked Repo when it has a configured source clone.
-/// Missing source clones are expected (worktree support is opt-in); an invalid
+/// List worktrees for one Tracked Repo when it has a configured Main Worktree.
+/// Missing Main Worktrees are expected (worktree support is opt-in); an invalid
 /// path was already rejected while loading config, but remains a harmless
 /// no-op here if a synthetic model reaches this helper in a test.
 fn list_worktree_cmd(model: &Model, repo_slug: String) -> Option<Cmd> {
-    match worktree::resolve_source_clone(&model.config, &repo_slug) {
-        Ok(Some(source_clone)) => Some(Cmd::ListWorktrees {
+    match worktree::resolve_main_worktree_path(&model.config, &repo_slug) {
+        Ok(Some(main_worktree_path)) => Some(Cmd::ListWorktrees {
             repo_slug,
-            source_clone,
+            main_worktree_path,
         }),
         Ok(None) => None,
         Err(error) => {
-            tracing::warn!(%repo_slug, %error, "failed to resolve worktree source clone");
+            tracing::warn!(%repo_slug, %error, "failed to resolve main worktree path");
             None
         }
     }
 }
 
-/// List worktrees for every configured Tracked Repo that has a source clone.
+/// List worktrees for every configured Tracked Repo that has a Main Worktree.
 fn list_worktree_cmds(model: &Model) -> Vec<Cmd> {
     model
         .tracked_repos()
@@ -269,29 +269,30 @@ fn create_worktree_cmds(model: &mut Model, pr: crate::github::rest::PR) -> Vec<C
         return copy_worktree_path_cmds(model, path);
     }
 
-    let source_clone = match worktree::resolve_source_clone(&model.config, &pr.repo_slug) {
-        Ok(Some(source_clone)) => source_clone,
-        Ok(None) => {
-            return set_status(
-                model,
-                StatusKind::Error,
-                format!(
-                    "No sourceClone configured for {}; edit ~/.legit/config.json",
-                    pr.repo_slug
-                ),
-            );
-        }
-        Err(error) => {
-            return set_status(
-                model,
-                StatusKind::Error,
-                format!(
-                    "Failed to resolve sourceClone for {}: {error:#}",
-                    pr.repo_slug
-                ),
-            );
-        }
-    };
+    let main_worktree_path =
+        match worktree::resolve_main_worktree_path(&model.config, &pr.repo_slug) {
+            Ok(Some(main_worktree_path)) => main_worktree_path,
+            Ok(None) => {
+                return set_status(
+                    model,
+                    StatusKind::Error,
+                    format!(
+                        "No mainWorktreePath configured for {}; edit ~/.legit/config.json",
+                        pr.repo_slug
+                    ),
+                );
+            }
+            Err(error) => {
+                return set_status(
+                    model,
+                    StatusKind::Error,
+                    format!(
+                        "Failed to resolve mainWorktreePath for {}: {error:#}",
+                        pr.repo_slug
+                    ),
+                );
+            }
+        };
     let target_path = match worktree::resolve_worktree_path(
         &model.config,
         &pr.repo_slug,
@@ -313,7 +314,7 @@ fn create_worktree_cmds(model: &mut Model, pr: crate::github::rest::PR) -> Vec<C
     let mut cmds = set_status(model, StatusKind::Info, "Creating worktree…".to_owned());
     cmds.push(Cmd::CreateWorktree {
         pr: pr.key(),
-        source_clone,
+        main_worktree_path,
         target_path,
     });
     cmds
@@ -1027,7 +1028,7 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
             // startup race, but when it arrives last it must kick off the fetch.
             model.config_loaded = true;
             let mut cmds = maybe_fetch_open_prs(model);
-            // Source Clones are config-derived, so reconcile them only after the
+            // Main Worktrees are config-derived, so reconcile them only after the
             // fresh config is installed. This serves both startup and `R`
             // without resolving paths from stale config or dispatching duplicates.
             cmds.extend(list_worktree_cmds(model));
@@ -1047,7 +1048,7 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
                 None => RepoDetection::Failed,
             };
             // Worktree listing stays config-driven: only configured repos can
-            // declare a sourceClone, so ConfigLoaded is the event that has
+            // declare a mainWorktreePath, so ConfigLoaded is the event that has
             // enough information to list them.
             maybe_fetch_open_prs(model)
         }

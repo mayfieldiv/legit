@@ -221,7 +221,7 @@ fn matches_by_branch_before_path() {
 fn resolves_worktree_paths_from_config() {
     let config = LegitConfig {
         repos: vec![RepoConfig {
-            slug: "acme/widgets".to_owned(),
+            slug: Some("acme/widgets".to_owned()),
             ..Default::default()
         }],
         ..Default::default()
@@ -237,7 +237,7 @@ fn resolves_worktree_paths_from_config() {
 
     let config = LegitConfig {
         repos: vec![RepoConfig {
-            slug: "acme/widgets".to_owned(),
+            slug: Some("acme/widgets".to_owned()),
             worktree_root: Some("/wts/widgets".to_owned()),
             ..Default::default()
         }],
@@ -251,7 +251,7 @@ fn resolves_worktree_paths_from_config() {
 
     let config = LegitConfig {
         repos: vec![RepoConfig {
-            slug: "acme/widgets".to_owned(),
+            slug: Some("acme/widgets".to_owned()),
             ..Default::default()
         }],
         worktree_root: Some("/srv/wts".to_owned()),
@@ -267,7 +267,7 @@ fn resolves_worktree_paths_from_config() {
 fn parse_worktree_leaf_round_trips_resolve_worktree_path_naming() {
     let config = LegitConfig {
         repos: vec![RepoConfig {
-            slug: "acme/widgets".to_owned(),
+            slug: Some("acme/widgets".to_owned()),
             ..Default::default()
         }],
         ..Default::default()
@@ -284,16 +284,16 @@ fn parse_worktree_leaf_round_trips_resolve_worktree_path_naming() {
 }
 
 #[test]
-fn resolves_source_clone_from_config() {
+fn resolves_main_worktree_path_from_config() {
     let config = LegitConfig {
         repos: vec![
             RepoConfig {
-                slug: "acme/widgets".to_owned(),
-                source_clone: Some("~/src/widgets".to_owned()),
+                slug: Some("acme/widgets".to_owned()),
+                main_worktree_path: Some("~/src/widgets".to_owned()),
                 ..Default::default()
             },
             RepoConfig {
-                slug: "acme/gadgets".to_owned(),
+                slug: Some("acme/gadgets".to_owned()),
                 ..Default::default()
             },
         ],
@@ -301,15 +301,15 @@ fn resolves_source_clone_from_config() {
     };
 
     assert_eq!(
-        resolve_source_clone(&config, "acme/widgets").expect("sourceClone path"),
+        resolve_main_worktree_path(&config, "acme/widgets").expect("mainWorktreePath path"),
         Some(home_dir().expect("home directory").join("src/widgets"))
     );
     assert_eq!(
-        resolve_source_clone(&config, "acme/gadgets").expect("missing sourceClone"),
+        resolve_main_worktree_path(&config, "acme/gadgets").expect("missing mainWorktreePath"),
         None
     );
     assert_eq!(
-        resolve_source_clone(&config, "acme/unknown").expect("unknown repo sourceClone"),
+        resolve_main_worktree_path(&config, "acme/unknown").expect("unknown repo mainWorktreePath"),
         None
     );
 }

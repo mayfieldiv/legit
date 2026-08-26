@@ -9,11 +9,11 @@ use crate::{
     worktree::WorktreeEntry,
 };
 
-fn config_with_source_clone() -> LegitConfig {
+fn config_with_main_worktree_path() -> LegitConfig {
     LegitConfig {
         repos: vec![RepoConfig {
-            slug: "mayfieldiv/legit".to_owned(),
-            source_clone: Some("/src/legit".to_owned()),
+            slug: Some("mayfieldiv/legit".to_owned()),
+            main_worktree_path: Some("/src/legit".to_owned()),
             ..Default::default()
         }],
         ..Default::default()
@@ -43,20 +43,23 @@ fn worktree_entry(path: &str, branch: Option<&str>) -> WorktreeEntry {
 }
 
 #[test]
-fn config_loaded_lists_worktrees_for_repos_with_source_clone() {
+fn config_loaded_lists_worktrees_for_repos_with_main_worktree_path() {
     let (mut model, _) = Model::new();
 
-    let cmds = update(&mut model, Msg::ConfigLoaded(config_with_source_clone()));
+    let cmds = update(
+        &mut model,
+        Msg::ConfigLoaded(config_with_main_worktree_path()),
+    );
 
     match cmds.as_slice() {
         [
             Cmd::ListWorktrees {
                 repo_slug,
-                source_clone,
+                main_worktree_path,
             },
         ] => {
             assert_eq!(repo_slug, "mayfieldiv/legit");
-            assert_eq!(source_clone, &PathBuf::from("/src/legit"));
+            assert_eq!(main_worktree_path, &PathBuf::from("/src/legit"));
         }
         other => panic!("expected one ListWorktrees cmd, got {other:?}"),
     }
@@ -64,7 +67,7 @@ fn config_loaded_lists_worktrees_for_repos_with_source_clone() {
 
 #[test]
 fn worktrees_arrived_stores_entries_and_matches_selected_pr_by_branch() {
-    let mut model = model_with_selected_pr(config_with_source_clone());
+    let mut model = model_with_selected_pr(config_with_main_worktree_path());
 
     update(
         &mut model,
@@ -81,7 +84,7 @@ fn worktrees_arrived_stores_entries_and_matches_selected_pr_by_branch() {
 
 #[test]
 fn worktrees_arrived_replaces_externally_deleted_entries() {
-    let mut model = model_with_selected_pr(config_with_source_clone());
+    let mut model = model_with_selected_pr(config_with_main_worktree_path());
     model.worktrees_by_repo.insert(
         "mayfieldiv/legit".to_owned(),
         vec![worktree_entry("/tmp/deleted-legit-1", Some("feature/1"))],
@@ -111,7 +114,7 @@ fn worktrees_arrived_replaces_externally_deleted_entries() {
 
 #[test]
 fn w_in_list_creates_the_selected_pr_worktree() {
-    let mut model = model_with_selected_pr(config_with_source_clone());
+    let mut model = model_with_selected_pr(config_with_main_worktree_path());
 
     let cmds = update(&mut model, key_event(KeyCode::Char('w')));
 
@@ -122,12 +125,12 @@ fn w_in_list_creates_the_selected_pr_worktree() {
         [
             Cmd::CreateWorktree {
                 pr,
-                source_clone,
+                main_worktree_path,
                 target_path,
             },
         ] => {
             assert_eq!(pr, &key(1));
-            assert_eq!(source_clone, &PathBuf::from("/src/legit"));
+            assert_eq!(main_worktree_path, &PathBuf::from("/src/legit"));
             assert!(
                 target_path.ends_with(".legit/worktrees/mayfieldiv/legit/1-feature-1"),
                 "target path should be deterministic, got {}",
@@ -140,7 +143,7 @@ fn w_in_list_creates_the_selected_pr_worktree() {
 
 #[test]
 fn w_in_detail_creates_the_current_detail_pr_worktree() {
-    let mut model = model_with_selected_pr(config_with_source_clone());
+    let mut model = model_with_selected_pr(config_with_main_worktree_path());
     update(&mut model, key_event(KeyCode::Enter));
 
     let cmds = update(&mut model, key_event(KeyCode::Char('w')));
@@ -153,7 +156,7 @@ fn w_in_detail_creates_the_current_detail_pr_worktree() {
 }
 
 #[test]
-fn w_without_source_clone_sets_error_status() {
+fn w_without_main_worktree_path_sets_error_status() {
     let mut model = model_with_selected_pr(LegitConfig::default());
 
     let cmds = update(&mut model, key_event(KeyCode::Char('w')));
@@ -162,21 +165,21 @@ fn w_without_source_clone_sets_error_status() {
         !cmds
             .iter()
             .any(|cmd| matches!(cmd, Cmd::CreateWorktree { .. })),
-        "missing sourceClone must not dispatch create: {cmds:?}"
+        "missing mainWorktreePath must not dispatch create: {cmds:?}"
     );
     let status = model.status.as_ref().expect("status set");
     assert_eq!(status.kind, StatusKind::Error);
     assert!(
         status
             .text
-            .contains("No sourceClone configured for mayfieldiv/legit"),
+            .contains("No mainWorktreePath configured for mayfieldiv/legit"),
         "status should name the repo: {status:?}"
     );
 }
 
 #[test]
 fn w_when_worktree_already_matches_reports_existing_path() {
-    let mut model = model_with_selected_pr(config_with_source_clone());
+    let mut model = model_with_selected_pr(config_with_main_worktree_path());
     model.worktrees_by_repo.insert(
         "mayfieldiv/legit".to_owned(),
         vec![worktree_entry("/tmp/legit-1", Some("feature/1"))],
@@ -211,7 +214,7 @@ fn w_copies_home_worktree_path_with_tilde() {
         return;
     }
     let path = format!("{home}/legit-1");
-    let mut model = model_with_selected_pr(config_with_source_clone());
+    let mut model = model_with_selected_pr(config_with_main_worktree_path());
     model.worktrees_by_repo.insert(
         "mayfieldiv/legit".to_owned(),
         vec![worktree_entry(&path, Some("feature/1"))],
@@ -231,8 +234,8 @@ fn w_copies_home_worktree_path_with_tilde() {
 }
 
 #[test]
-fn worktree_created_seeds_cache_and_re_lists_source_clones() {
-    let mut model = model_with_selected_pr(config_with_source_clone());
+fn worktree_created_seeds_cache_and_re_lists_main_worktree_paths() {
+    let mut model = model_with_selected_pr(config_with_main_worktree_path());
     let path =
         crate::worktree::resolve_worktree_path(&model.config, "mayfieldiv/legit", 1, "feature/1")
             .expect("worktree path")
