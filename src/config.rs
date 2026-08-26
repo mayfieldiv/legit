@@ -262,8 +262,7 @@ pub fn config_path() -> anyhow::Result<PathBuf> {
         return Ok(PathBuf::from(path));
     }
 
-    let home = env::var_os("HOME").context("HOME is not set")?;
-    Ok(PathBuf::from(home).join(".legit/config.json"))
+    Ok(home_dir()?.join(".legit/config.json"))
 }
 
 fn default_group_by() -> String {
