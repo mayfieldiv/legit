@@ -28,8 +28,11 @@ pub struct FileRule {
 /// enables worktree features and local Effort discovery. A slug-less entry is
 /// a local-only repo — no Repo Tab, no PR machinery — so `worktree_root` is
 /// rejected on it.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+///
+/// Deserialized by [`RepoEntry`]'s hand-written visitor, not a derive — a new
+/// field must also be added to its `visit_map` match and to `REPO_FIELDS`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RepoConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slug: Option<String>,
@@ -302,9 +305,9 @@ const REPO_FIELDS: &[&str] = &["slug", "mainWorktreePath", "worktreeRoot", "wayf
 /// instead of `#[serde(untagged)]` so a typo'd object key surfaces serde's
 /// precise `unknown field` error rather than the untagged enum's opaque "did
 /// not match any variant". The object case walks the map itself, rather than
-/// delegating to `RepoConfig`'s derive, so the retired `sourceClone` key can be
-/// reported as a rename — that one-line error is the migration path — while
-/// duplicate keys still fail as they would under the derive.
+/// delegating to a derived `RepoConfig` impl, so the retired `sourceClone` key
+/// can be reported as a rename — that one-line error is the migration path —
+/// while duplicate keys still fail as they would under a derive.
 struct RepoEntry(RepoConfig);
 
 impl<'de> Deserialize<'de> for RepoEntry {
