@@ -47,9 +47,9 @@ pub struct RepoConfig {
 }
 
 /// How a Tracked Repo is told apart from every other: PR-capable repos by slug
-/// (GitHub slugs are case-insensitive, so compare with `eq_ignore_ascii_case`),
+/// (GitHub slugs are case-insensitive, and `PartialEq` compares them that way),
 /// slug-less repos by their Main Worktree path.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum RepoIdentity {
     Slug(String),
     /// The expanded, absolute Main Worktree path — canonicalized when the
@@ -59,6 +59,20 @@ pub enum RepoIdentity {
     /// validation is shape-only and identity must not be stricter than it.
     Path(PathBuf),
 }
+
+impl PartialEq for RepoIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Slug(a), Self::Slug(b)) => a.eq_ignore_ascii_case(b),
+            (Self::Path(a), Self::Path(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+// ASCII-case-insensitive equality is still reflexive, symmetric, and
+// transitive, so full equivalence holds.
+impl Eq for RepoIdentity {}
 
 impl RepoConfig {
     fn validate(&self, index: usize) -> anyhow::Result<()> {
@@ -840,6 +854,15 @@ mod tests {
         assert_eq!(
             with_slug.identity().expect("slug identity"),
             RepoIdentity::Slug("acme/widgets".to_owned())
+        );
+        // GitHub slugs are case-insensitive, and so is slug identity.
+        assert_eq!(
+            with_slug.identity().expect("slug identity"),
+            RepoIdentity::Slug("Acme/Widgets".to_owned())
+        );
+        assert_ne!(
+            RepoIdentity::Slug("acme/widgets".to_owned()),
+            RepoIdentity::Path(PathBuf::from("acme/widgets"))
         );
 
         let dir = temp_path("identity").with_extension("");
