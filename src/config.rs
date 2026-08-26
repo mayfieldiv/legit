@@ -228,7 +228,7 @@ pub fn load_from_path(path: PathBuf) -> anyhow::Result<LegitConfig> {
     match fs::read_to_string(&path) {
         Ok(raw) => {
             tracing::debug!(path = %path.display(), bytes = raw.len(), "config file read");
-            let config: LegitConfig = serde_json::from_str(&raw)
+            let config = parse_config(&raw)
                 .with_context(|| format!("failed to parse {}", path.display()))?;
             config
                 .validate()
@@ -241,6 +241,19 @@ pub fn load_from_path(path: PathBuf) -> anyhow::Result<LegitConfig> {
         }
         Err(error) => Err(error).with_context(|| format!("failed to read {}", path.display())),
     }
+}
+
+/// Parse config JSON with `serde_path_to_error` tracking, so every shape error
+/// is prefixed with the failing key's config path ("repos[1].slug"); a
+/// document-root error carries no prefix. This is the one place `repos` errors
+/// get their index — nothing per-entry knows its own position.
+fn parse_config(raw: &str) -> anyhow::Result<LegitConfig> {
+    let mut deserializer = serde_json::Deserializer::from_str(raw);
+    let config = serde_path_to_error::deserialize(&mut deserializer)?;
+    // What `serde_json::from_str` would have done: reject trailing content
+    // after the JSON document.
+    deserializer.end()?;
+    Ok(config)
 }
 
 pub fn config_path() -> anyhow::Result<PathBuf> {
@@ -271,39 +284,14 @@ fn deserialize_repos<'de, D>(deserializer: D) -> Result<Vec<RepoConfig>, D::Erro
 where
     D: serde::Deserializer<'de>,
 {
-    // Validation is intentionally left to `LegitConfig::validate`, run in
-    // `load_from_path`, so every invalid entry surfaces one consistent "failed
-    // to validate" error rather than being silently dropped.
-    struct ReposVisitor;
-
-    impl<'de> serde::de::Visitor<'de> for ReposVisitor {
-        type Value = Vec<RepoConfig>;
-
-        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-            f.write_str("a list of repos")
-        }
-
-        fn visit_seq<A>(self, mut seq: A) -> Result<Vec<RepoConfig>, A::Error>
-        where
-            A: serde::de::SeqAccess<'de>,
-        {
-            let mut repos = Vec::with_capacity(seq.size_hint().unwrap_or(0));
-            loop {
-                // Entries are read one at a time (not via `Vec<RepoEntry>`) so
-                // each shape error can be prefixed with the entry's index.
-                let index = repos.len();
-                let entry = seq
-                    .next_element::<RepoEntry>()
-                    .map_err(|error| A::Error::custom(format!("{}: {error}", repo_label(index))))?;
-                match entry {
-                    Some(RepoEntry(repo)) => repos.push(repo),
-                    None => return Ok(repos),
-                }
-            }
-        }
-    }
-
-    deserializer.deserialize_seq(ReposVisitor)
+    // Each `RepoEntry` already normalises the two accepted shapes (bare-string
+    // legacy slug vs structured object) into a `RepoConfig`. Validation is
+    // intentionally left to `LegitConfig::validate`, run in `load_from_path`,
+    // so every invalid entry surfaces one consistent "failed to validate"
+    // error rather than being silently dropped; `parse_config`'s path tracking
+    // prefixes shape errors with the entry's index.
+    let entries = Vec::<RepoEntry>::deserialize(deserializer)?;
+    Ok(entries.into_iter().map(|RepoEntry(repo)| repo).collect())
 }
 
 /// The pre-rename key for `mainWorktreePath`, still reported by name so an old

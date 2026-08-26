@@ -285,6 +285,17 @@ fn repo_object_with_duplicate_key_fails() {
 }
 
 #[test]
+fn repo_field_shape_error_names_the_full_key_path() {
+    let error = load_error(
+        "wrong-typed-repo-field",
+        r#"{"repos": [{"slug": "acme/widgets", "wayfinderRoots": "docs"}]}"#,
+    );
+
+    assert!(error.contains("repos[0].wayfinderRoots:"), "{error}");
+    assert!(error.contains("invalid type"), "{error}");
+}
+
+#[test]
 fn repo_entry_of_wrong_type_fails() {
     let error = load_error("repo-entry-number", r#"{"repos": ["acme/widgets", 42]}"#);
 
