@@ -5,10 +5,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use super::{
-    LegitConfig, RepoConfig, RepoIdentity, home_dir, home_dir_from, load_from_path,
-    resolve_config_path_with,
-};
+use super::{LegitConfig, RepoConfig, home_dir_from, load_from_path, resolve_config_path_with};
 
 #[test]
 fn missing_config_returns_defaults() {
@@ -336,94 +333,6 @@ fn has_any_worktree_root_includes_global_and_per_repo_roots() {
         ..Default::default()
     }];
     assert!(config.has_any_worktree_root());
-}
-
-#[test]
-fn display_name_prefers_slug_then_expanded_basename() {
-    let with_slug = RepoConfig {
-        slug: Some("acme/widgets".to_owned()),
-        main_worktree_path: Some("~/src/widgets".to_owned()),
-        ..Default::default()
-    };
-    assert_eq!(with_slug.display_name().expect("slug"), "acme/widgets");
-
-    let slug_less = RepoConfig {
-        main_worktree_path: Some("~/src/local-only/".to_owned()),
-        ..Default::default()
-    };
-    assert_eq!(slug_less.display_name().expect("basename"), "local-only");
-
-    // `~` alone names the home directory, so the basename is home's, not "~".
-    let home = RepoConfig {
-        main_worktree_path: Some("~".to_owned()),
-        ..Default::default()
-    };
-    let expected = home_dir()
-        .expect("home directory")
-        .file_name()
-        .expect("home has a basename")
-        .to_string_lossy()
-        .into_owned();
-    assert_eq!(home.display_name().expect("home basename"), expected);
-
-    // A path with no final component (`..` is a parent walk, not a name)
-    // falls back to the whole path rather than failing or showing "..".
-    let parent_walk = RepoConfig {
-        main_worktree_path: Some("/src/widgets/..".to_owned()),
-        ..Default::default()
-    };
-    assert_eq!(
-        parent_walk.display_name().expect("fallback"),
-        "/src/widgets/.."
-    );
-}
-
-#[test]
-fn identity_is_the_slug_or_the_canonical_main_worktree() {
-    let with_slug = RepoConfig {
-        slug: Some("acme/widgets".to_owned()),
-        main_worktree_path: Some("~/src/widgets".to_owned()),
-        ..Default::default()
-    };
-    assert_eq!(
-        with_slug.identity().expect("slug identity"),
-        RepoIdentity::Slug("acme/widgets".to_owned())
-    );
-    // GitHub slugs are case-insensitive, and so is slug identity.
-    assert_eq!(
-        with_slug.identity().expect("slug identity"),
-        RepoIdentity::Slug("Acme/Widgets".to_owned())
-    );
-    assert_ne!(
-        RepoIdentity::Slug("acme/widgets".to_owned()),
-        RepoIdentity::Path(PathBuf::from("acme/widgets"))
-    );
-
-    let dir = temp_path("identity").with_extension("");
-    let nested = dir.join("nested");
-    fs::create_dir_all(&nested).expect("create dir");
-
-    let spelled_indirectly = RepoConfig {
-        main_worktree_path: Some(nested.join("..").join("nested").display().to_string()),
-        ..Default::default()
-    };
-    assert_eq!(
-        spelled_indirectly.identity().expect("canonical path"),
-        RepoIdentity::Path(fs::canonicalize(&nested).expect("canonical nested"))
-    );
-
-    // Not cloned yet: identity is the expanded path, not an error.
-    let missing = dir.join("missing");
-    let not_yet_cloned = RepoConfig {
-        main_worktree_path: Some(missing.display().to_string()),
-        ..Default::default()
-    };
-    assert_eq!(
-        not_yet_cloned.identity().expect("uncanonicalized path"),
-        RepoIdentity::Path(missing)
-    );
-
-    let _ = fs::remove_dir_all(dir);
 }
 
 #[test]

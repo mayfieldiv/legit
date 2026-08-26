@@ -47,34 +47,6 @@ pub struct RepoConfig {
     pub wayfinder_roots: Option<Vec<String>>,
 }
 
-/// How a Tracked Repo is told apart from every other: PR-capable repos by slug
-/// (GitHub slugs are case-insensitive, and `PartialEq` compares them that way),
-/// slug-less repos by their Main Worktree path.
-#[derive(Debug, Clone)]
-pub enum RepoIdentity {
-    Slug(String),
-    /// The expanded, absolute Main Worktree path — canonicalized when the
-    /// directory exists, so two entries spelling the same directory differently
-    /// (or an entry and the cwd repo) compare equal. A not-yet-cloned Main
-    /// Worktree keeps the un-canonicalized path rather than failing: config
-    /// validation is shape-only and identity must not be stricter than it.
-    Path(PathBuf),
-}
-
-impl PartialEq for RepoIdentity {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Slug(a), Self::Slug(b)) => a.eq_ignore_ascii_case(b),
-            (Self::Path(a), Self::Path(b)) => a == b,
-            _ => false,
-        }
-    }
-}
-
-// ASCII-case-insensitive equality is still reflexive, symmetric, and
-// transitive, so full equivalence holds.
-impl Eq for RepoIdentity {}
-
 impl RepoConfig {
     fn validate(&self, index: usize) -> anyhow::Result<()> {
         let label = repo_label(index);
@@ -99,44 +71,6 @@ impl RepoConfig {
             validate_path(&format!("{label}.wayfinderRoots[{root_index}]"), root)?;
         }
         Ok(())
-    }
-
-    /// The name this repo is shown under: its slug, or for a slug-less repo the
-    /// basename of its expanded Main Worktree path.
-    // Consumed by the ticket surface; nothing on the PR surface names a
-    // slug-less repo.
-    #[allow(dead_code)]
-    pub fn display_name(&self) -> anyhow::Result<String> {
-        if let Some(slug) = &self.slug {
-            return Ok(slug.clone());
-        }
-        let resolved = resolve_config_path(self.main_worktree_path()?)?;
-        Ok(resolved
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| resolved.display().to_string()))
-    }
-
-    /// See [`RepoIdentity`].
-    // Consumed by the ticket surface, which is where slug-less repos dedupe;
-    // `Model::tracked_repos` covers the slug case on the PR surface.
-    #[allow(dead_code)]
-    pub fn identity(&self) -> anyhow::Result<RepoIdentity> {
-        if let Some(slug) = &self.slug {
-            return Ok(RepoIdentity::Slug(slug.clone()));
-        }
-        let resolved = resolve_config_path(self.main_worktree_path()?)?;
-        Ok(RepoIdentity::Path(
-            fs::canonicalize(&resolved).unwrap_or(resolved),
-        ))
-    }
-
-    /// The slug-less case's one required field. `validate` guarantees it for a
-    /// loaded config; this only fails on a hand-built `RepoConfig`.
-    fn main_worktree_path(&self) -> anyhow::Result<&str> {
-        self.main_worktree_path
-            .as_deref()
-            .context("repo has neither slug nor mainWorktreePath")
     }
 }
 
