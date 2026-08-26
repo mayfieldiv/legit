@@ -1,14 +1,12 @@
 use std::{
-    env,
-    ffi::OsString,
-    fs, io,
+    fs,
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, bail};
 
 use crate::{
-    config::{LegitConfig, RepoConfig},
+    config::{LegitConfig, RepoConfig, home_dir, resolve_config_path},
     github::rest::PR,
     subprocess::{GitEnv, HardenedCommand, gh_command, git_command, run_command},
 };
@@ -122,41 +120,6 @@ pub fn resolve_main_worktree(config: &LegitConfig, slug: &str) -> anyhow::Result
     resolve_config_path(path)
         .with_context(|| format!("failed to resolve mainWorktreePath for {slug}"))
         .map(Some)
-}
-
-/// The name a Tracked Repo is shown under: its slug, or for a slug-less repo the
-/// basename of its expanded Main Worktree path.
-// Consumed by local Effort discovery and the ticket surface; nothing on the PR
-// surface names a slug-less repo yet.
-#[allow(dead_code)]
-pub fn repo_display_name(repo: &RepoConfig) -> anyhow::Result<String> {
-    if let Some(slug) = &repo.slug {
-        return Ok(slug.clone());
-    }
-    let path = repo
-        .main_worktree_path
-        .as_deref()
-        .context("repo has neither slug nor mainWorktreePath")?;
-    let resolved = resolve_config_path(path)?;
-    Ok(resolved
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| resolved.display().to_string()))
-}
-
-/// The identity of a slug-less Tracked Repo — its canonicalized Main Worktree
-/// path — so two entries (or an entry and the cwd repo) spelling the same
-/// directory differently dedupe. Resolved at use time, so unlike config
-/// validation it does require the directory to exist.
-#[allow(dead_code)]
-pub fn repo_identity_path(repo: &RepoConfig) -> anyhow::Result<PathBuf> {
-    let path = repo
-        .main_worktree_path
-        .as_deref()
-        .context("repo has no mainWorktreePath")?;
-    let resolved = resolve_config_path(path)?;
-    fs::canonicalize(&resolved)
-        .with_context(|| format!("failed to canonicalize {}", resolved.display()))
 }
 
 pub fn resolve_worktree_root(config: &LegitConfig, slug: &str) -> anyhow::Result<PathBuf> {
@@ -310,42 +273,6 @@ fn repo_config<'a>(config: &'a LegitConfig, slug: &str) -> Option<&'a RepoConfig
             .as_deref()
             .is_some_and(|s| s.eq_ignore_ascii_case(slug))
     })
-}
-
-fn home_dir() -> anyhow::Result<PathBuf> {
-    home_dir_from(env::var_os("HOME"))
-}
-
-fn home_dir_from(home: Option<OsString>) -> anyhow::Result<PathBuf> {
-    home.filter(|home| !home.as_os_str().is_empty())
-        .map(PathBuf::from)
-        .context("HOME is not set")
-}
-
-fn resolve_config_path(path: &str) -> anyhow::Result<PathBuf> {
-    resolve_config_path_with(path, home_dir, env::current_dir)
-}
-
-fn resolve_config_path_with(
-    path: &str,
-    home_dir: impl Fn() -> anyhow::Result<PathBuf>,
-    current_dir: impl Fn() -> io::Result<PathBuf>,
-) -> anyhow::Result<PathBuf> {
-    let expanded = if path == "~" {
-        home_dir()?
-    } else if let Some(rest) = path.strip_prefix("~/") {
-        home_dir()?.join(rest)
-    } else {
-        PathBuf::from(path)
-    };
-
-    if expanded.is_absolute() {
-        Ok(expanded)
-    } else {
-        Ok(current_dir()
-            .context("failed to resolve current directory")?
-            .join(expanded))
-    }
 }
 
 fn ensure_main_worktree(main_worktree: &Path) -> anyhow::Result<()> {

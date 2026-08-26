@@ -430,12 +430,13 @@ impl Model {
         &self.config.user
     }
 
-    /// Every Tracked Repo: the configured repos in config order, then the
-    /// CWD-detected repo appended when it isn't already configured. Deduped
-    /// case-insensitively comparing `.slug()` (GitHub slugs are
-    /// case-insensitive); the first occurrence's casing wins, so fetches,
-    /// `PR::repo_slug` stamps, and tab labels all share one canonical string per
-    /// repo.
+    /// Every PR-capable Tracked Repo: the configured repos with a slug in config
+    /// order, then the CWD-detected repo appended when it isn't already
+    /// configured. Slug-less (local-only) Tracked Repos are not included — they
+    /// have no Repo Tab and no PR machinery. Deduped case-insensitively
+    /// comparing `.slug()` (GitHub slugs are case-insensitive); the first
+    /// occurrence's casing wins, so fetches, `PR::repo_slug` stamps, and tab
+    /// labels all share one canonical string per repo.
     ///
     /// This is the ONE site that turns config `repos` slugs into `RepoInfo`, so
     /// it is where the validated-at-load invariant is leaned on: a config slug

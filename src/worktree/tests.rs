@@ -1,4 +1,5 @@
 use std::{
+    env, fs,
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -284,66 +285,6 @@ fn parse_worktree_leaf_round_trips_resolve_worktree_path_naming() {
 }
 
 #[test]
-fn repo_display_name_prefers_slug_then_expanded_basename() {
-    let with_slug = RepoConfig {
-        slug: Some("acme/widgets".to_owned()),
-        main_worktree_path: Some("~/src/widgets".to_owned()),
-        ..Default::default()
-    };
-    assert_eq!(repo_display_name(&with_slug).expect("slug"), "acme/widgets");
-
-    let slug_less = RepoConfig {
-        main_worktree_path: Some("~/src/local-only/".to_owned()),
-        ..Default::default()
-    };
-    assert_eq!(
-        repo_display_name(&slug_less).expect("basename"),
-        "local-only"
-    );
-
-    // `~` alone names the home directory, so the basename is home's, not "~".
-    let home = RepoConfig {
-        main_worktree_path: Some("~".to_owned()),
-        ..Default::default()
-    };
-    let expected = home_dir()
-        .expect("home directory")
-        .file_name()
-        .expect("home has a basename")
-        .to_string_lossy()
-        .into_owned();
-    assert_eq!(repo_display_name(&home).expect("home basename"), expected);
-}
-
-#[test]
-fn repo_identity_path_canonicalizes_the_main_worktree() {
-    let dir = temp_dir("identity");
-    let nested = dir.join("nested");
-    fs::create_dir_all(&nested).expect("create dir");
-
-    let spelled_indirectly = RepoConfig {
-        main_worktree_path: Some(nested.join("..").join("nested").display().to_string()),
-        ..Default::default()
-    };
-    assert_eq!(
-        repo_identity_path(&spelled_indirectly).expect("canonical path"),
-        fs::canonicalize(&nested).expect("canonical nested")
-    );
-
-    let missing = RepoConfig {
-        main_worktree_path: Some(dir.join("missing").display().to_string()),
-        ..Default::default()
-    };
-    let error = format!(
-        "{:#}",
-        repo_identity_path(&missing).expect_err("missing dir")
-    );
-    assert!(error.contains("failed to canonicalize"), "{error}");
-
-    let _ = fs::remove_dir_all(dir);
-}
-
-#[test]
 fn resolves_main_worktree_path_from_config() {
     let config = LegitConfig {
         repos: vec![
@@ -371,48 +312,6 @@ fn resolves_main_worktree_path_from_config() {
     assert_eq!(
         resolve_main_worktree(&config, "acme/unknown").expect("unknown repo mainWorktreePath"),
         None
-    );
-}
-
-#[test]
-fn home_expansion_requires_home() {
-    let error = home_dir_from(None).expect_err("missing HOME should fail");
-
-    assert_eq!(error.to_string(), "HOME is not set");
-}
-
-#[test]
-fn empty_home_is_treated_as_missing() {
-    let error = home_dir_from(Some(OsString::new())).expect_err("empty HOME should fail");
-
-    assert_eq!(error.to_string(), "HOME is not set");
-}
-
-#[test]
-fn tilde_config_paths_require_home() {
-    let error = resolve_config_path_with(
-        "~/src/widgets",
-        || anyhow::bail!("HOME is not set"),
-        || Ok(PathBuf::from("/cwd")),
-    )
-    .expect_err("tilde path without HOME should fail");
-
-    assert!(error.to_string().contains("HOME is not set"));
-}
-
-#[test]
-fn relative_config_paths_require_current_dir() {
-    let error = resolve_config_path_with(
-        "src/widgets",
-        || Ok(PathBuf::from("/home/me")),
-        || Err(io::Error::new(io::ErrorKind::NotFound, "cwd was deleted")),
-    )
-    .expect_err("relative path without current dir should fail");
-
-    assert!(
-        error
-            .to_string()
-            .contains("failed to resolve current directory")
     );
 }
 
