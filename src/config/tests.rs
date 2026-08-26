@@ -238,6 +238,21 @@ fn legacy_source_clone_names_the_rename() {
     assert!(!error.contains("unknown field"), "{error}");
 }
 
+// `null` must not slip past the rename error: a plain `Option` field would
+// treat `"sourceClone": null` as absent and silently drop the key.
+#[test]
+fn legacy_source_clone_null_still_names_the_rename() {
+    let error = load_error(
+        "legacy-source-clone-null",
+        r#"{"repos": [{"slug": "acme/widgets", "sourceClone": null}]}"#,
+    );
+
+    assert!(
+        error.contains("repos[0]: `sourceClone` was renamed to `mainWorktreePath`"),
+        "{error}"
+    );
+}
+
 #[test]
 fn unknown_top_level_field_fails() {
     let error = load_error("unknown-top-level", r#"{"usr": "mayfield"}"#);

@@ -293,8 +293,22 @@ struct RepoObject {
     main_worktree_path: Option<String>,
     worktree_root: Option<String>,
     wayfinder_roots: Option<Vec<String>>,
-    #[serde(rename = "sourceClone")]
+    #[serde(
+        default,
+        rename = "sourceClone",
+        deserialize_with = "present_even_if_null"
+    )]
     legacy_source_clone: Option<serde::de::IgnoredAny>,
+}
+
+/// `Some` whenever the key is present, `null` value included — a plain
+/// `Option` field maps JSON `null` to `None` before the field type sees it,
+/// which would let `"sourceClone": null` skip the rename error.
+fn present_even_if_null<'de, D>(deserializer: D) -> Result<Option<serde::de::IgnoredAny>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde::de::IgnoredAny::deserialize(deserializer).map(Some)
 }
 
 /// A `repos` entry is either a bare `"owner/repo"` string (legacy form) or a
