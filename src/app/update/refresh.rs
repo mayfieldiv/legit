@@ -43,7 +43,7 @@ pub(super) fn refresh_selected_cmds(model: &mut Model) -> Vec<Cmd> {
 /// `R`: refresh every visible PR, dispatched in smart-status tier order so the
 /// limiter's FIFO background lane drains `me-blocking` first; re-read the config
 /// so repos added since launch are picked up and `ConfigLoaded` reconciles
-/// worktrees from the fresh Source Clone paths. `count` is the PRs actually
+/// worktrees from the fresh Main Worktree paths. `count` is the PRs actually
 /// dispatched — already-refreshing ones dedupe to no-ops. Then re-list (for
 /// discovery) the in-scope repos so newly-opened PRs surface and closed ones are
 /// pruned — always, not only when nothing was re-enriched.

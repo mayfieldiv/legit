@@ -22,6 +22,9 @@ unicode-width = "0.2"
 # rustls-tls reuses the rustls stack octocrab already pulls in (no openssl).
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1.0", features = ["derive"] }
+# Prefixes config parse errors with the failing key's path ("repos[1].slug"),
+# so a bad entry in a long config names itself (src/config.rs `parse_config`).
+serde_path_to_error = "0.1"
 # Anonymous temp files back subprocess stdout/stderr capture (src/subprocess.rs):
 # unlike a pipe, a file read needs no EOF, so a hook-backgrounded descendant
 # that inherits the child's stdio can't wedge the capture.

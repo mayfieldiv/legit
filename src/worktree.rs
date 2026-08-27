@@ -1,14 +1,12 @@
 use std::{
-    env,
-    ffi::OsString,
-    fs, io,
+    fs,
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, bail};
 
 use crate::{
-    config::{LegitConfig, RepoConfig},
+    config::{LegitConfig, RepoConfig, home_dir, resolve_config_path},
     github::rest::PR,
     subprocess::{GitEnv, HardenedCommand, gh_command, git_command, run_command},
 };
@@ -114,12 +112,13 @@ pub fn sanitize_branch_for_path(branch: &str) -> String {
     sanitized.trim_matches('-').chars().take(80).collect()
 }
 
-pub fn resolve_source_clone(config: &LegitConfig, slug: &str) -> anyhow::Result<Option<PathBuf>> {
-    let Some(path) = repo_config(config, slug).and_then(|repo| repo.source_clone.as_deref()) else {
+pub fn resolve_main_worktree(config: &LegitConfig, slug: &str) -> anyhow::Result<Option<PathBuf>> {
+    let Some(path) = repo_config(config, slug).and_then(|repo| repo.main_worktree_path.as_deref())
+    else {
         return Ok(None);
     };
     resolve_config_path(path)
-        .with_context(|| format!("failed to resolve sourceClone for {slug}"))
+        .with_context(|| format!("failed to resolve mainWorktreePath for {slug}"))
         .map(Some)
 }
 
@@ -183,32 +182,32 @@ pub fn match_worktree<'a>(
 // `GitEnv::Scrubbed` — an inherited `GIT_DIR` could otherwise redirect them
 // onto the repository a hook is running inside.
 
-pub fn list_worktrees(source_clone: &Path) -> anyhow::Result<Vec<WorktreeEntry>> {
-    ensure_source_clone(source_clone)?;
+pub fn list_worktrees(main_worktree: &Path) -> anyhow::Result<Vec<WorktreeEntry>> {
+    ensure_main_worktree(main_worktree)?;
     let mut command = git_command(GitEnv::Scrubbed);
     command
         .arg("-C")
-        .arg(source_clone)
+        .arg(main_worktree)
         .args(["worktree", "list", "--porcelain"]);
     let stdout = run_command("git worktree list", &mut command)?;
     Ok(parse_worktree_list(&stdout))
 }
 
 pub fn create_worktree_for_pr(
-    source_clone: &Path,
+    main_worktree: &Path,
     target_path: &Path,
     pr_number: u64,
 ) -> anyhow::Result<()> {
-    create_worktree_for_pr_with_checkout(source_clone, target_path, pr_number, checkout_pr)
+    create_worktree_for_pr_with_checkout(main_worktree, target_path, pr_number, checkout_pr)
 }
 
 fn create_worktree_for_pr_with_checkout(
-    source_clone: &Path,
+    main_worktree: &Path,
     target_path: &Path,
     pr_number: u64,
     checkout: impl FnOnce(&Path, u64) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
-    ensure_source_clone(source_clone)?;
+    ensure_main_worktree(main_worktree)?;
     if let Some(parent) = target_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
@@ -221,13 +220,13 @@ fn create_worktree_for_pr_with_checkout(
     // strand a registered worktree with no cleanup. The hook fires once,
     // during `checkout`, whose failure path removes the partial worktree.
     git.arg("-C")
-        .arg(source_clone)
+        .arg(main_worktree)
         .args(["worktree", "add", "-d", "--no-checkout"])
         .arg(target_path);
     run_command("git worktree add", &mut git)?;
 
     checkout(target_path, pr_number).map_err(|checkout_error| {
-        match remove_worktree(source_clone, target_path) {
+        match remove_worktree(main_worktree, target_path) {
             Ok(()) => checkout_error,
             Err(cleanup_error) => checkout_error.context(format!(
                 "failed to clean up partial worktree {}: {cleanup_error:#}",
@@ -258,74 +257,46 @@ fn checkout_pr_command(target_path: &Path, pr_number: u64) -> HardenedCommand {
     gh
 }
 
-fn remove_worktree(source_clone: &Path, target_path: &Path) -> anyhow::Result<()> {
+fn remove_worktree(main_worktree: &Path, target_path: &Path) -> anyhow::Result<()> {
     let mut command = git_command(GitEnv::Scrubbed);
     command
         .arg("-C")
-        .arg(source_clone)
+        .arg(main_worktree)
         .args(["worktree", "remove", "--force"])
         .arg(target_path);
     run_command("git worktree remove", &mut command).map(|_| ())
 }
 
 fn repo_config<'a>(config: &'a LegitConfig, slug: &str) -> Option<&'a RepoConfig> {
-    config
-        .repos
-        .iter()
-        .find(|repo| repo.slug.eq_ignore_ascii_case(slug))
+    config.repos.iter().find(|repo| {
+        repo.slug
+            .as_deref()
+            .is_some_and(|s| s.eq_ignore_ascii_case(slug))
+    })
 }
 
-fn home_dir() -> anyhow::Result<PathBuf> {
-    home_dir_from(env::var_os("HOME"))
-}
-
-fn home_dir_from(home: Option<OsString>) -> anyhow::Result<PathBuf> {
-    home.filter(|home| !home.as_os_str().is_empty())
-        .map(PathBuf::from)
-        .context("HOME is not set")
-}
-
-fn resolve_config_path(path: &str) -> anyhow::Result<PathBuf> {
-    resolve_config_path_with(path, home_dir, env::current_dir)
-}
-
-fn resolve_config_path_with(
-    path: &str,
-    home_dir: impl Fn() -> anyhow::Result<PathBuf>,
-    current_dir: impl Fn() -> io::Result<PathBuf>,
-) -> anyhow::Result<PathBuf> {
-    let expanded = if path == "~" {
-        home_dir()?
-    } else if let Some(rest) = path.strip_prefix("~/") {
-        home_dir()?.join(rest)
-    } else {
-        PathBuf::from(path)
-    };
-
-    if expanded.is_absolute() {
-        Ok(expanded)
-    } else {
-        Ok(current_dir()
-            .context("failed to resolve current directory")?
-            .join(expanded))
+fn ensure_main_worktree(main_worktree: &Path) -> anyhow::Result<()> {
+    if !main_worktree.exists() {
+        bail!("main worktree {} does not exist", main_worktree.display());
     }
-}
-
-fn ensure_source_clone(source_clone: &Path) -> anyhow::Result<()> {
-    if !source_clone.exists() {
-        bail!("source clone {} does not exist", source_clone.display());
-    }
-    if !source_clone.is_dir() {
-        bail!("source clone {} is not a directory", source_clone.display());
+    if !main_worktree.is_dir() {
+        bail!(
+            "main worktree {} is not a directory",
+            main_worktree.display()
+        );
     }
 
     let mut command = git_command(GitEnv::Scrubbed);
     command
         .arg("-C")
-        .arg(source_clone)
+        .arg(main_worktree)
         .args(["rev-parse", "--git-dir"]);
-    run_command("git rev-parse --git-dir", &mut command)
-        .with_context(|| format!("source clone {} is not a git repo", source_clone.display()))?;
+    run_command("git rev-parse --git-dir", &mut command).with_context(|| {
+        format!(
+            "main worktree {} is not a git repo",
+            main_worktree.display()
+        )
+    })?;
     Ok(())
 }
 

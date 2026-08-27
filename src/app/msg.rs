@@ -98,7 +98,7 @@ pub enum Msg {
         error: String,
     },
     /// Parsed `git worktree list --porcelain` entries arrived for one Tracked
-    /// Repo's configured source clone.
+    /// Repo's configured Main Worktree.
     WorktreesArrived {
         repo_slug: String,
         entries: Vec<WorktreeEntry>,
