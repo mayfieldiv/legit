@@ -114,18 +114,6 @@ fn effort_source_follows_the_key_variant() {
 // ── key identity ─────────────────────────────────────────────────────────────
 
 #[test]
-fn repo_slug_identity_ignores_ascii_case_and_keeps_display_casing() {
-    let config_cased = RepoSlug::new("MayfieldIV/Legit");
-    let wire_cased = RepoSlug::new("mayfieldiv/legit");
-    assert_eq!(config_cased, wire_cased);
-    assert_eq!(config_cased.to_string(), "MayfieldIV/Legit");
-
-    let mut seen = std::collections::HashSet::new();
-    seen.insert(config_cased);
-    assert!(seen.contains(&wire_cased));
-}
-
-#[test]
 fn ticket_keys_unify_across_slug_casings() {
     let a = TicketKey::GitHub {
         repo_slug: RepoSlug::new("MayfieldIV/Legit"),

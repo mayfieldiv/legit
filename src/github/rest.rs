@@ -9,6 +9,7 @@ use tokio::sync::{OnceCell, mpsc};
 use crate::{
     file_category::FileChange,
     github::types::{CheckRun, IssueComment, PRState, Review, ReviewStatus, is_bot},
+    repo_slug::RepoSlug,
     secret::Secret,
 };
 
@@ -28,7 +29,7 @@ pub struct PR {
     /// the caller from the repo it was fetched for (not parsed from the wire)
     /// — PR numbers are only unique within a repo, so every cross-repo keyed
     /// structure pairs this with `number` (see `PrKey`).
-    pub repo_slug: String,
+    pub repo_slug: RepoSlug,
     pub title: String,
     pub author: String,
     pub created_at: DateTime<Utc>,
@@ -70,7 +71,7 @@ pub struct Label {
 /// blockers) keys on slug + number.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PrKey {
-    pub repo_slug: String,
+    pub repo_slug: RepoSlug,
     pub number: u64,
 }
 
@@ -271,7 +272,7 @@ struct RawRepo {
 /// Parse a raw REST pull request into the domain `PR`. The wire shape doesn't
 /// carry the slug of the repo the listing was made against, so the caller
 /// supplies it. Pure; tested directly.
-fn parse_pr(raw: RawRestPR, repo_slug: &str) -> PR {
+fn parse_pr(raw: RawRestPR, repo_slug: &RepoSlug) -> PR {
     // GitHub reports merged PRs as state="closed" with merged_at set. Split
     // them into a distinct MERGED state so the UI can distinguish them from
     // PRs closed without being merged. The list endpoint omits `state`
@@ -297,7 +298,7 @@ fn parse_pr(raw: RawRestPR, repo_slug: &str) -> PR {
 
     PR {
         number: raw.number,
-        repo_slug: repo_slug.to_owned(),
+        repo_slug: repo_slug.clone(),
         title: raw.title,
         author: raw
             .user
@@ -415,7 +416,7 @@ impl OctocrabRest {
             .await
             .with_context(|| format!("listing open PRs for {owner}/{repo}"))?;
 
-        let repo_slug = format!("{owner}/{repo}");
+        let repo_slug = RepoSlug::new(format!("{owner}/{repo}"));
         loop {
             let items = page.take_items();
             let count = items.len();

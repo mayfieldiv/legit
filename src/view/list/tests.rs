@@ -1,3 +1,4 @@
+use crate::repo_slug::RepoSlug;
 use chrono::{DateTime, TimeZone, Utc};
 use ratatui::{Terminal, backend::TestBackend, style::Color};
 
@@ -43,7 +44,7 @@ fn pr(number: u64, title: &str, author: &str, hours_ago: i64) -> PR {
     let created_at = fixed_now() - chrono::Duration::hours(hours_ago);
     PR {
         number,
-        repo_slug: "acme/web".to_owned(),
+        repo_slug: RepoSlug::new("acme/web"),
         title: title.to_owned(),
         author: author.to_owned(),
         created_at,
@@ -76,7 +77,7 @@ fn model_with(prs: Vec<PR>, grouping: Grouping, tier_of: impl Fn(&PR) -> Option<
         owner: "acme".to_owned(),
         repo: "web".to_owned(),
     });
-    model.list.begin_fetch("acme/web");
+    model.list.begin_fetch(&RepoSlug::new("acme/web"));
     for pr in prs {
         if let Some(tier) = tier_of(&pr) {
             model.blockers.insert(
@@ -90,7 +91,7 @@ fn model_with(prs: Vec<PR>, grouping: Grouping, tier_of: impl Fn(&PR) -> Option<
         }
         model.list.push(pr);
     }
-    model.list.complete_fetch("acme/web");
+    model.list.complete_fetch(&RepoSlug::new("acme/web"));
     set_grouping(&mut model, grouping);
     model
 }
@@ -248,7 +249,7 @@ fn worktree_gutter_shows_branch_glyph_for_matched_pr() {
     .to_string();
     let mut model = model_with(vec![pr], Grouping::None, |_| Some(Tier::NeedsReview));
     model.worktrees_by_repo.insert(
-        "acme/web".to_owned(),
+        RepoSlug::new("acme/web"),
         vec![WorktreeEntry {
             path,
             head: "a".repeat(40),
@@ -572,7 +573,7 @@ fn repo_grouping_renders_one_header_for_the_detected_repo() {
 #[test]
 fn all_tab_grouped_by_repo_shows_one_header_per_repo() {
     let mut other = pr(2, "two", "dave", 2);
-    other.repo_slug = "zeta/api".to_owned();
+    other.repo_slug = RepoSlug::new("zeta/api");
     let model = model_with(
         vec![pr(1, "one", "carol", 1), other],
         Grouping::Repo,
@@ -591,7 +592,7 @@ fn all_tab_grouped_by_repo_shows_one_header_per_repo() {
 #[test]
 fn repo_group_headers_take_each_repos_color() {
     let mut other = pr(2, "two", "dave", 2);
-    other.repo_slug = "zeta/api".to_owned();
+    other.repo_slug = RepoSlug::new("zeta/api");
     let model = model_with(
         vec![pr(1, "one", "carol", 1), other],
         Grouping::Repo,
@@ -682,7 +683,7 @@ fn all_tab_shows_repo_column_whenever_multiple_repos_are_tracked() {
 #[test]
 fn all_tab_multi_repo_rows_show_the_repo_column() {
     let mut other = pr(2, "two", "dave", 2);
-    other.repo_slug = "zeta/api".to_owned();
+    other.repo_slug = RepoSlug::new("zeta/api");
     let mut model = model_with(
         vec![pr(1, "one", "carol", 1), other],
         Grouping::None,
@@ -1118,10 +1119,11 @@ fn empty_list_with_smart_status_grouping_shows_placeholder() {
 #[test]
 fn pr_list_error_appears_in_the_status_bar() {
     let (mut model, _) = Model::new();
-    model.list.begin_fetch("acme/web");
-    model
-        .list
-        .fail_fetch("acme/web", "list open PRs: network down".to_owned());
+    model.list.begin_fetch(&RepoSlug::new("acme/web"));
+    model.list.fail_fetch(
+        &RepoSlug::new("acme/web"),
+        "list open PRs: network down".to_owned(),
+    );
 
     let terminal = render_snapshot(&model, 120, 5);
 
@@ -1138,10 +1140,11 @@ fn pr_list_error_appears_in_the_status_bar() {
 fn fatal_error_appears_in_the_status_bar_ahead_of_a_list_failure() {
     let (mut model, _) = Model::new();
     // A per-repo listing failed too; the fatal must win the status bar.
-    model.list.begin_fetch("acme/web");
-    model
-        .list
-        .fail_fetch("acme/web", "list open PRs: network down".to_owned());
+    model.list.begin_fetch(&RepoSlug::new("acme/web"));
+    model.list.fail_fetch(
+        &RepoSlug::new("acme/web"),
+        "list open PRs: network down".to_owned(),
+    );
     model.fatal = Some("config error: invalid bot_logins entry".to_owned());
 
     let status = status_row(&render_snapshot(&model, 140, 5));
@@ -1310,7 +1313,7 @@ fn wide_pr_number_widens_num_column_for_all_rows() {
 #[test]
 fn loading_pr_list_renders_loading_placeholder() {
     let (mut model, _) = Model::new();
-    model.list.begin_fetch("acme/web");
+    model.list.begin_fetch(&RepoSlug::new("acme/web"));
 
     let terminal = render_snapshot(&model, 40, 5);
 

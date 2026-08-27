@@ -1,6 +1,7 @@
 // ── multi-repo fan-out ────────────────────────────────────────────────────
 
 use super::*;
+use crate::repo_slug::RepoSlug;
 
 #[test]
 fn fetch_fans_out_to_every_tracked_repo() {
@@ -21,9 +22,13 @@ fn fetch_fans_out_to_every_tracked_repo() {
         fetched_slugs(&cmds),
         ["acme/web", "acme/api", "mayfieldiv/legit"]
     );
-    assert!(model.list.is_loading(Some("acme/web")));
-    assert!(model.list.is_loading(Some("acme/api")));
-    assert!(model.list.is_loading(Some("mayfieldiv/legit")));
+    assert!(model.list.is_loading(Some(&RepoSlug::new("acme/web"))));
+    assert!(model.list.is_loading(Some(&RepoSlug::new("acme/api"))));
+    assert!(
+        model
+            .list
+            .is_loading(Some(&RepoSlug::new("mayfieldiv/legit")))
+    );
 }
 
 #[test]
@@ -55,8 +60,8 @@ fn pr_list_loaded_fans_out_enrichment_only_for_that_repo() {
         owner: "mayfieldiv".to_owned(),
         repo: "legit".to_owned(),
     });
-    model.list.begin_fetch("acme/web");
-    model.list.begin_fetch("mayfieldiv/legit");
+    model.list.begin_fetch(&RepoSlug::new("acme/web"));
+    model.list.begin_fetch(&RepoSlug::new("mayfieldiv/legit"));
     // Stream through the merge path so the PRs are recorded as seen this fetch
     // cycle; otherwise PrListLoaded's reconcile would prune them as absent.
     model
@@ -67,7 +72,7 @@ fn pr_list_loaded_fans_out_enrichment_only_for_that_repo() {
     let cmds = update(
         &mut model,
         Msg::PrListLoaded {
-            repo_slug: "acme/web".to_owned(),
+            repo_slug: RepoSlug::new("acme/web"),
         },
     );
 
@@ -89,7 +94,7 @@ fn same_pr_number_in_two_repos_does_not_collide() {
     model.list.push(sample_pr_in("acme/web", 7, "a"));
     model.list.push(sample_pr(7, "b"));
     let acme_key = PrKey {
-        repo_slug: "acme/web".to_owned(),
+        repo_slug: RepoSlug::new("acme/web"),
         number: 7,
     };
 
@@ -127,7 +132,9 @@ fn relisting_a_pooled_pr_keeps_one_copy_and_its_enrichment() {
     // and the enrichment fetched earlier must survive (the merge keeps the
     // pooled entry rather than replacing it with the bare listing object).
     let mut model = enriched_model(&[1]);
-    model.list.complete_fetch("mayfieldiv/legit");
+    model
+        .list
+        .complete_fetch(&RepoSlug::new("mayfieldiv/legit"));
     model.list.pr_mut(&key(1)).unwrap().review_status_loaded = true;
     model.relayout();
 
@@ -166,17 +173,19 @@ fn relisting_prunes_a_pr_that_closed_since_the_last_listing() {
     // Pool #1 and #2, listing Loaded. A re-list re-streams only #1 (still open);
     // #2 closed since, so it must drop out when the fresh listing settles.
     let mut model = enriched_model(&[1, 2]);
-    model.list.complete_fetch("mayfieldiv/legit");
+    model
+        .list
+        .complete_fetch(&RepoSlug::new("mayfieldiv/legit"));
     model.relayout();
 
     // The R-driven re-list: begin_fetch resets the seen-set, the fresh listing
     // streams #1 only, then settles.
-    model.list.begin_fetch("mayfieldiv/legit");
+    model.list.begin_fetch(&RepoSlug::new("mayfieldiv/legit"));
     update(&mut model, Msg::PrArrived(sample_pr(1, "still open")));
     update(
         &mut model,
         Msg::PrListLoaded {
-            repo_slug: "mayfieldiv/legit".to_owned(),
+            repo_slug: RepoSlug::new("mayfieldiv/legit"),
         },
     );
 

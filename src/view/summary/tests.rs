@@ -1,3 +1,4 @@
+use crate::repo_slug::RepoSlug;
 use chrono::{DateTime, TimeZone, Utc};
 use ratatui::{Terminal, backend::TestBackend};
 
@@ -22,7 +23,7 @@ fn fixed_now() -> DateTime<Utc> {
 fn sample_pr(number: u64, title: &str) -> PR {
     PR {
         number,
-        repo_slug: "acme/web".to_owned(),
+        repo_slug: RepoSlug::new("acme/web"),
         title: title.to_owned(),
         author: "octocat".to_owned(),
         created_at: fixed_now() - chrono::Duration::hours(5),
@@ -54,9 +55,9 @@ fn model_with_selected(pr: PR) -> Model {
         owner: "acme".to_owned(),
         repo: "web".to_owned(),
     });
-    model.list.begin_fetch("acme/web");
+    model.list.begin_fetch(&RepoSlug::new("acme/web"));
     model.list.push(pr);
-    model.list.complete_fetch("acme/web");
+    model.list.complete_fetch(&RepoSlug::new("acme/web"));
     model.relayout();
     model
 }
@@ -147,7 +148,7 @@ fn with_files(model: &mut Model, paths: &[(&str, u64, u64)]) {
 
 fn with_worktree(model: &mut Model, path: &str, branch: &str) {
     model.worktrees_by_repo.insert(
-        "acme/web".to_owned(),
+        RepoSlug::new("acme/web"),
         vec![WorktreeEntry {
             path: path.to_owned(),
             head: "a".repeat(40),

@@ -1,3 +1,4 @@
+use crate::repo_slug::RepoSlug;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -94,7 +95,7 @@ fn maybe_fetch_open_prs(model: &mut Model) -> Vec<Cmd> {
 /// Missing Main Worktrees are expected (worktree support is opt-in); an invalid
 /// path was already rejected while loading config, but remains a harmless
 /// no-op here if a synthetic model reaches this helper in a test.
-fn list_worktree_cmd(model: &Model, repo_slug: String) -> Option<Cmd> {
+fn list_worktree_cmd(model: &Model, repo_slug: RepoSlug) -> Option<Cmd> {
     match worktree::resolve_main_worktree(&model.config, &repo_slug) {
         Ok(Some(main_worktree)) => Some(Cmd::ListWorktrees {
             repo_slug,
@@ -122,7 +123,7 @@ fn list_worktree_cmds(model: &Model) -> Vec<Cmd> {
 /// issue-comments fetches. Checks are deferred until review-status reports
 /// each PR's head SHA. Yields nothing if auth isn't ready or the repo has no
 /// PRs in the list.
-fn enrichment_cmds(model: &Model, repo_slug: &str) -> Vec<Cmd> {
+fn enrichment_cmds(model: &Model, repo_slug: &RepoSlug) -> Vec<Cmd> {
     let Some(token) = model.auth_token.as_ref() else {
         return Vec::new();
     };
@@ -133,7 +134,7 @@ fn enrichment_cmds(model: &Model, repo_slug: &str) -> Vec<Cmd> {
         .list
         .prs()
         .iter()
-        .filter(|pr| pr.repo_slug == repo_slug)
+        .filter(|pr| pr.repo_slug == *repo_slug)
         .map(|pr| pr.number)
         .collect();
     if numbers.is_empty() {

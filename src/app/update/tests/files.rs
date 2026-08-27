@@ -19,7 +19,7 @@ fn model_with_prs(numbers: &[u64]) -> Model {
         owner: "mayfieldiv".to_owned(),
         repo: "legit".to_owned(),
     });
-    model.list.begin_fetch("mayfieldiv/legit");
+    model.list.begin_fetch(&RepoSlug::new("mayfieldiv/legit"));
     for n in numbers {
         update(&mut model, Msg::PrArrived(sample_pr(*n, "p")));
     }
@@ -46,7 +46,7 @@ fn first_pr_arriving_requests_its_files() {
         owner: "mayfieldiv".to_owned(),
         repo: "legit".to_owned(),
     });
-    model.list.begin_fetch("mayfieldiv/legit");
+    model.list.begin_fetch(&RepoSlug::new("mayfieldiv/legit"));
 
     let cmds = update(&mut model, Msg::PrArrived(sample_pr(1, "first")));
 
@@ -173,7 +173,7 @@ fn files_fetch_waits_for_auth() {
         owner: "mayfieldiv".to_owned(),
         repo: "legit".to_owned(),
     });
-    model.list.begin_fetch("mayfieldiv/legit");
+    model.list.begin_fetch(&RepoSlug::new("mayfieldiv/legit"));
 
     let cmds = update(&mut model, Msg::PrArrived(sample_pr(1, "p")));
 

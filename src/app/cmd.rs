@@ -1,3 +1,4 @@
+use crate::repo_slug::RepoSlug;
 use std::{future::Future, path::PathBuf, sync::Arc};
 
 use tokio::sync::mpsc;
@@ -101,7 +102,7 @@ pub enum Cmd {
     },
     /// List worktrees for a repo's configured Main Worktree.
     ListWorktrees {
-        repo_slug: String,
+        repo_slug: RepoSlug,
         main_worktree: PathBuf,
     },
     /// Create the deterministic worktree for one PR.
@@ -438,7 +439,7 @@ async fn fetch_review_status(
 /// stamping each with `repo_slug`. Shared by the repo-wide `FetchReviewStatus`
 /// and the single-PR `fetch_review_status`, which both receive the same
 /// `(number, status)` shape from the GraphQL batch query.
-fn review_status_msgs(repo_slug: String, results: Vec<(u64, ReviewStatus)>) -> Vec<Msg> {
+fn review_status_msgs(repo_slug: RepoSlug, results: Vec<(u64, ReviewStatus)>) -> Vec<Msg> {
     results
         .into_iter()
         .map(|(number, status)| Msg::ReviewStatusArrived {
@@ -631,7 +632,7 @@ fn command_failed(context: &'static str, error: anyhow::Error) -> Msg {
 /// own `Msg` variant so the status bar can prioritise list errors over
 /// generic command errors). `repo_slug` names the Tracked Repo whose listing
 /// failed so other repos' phases are untouched.
-fn pr_list_failed(repo_slug: String, context: &'static str, error: anyhow::Error) -> Msg {
+fn pr_list_failed(repo_slug: RepoSlug, context: &'static str, error: anyhow::Error) -> Msg {
     let error = format!("{error:#}");
     tracing::warn!(%repo_slug, context, %error, "pr listing failed");
     Msg::PrListFailed {

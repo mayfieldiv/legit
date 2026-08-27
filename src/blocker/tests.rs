@@ -2,6 +2,7 @@
 //! TS `tests/blocker-engine.test.ts`: every rule, every edge case, every tier
 //! transition. Pure and synchronous — no tokio.
 
+use crate::repo_slug::RepoSlug;
 use chrono::{DateTime, TimeZone, Utc};
 
 use super::{
@@ -19,7 +20,7 @@ use crate::test_fixtures::check;
 fn make_pr(author: &str) -> PR {
     PR {
         number: 1,
-        repo_slug: "mayfieldiv/legit".to_owned(),
+        repo_slug: RepoSlug::new("mayfieldiv/legit"),
         title: "Test PR".to_owned(),
         author: author.to_owned(),
         created_at: Utc.with_ymd_and_hms(2026, 3, 1, 0, 0, 0).unwrap(),

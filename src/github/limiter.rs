@@ -302,11 +302,12 @@ impl NetworkLimiter {
 mod tests {
     use super::{NetworkLimiter, NetworkStats};
     use crate::github::rest::PrKey;
+    use crate::repo_slug::RepoSlug;
     use std::sync::Arc;
 
     fn key(number: u64) -> PrKey {
         PrKey {
-            repo_slug: "owner/repo".to_owned(),
+            repo_slug: RepoSlug::new("owner/repo"),
             number,
         }
     }

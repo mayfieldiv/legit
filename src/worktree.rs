@@ -8,6 +8,7 @@ use anyhow::{Context, bail};
 use crate::{
     config::{LegitConfig, RepoConfig, home_dir, resolve_config_path},
     github::rest::PR,
+    repo_slug::RepoSlug,
     subprocess::{GitEnv, HardenedCommand, gh_command, git_command, run_command},
 };
 
@@ -112,7 +113,10 @@ pub fn sanitize_branch_for_path(branch: &str) -> String {
     sanitized.trim_matches('-').chars().take(80).collect()
 }
 
-pub fn resolve_main_worktree(config: &LegitConfig, slug: &str) -> anyhow::Result<Option<PathBuf>> {
+pub fn resolve_main_worktree(
+    config: &LegitConfig,
+    slug: &RepoSlug,
+) -> anyhow::Result<Option<PathBuf>> {
     let Some(path) = repo_config(config, slug).and_then(|repo| repo.main_worktree_path.as_deref())
     else {
         return Ok(None);
@@ -122,7 +126,7 @@ pub fn resolve_main_worktree(config: &LegitConfig, slug: &str) -> anyhow::Result
         .map(Some)
 }
 
-pub fn resolve_worktree_root(config: &LegitConfig, slug: &str) -> anyhow::Result<PathBuf> {
+pub fn resolve_worktree_root(config: &LegitConfig, slug: &RepoSlug) -> anyhow::Result<PathBuf> {
     if let Some(root) = repo_config(config, slug).and_then(|repo| repo.worktree_root.as_deref()) {
         return resolve_config_path(root)
             .with_context(|| format!("failed to resolve worktreeRoot for {slug}"));
@@ -130,14 +134,14 @@ pub fn resolve_worktree_root(config: &LegitConfig, slug: &str) -> anyhow::Result
     if let Some(root) = config.worktree_root.as_deref() {
         return resolve_config_path(root)
             .with_context(|| "failed to resolve worktreeRoot".to_owned())
-            .map(|root| root.join(slug));
+            .map(|root| root.join(slug.as_str()));
     }
-    Ok(home_dir()?.join(".legit/worktrees").join(slug))
+    Ok(home_dir()?.join(".legit/worktrees").join(slug.as_str()))
 }
 
 pub fn resolve_worktree_path(
     config: &LegitConfig,
-    slug: &str,
+    slug: &RepoSlug,
     pr_number: u64,
     head_ref: &str,
 ) -> anyhow::Result<PathBuf> {
@@ -267,12 +271,11 @@ fn remove_worktree(main_worktree: &Path, target_path: &Path) -> anyhow::Result<(
     run_command("git worktree remove", &mut command).map(|_| ())
 }
 
-fn repo_config<'a>(config: &'a LegitConfig, slug: &str) -> Option<&'a RepoConfig> {
-    config.repos.iter().find(|repo| {
-        repo.slug
-            .as_deref()
-            .is_some_and(|s| s.eq_ignore_ascii_case(slug))
-    })
+fn repo_config<'a>(config: &'a LegitConfig, slug: &RepoSlug) -> Option<&'a RepoConfig> {
+    config
+        .repos
+        .iter()
+        .find(|repo| repo.slug.as_deref().is_some_and(|s| *slug == s))
 }
 
 fn ensure_main_worktree(main_worktree: &Path) -> anyhow::Result<()> {

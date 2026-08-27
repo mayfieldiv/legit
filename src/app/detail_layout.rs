@@ -544,11 +544,12 @@ mod tests {
     use super::*;
     use crate::github::rest::Label;
     use crate::github::types::PRState;
+    use crate::repo_slug::RepoSlug;
 
     fn pr_with_labels(labels: Vec<Label>) -> PR {
         PR {
             number: 1,
-            repo_slug: "acme/web".to_owned(),
+            repo_slug: RepoSlug::new("acme/web"),
             title: "t".to_owned(),
             author: "a".to_owned(),
             created_at: DateTime::UNIX_EPOCH,

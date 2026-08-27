@@ -1,3 +1,4 @@
+use crate::repo_slug::RepoSlug;
 use chrono::{DateTime, TimeZone, Utc};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -44,7 +45,7 @@ mod worktree;
 /// the same Tracked Repo slug.
 pub(super) fn key(number: u64) -> PrKey {
     PrKey {
-        repo_slug: "mayfieldiv/legit".to_owned(),
+        repo_slug: RepoSlug::new("mayfieldiv/legit"),
         number,
     }
 }
@@ -52,7 +53,7 @@ pub(super) fn key(number: u64) -> PrKey {
 pub(super) fn sample_pr(number: u64, title: &str) -> PR {
     PR {
         number,
-        repo_slug: "mayfieldiv/legit".to_owned(),
+        repo_slug: RepoSlug::new("mayfieldiv/legit"),
         title: title.to_owned(),
         author: "octocat".to_owned(),
         created_at: chrono::Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap(),
@@ -121,7 +122,9 @@ pub(super) fn mouse_down_event(column: u16, row: u16) -> Msg {
 #[test]
 fn wheel_in_list_mode_scrolls_the_viewport_without_moving_selection() {
     let mut model = enriched_model(&[1, 2, 3, 4, 5, 6]);
-    model.list.complete_fetch("mayfieldiv/legit");
+    model
+        .list
+        .complete_fetch(&RepoSlug::new("mayfieldiv/legit"));
     model.list.resize(3);
     model.relayout();
     assert_eq!(model.list.selected_pr().unwrap().number, 1);
@@ -160,7 +163,9 @@ fn wheel_in_list_mode_scrolls_the_viewport_without_moving_selection() {
 #[test]
 fn enrichment_arrival_preserves_wheel_scrolled_list_viewport() {
     let mut model = enriched_model(&[1, 2, 3, 4, 5, 6]);
-    model.list.complete_fetch("mayfieldiv/legit");
+    model
+        .list
+        .complete_fetch(&RepoSlug::new("mayfieldiv/legit"));
     model.list.resize(3);
     model.relayout();
     update(&mut model, wheel_event(true));
@@ -190,7 +195,9 @@ fn enrichment_arrival_preserves_wheel_scrolled_list_viewport() {
 #[test]
 fn terminal_resize_preserves_wheel_scrolled_list_viewport() {
     let mut model = enriched_model(&[1, 2, 3, 4, 5, 6]);
-    model.list.complete_fetch("mayfieldiv/legit");
+    model
+        .list
+        .complete_fetch(&RepoSlug::new("mayfieldiv/legit"));
     model.list.resize(3);
     model.relayout();
     update(&mut model, wheel_event(true));
@@ -218,7 +225,9 @@ fn terminal_resize_preserves_wheel_scrolled_list_viewport() {
 #[test]
 fn left_click_on_a_visible_list_row_selects_that_pr() {
     let mut model = enriched_model(&[1, 2, 3]);
-    model.list.complete_fetch("mayfieldiv/legit");
+    model
+        .list
+        .complete_fetch(&RepoSlug::new("mayfieldiv/legit"));
     // Use a flat list so terminal row 4 maps directly to the second PR row:
     // row 0 app header, row 1 tab bar, row 2 table header, row 3 first list
     // row, row 4 second list row.
@@ -243,7 +252,7 @@ fn left_click_on_a_visible_list_row_selects_that_pr() {
 /// A `sample_pr` stamped with a specific Tracked Repo slug.
 pub(super) fn sample_pr_in(repo_slug: &str, number: u64, title: &str) -> PR {
     PR {
-        repo_slug: repo_slug.to_owned(),
+        repo_slug: RepoSlug::new(repo_slug),
         ..sample_pr(number, title)
     }
 }
@@ -263,7 +272,7 @@ pub(super) fn config_with_repos(slugs: &[&str]) -> crate::config::LegitConfig {
 }
 
 /// The repo slugs of every `FetchOpenPRs` in `cmds`, in dispatch order.
-pub(super) fn fetched_slugs(cmds: &[Cmd]) -> Vec<String> {
+pub(super) fn fetched_slugs(cmds: &[Cmd]) -> Vec<RepoSlug> {
     cmds.iter()
         .map(|c| match c {
             Cmd::FetchOpenPRs { repo, .. } => repo.slug(),
@@ -298,7 +307,7 @@ pub(super) fn enriched_model(numbers: &[u64]) -> Model {
         owner: "mayfieldiv".to_owned(),
         repo: "legit".to_owned(),
     });
-    model.list.begin_fetch("mayfieldiv/legit");
+    model.list.begin_fetch(&RepoSlug::new("mayfieldiv/legit"));
     for n in numbers {
         // Stream through the listing-merge path so each PR is recorded as seen
         // — matching how PrArrived pools them, so a later PrListLoaded reconcile
@@ -338,7 +347,9 @@ fn q_key_sets_should_quit() {
 #[test]
 fn left_click_accounts_for_the_filter_chip_row() {
     let mut model = enriched_model(&[1, 2, 3]);
-    model.list.complete_fetch("mayfieldiv/legit");
+    model
+        .list
+        .complete_fetch(&RepoSlug::new("mayfieldiv/legit"));
     // Flat list, as in the plain click test: row maps directly to a PR row.
     model.list.cycle_grouping();
     model.list.cycle_grouping();
@@ -366,7 +377,9 @@ fn left_click_accounts_for_the_filter_chip_row() {
 #[test]
 fn left_click_in_the_summary_panel_leaves_the_selection_alone() {
     let mut model = enriched_model(&[1, 2, 3]);
-    model.list.complete_fetch("mayfieldiv/legit");
+    model
+        .list
+        .complete_fetch(&RepoSlug::new("mayfieldiv/legit"));
     model.list.cycle_grouping();
     model.list.cycle_grouping();
     model.relayout();
@@ -447,7 +460,9 @@ fn open_in_devin_message_dispatches_ts_devin_url() {
 #[test]
 fn o_key_opens_selected_pr_in_browser() {
     let mut model = enriched_model(&[45]);
-    model.list.complete_fetch("mayfieldiv/legit");
+    model
+        .list
+        .complete_fetch(&RepoSlug::new("mayfieldiv/legit"));
     model.relayout();
 
     let cmds = update(&mut model, key_event(KeyCode::Char('o')));
@@ -461,7 +476,9 @@ fn o_key_opens_selected_pr_in_browser() {
 #[test]
 fn d_key_opens_selected_pr_in_devin() {
     let mut model = enriched_model(&[45]);
-    model.list.complete_fetch("mayfieldiv/legit");
+    model
+        .list
+        .complete_fetch(&RepoSlug::new("mayfieldiv/legit"));
     model.relayout();
 
     let cmds = update(&mut model, key_event(KeyCode::Char('d')));
@@ -475,7 +492,9 @@ fn d_key_opens_selected_pr_in_devin() {
 #[test]
 fn y_key_copies_selected_pr_url_to_clipboard() {
     let mut model = enriched_model(&[45]);
-    model.list.complete_fetch("mayfieldiv/legit");
+    model
+        .list
+        .complete_fetch(&RepoSlug::new("mayfieldiv/legit"));
     model.relayout();
 
     let cmds = update(&mut model, key_event(KeyCode::Char('y')));
@@ -582,7 +601,9 @@ fn ctrl_c_sets_should_quit_from_list_and_detail_views() {
     assert!(list_model.should_quit, "Ctrl-C quits from the list view");
 
     let mut detail_model = enriched_model(&[1]);
-    detail_model.list.complete_fetch("mayfieldiv/legit");
+    detail_model
+        .list
+        .complete_fetch(&RepoSlug::new("mayfieldiv/legit"));
     detail_model.relayout();
     update(&mut detail_model, key_event(KeyCode::Enter));
     assert!(
@@ -694,7 +715,9 @@ fn dispatching_fetch_marks_list_as_loading() {
 
     assert_eq!(cmds.len(), 1);
     assert!(
-        model.list.is_loading(Some("mayfieldiv/legit")),
+        model
+            .list
+            .is_loading(Some(&RepoSlug::new("mayfieldiv/legit"))),
         "the repo should enter Loading phase on fetch dispatch",
     );
 }
@@ -702,7 +725,7 @@ fn dispatching_fetch_marks_list_as_loading() {
 #[test]
 fn pr_arrived_clears_loading_phase() {
     let (mut model, _) = Model::new();
-    model.list.begin_fetch("mayfieldiv/legit");
+    model.list.begin_fetch(&RepoSlug::new("mayfieldiv/legit"));
 
     update(&mut model, Msg::PrArrived(sample_pr(1, "a")));
 
@@ -714,17 +737,17 @@ fn pr_arrived_clears_loading_phase() {
 #[test]
 fn pr_list_loaded_transitions_that_repo_to_loaded() {
     let (mut model, _) = Model::new();
-    model.list.begin_fetch("mayfieldiv/legit");
+    model.list.begin_fetch(&RepoSlug::new("mayfieldiv/legit"));
 
     update(
         &mut model,
         Msg::PrListLoaded {
-            repo_slug: "mayfieldiv/legit".to_owned(),
+            repo_slug: RepoSlug::new("mayfieldiv/legit"),
         },
     );
 
     assert_eq!(
-        model.list.phase_of("mayfieldiv/legit"),
+        model.list.phase_of(&RepoSlug::new("mayfieldiv/legit")),
         Some(&Phase::Loaded)
     );
 }
@@ -732,12 +755,12 @@ fn pr_list_loaded_transitions_that_repo_to_loaded() {
 #[test]
 fn pr_list_failed_transitions_that_repo_to_failed_with_message() {
     let (mut model, _) = Model::new();
-    model.list.begin_fetch("mayfieldiv/legit");
+    model.list.begin_fetch(&RepoSlug::new("mayfieldiv/legit"));
 
     update(
         &mut model,
         Msg::PrListFailed {
-            repo_slug: "mayfieldiv/legit".to_owned(),
+            repo_slug: RepoSlug::new("mayfieldiv/legit"),
             context: "list open PRs",
             error: "boom".to_owned(),
         },
@@ -984,7 +1007,9 @@ fn k_retreats_selection_and_clamps_at_zero() {
 #[test]
 fn up_down_arrows_match_j_k_in_list_mode() {
     let mut model = enriched_model(&[1, 2, 3]);
-    model.list.complete_fetch("mayfieldiv/legit");
+    model
+        .list
+        .complete_fetch(&RepoSlug::new("mayfieldiv/legit"));
     model.relayout();
 
     update(&mut model, key_event(KeyCode::Down));
@@ -1128,7 +1153,7 @@ fn pr_list_failed_keeps_already_arrived_prs() {
     let cmds = update(
         &mut model,
         Msg::PrListFailed {
-            repo_slug: "mayfieldiv/legit".to_owned(),
+            repo_slug: RepoSlug::new("mayfieldiv/legit"),
             context: "list open PRs",
             error: "network down".to_owned(),
         },

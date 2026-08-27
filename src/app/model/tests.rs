@@ -1,3 +1,4 @@
+use crate::repo_slug::RepoSlug;
 use chrono::TimeZone;
 
 use crate::{app::model::Model, github::rest::PrKey, secret::Secret};
@@ -15,7 +16,7 @@ fn debug_redacts_auth_token() {
 
 fn key(number: u64) -> PrKey {
     PrKey {
-        repo_slug: "acme/web".to_owned(),
+        repo_slug: RepoSlug::new("acme/web"),
         number,
     }
 }

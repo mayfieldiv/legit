@@ -1,3 +1,4 @@
+use crate::repo_slug::RepoSlug;
 use chrono::TimeZone;
 
 use super::{DisplayRow, Grouping, PrList};
@@ -8,7 +9,7 @@ use crate::github::types::PRState;
 fn sample_pr(number: u64) -> PR {
     PR {
         number,
-        repo_slug: "owner/repo".to_owned(),
+        repo_slug: RepoSlug::new("owner/repo"),
         title: format!("PR #{number}"),
         author: "octocat".to_owned(),
         created_at: chrono::Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap(),
@@ -167,7 +168,7 @@ fn wheel_up_on_empty_list_does_not_detach_default_selection() {
 #[test]
 fn merge_listed_reports_whether_the_pool_changed() {
     let mut list = PrList::new();
-    list.begin_fetch("owner/repo");
+    list.begin_fetch(&RepoSlug::new("owner/repo"));
     assert!(list.merge_listed(sample_pr(1)), "a new PR changes the pool");
     assert!(
         !list.merge_listed(sample_pr(1)),
@@ -189,12 +190,12 @@ fn merge_listed_reports_whether_the_pool_changed() {
 #[test]
 fn begin_fetch_marks_only_that_repo_loading() {
     let mut list = PrList::new();
-    list.begin_fetch("acme/web");
+    list.begin_fetch(&RepoSlug::new("acme/web"));
 
     assert!(list.is_loading(None), "any-repo scope sees the fetch");
-    assert!(list.is_loading(Some("acme/web")));
+    assert!(list.is_loading(Some(&RepoSlug::new("acme/web"))));
     assert!(
-        !list.is_loading(Some("acme/api")),
+        !list.is_loading(Some(&RepoSlug::new("acme/api"))),
         "an untouched repo is not loading"
     );
 }
@@ -202,15 +203,18 @@ fn begin_fetch_marks_only_that_repo_loading() {
 #[test]
 fn complete_fetch_clears_loading_for_that_repo_only() {
     let mut list = PrList::new();
-    list.begin_fetch("acme/web");
-    list.begin_fetch("acme/api");
+    list.begin_fetch(&RepoSlug::new("acme/web"));
+    list.begin_fetch(&RepoSlug::new("acme/api"));
 
-    list.complete_fetch("acme/web");
+    list.complete_fetch(&RepoSlug::new("acme/web"));
 
-    assert!(!list.is_loading(Some("acme/web")));
-    assert!(list.is_loading(Some("acme/api")));
+    assert!(!list.is_loading(Some(&RepoSlug::new("acme/web"))));
+    assert!(list.is_loading(Some(&RepoSlug::new("acme/api"))));
     assert!(list.is_loading(None), "another repo is still in flight");
-    assert_eq!(list.phase_of("acme/web"), Some(&super::Phase::Loaded));
+    assert_eq!(
+        list.phase_of(&RepoSlug::new("acme/web")),
+        Some(&super::Phase::Loaded)
+    );
 }
 
 #[test]
@@ -365,24 +369,24 @@ fn single_row_viewport_keeps_selection_visible() {
 #[test]
 fn fail_fetch_records_failure_without_masking_other_repos() {
     let mut list = PrList::new();
-    list.begin_fetch("acme/web");
-    list.begin_fetch("acme/api");
+    list.begin_fetch(&RepoSlug::new("acme/web"));
+    list.begin_fetch(&RepoSlug::new("acme/api"));
 
-    list.fail_fetch("acme/web", "network down".to_owned());
+    list.fail_fetch(&RepoSlug::new("acme/web"), "network down".to_owned());
 
     assert_eq!(list.failure(), Some("network down"));
     assert!(
-        list.is_loading(Some("acme/api")),
+        list.is_loading(Some(&RepoSlug::new("acme/api"))),
         "the other repo's fetch keeps going"
     );
-    assert!(!list.is_loading(Some("acme/web")));
+    assert!(!list.is_loading(Some(&RepoSlug::new("acme/web"))));
 }
 
 #[test]
 fn failure_reports_first_failed_repo_in_slug_order() {
     let mut list = PrList::new();
-    list.fail_fetch("zeta/repo", "zeta down".to_owned());
-    list.fail_fetch("acme/web", "acme down".to_owned());
+    list.fail_fetch(&RepoSlug::new("zeta/repo"), "zeta down".to_owned());
+    list.fail_fetch(&RepoSlug::new("acme/web"), "acme down".to_owned());
 
     assert_eq!(
         list.failure(),
@@ -404,13 +408,13 @@ fn apply_filter(list: &mut PrList, text: &str) {
 fn multi_repo_list() -> PrList {
     let mut list = PrList::new();
     let mut immy = sample_pr(9248);
-    immy.repo_slug = "immense/immybot".to_owned();
+    immy.repo_slug = RepoSlug::new("immense/immybot");
     immy.title = "research generic ImmyRadioGroup".to_owned();
     let mut other = sample_pr(100);
-    other.repo_slug = "immense/immybot".to_owned();
+    other.repo_slug = RepoSlug::new("immense/immybot");
     other.title = "unrelated".to_owned();
     let mut manager = sample_pr(9248);
-    manager.repo_slug = "immense/immybot-manager".to_owned();
+    manager.repo_slug = RepoSlug::new("immense/immybot-manager");
     manager.title = "same number different repo".to_owned();
     list.push(immy);
     list.push(other);

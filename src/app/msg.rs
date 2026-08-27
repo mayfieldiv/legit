@@ -1,3 +1,4 @@
+use crate::repo_slug::RepoSlug;
 use ratatui::crossterm::event::Event;
 
 use crate::{
@@ -24,7 +25,7 @@ pub enum Msg {
     PrArrived(PR),
     /// One Tracked Repo's open-PR listing finished streaming.
     PrListLoaded {
-        repo_slug: String,
+        repo_slug: RepoSlug,
     },
     NetworkStatsChanged(NetworkStats),
     // ── enrichment arrivals (keyed by PrKey — numbers collide across repos) ──
@@ -44,7 +45,7 @@ pub enum Msg {
     /// because check runs are repo-scoped: a fork PR shares its head SHA with
     /// upstream but not its check runs.
     ChecksArrived {
-        repo_slug: String,
+        repo_slug: RepoSlug,
         head_sha: String,
         checks: Vec<CheckRun>,
     },
@@ -77,7 +78,7 @@ pub enum Msg {
     /// `Failed` phase so the view can surface it distinctly from transient
     /// command errors (and without masking other repos' results).
     PrListFailed {
-        repo_slug: String,
+        repo_slug: RepoSlug,
         context: &'static str,
         error: String,
     },
@@ -100,7 +101,7 @@ pub enum Msg {
     /// Parsed `git worktree list --porcelain` entries arrived for one Tracked
     /// Repo's configured Main Worktree.
     WorktreesArrived {
-        repo_slug: String,
+        repo_slug: RepoSlug,
         entries: Vec<WorktreeEntry>,
     },
     /// `git worktree add -d` + `gh pr checkout` completed.

@@ -11,8 +11,8 @@ use crate::app::grouping::Grouping;
 use crate::app::list_layout;
 use crate::app::model::{Model, StatusKind, ViewMode};
 use crate::color::repo_color;
-use crate::git_remote::RepoInfo;
 use crate::palette::{DARK, Palette};
+use crate::repo_slug::RepoSlug;
 
 pub mod detail;
 pub mod list;
@@ -84,19 +84,17 @@ pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
 }
 
 fn render_app_header(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
-    let scope = model
-        .active_scope()
-        .unwrap_or_else(|| "All repos".to_owned());
+    let scope = model.active_scope();
     let count = model
         .list
         .prs()
         .iter()
-        .filter(|pr| scope == "All repos" || pr.repo_slug == scope)
+        .filter(|pr| scope.as_ref().is_none_or(|slug| pr.repo_slug == *slug))
         .count();
     // A concrete repo scope takes that repo's Repo Color so the header
     // reinforces which repo is in view; the All scope stays on the accent role.
-    let scope_color = match model.active_scope() {
-        Some(slug) => repo_color(&slug),
+    let scope_color = match &scope {
+        Some(slug) => repo_color(slug.as_str()),
         None => palette.accent,
     };
     let line = Line::from(vec![
@@ -108,7 +106,9 @@ fn render_app_header(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: 
         ),
         Span::raw(" — "),
         Span::styled(
-            scope,
+            scope
+                .as_ref()
+                .map_or_else(|| "All repos".to_owned(), RepoSlug::to_string),
             Style::default()
                 .fg(scope_color)
                 .add_modifier(Modifier::BOLD),
@@ -159,7 +159,8 @@ fn render_tabs(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Palet
     } else {
         0
     };
-    let labels = std::iter::once("All".to_owned()).chain(repos.iter().map(RepoInfo::slug));
+    let labels =
+        std::iter::once("All".to_owned()).chain(repos.iter().map(|repo| repo.slug().to_string()));
     let mut spans = Vec::new();
     for (i, label) in labels.enumerate() {
         // The All tab (index 0) stays on the accent role; each per-repo tab

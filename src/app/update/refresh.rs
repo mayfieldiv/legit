@@ -107,7 +107,7 @@ fn relist_for_discovery(model: &mut Model) -> Vec<Cmd> {
     let scope = model.active_scope();
     let mut cmds = Vec::new();
     for repo in model.tracked_repos() {
-        if scope.as_deref().is_some_and(|active| active != repo.slug()) {
+        if scope.as_ref().is_some_and(|active| *active != repo.slug()) {
             continue;
         }
         cmds.extend(dispatch_relist(model, repo, &token));

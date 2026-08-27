@@ -1,5 +1,6 @@
 // ── refresh: direct dispatch, tier order, indicator, drain, checks, retry ───
 
+use crate::repo_slug::RepoSlug;
 use std::path::PathBuf;
 
 use super::*;
@@ -57,7 +58,7 @@ fn seed_checks(model: &mut Model, number: u64, head_sha: &str) {
         .expect("seeded PR exists")
         .head_commit_sha = Some(head_sha.to_owned());
     model.enrichment.checks.insert(
-        ("mayfieldiv/legit".to_owned(), head_sha.to_owned()),
+        (RepoSlug::new("mayfieldiv/legit"), head_sha.to_owned()),
         Vec::new(),
     );
 }
@@ -76,7 +77,9 @@ fn refreshed_keys(cmds: &[Cmd]) -> Vec<PrKey> {
 /// marked loaded, relaid out so a selection and visible rows exist.
 fn list_model(numbers: &[u64]) -> Model {
     let mut model = enriched_model(numbers);
-    model.list.complete_fetch("mayfieldiv/legit");
+    model
+        .list
+        .complete_fetch(&RepoSlug::new("mayfieldiv/legit"));
     model.relayout();
     model
 }
@@ -165,16 +168,17 @@ fn two_repo_model() -> Model {
         repo: "legit".to_owned(),
     });
     for (slug, number) in [("acme/web", 10u64), ("mayfieldiv/legit", 1)] {
-        model.list.begin_fetch(slug);
+        let key = RepoSlug::new(slug);
+        model.list.begin_fetch(&key);
         model.list.push(sample_pr_in(slug, number, "p"));
-        model.list.complete_fetch(slug);
+        model.list.complete_fetch(&key);
     }
     model.relayout();
     model
 }
 
 /// The repo slugs of every `FetchOpenPRs` in `cmds`, in dispatch order.
-fn fetched_open_pr_slugs(cmds: &[Cmd]) -> Vec<String> {
+fn fetched_open_pr_slugs(cmds: &[Cmd]) -> Vec<RepoSlug> {
     cmds.iter()
         .filter_map(|c| match c {
             Cmd::FetchOpenPRs { repo, .. } => Some(repo.slug()),
@@ -185,7 +189,7 @@ fn fetched_open_pr_slugs(cmds: &[Cmd]) -> Vec<String> {
 
 /// The repo slug and Main Worktree of every `ListWorktrees` in `cmds`, in
 /// dispatch order.
-fn listed_worktrees(cmds: &[Cmd]) -> Vec<(String, PathBuf)> {
+fn listed_worktrees(cmds: &[Cmd]) -> Vec<(RepoSlug, PathBuf)> {
     cmds.iter()
         .filter_map(|c| match c {
             Cmd::ListWorktrees {
@@ -197,7 +201,7 @@ fn listed_worktrees(cmds: &[Cmd]) -> Vec<(String, PathBuf)> {
         .collect()
 }
 
-fn listed_worktree_slugs(cmds: &[Cmd]) -> Vec<String> {
+fn listed_worktree_slugs(cmds: &[Cmd]) -> Vec<RepoSlug> {
     listed_worktrees(cmds)
         .into_iter()
         .map(|(repo_slug, _)| repo_slug)
@@ -269,8 +273,11 @@ fn shift_r_relists_each_main_worktree_path_from_the_reloaded_config_once() {
     assert_eq!(
         worktrees,
         [
-            ("acme/web".to_owned(), PathBuf::from("/new/acme-web")),
-            ("mayfieldiv/legit".to_owned(), PathBuf::from("/new/legit")),
+            (RepoSlug::new("acme/web"), PathBuf::from("/new/acme-web")),
+            (
+                RepoSlug::new("mayfieldiv/legit"),
+                PathBuf::from("/new/legit")
+            ),
         ],
         "the config response must reconcile every freshly loaded Main Worktree exactly once: \
          {reload_cmds:?}",
@@ -281,7 +288,10 @@ fn shift_r_relists_each_main_worktree_path_from_the_reloaded_config_once() {
 fn shift_r_on_a_repo_tab_relists_only_the_active_repo() {
     let mut model = two_repo_model();
     update(&mut model, key_event(KeyCode::Char('2'))); // mayfieldiv/legit tab
-    assert_eq!(model.active_scope().as_deref(), Some("mayfieldiv/legit"));
+    assert_eq!(
+        model.active_scope(),
+        Some(RepoSlug::new("mayfieldiv/legit"))
+    );
 
     let cmds = update(&mut model, key_event(KeyCode::Char('R')));
 
@@ -332,7 +342,7 @@ fn shift_r_discovers_new_prs_and_prunes_closed_ones_while_keeping_enrichment() {
     update(
         &mut model,
         Msg::PrListLoaded {
-            repo_slug: "mayfieldiv/legit".to_owned(),
+            repo_slug: RepoSlug::new("mayfieldiv/legit"),
         },
     );
 
@@ -360,7 +370,11 @@ fn shift_r_does_not_relist_a_repo_whose_listing_is_already_in_flight() {
     // duplicate listing on top of it.
     let mut model = enriched_model(&[1]); // begin_fetch'd, still Loading
     model.relayout();
-    assert!(model.list.is_loading(Some("mayfieldiv/legit")));
+    assert!(
+        model
+            .list
+            .is_loading(Some(&RepoSlug::new("mayfieldiv/legit")))
+    );
 
     let cmds = update(&mut model, key_event(KeyCode::Char('R')));
 
@@ -441,7 +455,9 @@ fn r_on_an_empty_repo_tab_relists_that_repo() {
         "r on an empty repo tab re-fetches its listing: {cmds:?}",
     );
     assert!(
-        model.list.is_loading(Some("mayfieldiv/legit")),
+        model
+            .list
+            .is_loading(Some(&RepoSlug::new("mayfieldiv/legit"))),
         "the repo enters Loading so the view shows the loading placeholder",
     );
 }
@@ -463,7 +479,11 @@ fn shift_r_on_an_empty_repo_tab_relists_that_repo() {
         ),
         "R on an empty repo tab also re-fetches its listing: {cmds:?}",
     );
-    assert!(model.list.is_loading(Some("mayfieldiv/legit")));
+    assert!(
+        model
+            .list
+            .is_loading(Some(&RepoSlug::new("mayfieldiv/legit")))
+    );
 }
 
 #[test]
@@ -473,7 +493,11 @@ fn refresh_on_an_empty_repo_tab_already_loading_does_not_redispatch() {
     let mut model = enriched_model(&[]); // begin_fetch'd, still Loading
     model.relayout();
     update(&mut model, key_event(KeyCode::Char('1')));
-    assert!(model.list.is_loading(Some("mayfieldiv/legit")));
+    assert!(
+        model
+            .list
+            .is_loading(Some(&RepoSlug::new("mayfieldiv/legit")))
+    );
 
     let cmds = update(&mut model, key_event(KeyCode::Char('r')));
 
@@ -903,9 +927,10 @@ fn config_reload_retries_a_failed_repo_reconciling_its_partial_prs() {
     // cleared up front: the retry re-streams, `merge_listed` dedupes the
     // survivors (no duplicates), and `finish_listing` prunes any that closed.
     let mut model = enriched_model(&[1, 2]); // two partial PRs streamed
-    model
-        .list
-        .fail_fetch("mayfieldiv/legit", "list open PRs: boom".to_owned());
+    model.list.fail_fetch(
+        &RepoSlug::new("mayfieldiv/legit"),
+        "list open PRs: boom".to_owned(),
+    );
     assert_eq!(
         model.list.prs().len(),
         2,
@@ -930,7 +955,7 @@ fn config_reload_retries_a_failed_repo_reconciling_its_partial_prs() {
     update(
         &mut model,
         Msg::PrListLoaded {
-            repo_slug: "mayfieldiv/legit".to_owned(),
+            repo_slug: RepoSlug::new("mayfieldiv/legit"),
         },
     );
 

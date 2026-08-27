@@ -1,3 +1,4 @@
+use crate::repo_slug::RepoSlug;
 use ratatui::crossterm::event::KeyCode;
 
 use super::update;
@@ -94,14 +95,16 @@ fn model_with_one_pr() -> crate::app::model::Model {
         owner: "mayfieldiv".to_owned(),
         repo: "legit".to_owned(),
     });
-    model.list.complete_fetch("mayfieldiv/legit");
+    model
+        .list
+        .complete_fetch(&RepoSlug::new("mayfieldiv/legit"));
     model.relayout();
     model
 }
 
 fn pr_key_42() -> PrKey {
     PrKey {
-        repo_slug: "mayfieldiv/legit".to_owned(),
+        repo_slug: RepoSlug::new("mayfieldiv/legit"),
         number: 42,
     }
 }

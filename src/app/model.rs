@@ -11,6 +11,7 @@ use crate::{
     github::rest::{PR, PrKey},
     github::types::{CheckRun, FullReviewThread, IssueComment, Review},
     markdown::Block,
+    repo_slug::RepoSlug,
     secret::Secret,
     worktree::{self, WorktreeEntry},
 };
@@ -102,7 +103,7 @@ pub struct Enrichment {
     pub review_threads: HashMap<PrKey, Vec<FullReviewThread>>,
     pub reviews: HashMap<PrKey, Vec<Review>>,
     pub issue_comments: HashMap<PrKey, Vec<IssueComment>>,
-    pub checks: HashMap<(String, String), Vec<CheckRun>>,
+    pub checks: HashMap<(RepoSlug, String), Vec<CheckRun>>,
     /// Comment bodies parsed to markdown blocks once on arrival, keyed by the
     /// comment's URL (the same stable key `DetailState::expanded` uses). Blocks
     /// rather than flat lines so each comment's `<details>` groups fold per the
@@ -327,7 +328,7 @@ pub struct Model {
     /// Latest `git worktree list --porcelain` entries per Tracked Repo whose
     /// config has a Main Worktree. Filled at startup and after worktree
     /// creation; summary/detail views derive per-PR matches from this cache.
-    pub worktrees_by_repo: HashMap<String, Vec<WorktreeEntry>>,
+    pub worktrees_by_repo: HashMap<RepoSlug, Vec<WorktreeEntry>>,
     /// Per-PR Smart-status, derived from `enrichment` + the current user and
     /// cached so the list view and grouping read it without recomputing on
     /// every frame. Keyed by `PrKey`; recomputed by `refresh_blockers`
@@ -434,9 +435,9 @@ impl Model {
     /// order, then the CWD-detected repo appended when it isn't already
     /// configured. Slug-less (local-only) Tracked Repos are not included — they
     /// have no Repo Tab and no PR machinery. Deduped case-insensitively
-    /// comparing `.slug()` (GitHub slugs are case-insensitive); the first
-    /// occurrence's casing wins, so fetches, `PR::repo_slug` stamps, and tab
-    /// labels all share one canonical string per repo.
+    /// comparing `.slug()` (`RepoSlug` folds case); the first
+    /// occurrence's casing wins for tab labels; identity is `RepoSlug`, so
+    /// casing can never split a repo in two.
     ///
     /// This is the ONE site that turns config `repos` slugs into `RepoInfo`, so
     /// it is where the validated-at-load invariant is leaned on: a config slug
@@ -448,7 +449,7 @@ impl Model {
         let mut repos: Vec<RepoInfo> = Vec::new();
         let push_unique = |repo: RepoInfo, repos: &mut Vec<RepoInfo>| {
             let slug = repo.slug();
-            if !repos.iter().any(|r| r.slug().eq_ignore_ascii_case(&slug)) {
+            if !repos.iter().any(|r| r.slug() == slug) {
                 repos.push(repo);
             }
         };
@@ -468,10 +469,10 @@ impl Model {
     /// matches (e.g. a PR whose `repo_slug` is no longer configured). The single
     /// place enrichment/check fan-out resolves a slug back to a `RepoInfo`, so
     /// the validated-at-load invariant is leaned on only in `tracked_repos`.
-    pub fn tracked_repo(&self, slug: &str) -> Option<RepoInfo> {
+    pub fn tracked_repo(&self, slug: &RepoSlug) -> Option<RepoInfo> {
         self.tracked_repos()
             .into_iter()
-            .find(|repo| repo.slug() == slug)
+            .find(|repo| repo.slug() == *slug)
     }
 
     /// The PR the user is focused on for fetch prioritisation: the open detail
@@ -525,7 +526,7 @@ impl Model {
 
     /// The repo slug the active tab narrows the list to, or `None` for the All
     /// tab. An out-of-range `active_tab` clamps to All rather than panicking.
-    pub fn active_scope(&self) -> Option<String> {
+    pub fn active_scope(&self) -> Option<RepoSlug> {
         if self.active_tab == 0 {
             return None;
         }
@@ -600,9 +601,8 @@ impl Model {
         // `blockers` is a field disjoint from `self.list`, so it can be borrowed
         // by the tier closure while `self.list` is borrowed mutably.
         let blockers = &self.blockers;
-        self.list.relayout(scope.as_deref(), |pr| {
-            blockers.get(&pr.key()).map(|b| b.tier)
-        });
+        self.list
+            .relayout(scope.as_ref(), |pr| blockers.get(&pr.key()).map(|b| b.tier));
     }
 }
 

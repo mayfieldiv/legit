@@ -11,45 +11,7 @@
 #![allow(dead_code)]
 
 use crate::canonical_path::CanonicalPathBuf;
-
-/// An `owner/repo` slug carrying GitHub's identity semantics: equality and
-/// hashing are ASCII-case-insensitive because GitHub treats slugs that way,
-/// while the stored casing is preserved for display. Keys built from config
-/// and keys built from wire payloads (`repository.nameWithOwner`) therefore
-/// unify no matter how either side was cased.
-#[derive(Debug, Clone)]
-pub struct RepoSlug(String);
-
-impl RepoSlug {
-    pub fn new(slug: impl Into<String>) -> Self {
-        Self(slug.into())
-    }
-
-    /// The slug as entered — display casing, not the identity.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl PartialEq for RepoSlug {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.eq_ignore_ascii_case(&other.0)
-    }
-}
-
-impl Eq for RepoSlug {}
-
-impl std::hash::Hash for RepoSlug {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.to_ascii_lowercase().hash(state);
-    }
-}
-
-impl std::fmt::Display for RepoSlug {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
+use crate::repo_slug::RepoSlug;
 
 /// A Ticket's kind — the `wayfinder:<type>` label or the dialect's type
 /// field. Deliberately an open string: unknown Types are shown verbatim,

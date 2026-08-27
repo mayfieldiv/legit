@@ -2,6 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
+use crate::repo_slug::RepoSlug;
 use crate::subprocess::{GitEnv, git_command, run_command};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,8 +32,8 @@ impl RepoInfo {
 
     /// The `owner/repo` slug for this repo — the form config, tabs, and
     /// `PR::repo_slug` all use.
-    pub fn slug(&self) -> String {
-        format!("{}/{}", self.owner, self.repo)
+    pub fn slug(&self) -> RepoSlug {
+        RepoSlug::new(format!("{}/{}", self.owner, self.repo))
     }
 }
 

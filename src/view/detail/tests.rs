@@ -1,3 +1,4 @@
+use crate::repo_slug::RepoSlug;
 use chrono::{DateTime, TimeZone, Utc};
 use ratatui::{Terminal, backend::TestBackend};
 
@@ -60,7 +61,7 @@ fn find_cell_with_bg(
 fn sample_pr() -> PR {
     PR {
         number: 42,
-        repo_slug: "acme/web".to_owned(),
+        repo_slug: RepoSlug::new("acme/web"),
         title: "Add streaming PR list".to_owned(),
         author: "octocat".to_owned(),
         created_at: fixed_now() - chrono::Duration::hours(5),
@@ -90,9 +91,9 @@ fn model_with_pr_in_list(pr: PR) -> Model {
         owner: "acme".to_owned(),
         repo: "web".to_owned(),
     });
-    model.list.begin_fetch("acme/web");
+    model.list.begin_fetch(&RepoSlug::new("acme/web"));
     model.list.push(pr);
-    model.list.complete_fetch("acme/web");
+    model.list.complete_fetch(&RepoSlug::new("acme/web"));
     model.relayout();
     model
 }
@@ -117,7 +118,7 @@ fn model_in_detail(pr: PR, body: &str) -> Model {
 
 fn seed_worktree(model: &mut Model, path: &str, branch: &str) {
     model.worktrees_by_repo.insert(
-        "acme/web".to_owned(),
+        RepoSlug::new("acme/web"),
         vec![WorktreeEntry {
             path: path.to_owned(),
             head: "a".repeat(40),
