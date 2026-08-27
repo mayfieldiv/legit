@@ -16,6 +16,7 @@ mod secret;
 mod subprocess;
 #[cfg(test)]
 mod test_fixtures;
+mod ticket;
 mod tracing_setup;
 mod view;
 mod worktree;
