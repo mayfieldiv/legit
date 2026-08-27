@@ -288,7 +288,7 @@ fn pr_detail_arrived_stores_detail_when_still_in_detail_view() {
 }
 
 #[test]
-fn pr_detail_arrived_discarded_after_navigating_back() {
+fn pr_detail_arrived_does_not_reopen_detail_after_navigating_back() {
     let mut model = model_with_one_pr();
     update(&mut model, key_event(KeyCode::Enter));
     // Navigate back before the fetch completes
@@ -306,7 +306,7 @@ fn pr_detail_arrived_discarded_after_navigating_back() {
     assert_eq!(
         model.view_mode,
         ViewMode::List,
-        "a late-arriving body for a closed view must be discarded"
+        "a late-arriving body must not reopen a closed detail view"
     );
 }
 

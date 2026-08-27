@@ -16,6 +16,9 @@ A PR plus its body (markdown), used in the detail view. Fetched lazily when the 
 **Open PR List**:
 The list of open PRs for the current Tracked Repo, plus the user's selection cursor and the scroll viewport that keeps the cursor on-screen as the list grows. Populated by REST streaming during a fetch; rendered as one row per PR in the list view.
 
+**Substring Filter**:
+The case-insensitive query that narrows the **Open PR List** across a PR's title, description, author, reviewers, labels, number, and changed file paths. Enrichment-backed text contributes once available; filtering never initiates a fetch.
+
 **Repo Tab**:
 A UI tab showing PRs from a single configured repo (or `All` showing every tracked repo combined).
 
@@ -202,7 +205,7 @@ The **Open PR List** row under the cursor, highlighted by a subtle full-width ba
 _Avoid_: highlighted row, active row, reverse-video row.
 
 **Label Chip**:
-A PR label rendered as a filled badge — the label's own GitHub colour as background, a contrast-flipped foreground — shown in the summary panel and detail header (not the list). Pure presentation: chips assign no domain meaning and drive no sort, filter, or **Smart-status**; they are a cosmetic rendering of the same contextual metadata the labels are otherwise.
+A PR label rendered as a filled badge — the label's own GitHub colour as background, a contrast-flipped foreground — shown in the summary panel and detail header (not the list). Pure presentation: chips assign no domain meaning and drive no sort or **Smart-status**; the underlying label text remains searchable by the **Substring Filter**.
 _Avoid_: tag, badge (badge is the generic shape; chip is the legit term).
 
 **Repo Color**:

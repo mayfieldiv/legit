@@ -39,7 +39,7 @@ fn flat_list(n: u64) -> PrList {
         list.push(sample_pr(i));
     }
     list.grouping = Grouping::None;
-    list.relayout(None, |_| None);
+    list.relayout(None, |_| None, |_, _| false);
     list
 }
 
@@ -85,7 +85,7 @@ fn smart_status_groups_order_prs_by_most_recent_github_activity() {
         list.push(pr);
     }
 
-    list.relayout(None, |_| Some(Tier::NeedsReview));
+    list.relayout(None, |_| Some(Tier::NeedsReview), |_, _| false);
 
     assert_eq!(list.pr_numbers_in_display_order(), vec![2, 3, 1]);
 }
@@ -101,7 +101,7 @@ fn equal_activity_times_put_the_newer_pr_first() {
         list.push(pr);
     }
 
-    list.relayout(None, |_| Some(Tier::NeedsReview));
+    list.relayout(None, |_| Some(Tier::NeedsReview), |_, _| false);
 
     assert_eq!(list.pr_numbers_in_display_order(), vec![2, 1]);
 }
@@ -110,7 +110,7 @@ fn equal_activity_times_put_the_newer_pr_first() {
 fn untouched_selection_follows_the_top_row_as_arrivals_resort() {
     let mut list = PrList::new();
     list.push(sample_pr(1));
-    list.relayout(None, |_| Some(Tier::NeedsReview));
+    list.relayout(None, |_| Some(Tier::NeedsReview), |_, _| false);
     assert_eq!(list.prs()[list.selected()].number, 1);
 
     // A more recently active PR arrives and sorts above the first-streamed
@@ -118,7 +118,7 @@ fn untouched_selection_follows_the_top_row_as_arrivals_resort() {
     let mut newer = sample_pr(2);
     newer.updated_at = chrono::Utc.with_ymd_and_hms(2026, 5, 2, 0, 0, 0).unwrap();
     list.push(newer);
-    list.relayout(None, |_| Some(Tier::NeedsReview));
+    list.relayout(None, |_| Some(Tier::NeedsReview), |_, _| false);
     assert_eq!(
         list.prs()[list.selected()].number,
         2,
@@ -131,7 +131,7 @@ fn untouched_selection_follows_the_top_row_as_arrivals_resort() {
     let mut newest = sample_pr(3);
     newest.updated_at = chrono::Utc.with_ymd_and_hms(2026, 5, 3, 0, 0, 0).unwrap();
     list.push(newest);
-    list.relayout(None, |_| Some(Tier::NeedsReview));
+    list.relayout(None, |_| Some(Tier::NeedsReview), |_, _| false);
     assert_eq!(
         list.prs()[list.selected()].number,
         1,
@@ -143,7 +143,7 @@ fn untouched_selection_follows_the_top_row_as_arrivals_resort() {
 fn wheel_up_on_empty_list_does_not_detach_default_selection() {
     let mut list = PrList::new();
     list.resize(10);
-    list.relayout(None, |_| None);
+    list.relayout(None, |_| None, |_, _| false);
 
     list.scroll_up(3);
 
@@ -151,11 +151,11 @@ fn wheel_up_on_empty_list_does_not_detach_default_selection() {
     // wheel-up over the empty list must not have pinned the selection to
     // the first arrival.
     list.push(sample_pr(1));
-    list.relayout(None, |_| Some(Tier::NeedsReview));
+    list.relayout(None, |_| Some(Tier::NeedsReview), |_, _| false);
     let mut newer = sample_pr(2);
     newer.updated_at = chrono::Utc.with_ymd_and_hms(2026, 5, 2, 0, 0, 0).unwrap();
     list.push(newer);
-    list.relayout(None, |_| Some(Tier::NeedsReview));
+    list.relayout(None, |_| Some(Tier::NeedsReview), |_, _| false);
 
     assert_eq!(
         list.prs()[list.selected()].number,
@@ -246,13 +246,17 @@ fn navigation_skips_group_headers() {
     let mut list = PrList::new();
     list.push(sample_pr(1));
     list.push(sample_pr(2));
-    list.relayout(None, |pr| {
-        Some(if pr.number == 1 {
-            Tier::MeBlocking
-        } else {
-            Tier::WaitingOnAuthor
-        })
-    });
+    list.relayout(
+        None,
+        |pr| {
+            Some(if pr.number == 1 {
+                Tier::MeBlocking
+            } else {
+                Tier::WaitingOnAuthor
+            })
+        },
+        |_, _| false,
+    );
 
     assert_eq!(list.selected(), 0);
     list.move_down();
@@ -398,7 +402,7 @@ fn apply_filter(list: &mut PrList, text: &str) {
         list.filter_push(c);
     }
     list.filter_submit();
-    list.relayout(None, |_| None);
+    list.relayout(None, |_| None, |_, _| false);
 }
 
 fn multi_repo_list() -> PrList {
@@ -416,7 +420,7 @@ fn multi_repo_list() -> PrList {
     list.push(other);
     list.push(manager);
     list.grouping = Grouping::None;
-    list.relayout(None, |_| None);
+    list.relayout(None, |_| None, |_, _| false);
     list
 }
 
@@ -504,7 +508,7 @@ fn filter_bare_hyphenated_text_still_uses_substring_not_path_parse() {
     other.title = "unrelated".to_owned();
     list.push(other);
     list.grouping = Grouping::None;
-    list.relayout(None, |_| None);
+    list.relayout(None, |_| None, |_, _| false);
 
     apply_filter(&mut list, "1-click");
 

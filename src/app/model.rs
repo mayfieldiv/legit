@@ -18,7 +18,7 @@ use crate::{
 use super::{
     cmd::Cmd,
     detail_items::{DetailFilters, DetailFocus},
-    pr_list::PrList,
+    pr_list::{PrList, contains_case_insensitive},
     summary_layout::SummaryState,
 };
 
@@ -103,6 +103,11 @@ pub struct Enrichment {
     pub reviews: HashMap<PrKey, Vec<Review>>,
     pub issue_comments: HashMap<PrKey, Vec<IssueComment>>,
     pub checks: HashMap<(String, String), Vec<CheckRun>>,
+    /// Raw PR descriptions that have arrived through the detail fetch. The
+    /// open detail owns its parsed render blocks separately; retaining the raw
+    /// text here lets the list filter use already-fetched descriptions after
+    /// the user returns to the list.
+    descriptions: HashMap<PrKey, String>,
     /// Comment bodies parsed to markdown blocks once on arrival, keyed by the
     /// comment's URL (the same stable key `DetailState::expanded` uses). Blocks
     /// rather than flat lines so each comment's `<details>` groups fold per the
@@ -125,6 +130,12 @@ pub struct Enrichment {
 }
 
 impl Enrichment {
+    /// Retain a fetched PR description for list filtering after the detail view
+    /// that requested it closes.
+    pub(super) fn store_description(&mut self, pr: PrKey, body: String) {
+        self.descriptions.insert(pr, body);
+    }
+
     /// Store an arrived thread list, parsing each comment's markdown body to
     /// blocks exactly once. The one write path for `review_threads`, so the
     /// parsed cache always covers what the maps hold.
@@ -187,6 +198,27 @@ impl Enrichment {
     /// `IssueCommentsArrived`. Same `None`-vs-empty contract as `threads_for`.
     pub fn comments_for(&self, pr: &PrKey) -> Option<&[IssueComment]> {
         self.issue_comments.get(pr).map(Vec::as_slice)
+    }
+
+    /// Whether already-arrived enrichment adds a case-insensitive substring
+    /// match for `needle`. Purely reads cached data; filtering never fetches.
+    fn matches_filter(&self, pr: &PR, needle: &str) -> bool {
+        let key = pr.key();
+        self.reviews.get(&key).is_some_and(|reviews| {
+            reviews
+                .iter()
+                .any(|review| contains_case_insensitive(&review.user, needle))
+        }) || matches!(
+            self.files.get(&key),
+            Some(FilesState::Loaded(files))
+                if files
+                    .files
+                    .iter()
+                    .any(|file| contains_case_insensitive(&file.path, needle))
+        ) || self
+            .descriptions
+            .get(&key)
+            .is_some_and(|body| contains_case_insensitive(body, needle))
     }
 
     /// The check runs fetched for `pr`'s head commit, or `None` until they
@@ -600,9 +632,12 @@ impl Model {
         // `blockers` is a field disjoint from `self.list`, so it can be borrowed
         // by the tier closure while `self.list` is borrowed mutably.
         let blockers = &self.blockers;
-        self.list.relayout(scope.as_deref(), |pr| {
-            blockers.get(&pr.key()).map(|b| b.tier)
-        });
+        let enrichment = &self.enrichment;
+        self.list.relayout(
+            scope.as_deref(),
+            |pr| blockers.get(&pr.key()).map(|b| b.tier),
+            |pr, needle| enrichment.matches_filter(pr, needle),
+        );
     }
 }
 
