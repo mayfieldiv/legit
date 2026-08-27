@@ -200,10 +200,39 @@ pub struct Effort {
     pub title: String,
     /// The Destination stated on the Map, when its body carries one.
     pub destination: Option<String>,
-    pub tickets: Vec<Ticket>,
+    /// Private so [`Effort::new`]'s unique-key guarantee can't be bypassed;
+    /// read through [`Effort::tickets`] / [`Effort::ticket`], which hand out
+    /// member handles.
+    tickets: Vec<Ticket>,
 }
 
 impl Effort {
+    /// Construct an Effort, rejecting duplicate Ticket keys — two Tickets
+    /// with one identity would make every keyed lookup silently pick a
+    /// winner. Neither real source can produce one (GitHub sub-issue
+    /// numbers and canonical paths are unique), so a duplicate is malformed
+    /// input, surfaced per-Effort like any other parse failure.
+    pub fn new(
+        key: EffortKey,
+        title: String,
+        destination: Option<String>,
+        tickets: Vec<Ticket>,
+    ) -> anyhow::Result<Self> {
+        for (i, ticket) in tickets.iter().enumerate() {
+            anyhow::ensure!(
+                !tickets[..i].iter().any(|prev| prev.key == ticket.key),
+                "duplicate ticket key {:?}",
+                ticket.key
+            );
+        }
+        Ok(Self {
+            key,
+            title,
+            destination,
+            tickets,
+        })
+    }
+
     /// Where this Effort's data comes from, read off its key — one source of
     /// truth, so the attribute can never disagree with the identity.
     pub fn source(&self) -> EffortSource {
@@ -213,17 +242,64 @@ impl Effort {
         }
     }
 
+    /// This Effort's Tickets as member handles, in effort order.
+    pub fn tickets(&self) -> impl Iterator<Item = EffortTicket<'_>> {
+        self.tickets.iter().map(|ticket| EffortTicket {
+            effort: self,
+            ticket,
+        })
+    }
+
     /// Look up one of this Effort's Tickets by key.
-    pub fn ticket(&self, key: &TicketKey) -> Option<&Ticket> {
-        self.tickets.iter().find(|t| &t.key == key)
+    pub fn ticket(&self, key: &TicketKey) -> Option<EffortTicket<'_>> {
+        self.tickets().find(|t| &t.key == key)
+    }
+
+    /// The Tickets a session can take right now, in effort order.
+    pub fn frontier(&self) -> impl Iterator<Item = EffortTicket<'_>> {
+        self.tickets().filter(|t| t.is_on_frontier())
+    }
+}
+
+/// One of an Effort's Tickets, resolved against the Effort that owns it —
+/// the only thing the derivations hang off, so a Ticket can never be asked
+/// about an Effort it doesn't belong to. Handed out exclusively by
+/// [`Effort::tickets`] / [`Effort::ticket`] / [`Effort::frontier`]; derefs
+/// to the underlying [`Ticket`] for its data.
+#[derive(Clone, Copy)]
+pub struct EffortTicket<'a> {
+    effort: &'a Effort,
+    ticket: &'a Ticket,
+}
+
+impl std::ops::Deref for EffortTicket<'_> {
+    type Target = Ticket;
+
+    fn deref(&self) -> &Ticket {
+        self.ticket
+    }
+}
+
+impl std::fmt::Debug for EffortTicket<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.ticket.fmt(f)
+    }
+}
+
+impl<'a> EffortTicket<'a> {
+    /// The underlying Ticket, on the Effort's lifetime rather than the
+    /// handle's.
+    pub fn get(self) -> &'a Ticket {
+        self.ticket
     }
 
     /// Whether this Ticket waits on anything: any open or Unknown
     /// Dependency. Always derived, never stored. A same-effort target the
     /// lookup can't find counts as an Unknown Dependency, so it blocks.
-    pub fn is_blocked(&self, ticket: &Ticket) -> bool {
-        ticket.dependencies.iter().any(|dep| match dep {
+    pub fn is_blocked(&self) -> bool {
+        self.ticket.dependencies.iter().any(|dep| match dep {
             Dependency::SameEffort(key) => self
+                .effort
                 .ticket(key)
                 .is_none_or(|t| t.state == TicketState::Open),
             Dependency::External(external) => external.state == TicketState::Open,
@@ -233,25 +309,20 @@ impl Effort {
 
     /// Whether this Ticket is on the Frontier: open, unclaimed, every
     /// Dependency target closed, and no Unknown Dependency.
-    pub fn is_on_frontier(&self, ticket: &Ticket) -> bool {
-        ticket.state == TicketState::Open && ticket.claim.is_none() && !self.is_blocked(ticket)
-    }
-
-    /// The Tickets a session can take right now, in effort order.
-    pub fn frontier(&self) -> impl Iterator<Item = &Ticket> {
-        self.tickets.iter().filter(|t| self.is_on_frontier(t))
+    pub fn is_on_frontier(&self) -> bool {
+        self.ticket.state == TicketState::Open && self.ticket.claim.is_none() && !self.is_blocked()
     }
 
     /// Blocks — the reverse read of Dependency: the open Tickets of this
-    /// Effort whose Dependencies include the given one, in effort order.
-    pub fn blocks(&self, key: &TicketKey) -> Vec<&Ticket> {
-        self.tickets
-            .iter()
+    /// Effort whose Dependencies include this one, in effort order.
+    pub fn blocks(&self) -> Vec<EffortTicket<'a>> {
+        self.effort
+            .tickets()
             .filter(|t| t.state == TicketState::Open)
             .filter(|t| {
                 t.dependencies
                     .iter()
-                    .any(|dep| dep.target_key() == Some(key))
+                    .any(|dep| dep.target_key() == Some(&self.ticket.key))
             })
             .collect()
     }

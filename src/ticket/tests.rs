@@ -3,8 +3,8 @@
 //! `### Wayfinder tickets` glossary. Pure and synchronous — no tokio.
 
 use super::{
-    Claim, Dependency, Effort, EffortKey, EffortSource, ExternalDependency, Mode, RepoSlug, Ticket,
-    TicketKey, TicketState, TicketType,
+    Claim, Dependency, Effort, EffortKey, EffortSource, EffortTicket, ExternalDependency, Mode,
+    RepoSlug, Ticket, TicketKey, TicketState, TicketType,
 };
 use crate::canonical_path::CanonicalPathBuf;
 
@@ -47,15 +47,21 @@ fn dep_on(number: u64) -> Dependency {
 }
 
 fn effort(tickets: Vec<Ticket>) -> Effort {
-    Effort {
-        key: EffortKey::GitHub {
+    Effort::new(
+        EffortKey::GitHub {
             repo_slug: RepoSlug::new(SLUG),
             map_number: 100,
         },
-        title: "Map: test effort".to_owned(),
-        destination: Some("A test destination".to_owned()),
+        "Map: test effort".to_owned(),
+        Some("A test destination".to_owned()),
         tickets,
-    }
+    )
+    .unwrap()
+}
+
+/// The member handle for ticket `number`, which must exist in `e`.
+fn member(e: &Effort, number: u64) -> EffortTicket<'_> {
+    e.ticket(&key(number)).unwrap()
 }
 
 // ── Mode from Type ───────────────────────────────────────────────────────────
@@ -91,14 +97,17 @@ fn effort_source_follows_the_key_variant() {
     let github = effort(Vec::new());
     assert_eq!(github.source(), EffortSource::GitHub);
 
-    let local = Effort {
-        key: EffortKey::Local {
+    let local = Effort::new(
+        EffortKey::Local {
             dir: CanonicalPathBuf::assume_canonical(
                 "/home/mayfield/dev/legit/docs/wayfinder/ticket-surface",
             ),
         },
-        ..effort(Vec::new())
-    };
+        "Map: test effort".to_owned(),
+        None,
+        Vec::new(),
+    )
+    .unwrap();
     assert_eq!(local.source(), EffortSource::Local);
 }
 
@@ -129,12 +138,27 @@ fn ticket_keys_unify_across_slug_casings() {
     assert_eq!(a, b);
 }
 
+#[test]
+fn duplicate_ticket_keys_are_rejected_at_construction() {
+    let err = Effort::new(
+        EffortKey::GitHub {
+            repo_slug: RepoSlug::new(SLUG),
+            map_number: 100,
+        },
+        "Map: test effort".to_owned(),
+        None,
+        vec![open_ticket(1), closed_ticket(1)],
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("duplicate ticket key"));
+}
+
 // ── blocked-ness ─────────────────────────────────────────────────────────────
 
 #[test]
 fn no_dependencies_is_not_blocked() {
     let e = effort(vec![open_ticket(1)]);
-    assert!(!e.is_blocked(&e.tickets[0]));
+    assert!(!member(&e, 1).is_blocked());
 }
 
 #[test]
@@ -142,7 +166,7 @@ fn dependency_on_closed_same_effort_ticket_is_not_blocked() {
     let mut t = open_ticket(2);
     t.dependencies.push(dep_on(1));
     let e = effort(vec![closed_ticket(1), t]);
-    assert!(!e.is_blocked(&e.tickets[1]));
+    assert!(!member(&e, 2).is_blocked());
 }
 
 #[test]
@@ -150,7 +174,7 @@ fn dependency_on_open_same_effort_ticket_is_blocked() {
     let mut t = open_ticket(2);
     t.dependencies.push(dep_on(1));
     let e = effort(vec![open_ticket(1), t]);
-    assert!(e.is_blocked(&e.tickets[1]));
+    assert!(member(&e, 2).is_blocked());
 }
 
 #[test]
@@ -159,7 +183,7 @@ fn one_open_dependency_among_closed_ones_still_blocks() {
     t.dependencies.push(dep_on(1));
     t.dependencies.push(dep_on(2));
     let e = effort(vec![closed_ticket(1), open_ticket(2), t]);
-    assert!(e.is_blocked(&e.tickets[2]));
+    assert!(member(&e, 3).is_blocked());
 }
 
 #[test]
@@ -167,7 +191,7 @@ fn same_effort_dependency_target_missing_counts_as_unknown_and_blocks() {
     let mut t = open_ticket(2);
     t.dependencies.push(dep_on(99));
     let e = effort(vec![t]);
-    assert!(e.is_blocked(&e.tickets[0]));
+    assert!(member(&e, 2).is_blocked());
 }
 
 #[test]
@@ -188,8 +212,8 @@ fn open_external_dependency_blocks_closed_does_not() {
     let mut free = open_ticket(2);
     free.dependencies.push(external(TicketState::Closed));
     let e = effort(vec![blocked, free]);
-    assert!(e.is_blocked(&e.tickets[0]));
-    assert!(!e.is_blocked(&e.tickets[1]));
+    assert!(member(&e, 1).is_blocked());
+    assert!(!member(&e, 2).is_blocked());
 }
 
 // ── Frontier ─────────────────────────────────────────────────────────────────
@@ -197,7 +221,7 @@ fn open_external_dependency_blocks_closed_does_not() {
 #[test]
 fn open_unclaimed_unblocked_ticket_is_on_the_frontier() {
     let e = effort(vec![open_ticket(1)]);
-    assert!(e.is_on_frontier(&e.tickets[0]));
+    assert!(member(&e, 1).is_on_frontier());
 }
 
 #[test]
@@ -208,14 +232,14 @@ fn claimed_tickets_are_off_the_frontier() {
     let mut anonymous = open_ticket(2);
     anonymous.claim = Some(Claim::Anonymous);
     let e = effort(vec![named, anonymous]);
-    assert!(!e.is_on_frontier(&e.tickets[0]));
-    assert!(!e.is_on_frontier(&e.tickets[1]));
+    assert!(!member(&e, 1).is_on_frontier());
+    assert!(!member(&e, 2).is_on_frontier());
 }
 
 #[test]
 fn closed_tickets_are_off_the_frontier() {
     let e = effort(vec![closed_ticket(1)]);
-    assert!(!e.is_on_frontier(&e.tickets[0]));
+    assert!(!member(&e, 1).is_on_frontier());
 }
 
 #[test]
@@ -227,8 +251,8 @@ fn blocked_tickets_are_off_the_frontier() {
         raw: "#999".to_owned(),
     });
     let e = effort(vec![open_ticket(1), blocked, unknown]);
-    assert!(!e.is_on_frontier(&e.tickets[1]));
-    assert!(!e.is_on_frontier(&e.tickets[2]));
+    assert!(!member(&e, 2).is_on_frontier());
+    assert!(!member(&e, 3).is_on_frontier());
 }
 
 #[test]
@@ -246,7 +270,7 @@ fn frontier_lists_only_frontier_tickets_in_effort_order() {
         blocked,
         unblocked,
     ]);
-    let frontier: Vec<&TicketKey> = e.frontier().map(|t| &t.key).collect();
+    let frontier: Vec<&TicketKey> = e.frontier().map(|t| &t.get().key).collect();
     assert_eq!(frontier, vec![&key(1), &key(5)]);
 }
 
@@ -260,7 +284,12 @@ fn blocks_lists_open_tickets_that_depend_on_the_given_one() {
     dependent_b.dependencies.push(dep_on(1));
     dependent_b.dependencies.push(dep_on(2));
     let e = effort(vec![open_ticket(1), dependent_a, dependent_b]);
-    let blocks: Vec<&TicketKey> = e.blocks(&key(1)).iter().map(|t| &t.key).collect();
+    let blocks: Vec<&TicketKey> = member(&e, 1)
+        .blocks()
+        .iter()
+        .map(|t| t.get())
+        .map(|t| &t.key)
+        .collect();
     assert_eq!(blocks, vec![&key(2), &key(3)]);
 }
 
@@ -269,13 +298,13 @@ fn blocks_excludes_closed_dependents() {
     let mut resolved = closed_ticket(2);
     resolved.dependencies.push(dep_on(1));
     let e = effort(vec![open_ticket(1), resolved]);
-    assert!(e.blocks(&key(1)).is_empty());
+    assert!(member(&e, 1).blocks().is_empty());
 }
 
 #[test]
 fn blocks_is_empty_without_dependents() {
     let e = effort(vec![open_ticket(1), open_ticket(2)]);
-    assert!(e.blocks(&key(1)).is_empty());
+    assert!(member(&e, 1).blocks().is_empty());
 }
 
 #[test]
@@ -285,5 +314,5 @@ fn unknown_dependency_always_blocks() {
         raw: "../../other/tickets/03-gone.md".to_owned(),
     });
     let e = effort(vec![t]);
-    assert!(e.is_blocked(&e.tickets[0]));
+    assert!(member(&e, 1).is_blocked());
 }
