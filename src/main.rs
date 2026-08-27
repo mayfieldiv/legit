@@ -1,6 +1,7 @@
 mod app;
 mod auth;
 mod blocker;
+mod canonical_path;
 mod chip;
 mod clipboard;
 mod color;

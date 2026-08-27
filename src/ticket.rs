@@ -10,6 +10,47 @@
 // TODO(#117): remove once the transport/fetch layers consume this module.
 #![allow(dead_code)]
 
+use crate::canonical_path::CanonicalPathBuf;
+
+/// An `owner/repo` slug carrying GitHub's identity semantics: equality and
+/// hashing are ASCII-case-insensitive because GitHub treats slugs that way,
+/// while the stored casing is preserved for display. Keys built from config
+/// and keys built from wire payloads (`repository.nameWithOwner`) therefore
+/// unify no matter how either side was cased.
+#[derive(Debug, Clone)]
+pub struct RepoSlug(String);
+
+impl RepoSlug {
+    pub fn new(slug: impl Into<String>) -> Self {
+        Self(slug.into())
+    }
+
+    /// The slug as entered — display casing, not the identity.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl PartialEq for RepoSlug {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.eq_ignore_ascii_case(&other.0)
+    }
+}
+
+impl Eq for RepoSlug {}
+
+impl std::hash::Hash for RepoSlug {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.to_ascii_lowercase().hash(state);
+    }
+}
+
+impl std::fmt::Display for RepoSlug {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 /// A Ticket's kind — the `wayfinder:<type>` label or the dialect's type
 /// field. Deliberately an open string: unknown Types are shown verbatim,
 /// never hidden, and only feed [`Mode`] derivation as "unknown".
@@ -62,23 +103,29 @@ pub enum Claim {
     Anonymous,
 }
 
-/// Globally-unique Ticket identity across Efforts and sources.
+/// Globally-unique Ticket identity across Efforts and sources. Both
+/// variants carry identity-safe parts: [`RepoSlug`] unifies casings, and
+/// [`CanonicalPathBuf`] is constructible only by canonicalizing.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TicketKey {
     /// A GitHub sub-issue: issue numbers are only unique within a repo, so
     /// the key pairs the repo slug with the number (the `PrKey` pattern).
-    GitHub { repo_slug: String, number: u64 },
+    GitHub { repo_slug: RepoSlug, number: u64 },
     /// A local ticket file, keyed by its canonical path.
-    Local { path: std::path::PathBuf },
+    Local { path: CanonicalPathBuf },
 }
 
-/// Globally-unique Effort identity across Tracked Repos and sources.
+/// Globally-unique Effort identity across Tracked Repos and sources; the
+/// same identity-safe parts as [`TicketKey`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum EffortKey {
     /// A GitHub map issue (labelled `wayfinder:map`), keyed like its tickets.
-    GitHub { repo_slug: String, map_number: u64 },
+    GitHub {
+        repo_slug: RepoSlug,
+        map_number: u64,
+    },
     /// A local Effort, keyed by its canonical effort directory.
-    Local { dir: std::path::PathBuf },
+    Local { dir: CanonicalPathBuf },
 }
 
 /// Where an Effort's data comes from — an attribute of the Effort, not a

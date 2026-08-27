@@ -3,9 +3,10 @@
 //! `### Wayfinder tickets` glossary. Pure and synchronous — no tokio.
 
 use super::{
-    Claim, Dependency, Effort, EffortKey, EffortSource, ExternalDependency, Mode, Ticket,
+    Claim, Dependency, Effort, EffortKey, EffortSource, ExternalDependency, Mode, RepoSlug, Ticket,
     TicketKey, TicketState, TicketType,
 };
+use crate::canonical_path::CanonicalPathBuf;
 
 fn ty(s: &str) -> TicketType {
     TicketType(s.to_owned())
@@ -17,7 +18,7 @@ const SLUG: &str = "mayfieldiv/legit";
 
 fn key(number: u64) -> TicketKey {
     TicketKey::GitHub {
-        repo_slug: SLUG.to_owned(),
+        repo_slug: RepoSlug::new(SLUG),
         number,
     }
 }
@@ -48,7 +49,7 @@ fn dep_on(number: u64) -> Dependency {
 fn effort(tickets: Vec<Ticket>) -> Effort {
     Effort {
         key: EffortKey::GitHub {
-            repo_slug: SLUG.to_owned(),
+            repo_slug: RepoSlug::new(SLUG),
             map_number: 100,
         },
         title: "Map: test effort".to_owned(),
@@ -92,11 +93,40 @@ fn effort_source_follows_the_key_variant() {
 
     let local = Effort {
         key: EffortKey::Local {
-            dir: "/home/mayfield/dev/legit/docs/wayfinder/ticket-surface".into(),
+            dir: CanonicalPathBuf::assume_canonical(
+                "/home/mayfield/dev/legit/docs/wayfinder/ticket-surface",
+            ),
         },
         ..effort(Vec::new())
     };
     assert_eq!(local.source(), EffortSource::Local);
+}
+
+// ── key identity ─────────────────────────────────────────────────────────────
+
+#[test]
+fn repo_slug_identity_ignores_ascii_case_and_keeps_display_casing() {
+    let config_cased = RepoSlug::new("MayfieldIV/Legit");
+    let wire_cased = RepoSlug::new("mayfieldiv/legit");
+    assert_eq!(config_cased, wire_cased);
+    assert_eq!(config_cased.to_string(), "MayfieldIV/Legit");
+
+    let mut seen = std::collections::HashSet::new();
+    seen.insert(config_cased);
+    assert!(seen.contains(&wire_cased));
+}
+
+#[test]
+fn ticket_keys_unify_across_slug_casings() {
+    let a = TicketKey::GitHub {
+        repo_slug: RepoSlug::new("MayfieldIV/Legit"),
+        number: 7,
+    };
+    let b = TicketKey::GitHub {
+        repo_slug: RepoSlug::new("mayfieldiv/legit"),
+        number: 7,
+    };
+    assert_eq!(a, b);
 }
 
 // ── blocked-ness ─────────────────────────────────────────────────────────────
@@ -145,7 +175,7 @@ fn open_external_dependency_blocks_closed_does_not() {
     let external = |state| {
         Dependency::External(ExternalDependency {
             key: TicketKey::GitHub {
-                repo_slug: "other/repo".to_owned(),
+                repo_slug: RepoSlug::new("other/repo"),
                 number: 7,
             },
             state,
