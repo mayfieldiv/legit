@@ -8,10 +8,7 @@ use tokio::sync::{OnceCell, mpsc};
 
 use crate::{
     file_category::FileChange,
-    github::types::{
-        CheckRun, DependenciesSummary, Issue, IssueComment, IssueState, PRState, Review,
-        ReviewStatus, SubIssuesSummary, is_bot,
-    },
+    github::types::{CheckRun, IssueComment, PRState, Review, ReviewStatus, is_bot},
     repo_slug::RepoSlug,
     secret::Secret,
 };
@@ -469,48 +466,13 @@ impl OctocrabRest {
         Ok(parse_issue_comments(raw, bot_logins))
     }
 
-    /// Fetch one issue — the single-ticket refresh (spec §4.1): state,
-    /// labels, assignees, both summaries, `parent_issue_url`, and the body
-    /// all ride on this one payload. Never call `GET …/parent`: it 404s on a
-    /// parentless issue, while `parent_issue_url` already answers parentage —
-    /// so every 404 here stays a genuine error (including a token without
-    /// Issues read scope, which surfaces as 404, not 403).
-    // TODO(#120): remove once the fetch layer dispatches ticket refreshes.
-    #[allow(dead_code)]
-    #[tracing::instrument(name = "get_issue", skip(self))]
-    pub async fn get_issue(&self, slug: &RepoSlug, number: u64) -> Result<Issue> {
-        let route = format!("/repos/{slug}/issues/{number}");
-        let raw: RawRestIssue = self
-            .client
-            .get(&route, None::<&()>)
-            .await
-            .with_context(|| format!("fetching issue {slug}#{number}"))?;
-        Ok(parse_issue(raw))
-    }
-
-    /// List a repo's issues carrying `label`, dropping the pull requests the
-    /// endpoint mixes in. `state` is GitHub's filter vocabulary: `open`,
-    /// `closed`, or `all`.
-    // TODO(#120): remove once the fetch layer dispatches map discovery.
-    #[allow(dead_code)]
-    #[tracing::instrument(name = "list_issues_with_label", skip(self))]
-    pub async fn list_issues_with_label(
+    /// One un-paginated GET, decoded permissively — the internal seam the
+    /// wayfinder module's single-ticket refresh rides.
+    pub(crate) async fn get_resource<T: DeserializeOwned>(
         &self,
-        slug: &RepoSlug,
-        label: &str,
-        state: &str,
-    ) -> Result<Vec<Issue>> {
-        let route = format!("/repos/{slug}/issues");
-        let params = IssueListParams {
-            labels: label,
-            state,
-            per_page: 100,
-        };
-        let raw = self
-            .get_all_with::<RawRestIssue, _>(&route, &params)
-            .await
-            .with_context(|| format!("listing {label:?} issues for {slug}"))?;
-        Ok(parse_issues(raw))
+        route: &str,
+    ) -> octocrab::Result<T> {
+        self.client.get(route, None::<&()>).await
     }
 
     /// Fetch all CI check runs for a commit, each tagged with its `workflow / job`
@@ -716,20 +678,9 @@ impl OctocrabRest {
     /// Follow Link-header pagination for an array endpoint, collecting every
     /// page into one `Vec`. Mirrors the pagination in `list_open_prs`.
     async fn get_all<T: DeserializeOwned>(&self, route: &str) -> octocrab::Result<Vec<T>> {
-        self.get_all_with(route, &PerPageParams { per_page: 100 })
-            .await
-    }
-
-    /// [`Self::get_all`] with caller-supplied query params, for endpoints
-    /// that filter (the label-filtered issues listing). Params must carry
-    /// their own `per_page`.
-    async fn get_all_with<T: DeserializeOwned, P: serde::Serialize>(
-        &self,
-        route: &str,
-        params: &P,
-    ) -> octocrab::Result<Vec<T>> {
+        let params = PerPageParams { per_page: 100 };
         let mut items = Vec::new();
-        let mut page: Page<T> = self.client.get(route, Some(params)).await?;
+        let mut page: Page<T> = self.client.get(route, Some(&params)).await?;
         loop {
             items.extend(page.take_items());
             match self.client.get_page::<T>(&page.next).await? {
@@ -748,14 +699,6 @@ struct ListParams {
 
 #[derive(serde::Serialize)]
 struct PerPageParams {
-    per_page: u8,
-}
-
-/// Query params for the label-filtered issues listing.
-#[derive(serde::Serialize)]
-struct IssueListParams<'a> {
-    labels: &'a str,
-    state: &'a str,
     per_page: u8,
 }
 
@@ -866,62 +809,6 @@ struct RawCommentUser {
     login: String,
     #[serde(rename = "type", default)]
     user_type: Option<String>,
-}
-
-/// Permissive wire shape for a GitHub issue, from the single-issue endpoint
-/// (`GET /repos/:owner/:repo/issues/:number`) and the label-filtered listing.
-/// Same posture as `RawRestPR`: everything GitHub may omit is optional or
-/// defaulted. Private — the module's contract is `Issue`.
-#[derive(Debug, Clone, Deserialize)]
-struct RawRestIssue {
-    number: u64,
-    #[serde(default)]
-    title: String,
-    #[serde(default)]
-    state: Option<String>,
-    #[serde(default)]
-    html_url: String,
-    #[serde(default)]
-    body: Option<String>,
-    #[serde(default)]
-    labels: Vec<RawLabel>,
-    #[serde(default)]
-    assignees: Vec<RawUser>,
-    #[serde(default)]
-    sub_issues_summary: SubIssuesSummary,
-    #[serde(default)]
-    issue_dependencies_summary: DependenciesSummary,
-    #[serde(default)]
-    parent_issue_url: Option<String>,
-    /// Present exactly when this "issue" is really a pull request — the
-    /// issues listing returns both, and the ticket surface must drop PRs.
-    #[serde(default)]
-    pull_request: Option<serde::de::IgnoredAny>,
-}
-
-/// Parse a raw REST issue into the domain `Issue`. Pure; tested directly.
-fn parse_issue(raw: RawRestIssue) -> Issue {
-    Issue {
-        number: raw.number,
-        title: raw.title,
-        state: IssueState::parse(raw.state.as_deref()),
-        url: raw.html_url,
-        body: raw.body.unwrap_or_default(),
-        labels: raw.labels.into_iter().map(|l| l.name).collect(),
-        assignees: raw.assignees.into_iter().map(|u| u.login).collect(),
-        sub_issues_summary: raw.sub_issues_summary,
-        dependencies_summary: raw.issue_dependencies_summary,
-        parent_issue_url: raw.parent_issue_url,
-    }
-}
-
-/// Parse an issues listing, dropping the pull requests the endpoint mixes in
-/// (marked by their `pull_request` key). Pure; tested directly.
-fn parse_issues(raw: Vec<RawRestIssue>) -> Vec<Issue> {
-    raw.into_iter()
-        .filter(|issue| issue.pull_request.is_none())
-        .map(parse_issue)
-        .collect()
 }
 
 /// Wire shape for the single-PR detail endpoint (`GET /repos/:owner/:repo/pulls/:number`).

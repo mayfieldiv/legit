@@ -1,16 +1,16 @@
 //! Hand-written GitHub GraphQL transport (reqwest + serde). Covers the
-//! queries REST can't serve well: the batched per-repo review-status query,
-//! the full review-thread query (with `isResolved` + bot detection) — both
-//! mirroring the GraphQL half of the TS `src/lib/github-transport.ts` — and
-//! the whole-map wayfinder read (the same N+1 collapse, spec §4.1).
+//! queries REST can't serve well: the batched per-repo review-status query
+//! and the full review-thread query (with `isResolved` + bot detection) —
+//! both mirroring the GraphQL half of the TS `src/lib/github-transport.ts`.
+//! The wayfinder whole-map read rides this client too, from behind
+//! `github::wayfinder`'s interface.
 //!
 //! Parsing is split into pure functions (`parse_review_status`,
-//! `parse_review_threads`, `parse_wayfinder_maps`) tested directly against
-//! fixture JSON — the same posture as `github::rest::parse_pr`. The
-//! `GraphQlClient` owns only the HTTP; concurrency limiting happens at the
-//! command layer.
+//! `parse_review_threads`) tested directly against fixture JSON — the same
+//! posture as `github::rest::parse_pr`. The `GraphQlClient` owns only the
+//! HTTP; concurrency limiting happens at the command layer.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -18,13 +18,9 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::{
-    github::types::{
-        FullReviewThread, IssueState, PRState, ReviewComment, ReviewStatus, claim_from_assignees,
-        is_bot, ticket_type_from_labels,
-    },
+    github::types::{FullReviewThread, PRState, ReviewComment, ReviewStatus, is_bot},
     repo_slug::RepoSlug,
     secret::Secret,
-    ticket::{Dependency, Effort, EffortKey, ExternalDependency, Ticket, TicketKey},
 };
 
 const GITHUB_GRAPHQL_URL: &str = "https://api.github.com/graphql";
@@ -37,20 +33,20 @@ const REVIEW_STATUS_BATCH_SIZE: usize = 25;
 /// so a 2xx status alone does not mean the query succeeded — they must be
 /// inspected explicitly.
 #[derive(Debug, Deserialize)]
-struct GraphQlError {
+pub(crate) struct GraphQlError {
     message: String,
 }
 
 /// Implemented by every top-level response envelope so `post` can surface
 /// query-level `errors` generically instead of silently parsing `data: null`
 /// as an empty (but "successful") result.
-trait GraphQlErrors {
+pub(crate) trait GraphQlErrors {
     fn errors(&self) -> &[GraphQlError];
 }
 
 /// Turn a decoded response into `Err` when it carries any GraphQL-level errors,
 /// joining their messages; otherwise pass it through unchanged.
-fn ensure_no_errors<T: GraphQlErrors>(response: T) -> Result<T> {
+pub(crate) fn ensure_no_errors<T: GraphQlErrors>(response: T) -> Result<T> {
     if response.errors().is_empty() {
         return Ok(response);
     }
@@ -220,13 +216,15 @@ struct RawThreadConnection {
     nodes: Vec<RawReviewThread>,
 }
 
+/// The standard GraphQL connection cursor pair. Shared with the wayfinder
+/// module's map-read shapes.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct RawPageInfo {
+pub(crate) struct RawPageInfo {
     #[serde(default)]
-    has_next_page: bool,
+    pub(crate) has_next_page: bool,
     #[serde(default)]
-    end_cursor: Option<String>,
+    pub(crate) end_cursor: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -334,396 +332,14 @@ fn parse_thread_comment(comment: RawThreadComment, bot_logins: &[String]) -> Rev
     }
 }
 
-// ── wayfinder map read ───────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-pub struct WayfinderMapResponse {
-    #[serde(default)]
-    data: Option<WayfinderMapData>,
-    #[serde(default)]
-    errors: Vec<GraphQlError>,
-}
-
-impl GraphQlErrors for WayfinderMapResponse {
-    fn errors(&self) -> &[GraphQlError] {
-        &self.errors
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WayfinderMapData {
-    #[serde(default)]
-    rate_limit: Option<RawRateLimit>,
-    #[serde(default)]
-    repository: Option<WayfinderMapRepo>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RawRateLimit {
-    #[serde(default)]
-    cost: u64,
-    #[serde(default)]
-    remaining: u64,
-}
-
-#[derive(Debug, Deserialize)]
-struct WayfinderMapRepo {
-    #[serde(default)]
-    issues: Option<RawMapConnection>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawMapConnection {
-    page_info: RawPageInfo,
-    #[serde(default)]
-    nodes: Vec<RawMapNode>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawMapNode {
-    number: u64,
-    #[serde(default)]
-    title: String,
-    #[serde(default)]
-    body: String,
-    #[serde(default)]
-    sub_issues: Option<RawTicketConnection>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawTicketConnection {
-    page_info: RawPageInfo,
-    #[serde(default)]
-    nodes: Vec<RawTicketNode>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawTicketNode {
-    number: u64,
-    #[serde(default)]
-    title: String,
-    #[serde(default)]
-    state: Option<String>,
-    #[serde(default)]
-    assignees: Option<RawLoginConnection>,
-    #[serde(default)]
-    labels: Option<RawLabelConnection>,
-    #[serde(default)]
-    blocked_by: Option<RawBlockerConnection>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RawLoginConnection {
-    #[serde(default)]
-    nodes: Vec<RawLogin>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RawLogin {
-    login: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct RawLabelConnection {
-    #[serde(default)]
-    nodes: Vec<RawLabelName>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RawLabelName {
-    name: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawBlockerConnection {
-    page_info: RawPageInfo,
-    #[serde(default)]
-    nodes: Vec<RawBlockerNode>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RawBlockerNode {
-    number: u64,
-    #[serde(default)]
-    state: Option<String>,
-    #[serde(default)]
-    title: Option<String>,
-    /// The blocker's home repo. Read from the payload, never assumed: a
-    /// blocker in another repo is an External Dependency.
-    #[serde(default)]
-    repository: Option<RawRepoName>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawRepoName {
-    name_with_owner: String,
-}
-
-/// One Effort normalized out of the whole-map read, plus its §4.4 degradation
-/// signal.
-// TODO(#120): remove once the fetch layer consumes map reads.
-#[allow(dead_code)]
-#[derive(Debug)]
-pub struct WayfinderMapRead {
-    pub effort: Effort,
-    /// The map has zero native sub-issues but its body carries a task list —
-    /// the body-line fallback dialect, which v1 detects but never parses. The
-    /// effort card renders a degradation notice instead of silently showing
-    /// an empty Effort.
-    pub fallback_dialect: bool,
-}
-
-/// Every open wayfinder map in one repo — the result of one map read.
-// TODO(#120): remove once the fetch layer consumes map reads.
-#[allow(dead_code)]
-#[derive(Debug)]
-pub struct WayfinderMapPage {
-    pub maps: Vec<WayfinderMapRead>,
-    /// Maps that couldn't be normalized, as (map number, error). Parse
-    /// failures degrade per-Effort (spec §5.5): one malformed map must not
-    /// discard the repo's other Efforts, and never disappears silently.
-    pub failed_maps: Vec<(u64, String)>,
-    /// The repo has more open maps than the query's `first:10` window. The
-    /// query is fixed (spec §4.1), so the surplus is reported, not fetched.
-    pub has_more_maps: bool,
-}
-
-/// Parse a whole-map response into normalized Efforts. Blocked-ness inputs
-/// come from each ticket's `blockedBy` list (filtered on state at derivation
-/// time) — never from the eventually-consistent `issueDependenciesSummary`
-/// counters, which this parse doesn't even read.
-fn parse_wayfinder_maps(response: WayfinderMapResponse, slug: &RepoSlug) -> WayfinderMapPage {
-    let connection = response
-        .data
-        .and_then(|d| d.repository)
-        .and_then(|r| r.issues);
-    let Some(connection) = connection else {
-        return WayfinderMapPage {
-            maps: Vec::new(),
-            failed_maps: Vec::new(),
-            has_more_maps: false,
-        };
-    };
-    let mut maps = Vec::new();
-    let mut failed_maps = Vec::new();
-    for node in connection.nodes {
-        let number = node.number;
-        match parse_map_node(node, slug) {
-            Ok(read) => maps.push(read),
-            Err(error) => failed_maps.push((number, format!("{error:#}"))),
-        }
-    }
-    WayfinderMapPage {
-        maps,
-        failed_maps,
-        has_more_maps: connection.page_info.has_next_page,
-    }
-}
-
-fn parse_map_node(node: RawMapNode, slug: &RepoSlug) -> Result<WayfinderMapRead> {
-    // `first:100` is the hard sub-issue cap per parent, so a next page
-    // "can't" exist; if it ever does, say so rather than silently showing a
-    // partial Effort.
-    if node
-        .sub_issues
-        .as_ref()
-        .is_some_and(|c| c.page_info.has_next_page)
-    {
-        tracing::warn!(map = node.number, "sub-issue list truncated at 100");
-    }
-    let ticket_nodes = node.sub_issues.map(|c| c.nodes).unwrap_or_default();
-    // Same-effort membership is "is a sub-issue of this map", not "lives in
-    // this repo": a same-repo blocker outside the map stays External.
-    let members: HashSet<u64> = ticket_nodes.iter().map(|t| t.number).collect();
-    let tickets: Vec<Ticket> = ticket_nodes
-        .into_iter()
-        .map(|t| parse_ticket_node(t, slug, &members))
-        .collect();
-    let fallback_dialect = tickets.is_empty() && body_has_task_list(&node.body);
-    let effort = Effort::new(
-        EffortKey::GitHub {
-            repo_slug: slug.clone(),
-            map_number: node.number,
-        },
-        node.title,
-        destination_from_map_body(&node.body),
-        tickets,
-    )
-    .with_context(|| format!("normalizing map {slug}#{}", node.number))?;
-    Ok(WayfinderMapRead {
-        effort,
-        fallback_dialect,
-    })
-}
-
-fn parse_ticket_node(node: RawTicketNode, slug: &RepoSlug, members: &HashSet<u64>) -> Ticket {
-    let claim = claim_from_assignees(
-        node.assignees
-            .into_iter()
-            .flat_map(|c| c.nodes)
-            .map(|assignee| assignee.login),
-    );
-    let labels = node.labels.map(|c| c.nodes).unwrap_or_default();
-    let ty = ticket_type_from_labels(labels.iter().map(|label| label.name.as_str()));
-    let mut dependencies = Vec::new();
-    if let Some(connection) = node.blocked_by {
-        dependencies.extend(
-            connection
-                .nodes
-                .into_iter()
-                .map(|blocker| parse_blocker(blocker, slug, members)),
-        );
-        // `first:50` is GitHub's hard relation cap, so this "can't" be true —
-        // but unseen blockers must never put a ticket on the Frontier, so a
-        // truncated list degrades to an Unknown Dependency.
-        if connection.page_info.has_next_page {
-            dependencies.push(Dependency::Unknown {
-                raw: "additional blockers".to_owned(),
-            });
-        }
-    }
-    Ticket {
-        key: TicketKey::GitHub {
-            repo_slug: slug.clone(),
-            number: node.number,
-        },
-        title: node.title,
-        state: IssueState::parse(node.state.as_deref()).into(),
-        claim,
-        ty,
-        dependencies,
-    }
-}
-
-fn parse_blocker(node: RawBlockerNode, slug: &RepoSlug, members: &HashSet<u64>) -> Dependency {
-    let repo = match node.repository {
-        Some(repo) => match RepoSlug::parse(&repo.name_with_owner) {
-            Ok(parsed) => parsed,
-            Err(_) => {
-                return Dependency::Unknown {
-                    raw: format!("{}#{}", repo.name_with_owner, node.number),
-                };
-            }
-        },
-        None => {
-            return Dependency::Unknown {
-                raw: format!("#{}", node.number),
-            };
-        }
-    };
-    if repo == *slug && members.contains(&node.number) {
-        // Key on the map's slug so the edge is byte-identical to its target
-        // ticket's key (RepoSlug equality is case-insensitive anyway).
-        Dependency::SameEffort(TicketKey::GitHub {
-            repo_slug: slug.clone(),
-            number: node.number,
-        })
-    } else {
-        // Outside this Effort — another repo, or a same-repo issue that isn't
-        // one of this map's sub-issues. The payload's state and title are
-        // captured so the closed/open signal survives without another fetch.
-        Dependency::External(ExternalDependency {
-            key: TicketKey::GitHub {
-                repo_slug: repo,
-                number: node.number,
-            },
-            state: IssueState::parse(node.state.as_deref()).into(),
-            title: node.title,
-        })
-    }
-}
-
-/// The first paragraph under the map body's `Destination` heading (any
-/// heading level — the wayfinder template says `##`, real maps drift) — the
-/// one-liner the effort card and ticket detail header show. Wrapped lines are
-/// joined; `None` when the body has no such heading or the section is empty.
-fn destination_from_map_body(body: &str) -> Option<String> {
-    let mut lines = body.lines();
-    lines.by_ref().find(|line| {
-        let trimmed = line.trim();
-        let level = trimmed.bytes().take_while(|&b| b == b'#').count();
-        (1..=6).contains(&level) && trimmed[level..].trim().eq_ignore_ascii_case("destination")
-    })?;
-    let mut paragraph: Vec<&str> = Vec::new();
-    for line in lines {
-        let trimmed = line.trim();
-        if trimmed.starts_with('#') {
-            break;
-        }
-        if trimmed.is_empty() {
-            if paragraph.is_empty() {
-                continue;
-            }
-            break;
-        }
-        paragraph.push(trimmed);
-    }
-    (!paragraph.is_empty()).then(|| paragraph.join(" "))
-}
-
-/// Whether a map body carries a GitHub task list — half of the §4.4 fallback
-/// signal (with zero native sub-issues).
-fn body_has_task_list(body: &str) -> bool {
-    body.lines().any(|line| {
-        let Some(rest) = line.trim_start().strip_prefix(['-', '*', '+']) else {
-            return false;
-        };
-        let rest = rest.trim_start();
-        rest.starts_with("[ ]") || rest.starts_with("[x]") || rest.starts_with("[X]")
-    })
-}
-
-/// Whether a ticket body opens with the fallback dialect's dependency lines
-/// (`Part of #n` / `Blocked by: #n`) — the other half of the §4.4 signal,
-/// checked when a ticket body arrives (drill-in / single-ticket refresh).
-/// Only leading lines count, stopping at the first `##` heading, so refs in
-/// prose or code fences don't match; a bare "blocked by" with no issue ref
-/// doesn't either. Detection only — the lines are never parsed into the
-/// model, and where native data exists a stale `Part of` line is advisory.
-// TODO(#120): remove once the per-ticket fetch checks arriving bodies.
-#[allow(dead_code)]
-pub fn has_fallback_dependency_lines(body: &str) -> bool {
-    for line in body.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("##") {
-            break;
-        }
-        let lower = trimmed.to_ascii_lowercase();
-        let is_dependency_line = lower.starts_with("part of ") || lower.starts_with("blocked by:");
-        if is_dependency_line && line_has_issue_ref(trimmed) {
-            return true;
-        }
-    }
-    false
-}
-
-/// An issue ref in any of the fallback dialect's accepted forms: `#123`,
-/// `owner/repo#123`, or a github.com URL.
-fn line_has_issue_ref(line: &str) -> bool {
-    if line.contains("github.com/") {
-        return true;
-    }
-    line.match_indices('#').any(|(i, _)| {
-        line[i + 1..]
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_digit())
-    })
-}
-
 // ── transport ────────────────────────────────────────────────────────────────
 
+/// One GraphQL POST body. Crate-visible so the wayfinder module can send its
+/// whole-map query through [`GraphQlClient::post`].
 #[derive(serde::Serialize)]
-struct GraphQlRequest {
-    query: String,
-    variables: serde_json::Value,
+pub(crate) struct GraphQlRequest {
+    pub(crate) query: String,
+    pub(crate) variables: serde_json::Value,
 }
 
 /// reqwest-backed GraphQL client. Holds only the HTTP client + token; the
@@ -745,7 +361,9 @@ impl GraphQlClient {
         })
     }
 
-    async fn post<T: serde::de::DeserializeOwned + GraphQlErrors>(
+    /// Send one query, surfacing HTTP and GraphQL-level failures. The
+    /// internal seam the wayfinder module's map read rides.
+    pub(crate) async fn post<T: serde::de::DeserializeOwned + GraphQlErrors>(
         &self,
         body: &GraphQlRequest,
     ) -> Result<T> {
@@ -802,67 +420,6 @@ impl GraphQlClient {
             out.extend(parse_review_status(response));
         }
         Ok(out)
-    }
-
-    /// One whole-map read: every open issue labelled `label` (the wayfinder
-    /// maps) in `slug`, with sub-issues and their blockers, normalized into
-    /// Efforts. The N+1 collapse that puts this in GraphQL: one query,
-    /// measured cost 10 of 5,000 points/hr, flat in map size (spec §4.1).
-    // TODO(#120): remove once the fetch layer dispatches map reads.
-    #[allow(dead_code)]
-    #[tracing::instrument(name = "fetch_wayfinder_map", skip(self))]
-    pub async fn fetch_wayfinder_map(
-        &self,
-        slug: &RepoSlug,
-        label: &str,
-    ) -> Result<WayfinderMapPage> {
-        // Verbatim from spec §4.1. `first:100`/`first:50` are GitHub's hard
-        // relation caps, so `hasNextPage` can't be true — `pageInfo` is
-        // selected anyway, and the parse degrades if it ever lies.
-        const QUERY: &str = "query($owner:String!, $repo:String!, $label:String!) {
-            rateLimit { cost remaining resetAt }
-            repository(owner:$owner, name:$repo) {
-                issues(first:10, labels:[$label], states:[OPEN]) {
-                    pageInfo { hasNextPage endCursor }
-                    nodes {
-                        number title state url body
-                        subIssuesSummary { total completed percentCompleted }
-                        subIssues(first:100) {
-                            pageInfo { hasNextPage endCursor }
-                            nodes {
-                                number title state stateReason url
-                                assignees(first:5) { nodes { login } }
-                                labels(first:10) { nodes { name } }
-                                issueDependenciesSummary { blockedBy blocking totalBlockedBy totalBlocking }
-                                blockedBy(first:50) {
-                                    pageInfo { hasNextPage endCursor }
-                                    nodes { number state title repository { nameWithOwner } }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }";
-        let body = GraphQlRequest {
-            query: QUERY.to_owned(),
-            variables: json!({ "owner": slug.owner(), "repo": slug.name(), "label": label }),
-        };
-        let response: WayfinderMapResponse = self.post(&body).await?;
-        if let Some(rate) = response.data.as_ref().and_then(|d| d.rate_limit.as_ref()) {
-            tracing::debug!(
-                cost = rate.cost,
-                remaining = rate.remaining,
-                "map read cost"
-            );
-        }
-        let page = parse_wayfinder_maps(response, slug);
-        if page.has_more_maps {
-            // The fixed query reads one `first:10` window; a repo with more
-            // open maps gets the surplus reported, not silently dropped.
-            tracing::warn!(%slug, "more than 10 open wayfinder maps; reading the first 10");
-        }
-        Ok(page)
     }
 
     /// Fetch every review thread for a PR, following pagination.

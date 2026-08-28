@@ -187,7 +187,7 @@ pub struct DependenciesSummary {
 /// A GitHub issue as the ticket surface consumes it — the REST single-issue
 /// refresh's parsed output (the `PR` analog for issues). The whole-map GraphQL
 /// read normalizes straight into `ticket::Effort` instead; this type serves
-/// the per-ticket paths (drill-in body, single-ticket refresh, label listing).
+/// the per-ticket paths (drill-in body, single-ticket refresh).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Issue {
     pub number: u64,
