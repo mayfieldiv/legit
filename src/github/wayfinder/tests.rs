@@ -1,12 +1,12 @@
 use super::{
-    RawRestIssue, WayfinderMapResponse, destination_from_map_body, has_fallback_dependency_lines,
-    parse_issue, parse_wayfinder_maps,
+    EffortRead, RawRestIssue, WayfinderMapResponse, destination_from_map_body,
+    has_fallback_dependency_lines, parse_issue, parse_wayfinder_maps,
 };
 use crate::github::graphql::ensure_no_errors;
 use crate::github::types::{DependenciesSummary, Issue, IssueState, SubIssuesSummary};
 use crate::repo_slug::RepoSlug;
 use crate::ticket::{
-    Claim, Dependency, EffortKey, ExternalDependency, TicketKey, TicketState, TicketType,
+    Claim, Dependency, Effort, EffortKey, ExternalDependency, TicketKey, TicketState, TicketType,
 };
 
 fn map_slug() -> RepoSlug {
@@ -17,6 +17,13 @@ fn same_effort_key(number: u64) -> TicketKey {
     TicketKey::GitHub {
         repo_slug: map_slug(),
         number,
+    }
+}
+
+fn ready(read: &EffortRead) -> &Effort {
+    match read {
+        EffortRead::Ready(effort) => effort,
+        degraded => panic!("expected Ready, got {degraded:?}"),
     }
 }
 
@@ -82,14 +89,11 @@ fn parses_wayfinder_map_into_effort() {
     } }"###;
     let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
 
-    let page = parse_wayfinder_maps(response, &map_slug());
+    let batch = parse_wayfinder_maps(response, &map_slug());
 
-    assert!(!page.has_more_maps);
-    assert_eq!(page.maps.len(), 1);
-    let read = &page.maps[0];
-    assert!(!read.fallback_dialect);
-
-    let effort = &read.effort;
+    assert!(!batch.more_maps);
+    assert_eq!(batch.efforts.len(), 1);
+    let effort = ready(&batch.efforts[0]);
     assert_eq!(
         effort.key,
         EffortKey::GitHub {
@@ -169,9 +173,9 @@ fn map_parse_flags_more_maps_beyond_first_page() {
     } } } }"#;
     let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
 
-    let page = parse_wayfinder_maps(response, &map_slug());
+    let batch = parse_wayfinder_maps(response, &map_slug());
 
-    assert!(page.has_more_maps);
+    assert!(batch.more_maps);
 }
 
 #[test]
@@ -192,9 +196,9 @@ fn unreadable_blocker_repo_degrades_to_unknown_dependency() {
     } } } }"#;
     let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
 
-    let page = parse_wayfinder_maps(response, &map_slug());
+    let batch = parse_wayfinder_maps(response, &map_slug());
 
-    let effort = &page.maps[0].effort;
+    let effort = ready(&batch.efforts[0]);
     let ticket = effort.tickets().next().unwrap();
     assert_eq!(
         ticket.dependencies,
@@ -223,14 +227,14 @@ fn truncated_blocker_list_keeps_ticket_off_the_frontier() {
     } } } }"#;
     let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
 
-    let page = parse_wayfinder_maps(response, &map_slug());
+    let batch = parse_wayfinder_maps(response, &map_slug());
 
-    let effort = &page.maps[0].effort;
+    let effort = ready(&batch.efforts[0]);
     assert!(effort.tickets().next().unwrap().is_blocked());
 }
 
 #[test]
-fn map_with_task_list_body_and_no_sub_issues_is_fallback_dialect() {
+fn map_with_task_list_body_and_no_sub_issues_degrades_as_fallback_dialect() {
     let raw = r###"{ "data": { "repository": { "issues": {
         "pageInfo": { "hasNextPage": false, "endCursor": null },
         "nodes": [
@@ -250,16 +254,37 @@ fn map_with_task_list_body_and_no_sub_issues_is_fallback_dialect() {
     } } } }"###;
     let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
 
-    let page = parse_wayfinder_maps(response, &map_slug());
+    let batch = parse_wayfinder_maps(response, &map_slug());
 
-    assert!(
-        page.maps[0].fallback_dialect,
-        "task-list body with zero sub-issues"
+    // Task-list body with zero sub-issues: degraded (§4.4), with the map's
+    // identity and context intact for the effort card's error line.
+    let EffortRead::Degraded {
+        key,
+        title,
+        destination,
+        reason,
+    } = &batch.efforts[0]
+    else {
+        panic!("expected Degraded, got {:?}", batch.efforts[0]);
+    };
+    assert_eq!(
+        *key,
+        EffortKey::GitHub {
+            repo_slug: map_slug(),
+            map_number: 1,
+        }
     );
+    assert_eq!(title, "fallback map");
+    assert_eq!(*destination, None);
     assert!(
-        !page.maps[1].fallback_dialect,
-        "an empty map without a task list is just empty"
+        reason.contains("fallback dialect"),
+        "reason names the cause: {reason}"
     );
+
+    // An empty map without a task list is just empty — still Ready.
+    let effort = ready(&batch.efforts[1]);
+    assert_eq!(effort.tickets().count(), 0);
+    assert_eq!(effort.destination.as_deref(), Some("Nothing charted yet."));
 }
 
 #[test]
@@ -289,17 +314,30 @@ fn a_malformed_map_degrades_without_discarding_the_others() {
     } } } }"#;
     let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
 
-    let page = parse_wayfinder_maps(response, &map_slug());
+    let batch = parse_wayfinder_maps(response, &map_slug());
 
-    assert_eq!(page.maps.len(), 1);
-    assert_eq!(page.maps[0].effort.title, "healthy");
-    assert_eq!(page.failed_maps.len(), 1);
-    assert_eq!(page.failed_maps[0].0, 1);
-    assert!(
-        page.failed_maps[0].1.contains("duplicate"),
-        "error names the cause: {}",
-        page.failed_maps[0].1
+    // GitHub order is preserved: the broken map degrades in place, the
+    // healthy one stays Ready.
+    assert_eq!(batch.efforts.len(), 2);
+    let EffortRead::Degraded {
+        key, title, reason, ..
+    } = &batch.efforts[0]
+    else {
+        panic!("expected Degraded, got {:?}", batch.efforts[0]);
+    };
+    assert_eq!(
+        *key,
+        EffortKey::GitHub {
+            repo_slug: map_slug(),
+            map_number: 1,
+        }
     );
+    assert_eq!(title, "broken");
+    assert!(
+        reason.contains("duplicate"),
+        "error names the cause: {reason}"
+    );
+    assert_eq!(ready(&batch.efforts[1]).title, "healthy");
 }
 
 #[test]

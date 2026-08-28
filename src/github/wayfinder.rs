@@ -60,7 +60,7 @@ impl Wayfinder {
     /// collapse that puts this on GraphQL: one query, measured cost 10 of
     /// 5,000 points/hr, flat in map size (spec §4.1).
     #[tracing::instrument(name = "read_efforts", skip(self))]
-    pub async fn read_efforts(&self, slug: &RepoSlug) -> Result<WayfinderMapPage> {
+    pub async fn read_efforts(&self, slug: &RepoSlug) -> Result<EffortReadBatch> {
         // Verbatim from spec §4.1. `first:100`/`first:50` are GitHub's hard
         // relation caps, so `hasNextPage` can't be true — `pageInfo` is
         // selected anyway, and the parse degrades if it ever lies.
@@ -101,13 +101,13 @@ impl Wayfinder {
                 "map read cost"
             );
         }
-        let page = parse_wayfinder_maps(response, slug);
-        if page.has_more_maps {
+        let batch = parse_wayfinder_maps(response, slug);
+        if batch.more_maps {
             // The fixed query reads one `first:10` window; a repo with more
             // open maps gets the surplus reported, not silently dropped.
             tracing::warn!(%slug, "more than 10 open wayfinder maps; reading the first 10");
         }
-        Ok(page)
+        Ok(batch)
     }
 
     /// The single-ticket refresh (spec §4.1): state, labels, assignees, both
@@ -261,64 +261,69 @@ struct RawRepoName {
 
 // ── whole-map read: normalization ────────────────────────────────────────────
 
-/// One Effort normalized out of the whole-map read, plus its §4.4 degradation
-/// signal.
+/// One map's outcome from the whole-map read — the §5.5 per-Effort
+/// degradation boundary made structural: a map is either a fully normalized
+/// Effort or visibly degraded, never a silently partial one.
 #[derive(Debug)]
-pub struct WayfinderMapRead {
-    pub effort: Effort,
-    /// The map has zero native sub-issues but its body carries a task list —
-    /// the body-line fallback dialect, which v1 detects but never parses. The
-    /// effort card renders a degradation notice instead of silently showing
-    /// an empty Effort.
-    pub fallback_dialect: bool,
+pub enum EffortRead {
+    /// The map normalized cleanly.
+    Ready(Effort),
+    /// The map couldn't be represented as a complete Effort — a
+    /// normalization failure, or the §4.4 body-line fallback dialect
+    /// (detected, never parsed in v1). Identity and map context survive the
+    /// failure so the effort card can render its error line (§5.5) with a
+    /// real title instead of a bare number.
+    Degraded {
+        key: EffortKey,
+        title: String,
+        destination: Option<String>,
+        /// Human-readable cause, shown on the card.
+        reason: String,
+    },
 }
 
-/// Every open wayfinder map in one repo — the result of one map read.
+/// Every open wayfinder map in one repo — the result of one map read, in
+/// GitHub's order.
 #[derive(Debug)]
-pub struct WayfinderMapPage {
-    pub maps: Vec<WayfinderMapRead>,
-    /// Maps that couldn't be normalized, as (map number, error). Parse
-    /// failures degrade per-Effort (spec §5.5): one malformed map must not
-    /// discard the repo's other Efforts, and never disappears silently.
-    pub failed_maps: Vec<(u64, String)>,
+pub struct EffortReadBatch {
+    pub efforts: Vec<EffortRead>,
     /// The repo has more open maps than the query's `first:10` window. The
     /// query is fixed (spec §4.1), so the surplus is reported, not fetched.
-    pub has_more_maps: bool,
+    pub more_maps: bool,
 }
 
-/// Parse a whole-map response into normalized Efforts. Blocked-ness inputs
-/// come from each ticket's `blockedBy` list (filtered on state at derivation
-/// time) — never from the eventually-consistent `issueDependenciesSummary`
-/// counters, which this parse doesn't even read.
-fn parse_wayfinder_maps(response: WayfinderMapResponse, slug: &RepoSlug) -> WayfinderMapPage {
+/// Parse a whole-map response into per-map [`EffortRead`]s. Blocked-ness
+/// inputs come from each ticket's `blockedBy` list (filtered on state at
+/// derivation time) — never from the eventually-consistent
+/// `issueDependenciesSummary` counters, which this parse doesn't even read.
+fn parse_wayfinder_maps(response: WayfinderMapResponse, slug: &RepoSlug) -> EffortReadBatch {
     let connection = response
         .data
         .and_then(|d| d.repository)
         .and_then(|r| r.issues);
     let Some(connection) = connection else {
-        return WayfinderMapPage {
-            maps: Vec::new(),
-            failed_maps: Vec::new(),
-            has_more_maps: false,
+        return EffortReadBatch {
+            efforts: Vec::new(),
+            more_maps: false,
         };
     };
-    let mut maps = Vec::new();
-    let mut failed_maps = Vec::new();
-    for node in connection.nodes {
-        let number = node.number;
-        match parse_map_node(node, slug) {
-            Ok(read) => maps.push(read),
-            Err(error) => failed_maps.push((number, format!("{error:#}"))),
-        }
-    }
-    WayfinderMapPage {
-        maps,
-        failed_maps,
-        has_more_maps: connection.page_info.has_next_page,
+    EffortReadBatch {
+        efforts: connection
+            .nodes
+            .into_iter()
+            .map(|node| read_map_node(node, slug))
+            .collect(),
+        more_maps: connection.page_info.has_next_page,
     }
 }
 
-fn parse_map_node(node: RawMapNode, slug: &RepoSlug) -> Result<WayfinderMapRead> {
+fn read_map_node(node: RawMapNode, slug: &RepoSlug) -> EffortRead {
+    let key = EffortKey::GitHub {
+        repo_slug: slug.clone(),
+        map_number: node.number,
+    };
+    let title = node.title;
+    let destination = destination_from_map_body(&node.body);
     // `first:100` is the hard sub-issue cap per parent, so a next page
     // "can't" exist; if it ever does, say so rather than silently showing a
     // partial Effort.
@@ -337,21 +342,26 @@ fn parse_map_node(node: RawMapNode, slug: &RepoSlug) -> Result<WayfinderMapRead>
         .into_iter()
         .map(|t| parse_ticket_node(t, slug, &members))
         .collect();
-    let fallback_dialect = tickets.is_empty() && body_has_task_list(&node.body);
-    let effort = Effort::new(
-        EffortKey::GitHub {
-            repo_slug: slug.clone(),
-            map_number: node.number,
+    // Zero native sub-issues + a task-list body = the fallback dialect,
+    // which v1 detects but never parses (§4.4) — degraded, not an
+    // innocently empty Effort.
+    if tickets.is_empty() && body_has_task_list(&node.body) {
+        return EffortRead::Degraded {
+            key,
+            title,
+            destination,
+            reason: "task-list map (fallback dialect) — not parsed in v1".to_owned(),
+        };
+    }
+    match Effort::new(key.clone(), title.clone(), destination.clone(), tickets) {
+        Ok(effort) => EffortRead::Ready(effort),
+        Err(error) => EffortRead::Degraded {
+            key,
+            title,
+            destination,
+            reason: format!("{error:#}"),
         },
-        node.title,
-        destination_from_map_body(&node.body),
-        tickets,
-    )
-    .with_context(|| format!("normalizing map {slug}#{}", node.number))?;
-    Ok(WayfinderMapRead {
-        effort,
-        fallback_dialect,
-    })
+    }
 }
 
 fn parse_ticket_node(node: RawTicketNode, slug: &RepoSlug, members: &HashSet<u64>) -> Ticket {
