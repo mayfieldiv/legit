@@ -341,6 +341,63 @@ fn a_malformed_map_degrades_without_discarding_the_others() {
 }
 
 #[test]
+fn absent_authoritative_connections_degrade_the_map() {
+    // Absent ≠ present-empty: reading a missing subIssues/assignees/blockedBy
+    // as empty would manufacture unclaimed/unblocked facts and could put a
+    // ticket falsely on the Frontier. No conservative reading exists, so the
+    // map degrades per-Effort; sibling maps survive.
+    let raw = r#"{ "data": { "repository": { "issues": {
+        "pageInfo": { "hasNextPage": false, "endCursor": null },
+        "nodes": [
+            { "number": 1, "title": "no subIssues", "state": "OPEN", "url": "u", "body": "" },
+            {
+                "number": 2, "title": "no assignees", "state": "OPEN", "url": "u", "body": "",
+                "subIssues": { "pageInfo": { "hasNextPage": false, "endCursor": null }, "nodes": [ {
+                    "number": 10, "title": "t", "state": "OPEN",
+                    "labels": { "nodes": [] },
+                    "blockedBy": { "pageInfo": { "hasNextPage": false, "endCursor": null }, "nodes": [] }
+                } ] }
+            },
+            {
+                "number": 3, "title": "no blockedBy", "state": "OPEN", "url": "u", "body": "",
+                "subIssues": { "pageInfo": { "hasNextPage": false, "endCursor": null }, "nodes": [ {
+                    "number": 11, "title": "t", "state": "OPEN",
+                    "assignees": { "nodes": [] }, "labels": { "nodes": [] }
+                } ] }
+            },
+            {
+                "number": 4, "title": "healthy", "state": "OPEN", "url": "u", "body": "",
+                "subIssues": { "pageInfo": { "hasNextPage": false, "endCursor": null }, "nodes": [ {
+                    "number": 12, "title": "t", "state": "OPEN",
+                    "assignees": { "nodes": [] },
+                    "blockedBy": { "pageInfo": { "hasNextPage": false, "endCursor": null }, "nodes": [] }
+                } ] }
+            }
+        ]
+    } } } }"#;
+    let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
+
+    let batch = parse_wayfinder_maps(response, &map_slug());
+
+    let reason = |read: &EffortRead| -> String {
+        match read {
+            EffortRead::Degraded { reason, .. } => reason.clone(),
+            ready => panic!("expected Degraded, got {ready:?}"),
+        }
+    };
+    assert!(reason(&batch.efforts[0]).contains("subIssues"));
+    assert!(reason(&batch.efforts[1]).contains("#10 payload missing assignees"));
+    assert!(reason(&batch.efforts[2]).contains("#11 payload missing blockedBy"));
+    // `labels` absent stays Ready: Type only feeds the Mode filter, never
+    // the Frontier, so an absent list is safely an empty Type.
+    let effort = ready(&batch.efforts[3]);
+    assert_eq!(
+        effort.tickets().next().unwrap().ty,
+        TicketType(String::new())
+    );
+}
+
+#[test]
 fn wayfinder_map_errors_surface_as_err() {
     // The envelope must `impl GraphQlErrors`: GitHub reports query failures
     // as HTTP 200 + `errors`, which must not parse as an empty success.

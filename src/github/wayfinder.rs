@@ -324,24 +324,44 @@ fn read_map_node(node: RawMapNode, slug: &RepoSlug) -> EffortRead {
     };
     let title = node.title;
     let destination = destination_from_map_body(&node.body);
+    // Absent ≠ present-empty: the query always selects these connections, so
+    // a payload without one is malformed, and treating it as empty would
+    // manufacture facts (an empty Effort here; unclaimed / unblocked tickets
+    // in `parse_ticket_node`) that can put a ticket falsely on the Frontier.
+    // No conservative reading exists, so the map degrades (§5.5).
+    let Some(sub_issues) = node.sub_issues else {
+        return EffortRead::Degraded {
+            key,
+            title,
+            destination,
+            reason: "payload missing subIssues connection".to_owned(),
+        };
+    };
     // `first:100` is the hard sub-issue cap per parent, so a next page
     // "can't" exist; if it ever does, say so rather than silently showing a
     // partial Effort.
-    if node
-        .sub_issues
-        .as_ref()
-        .is_some_and(|c| c.page_info.has_next_page)
-    {
+    if sub_issues.page_info.has_next_page {
         tracing::warn!(map = node.number, "sub-issue list truncated at 100");
     }
-    let ticket_nodes = node.sub_issues.map(|c| c.nodes).unwrap_or_default();
+    let ticket_nodes = sub_issues.nodes;
     // Same-effort membership is "is a sub-issue of this map", not "lives in
     // this repo": a same-repo blocker outside the map stays External.
     let members: HashSet<u64> = ticket_nodes.iter().map(|t| t.number).collect();
-    let tickets: Vec<Ticket> = ticket_nodes
+    let tickets: Vec<Ticket> = match ticket_nodes
         .into_iter()
         .map(|t| parse_ticket_node(t, slug, &members))
-        .collect();
+        .collect::<Result<_>>()
+    {
+        Ok(tickets) => tickets,
+        Err(error) => {
+            return EffortRead::Degraded {
+                key,
+                title,
+                destination,
+                reason: format!("{error:#}"),
+            };
+        }
+    };
     // Zero native sub-issues + a task-list body = the fallback dialect,
     // which v1 detects but never parses (§4.4) — degraded, not an
     // innocently empty Effort.
@@ -364,33 +384,46 @@ fn read_map_node(node: RawMapNode, slug: &RepoSlug) -> EffortRead {
     }
 }
 
-fn parse_ticket_node(node: RawTicketNode, slug: &RepoSlug, members: &HashSet<u64>) -> Ticket {
-    let claim = claim_from_assignees(
-        node.assignees
-            .into_iter()
-            .flat_map(|c| c.nodes)
-            .map(|assignee| assignee.login),
-    );
+/// Normalize one sub-issue node. Errs when a Frontier-authoritative
+/// connection (`assignees`, `blockedBy`) is absent — treating absence as
+/// empty would read as unclaimed/unblocked and could manufacture a false
+/// Frontier Ticket, so the whole map degrades instead (see `read_map_node`).
+/// `labels` stays defaulted: Type only feeds the Mode filter, never the
+/// Frontier, so an absent list is safely an empty Type.
+fn parse_ticket_node(
+    node: RawTicketNode,
+    slug: &RepoSlug,
+    members: &HashSet<u64>,
+) -> Result<Ticket> {
+    let assignees = node.assignees.with_context(|| {
+        format!(
+            "ticket #{} payload missing assignees connection",
+            node.number
+        )
+    })?;
+    let blocked_by = node.blocked_by.with_context(|| {
+        format!(
+            "ticket #{} payload missing blockedBy connection",
+            node.number
+        )
+    })?;
+    let claim = claim_from_assignees(assignees.nodes.into_iter().map(|assignee| assignee.login));
     let labels = node.labels.map(|c| c.nodes).unwrap_or_default();
     let ty = ticket_type_from_labels(labels.iter().map(|label| label.name.as_str()));
-    let mut dependencies = Vec::new();
-    if let Some(connection) = node.blocked_by {
-        dependencies.extend(
-            connection
-                .nodes
-                .into_iter()
-                .map(|blocker| parse_blocker(blocker, slug, members)),
-        );
-        // `first:50` is GitHub's hard relation cap, so this "can't" be true —
-        // but unseen blockers must never put a ticket on the Frontier, so a
-        // truncated list degrades to an Unknown Dependency.
-        if connection.page_info.has_next_page {
-            dependencies.push(Dependency::Unknown {
-                raw: "additional blockers".to_owned(),
-            });
-        }
+    let mut dependencies: Vec<Dependency> = blocked_by
+        .nodes
+        .into_iter()
+        .map(|blocker| parse_blocker(blocker, slug, members))
+        .collect();
+    // `first:50` is GitHub's hard relation cap, so this "can't" be true —
+    // but unseen blockers must never put a ticket on the Frontier, so a
+    // truncated list degrades to an Unknown Dependency.
+    if blocked_by.page_info.has_next_page {
+        dependencies.push(Dependency::Unknown {
+            raw: "additional blockers".to_owned(),
+        });
     }
-    Ticket {
+    Ok(Ticket {
         key: TicketKey::GitHub {
             repo_slug: slug.clone(),
             number: node.number,
@@ -400,7 +433,7 @@ fn parse_ticket_node(node: RawTicketNode, slug: &RepoSlug, members: &HashSet<u64
         claim,
         ty,
         dependencies,
-    }
+    })
 }
 
 fn parse_blocker(node: RawBlockerNode, slug: &RepoSlug, members: &HashSet<u64>) -> Dependency {
