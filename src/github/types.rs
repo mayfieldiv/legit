@@ -1,11 +1,15 @@
 //! Domain types for the per-PR enrichment layer (review status, checks,
-//! reviews, review threads, issue comments). Field sets mirror the TS
-//! `src/lib/types.ts` so downstream consumers (blocker engine, summary panel,
-//! detail view) stay in lockstep with the reference implementation. Strings are
-//! kept permissive (e.g. `mergeable`, `state`, `conclusion`) rather than enums
-//! so a value GitHub adds later doesn't fail parsing — same posture as `PR`.
+//! reviews, review threads, issue comments) and the wayfinder ticket
+//! transport (issues, sub-issue and dependency summaries). The PR-side field
+//! sets mirror the TS `src/lib/types.ts` so downstream consumers (blocker
+//! engine, summary panel, detail view) stay in lockstep with the reference
+//! implementation. Strings are kept permissive (e.g. `mergeable`, `state`,
+//! `conclusion`) rather than enums so a value GitHub adds later doesn't fail
+//! parsing — same posture as `PR`.
 
 use chrono::{DateTime, Utc};
+
+use crate::ticket::{Claim, TicketType};
 
 /// Lifecycle state for a pull request. Mirrors the TS `PRState` discriminated
 /// type so the rest of the app can compare against the same values.
@@ -146,21 +150,23 @@ impl From<IssueState> for crate::ticket::TicketState {
 }
 
 /// A Map issue's sub-issue progress counters, as GitHub reports them on every
-/// issue payload. Drives the effort card's `N/M decided` counts. Deserializes
-/// from both transports' casings (REST snake_case, GraphQL camelCase).
+/// REST issue payload (`sub_issues_summary`). The GraphQL map read doesn't
+/// deserialize its equivalent — an Effort's counts derive from the tickets
+/// themselves, which the summary can only lag.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
 pub struct SubIssuesSummary {
     #[serde(default)]
     pub total: u64,
     #[serde(default)]
     pub completed: u64,
-    #[serde(default, alias = "percentCompleted")]
+    #[serde(default)]
     pub percent_completed: u64,
 }
 
-/// An issue's dependency counters (`issue_dependencies_summary` /
-/// `issueDependenciesSummary`). `blocked_by`/`blocking` count OPEN
-/// counterparts only; the `total_*` pair counts open and closed.
+/// An issue's dependency counters, from the REST payload's
+/// `issue_dependencies_summary` (the GraphQL map read doesn't deserialize its
+/// equivalent). `blocked_by`/`blocking` count OPEN counterparts only; the
+/// `total_*` pair counts open and closed.
 ///
 /// Never derive blocked-ness from these: the summary is eventually consistent
 /// (~10s after a close), so a read right after a blocker closes still counts
@@ -168,13 +174,13 @@ pub struct SubIssuesSummary {
 /// state (spec §4.2); these ride along as display-only data.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
 pub struct DependenciesSummary {
-    #[serde(default, alias = "blockedBy")]
+    #[serde(default)]
     pub blocked_by: u64,
-    #[serde(default, alias = "blocking")]
+    #[serde(default)]
     pub blocking: u64,
-    #[serde(default, alias = "totalBlockedBy")]
+    #[serde(default)]
     pub total_blocked_by: u64,
-    #[serde(default, alias = "totalBlocking")]
+    #[serde(default)]
     pub total_blocking: u64,
 }
 
@@ -200,8 +206,29 @@ pub struct Issue {
     /// API URL of the parent issue, when this issue is a sub-issue. On every
     /// payload, which is why `GET …/parent` (404 when parentless) is never
     /// called — every 404 stays a genuine error, including the
-    /// missing-Issues-scope case, which surfaces as 404.
+    /// missing-Issues-scope case, which surfaces as 404. Kept as the raw wire
+    /// string: no consumer navigates by it yet; one that does should parse it
+    /// into an `EffortKey` rather than compare URLs.
     pub parent_issue_url: Option<String>,
+}
+
+/// The Claim a GitHub assignee list carries: the first assignee (the model
+/// holds one claimant). Shared by the whole-map read and the single-ticket
+/// refresh so the rule can't drift between them.
+pub(crate) fn claim_from_assignees(assignees: impl IntoIterator<Item = String>) -> Option<Claim> {
+    assignees.into_iter().next().map(Claim::By)
+}
+
+/// The Type a GitHub label list carries: the first `wayfinder:<type>` label,
+/// prefix stripped. A ticket without one gets the empty Type (shown verbatim,
+/// Mode Either); other labels (triage vocabulary) never masquerade as a Type.
+/// Shared by the whole-map read and the single-ticket refresh.
+pub(crate) fn ticket_type_from_labels<'a>(labels: impl IntoIterator<Item = &'a str>) -> TicketType {
+    labels
+        .into_iter()
+        .find_map(|name| name.strip_prefix("wayfinder:").map(str::to_owned))
+        .map(TicketType)
+        .unwrap_or_else(|| TicketType(String::new()))
 }
 
 /// Whether a commenter is a bot. Mirrors the TS rule: a GraphQL `Bot` typename

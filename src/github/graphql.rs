@@ -1,12 +1,14 @@
-//! Hand-written GitHub GraphQL transport (reqwest + serde). Covers the two
-//! queries REST can't serve well: the batched per-repo review-status query and
-//! the full review-thread query (with `isResolved` + bot detection). Mirrors
-//! the GraphQL half of the TS `src/lib/github-transport.ts`.
+//! Hand-written GitHub GraphQL transport (reqwest + serde). Covers the
+//! queries REST can't serve well: the batched per-repo review-status query,
+//! the full review-thread query (with `isResolved` + bot detection) — both
+//! mirroring the GraphQL half of the TS `src/lib/github-transport.ts` — and
+//! the whole-map wayfinder read (the same N+1 collapse, spec §4.1).
 //!
 //! Parsing is split into pure functions (`parse_review_status`,
-//! `parse_review_threads`) tested directly against fixture JSON — the same
-//! posture as `github::rest::parse_pr`. The `GraphQlClient` owns only the HTTP;
-//! concurrency limiting happens at the command layer.
+//! `parse_review_threads`, `parse_wayfinder_maps`) tested directly against
+//! fixture JSON — the same posture as `github::rest::parse_pr`. The
+//! `GraphQlClient` owns only the HTTP; concurrency limiting happens at the
+//! command layer.
 
 use std::collections::{HashMap, HashSet};
 
@@ -16,12 +18,13 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::{
-    github::types::{FullReviewThread, IssueState, PRState, ReviewComment, ReviewStatus, is_bot},
+    github::types::{
+        FullReviewThread, IssueState, PRState, ReviewComment, ReviewStatus, claim_from_assignees,
+        is_bot, ticket_type_from_labels,
+    },
     repo_slug::RepoSlug,
     secret::Secret,
-    ticket::{
-        Claim, Dependency, Effort, EffortKey, ExternalDependency, Ticket, TicketKey, TicketType,
-    },
+    ticket::{Dependency, Effort, EffortKey, ExternalDependency, Ticket, TicketKey},
 };
 
 const GITHUB_GRAPHQL_URL: &str = "https://api.github.com/graphql";
@@ -483,6 +486,10 @@ pub struct WayfinderMapRead {
 #[derive(Debug)]
 pub struct WayfinderMapPage {
     pub maps: Vec<WayfinderMapRead>,
+    /// Maps that couldn't be normalized, as (map number, error). Parse
+    /// failures degrade per-Effort (spec §5.5): one malformed map must not
+    /// discard the repo's other Efforts, and never disappears silently.
+    pub failed_maps: Vec<(u64, String)>,
     /// The repo has more open maps than the query's `first:10` window. The
     /// query is fixed (spec §4.1), so the surplus is reported, not fetched.
     pub has_more_maps: bool,
@@ -492,29 +499,32 @@ pub struct WayfinderMapPage {
 /// come from each ticket's `blockedBy` list (filtered on state at derivation
 /// time) — never from the eventually-consistent `issueDependenciesSummary`
 /// counters, which this parse doesn't even read.
-fn parse_wayfinder_maps(
-    response: WayfinderMapResponse,
-    slug: &RepoSlug,
-) -> Result<WayfinderMapPage> {
+fn parse_wayfinder_maps(response: WayfinderMapResponse, slug: &RepoSlug) -> WayfinderMapPage {
     let connection = response
         .data
         .and_then(|d| d.repository)
         .and_then(|r| r.issues);
     let Some(connection) = connection else {
-        return Ok(WayfinderMapPage {
+        return WayfinderMapPage {
             maps: Vec::new(),
+            failed_maps: Vec::new(),
             has_more_maps: false,
-        });
+        };
     };
-    let maps = connection
-        .nodes
-        .into_iter()
-        .map(|node| parse_map_node(node, slug))
-        .collect::<Result<Vec<_>>>()?;
-    Ok(WayfinderMapPage {
+    let mut maps = Vec::new();
+    let mut failed_maps = Vec::new();
+    for node in connection.nodes {
+        let number = node.number;
+        match parse_map_node(node, slug) {
+            Ok(read) => maps.push(read),
+            Err(error) => failed_maps.push((number, format!("{error:#}"))),
+        }
+    }
+    WayfinderMapPage {
         maps,
+        failed_maps,
         has_more_maps: connection.page_info.has_next_page,
-    })
+    }
 }
 
 fn parse_map_node(node: RawMapNode, slug: &RepoSlug) -> Result<WayfinderMapRead> {
@@ -554,22 +564,14 @@ fn parse_map_node(node: RawMapNode, slug: &RepoSlug) -> Result<WayfinderMapRead>
 }
 
 fn parse_ticket_node(node: RawTicketNode, slug: &RepoSlug, members: &HashSet<u64>) -> Ticket {
-    let claim = node
-        .assignees
-        .into_iter()
-        .flat_map(|c| c.nodes)
-        .next()
-        .map(|assignee| Claim::By(assignee.login));
-    // The Type is the `wayfinder:<type>` label, prefix stripped; a ticket
-    // without one gets the empty Type (shown verbatim, Mode Either). Other
-    // labels (triage vocabulary) never masquerade as a Type.
-    let ty = node
-        .labels
-        .into_iter()
-        .flat_map(|c| c.nodes)
-        .find_map(|label| label.name.strip_prefix("wayfinder:").map(str::to_owned))
-        .map(TicketType)
-        .unwrap_or_else(|| TicketType(String::new()));
+    let claim = claim_from_assignees(
+        node.assignees
+            .into_iter()
+            .flat_map(|c| c.nodes)
+            .map(|assignee| assignee.login),
+    );
+    let labels = node.labels.map(|c| c.nodes).unwrap_or_default();
+    let ty = ticket_type_from_labels(labels.iter().map(|label| label.name.as_str()));
     let mut dependencies = Vec::new();
     if let Some(connection) = node.blocked_by {
         dependencies.extend(
@@ -583,7 +585,7 @@ fn parse_ticket_node(node: RawTicketNode, slug: &RepoSlug, members: &HashSet<u64
         // truncated list degrades to an Unknown Dependency.
         if connection.page_info.has_next_page {
             dependencies.push(Dependency::Unknown {
-                raw: "blockers beyond the first 50".to_owned(),
+                raw: "additional blockers".to_owned(),
             });
         }
     }
@@ -638,15 +640,16 @@ fn parse_blocker(node: RawBlockerNode, slug: &RepoSlug, members: &HashSet<u64>) 
     }
 }
 
-/// The first paragraph under the map body's `## Destination` heading — the
+/// The first paragraph under the map body's `Destination` heading (any
+/// heading level — the wayfinder template says `##`, real maps drift) — the
 /// one-liner the effort card and ticket detail header show. Wrapped lines are
 /// joined; `None` when the body has no such heading or the section is empty.
 fn destination_from_map_body(body: &str) -> Option<String> {
     let mut lines = body.lines();
     lines.by_ref().find(|line| {
-        line.trim()
-            .strip_prefix("##")
-            .is_some_and(|rest| rest.trim().eq_ignore_ascii_case("destination"))
+        let trimmed = line.trim();
+        let level = trimmed.bytes().take_while(|&b| b == b'#').count();
+        (1..=6).contains(&level) && trimmed[level..].trim().eq_ignore_ascii_case("destination")
     })?;
     let mut paragraph: Vec<&str> = Vec::new();
     for line in lines {
@@ -853,7 +856,7 @@ impl GraphQlClient {
                 "map read cost"
             );
         }
-        let page = parse_wayfinder_maps(response, slug)?;
+        let page = parse_wayfinder_maps(response, slug);
         if page.has_more_maps {
             // The fixed query reads one `first:10` window; a repo with more
             // open maps gets the surplus reported, not silently dropped.

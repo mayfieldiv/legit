@@ -284,7 +284,7 @@ fn parses_wayfinder_map_into_effort() {
     } }"###;
     let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
 
-    let page = parse_wayfinder_maps(response, &map_slug()).expect("parse");
+    let page = parse_wayfinder_maps(response, &map_slug());
 
     assert!(!page.has_more_maps);
     assert_eq!(page.maps.len(), 1);
@@ -371,7 +371,7 @@ fn map_parse_flags_more_maps_beyond_first_page() {
     } } } }"#;
     let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
 
-    let page = parse_wayfinder_maps(response, &map_slug()).expect("parse");
+    let page = parse_wayfinder_maps(response, &map_slug());
 
     assert!(page.has_more_maps);
 }
@@ -394,7 +394,7 @@ fn unreadable_blocker_repo_degrades_to_unknown_dependency() {
     } } } }"#;
     let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
 
-    let page = parse_wayfinder_maps(response, &map_slug()).expect("parse");
+    let page = parse_wayfinder_maps(response, &map_slug());
 
     let effort = &page.maps[0].effort;
     let ticket = effort.tickets().next().unwrap();
@@ -425,7 +425,7 @@ fn truncated_blocker_list_keeps_ticket_off_the_frontier() {
     } } } }"#;
     let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
 
-    let page = parse_wayfinder_maps(response, &map_slug()).expect("parse");
+    let page = parse_wayfinder_maps(response, &map_slug());
 
     let effort = &page.maps[0].effort;
     assert!(effort.tickets().next().unwrap().is_blocked());
@@ -452,7 +452,7 @@ fn map_with_task_list_body_and_no_sub_issues_is_fallback_dialect() {
     } } } }"###;
     let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
 
-    let page = parse_wayfinder_maps(response, &map_slug()).expect("parse");
+    let page = parse_wayfinder_maps(response, &map_slug());
 
     assert!(
         page.maps[0].fallback_dialect,
@@ -461,6 +461,46 @@ fn map_with_task_list_body_and_no_sub_issues_is_fallback_dialect() {
     assert!(
         !page.maps[1].fallback_dialect,
         "an empty map without a task list is just empty"
+    );
+}
+
+#[test]
+fn a_malformed_map_degrades_without_discarding_the_others() {
+    // Duplicate ticket keys (Effort::new's guard) are the one way
+    // normalization can fail; the read's other maps must survive it — parse
+    // failures degrade per-Effort, never silently drop (spec §5.5).
+    let raw = r#"{ "data": { "repository": { "issues": {
+        "pageInfo": { "hasNextPage": false, "endCursor": null },
+        "nodes": [
+            {
+                "number": 1, "title": "broken", "state": "OPEN", "url": "u", "body": "",
+                "subIssues": { "pageInfo": { "hasNextPage": false, "endCursor": null }, "nodes": [
+                    { "number": 2, "title": "a", "state": "OPEN",
+                      "assignees": { "nodes": [] }, "labels": { "nodes": [] },
+                      "blockedBy": { "pageInfo": { "hasNextPage": false, "endCursor": null }, "nodes": [] } },
+                    { "number": 2, "title": "a again", "state": "OPEN",
+                      "assignees": { "nodes": [] }, "labels": { "nodes": [] },
+                      "blockedBy": { "pageInfo": { "hasNextPage": false, "endCursor": null }, "nodes": [] } }
+                ] }
+            },
+            {
+                "number": 9, "title": "healthy", "state": "OPEN", "url": "u", "body": "",
+                "subIssues": { "pageInfo": { "hasNextPage": false, "endCursor": null }, "nodes": [] }
+            }
+        ]
+    } } } }"#;
+    let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
+
+    let page = parse_wayfinder_maps(response, &map_slug());
+
+    assert_eq!(page.maps.len(), 1);
+    assert_eq!(page.maps[0].effort.title, "healthy");
+    assert_eq!(page.failed_maps.len(), 1);
+    assert_eq!(page.failed_maps[0].0, 1);
+    assert!(
+        page.failed_maps[0].1.contains("duplicate"),
+        "error names the cause: {}",
+        page.failed_maps[0].1
     );
 }
 
@@ -483,6 +523,11 @@ fn destination_extracts_first_paragraph_under_the_heading() {
     assert_eq!(
         destination_from_map_body(body).as_deref(),
         Some("All eight issues merged and usable in the TUI.")
+    );
+    assert_eq!(
+        destination_from_map_body("# Destination\n\nAny heading level works.\n").as_deref(),
+        Some("Any heading level works."),
+        "real maps drift from the template's ## level"
     );
     assert_eq!(destination_from_map_body("no heading here"), None);
     assert_eq!(
