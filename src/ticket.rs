@@ -7,7 +7,8 @@
 //! and local dialect parser (#118) normalize their wire/file shapes into
 //! these types; the fetch and view layers consume them.
 
-// TODO(#117): remove once the transport/fetch layers consume this module.
+// TODO(#118/#120): remove once the local parser constructs the Local variants
+// and the fetch/view layers consume the derivations.
 #![allow(dead_code)]
 
 use crate::canonical_path::CanonicalPathBuf;
