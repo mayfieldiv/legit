@@ -68,10 +68,7 @@ fn pr_list_loaded_with_empty_list_fans_out_nothing() {
 #[test]
 fn pr_list_loaded_without_auth_fans_out_nothing() {
     let (mut model, _) = Model::new();
-    model.repo = RepoDetection::Detected(RepoInfo {
-        owner: "mayfieldiv".to_owned(),
-        repo: "legit".to_owned(),
-    });
+    model.repo = RepoDetection::Detected(RepoSlug::new("mayfieldiv/legit"));
     model.list.begin_fetch(&RepoSlug::new("mayfieldiv/legit"));
     model.list.push(sample_pr(1, "p"));
 
@@ -195,7 +192,7 @@ fn same_sha_in_another_repo_still_fetches_checks() {
 
     match cmds.as_slice() {
         [Cmd::FetchChecks { ctx, pr, head_sha }] => {
-            assert_eq!(ctx.repo.slug(), "acme/web");
+            assert_eq!(ctx.repo, "acme/web");
             assert_eq!(head_sha, "abc123");
             // Carries the PR the SHA came from, so the limiter can focus-promote it.
             assert_eq!(pr.repo_slug, "acme/web");

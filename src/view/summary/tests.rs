@@ -6,7 +6,6 @@ use crate::{
     app::list_layout::panel_width,
     app::model::{Model, RepoDetection},
     blocker::{BlockerResult, Tier},
-    git_remote::RepoInfo,
     github::rest::{Label, PR},
     github::types::PRState,
     test_fixtures::{check, timed_check},
@@ -51,10 +50,7 @@ fn sample_pr(number: u64, title: &str) -> PR {
 /// until the test adds it.
 fn model_with_selected(pr: PR) -> Model {
     let (mut model, _) = Model::new();
-    model.repo = RepoDetection::Detected(RepoInfo {
-        owner: "acme".to_owned(),
-        repo: "web".to_owned(),
-    });
+    model.repo = RepoDetection::Detected(RepoSlug::new("acme/web"));
     model.list.begin_fetch(&RepoSlug::new("acme/web"));
     model.list.push(pr);
     model.list.complete_fetch(&RepoSlug::new("acme/web"));

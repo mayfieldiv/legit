@@ -10,9 +10,9 @@ use crate::{
         model::{Model, StatusKind},
     },
     blocker::Tier,
-    git_remote::RepoInfo,
     github::rest::{PR, PrKey},
     github::types::PRState,
+    repo_slug::RepoSlug,
     secret::Secret,
 };
 
@@ -84,12 +84,11 @@ pub(super) fn refresh_all_cmds(model: &mut Model) -> Vec<Cmd> {
 /// re-stream and duplicate the pooled PRs. The pooled PRs are left in place:
 /// `merge_listed` dedupes the re-stream (preserving each PR's enrichment) and
 /// `finish_listing` prunes the ones that didn't reappear.
-fn dispatch_relist(model: &mut Model, repo: RepoInfo, token: &Secret<String>) -> Option<Cmd> {
-    let slug = repo.slug();
-    if model.list.is_loading(Some(&slug)) {
+fn dispatch_relist(model: &mut Model, repo: RepoSlug, token: &Secret<String>) -> Option<Cmd> {
+    if model.list.is_loading(Some(&repo)) {
         return None;
     }
-    model.list.begin_fetch(&slug);
+    model.list.begin_fetch(&repo);
     Some(Cmd::FetchOpenPRs {
         repo,
         token: token.clone(),
@@ -107,7 +106,7 @@ fn relist_for_discovery(model: &mut Model) -> Vec<Cmd> {
     let scope = model.active_scope();
     let mut cmds = Vec::new();
     for repo in model.tracked_repos() {
-        if scope.as_ref().is_some_and(|active| *active != repo.slug()) {
+        if scope.as_ref().is_some_and(|active| *active != repo) {
             continue;
         }
         cmds.extend(dispatch_relist(model, repo, &token));

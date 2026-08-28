@@ -10,7 +10,6 @@ use crate::{
         pr_list::Phase,
         update::update as update_at,
     },
-    git_remote::RepoInfo,
     github::rest::{PR, PrKey},
     github::types::PRState,
     secret::Secret,
@@ -275,7 +274,7 @@ pub(super) fn config_with_repos(slugs: &[&str]) -> crate::config::LegitConfig {
 pub(super) fn fetched_slugs(cmds: &[Cmd]) -> Vec<RepoSlug> {
     cmds.iter()
         .map(|c| match c {
-            Cmd::FetchOpenPRs { repo, .. } => repo.slug(),
+            Cmd::FetchOpenPRs { repo, .. } => repo.clone(),
             other => panic!("expected only FetchOpenPRs, got {other:?}"),
         })
         .collect()
@@ -287,10 +286,7 @@ pub(super) fn fetched_slugs(cmds: &[Cmd]) -> Vec<RepoSlug> {
 pub(super) fn tabbed_model() -> Model {
     let (mut model, _) = Model::new();
     model.config = config_with_repos(&["acme/web"]);
-    model.repo = RepoDetection::Detected(RepoInfo {
-        owner: "mayfieldiv".to_owned(),
-        repo: "legit".to_owned(),
-    });
+    model.repo = RepoDetection::Detected(RepoSlug::new("mayfieldiv/legit"));
     update(
         &mut model,
         Msg::PrArrived(sample_pr_in("acme/web", 10, "web pr")),
@@ -303,10 +299,7 @@ pub(super) fn tabbed_model() -> Model {
 pub(super) fn enriched_model(numbers: &[u64]) -> Model {
     let (mut model, _) = Model::new();
     model.auth_token = Some(Secret::new("ghp_test".to_owned()));
-    model.repo = RepoDetection::Detected(RepoInfo {
-        owner: "mayfieldiv".to_owned(),
-        repo: "legit".to_owned(),
-    });
+    model.repo = RepoDetection::Detected(RepoSlug::new("mayfieldiv/legit"));
     model.list.begin_fetch(&RepoSlug::new("mayfieldiv/legit"));
     for n in numbers {
         // Stream through the listing-merge path so each PR is recorded as seen
@@ -707,10 +700,7 @@ fn dispatching_fetch_marks_list_as_loading() {
 
     let cmds = update(
         &mut model,
-        Msg::RepoDetected(Some(RepoInfo {
-            owner: "mayfieldiv".to_owned(),
-            repo: "legit".to_owned(),
-        })),
+        Msg::RepoDetected(Some(RepoSlug::new("mayfieldiv/legit"))),
     );
 
     assert_eq!(cmds.len(), 1);
@@ -792,15 +782,11 @@ fn repo_detected_without_token_stores_repo_but_does_not_fetch() {
 
     let cmds = update(
         &mut model,
-        Msg::RepoDetected(Some(RepoInfo {
-            owner: "mayfieldiv".to_owned(),
-            repo: "legit".to_owned(),
-        })),
+        Msg::RepoDetected(Some(RepoSlug::new("mayfieldiv/legit"))),
     );
 
-    let repo = model.repo.repo().expect("repo info stored");
-    assert_eq!(repo.owner, "mayfieldiv");
-    assert_eq!(repo.repo, "legit");
+    let repo = model.repo.repo().expect("repo slug stored");
+    assert_eq!(*repo, "mayfieldiv/legit");
     assert!(
         cmds.is_empty(),
         "no fetch should fire before auth token resolves"
@@ -815,17 +801,13 @@ fn repo_detected_after_token_dispatches_fetch_open_prs() {
 
     let cmds = update(
         &mut model,
-        Msg::RepoDetected(Some(RepoInfo {
-            owner: "mayfieldiv".to_owned(),
-            repo: "legit".to_owned(),
-        })),
+        Msg::RepoDetected(Some(RepoSlug::new("mayfieldiv/legit"))),
     );
 
     assert_eq!(cmds.len(), 1);
     match &cmds[0] {
         Cmd::FetchOpenPRs { repo, .. } => {
-            assert_eq!(repo.owner, "mayfieldiv");
-            assert_eq!(repo.repo, "legit");
+            assert_eq!(*repo, "mayfieldiv/legit");
         }
         other => panic!("expected FetchOpenPRs cmd, got {other:?}"),
     }
@@ -839,10 +821,7 @@ fn fetch_waits_for_config_even_with_auth_and_repo() {
 
     let cmds = update(
         &mut model,
-        Msg::RepoDetected(Some(RepoInfo {
-            owner: "mayfieldiv".to_owned(),
-            repo: "legit".to_owned(),
-        })),
+        Msg::RepoDetected(Some(RepoSlug::new("mayfieldiv/legit"))),
     );
 
     assert!(
@@ -859,10 +838,7 @@ fn fetch_waits_for_config_even_with_auth_and_repo() {
 fn config_loaded_releases_the_fetch_when_auth_and_repo_already_landed() {
     let (mut model, _) = Model::new();
     model.auth_token = Some(Secret::new("ghp_test".to_owned()));
-    model.repo = RepoDetection::Detected(RepoInfo {
-        owner: "mayfieldiv".to_owned(),
-        repo: "legit".to_owned(),
-    });
+    model.repo = RepoDetection::Detected(RepoSlug::new("mayfieldiv/legit"));
 
     // Config arrives last; it must kick off the gated fetch.
     let cmds = update(&mut model, Msg::ConfigLoaded(Default::default()));
@@ -879,10 +855,7 @@ fn config_loaded_releases_the_fetch_when_auth_and_repo_already_landed() {
 fn config_load_failed_records_a_fatal_and_does_not_fetch() {
     let (mut model, _) = Model::new();
     model.auth_token = Some(Secret::new("ghp_test".to_owned()));
-    model.repo = RepoDetection::Detected(RepoInfo {
-        owner: "mayfieldiv".to_owned(),
-        repo: "legit".to_owned(),
-    });
+    model.repo = RepoDetection::Detected(RepoSlug::new("mayfieldiv/legit"));
 
     let cmds = update(
         &mut model,

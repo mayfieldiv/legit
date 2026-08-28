@@ -8,7 +8,6 @@ use crate::{
         model::{Model, RepoDetection, StatusKind, StatusMessage},
     },
     blocker::{BlockerResult, Tier},
-    git_remote::RepoInfo,
     github::limiter::NetworkStats,
     github::rest::PR,
     github::types::{FullReviewThread, PRState, Review, ReviewComment},
@@ -73,10 +72,7 @@ fn pr(number: u64, title: &str, author: &str, hours_ago: i64) -> PR {
 /// "Loading details…". Drives the same `relayout` path the runtime uses.
 fn model_with(prs: Vec<PR>, grouping: Grouping, tier_of: impl Fn(&PR) -> Option<Tier>) -> Model {
     let (mut model, _) = Model::new();
-    model.repo = RepoDetection::Detected(RepoInfo {
-        owner: "acme".to_owned(),
-        repo: "web".to_owned(),
-    });
+    model.repo = RepoDetection::Detected(RepoSlug::new("acme/web"));
     model.list.begin_fetch(&RepoSlug::new("acme/web"));
     for pr in prs {
         if let Some(tier) = tier_of(&pr) {

@@ -5,77 +5,38 @@ use anyhow::{Context, Result, bail};
 use crate::repo_slug::RepoSlug;
 use crate::subprocess::{GitEnv, git_command, run_command};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RepoInfo {
-    pub owner: String,
-    pub repo: String,
-}
-
-impl RepoInfo {
-    /// Parse an `owner/repo` slug back into parts. `None` for malformed slugs.
-    /// The split rule is a structural subset of `RepoSlug::parse`, so a slug
-    /// that survived config load always parses. Only `Model::tracked_repos`
-    /// calls this, on such validated slugs, so `None` is an unreachable guard
-    /// there rather than an error path.
-    pub fn from_slug(slug: &str) -> Option<Self> {
-        let (owner, repo) = slug.split_once('/')?;
-        if owner.is_empty() || repo.is_empty() || repo.contains('/') {
-            return None;
-        }
-        Some(Self {
-            owner: owner.to_owned(),
-            repo: repo.to_owned(),
-        })
-    }
-
-    /// The `owner/repo` slug for this repo — the form config, tabs, and
-    /// `PR::repo_slug` all use.
-    pub fn slug(&self) -> RepoSlug {
-        RepoSlug::new(format!("{}/{}", self.owner, self.repo))
-    }
-}
-
-/// Parse a GitHub remote URL into (owner, repo). Mirrors the TS `parseRemoteUrl`
+/// Parse a GitHub remote URL into a repo slug. Mirrors the TS `parseRemoteUrl`
 /// in `src/lib/legit.ts` so dotted repo names (e.g. `angular.js`) and both SSH
-/// and HTTPS forms parse identically.
-pub fn parse_remote_url(url: &str) -> Result<RepoInfo> {
-    if let Some((owner, repo)) = parse_ssh(url) {
-        return Ok(RepoInfo { owner, repo });
-    }
-    if let Some((owner, repo)) = parse_https(url) {
-        return Ok(RepoInfo { owner, repo });
-    }
-    bail!("Cannot parse GitHub remote URL: {url}");
+/// and HTTPS forms parse identically. The extracted parts still pass through
+/// `RepoSlug::parse`, so a remote whose owner/repo violates slug syntax is
+/// rejected here rather than smuggling an unvalidated slug into the app.
+pub fn parse_remote_url(url: &str) -> Result<RepoSlug> {
+    let Some(rest) = parse_ssh(url).or_else(|| parse_https(url)) else {
+        bail!("Cannot parse GitHub remote URL: {url}");
+    };
+    RepoSlug::parse(rest).with_context(|| format!("Cannot parse GitHub remote URL: {url}"))
 }
 
-fn parse_ssh(url: &str) -> Option<(String, String)> {
+fn parse_ssh(url: &str) -> Option<String> {
     let rest = url.strip_prefix("git@github.com:")?;
-    split_owner_repo(rest)
+    strip_git_suffix(rest)
 }
 
-fn parse_https(url: &str) -> Option<(String, String)> {
+fn parse_https(url: &str) -> Option<String> {
     let rest = url
         .strip_prefix("https://github.com/")
         .or_else(|| url.strip_prefix("http://github.com/"))?;
-    split_owner_repo(rest)
+    strip_git_suffix(rest)
 }
 
-fn split_owner_repo(rest: &str) -> Option<(String, String)> {
-    let (owner, repo) = rest.split_once('/')?;
-    if owner.is_empty() {
-        return None;
-    }
-    let repo = repo.strip_suffix(".git").unwrap_or(repo);
-    if repo.is_empty() {
-        return None;
-    }
-    Some((owner.to_owned(), repo.to_owned()))
+fn strip_git_suffix(rest: &str) -> Option<String> {
+    Some(rest.strip_suffix(".git").unwrap_or(rest).to_owned())
 }
 
 /// Detect the GitHub repo for the given working directory by reading
 /// `git remote get-url origin`.
 #[tracing::instrument(name = "detect_repo")]
-pub fn detect_repo(cwd: &Path) -> Result<RepoInfo> {
+pub fn detect_repo(cwd: &Path) -> Result<RepoSlug> {
     tracing::info!(path = %cwd.display(), "detecting repo from git remote");
     // Reading the remote URL is a local operation that won't prompt, but run it
     // through the hardened path (non-interactive, timeout, shutdown-tracked) like
@@ -95,20 +56,13 @@ pub fn detect_repo(cwd: &Path) -> Result<RepoInfo> {
 
 #[cfg(test)]
 mod tests {
-    use super::{RepoInfo, parse_remote_url};
-
-    fn info(owner: &str, repo: &str) -> RepoInfo {
-        RepoInfo {
-            owner: owner.to_owned(),
-            repo: repo.to_owned(),
-        }
-    }
+    use super::parse_remote_url;
 
     #[test]
     fn parses_ssh_url_with_git_suffix() {
         assert_eq!(
             parse_remote_url("git@github.com:owner/repo.git").unwrap(),
-            info("owner", "repo"),
+            "owner/repo",
         );
     }
 
@@ -116,7 +70,7 @@ mod tests {
     fn parses_ssh_url_without_git_suffix() {
         assert_eq!(
             parse_remote_url("git@github.com:owner/repo").unwrap(),
-            info("owner", "repo"),
+            "owner/repo",
         );
     }
 
@@ -124,7 +78,7 @@ mod tests {
     fn parses_https_url_with_git_suffix() {
         assert_eq!(
             parse_remote_url("https://github.com/owner/repo.git").unwrap(),
-            info("owner", "repo"),
+            "owner/repo",
         );
     }
 
@@ -132,7 +86,7 @@ mod tests {
     fn parses_https_url_without_git_suffix() {
         assert_eq!(
             parse_remote_url("https://github.com/owner/repo").unwrap(),
-            info("owner", "repo"),
+            "owner/repo",
         );
     }
 
@@ -140,7 +94,7 @@ mod tests {
     fn parses_ssh_url_with_dotted_repo_with_git_suffix() {
         assert_eq!(
             parse_remote_url("git@github.com:angular/angular.js.git").unwrap(),
-            info("angular", "angular.js"),
+            "angular/angular.js",
         );
     }
 
@@ -148,7 +102,7 @@ mod tests {
     fn parses_ssh_url_with_dotted_repo_without_git_suffix() {
         assert_eq!(
             parse_remote_url("git@github.com:socketio/socket.io").unwrap(),
-            info("socketio", "socket.io"),
+            "socketio/socket.io",
         );
     }
 
@@ -156,7 +110,7 @@ mod tests {
     fn parses_https_url_with_dotted_repo_with_git_suffix() {
         assert_eq!(
             parse_remote_url("https://github.com/highlightjs/highlight.js.git").unwrap(),
-            info("highlightjs", "highlight.js"),
+            "highlightjs/highlight.js",
         );
     }
 
@@ -164,7 +118,7 @@ mod tests {
     fn parses_https_url_with_dotted_repo_without_git_suffix() {
         assert_eq!(
             parse_remote_url("https://github.com/kubernetes/kubernetes.io").unwrap(),
-            info("kubernetes", "kubernetes.io"),
+            "kubernetes/kubernetes.io",
         );
     }
 
@@ -181,21 +135,10 @@ mod tests {
     }
 
     #[test]
-    fn from_slug_parses_owner_repo() {
-        assert_eq!(RepoInfo::from_slug("acme/web"), Some(info("acme", "web")));
-    }
-
-    #[test]
-    fn from_slug_rejects_empty_segments() {
-        assert_eq!(RepoInfo::from_slug("acme"), None);
-        assert_eq!(RepoInfo::from_slug("acme/"), None);
-        assert_eq!(RepoInfo::from_slug("/web"), None);
-    }
-
-    #[test]
-    fn from_slug_rejects_extra_segment_to_agree_with_validate_repo_slug() {
-        // `a/b/c` would split into owner=a, repo=b/c; rejecting it keeps
-        // `from_slug` in lockstep with `config::validate_repo_slug`.
-        assert_eq!(RepoInfo::from_slug("a/b/c"), None);
+    fn rejects_github_url_with_invalid_slug_syntax() {
+        // The host prefix parses, but the extracted parts still go through
+        // `RepoSlug::parse` — a traversal segment must not become a slug.
+        let err = parse_remote_url("https://github.com/owner/..").unwrap_err();
+        assert!(format!("{err:#}").contains("Cannot parse"), "{err:#}");
     }
 }

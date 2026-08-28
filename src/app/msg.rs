@@ -4,7 +4,6 @@ use ratatui::crossterm::event::Event;
 use crate::{
     config::LegitConfig,
     file_category::FileChange,
-    git_remote::RepoInfo,
     github::limiter::NetworkStats,
     github::rest::{PR, PrKey},
     github::types::{CheckRun, FullReviewThread, IssueComment, Review, ReviewStatus},
@@ -21,7 +20,7 @@ pub enum Msg {
     /// `None` means detection ran but found none (not a git repo / no GitHub
     /// remote). Either outcome settles the PR-fetch gate so configured Tracked
     /// Repos still fetch when there's no CWD repo.
-    RepoDetected(Option<RepoInfo>),
+    RepoDetected(Option<RepoSlug>),
     PrArrived(PR),
     /// One Tracked Repo's open-PR listing finished streaming.
     PrListLoaded {

@@ -22,10 +22,11 @@ pub fn pr_url(repo_slug: &RepoSlug, number: u64) -> String {
 }
 
 pub fn devin_url(repo_slug: &RepoSlug, number: u64) -> String {
-    let mut parts = repo_slug.as_str().split('/');
-    let owner = parts.next().unwrap_or("");
-    let repo = parts.next().unwrap_or("undefined");
-    format!("https://app.devin.ai/review/{owner}/{repo}/pull/{number}")
+    format!(
+        "https://app.devin.ai/review/{}/{}/pull/{number}",
+        repo_slug.owner(),
+        repo_slug.name(),
+    )
 }
 
 pub fn open_url(url: impl Into<String>) -> Cmd {

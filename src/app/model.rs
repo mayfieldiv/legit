@@ -6,7 +6,6 @@ use crate::{
     blocker::{BlockerOptions, BlockerResult, compute_blocker},
     config::LegitConfig,
     file_category::FileCategorization,
-    git_remote::RepoInfo,
     github::limiter::NetworkStats,
     github::rest::{PR, PrKey},
     github::types::{CheckRun, FullReviewThread, IssueComment, Review},
@@ -252,7 +251,7 @@ pub struct StatusMessage {
 /// Outcome of CWD repo detection (`Cmd::DetectRepo`). An explicit tri-state so
 /// the PR-fetch gate can tell "detection hasn't reported yet" apart from
 /// "detection reported, but there's no repo here". Conflating the two as
-/// `Option<RepoInfo>` (`None` = both) would wedge the app at an empty list
+/// `Option<RepoSlug>` (`None` = both) would wedge the app at an empty list
 /// whenever detection fails (outside a git repo / no GitHub remote): the gate
 /// would wait forever for a `Detected` that never comes, never fetching even
 /// the configured Tracked Repos.
@@ -261,7 +260,7 @@ pub enum RepoDetection {
     /// `Cmd::DetectRepo` is still in flight; the gate waits.
     Pending,
     /// Detection found a GitHub repo in the CWD — added to the tracked set.
-    Detected(RepoInfo),
+    Detected(RepoSlug),
     /// Detection ran but found no repo (not a git repo / no GitHub remote).
     /// The gate proceeds on configured repos alone; nothing is added to the
     /// tracked set.
@@ -277,7 +276,7 @@ impl RepoDetection {
     }
 
     /// The detected CWD repo, or `None` while pending or after a failure.
-    pub fn repo(&self) -> Option<&RepoInfo> {
+    pub fn repo(&self) -> Option<&RepoSlug> {
         match self {
             RepoDetection::Detected(repo) => Some(repo),
             RepoDetection::Pending | RepoDetection::Failed => None,
@@ -434,47 +433,34 @@ impl Model {
     /// Every PR-capable Tracked Repo: the configured repos with a slug in config
     /// order, then the CWD-detected repo appended when it isn't already
     /// configured. Slug-less (local-only) Tracked Repos are not included — they
-    /// have no Repo Tab and no PR machinery. Deduped case-insensitively
-    /// comparing `.slug()` (`RepoSlug` folds case); the first
-    /// occurrence's casing wins for tab labels; identity is `RepoSlug`, so
-    /// casing can never split a repo in two.
-    ///
-    /// This is the ONE site that turns config `repos` slugs into `RepoInfo`.
-    /// Config slugs are validated by `RepoSlug::parse` at load, and
-    /// `RepoInfo::from_slug` accepts a structural subset of the same rule, so
-    /// the `and_then` can't drop anything here.
-    pub fn tracked_repos(&self) -> Vec<RepoInfo> {
-        let mut repos: Vec<RepoInfo> = Vec::new();
-        let push_unique = |repo: RepoInfo, repos: &mut Vec<RepoInfo>| {
-            let slug = repo.slug();
-            if !repos.iter().any(|r| r.slug() == slug) {
-                repos.push(repo);
+    /// have no Repo Tab and no PR machinery. Deduped by `RepoSlug` equality
+    /// (which folds ASCII case); the first occurrence's casing wins for tab
+    /// labels, so casing can never split a repo in two.
+    pub fn tracked_repos(&self) -> Vec<RepoSlug> {
+        let mut repos: Vec<RepoSlug> = Vec::new();
+        let push_unique = |slug: &RepoSlug, repos: &mut Vec<RepoSlug>| {
+            if !repos.iter().any(|r| r == slug) {
+                repos.push(slug.clone());
             }
         };
         // Slug-less repos are local-only: no Repo Tab, no PR machinery.
         for repo in &self.config.repos {
-            if let Some(info) = repo
-                .slug
-                .as_ref()
-                .and_then(|slug| RepoInfo::from_slug(slug.as_str()))
-            {
-                push_unique(info, &mut repos);
+            if let Some(slug) = &repo.slug {
+                push_unique(slug, &mut repos);
             }
         }
-        if let Some(repo) = self.repo.repo() {
-            push_unique(repo.clone(), &mut repos);
+        if let Some(slug) = self.repo.repo() {
+            push_unique(slug, &mut repos);
         }
         repos
     }
 
-    /// The `RepoInfo` for a Tracked Repo slug, or `None` when no tracked repo
-    /// matches (e.g. a PR whose `repo_slug` is no longer configured). The single
-    /// place enrichment/check fan-out resolves a slug back to a `RepoInfo`, so
-    /// the validated-at-load invariant is leaned on only in `tracked_repos`.
-    pub fn tracked_repo(&self, slug: &RepoSlug) -> Option<RepoInfo> {
-        self.tracked_repos()
-            .into_iter()
-            .find(|repo| repo.slug() == *slug)
+    /// The Tracked Repo matching `slug`, in its tracked (config/tab) casing —
+    /// or `None` when no tracked repo matches (e.g. a PR whose `repo_slug` is
+    /// no longer configured). The enrichment/check fan-out gate: an untracked
+    /// slug yields no requests.
+    pub fn tracked_repo(&self, slug: &RepoSlug) -> Option<RepoSlug> {
+        self.tracked_repos().into_iter().find(|repo| repo == slug)
     }
 
     /// The PR the user is focused on for fetch prioritisation: the open detail
@@ -493,7 +479,7 @@ impl Model {
     pub fn worktree_for_pr(&self, pr: &PR) -> Option<&WorktreeEntry> {
         let repo = self.tracked_repo(&pr.repo_slug)?;
         let entries = self.worktrees_by_repo.get(&pr.repo_slug)?;
-        let expected_branch = worktree::expected_branch_for_pr(pr, &repo.owner);
+        let expected_branch = worktree::expected_branch_for_pr(pr, repo.owner());
         let expected_path =
             worktree::resolve_worktree_path(&self.config, &pr.repo_slug, pr.number, &pr.head_ref)
                 .ok()?;
@@ -532,10 +518,7 @@ impl Model {
         if self.active_tab == 0 {
             return None;
         }
-        self.tracked_repos()
-            .into_iter()
-            .nth(self.active_tab - 1)
-            .map(|repo| repo.slug())
+        self.tracked_repos().into_iter().nth(self.active_tab - 1)
     }
 
     /// Number of non-list "chrome" rows around the list: the always-present tab

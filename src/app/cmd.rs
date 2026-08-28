@@ -6,7 +6,6 @@ use tokio::sync::mpsc;
 use crate::{
     app::{browser, msg::Msg},
     auth, clipboard, config, git_remote,
-    git_remote::RepoInfo,
     github::graphql::GraphQlClient,
     github::limiter::NetworkLimiter,
     github::rest::OctocrabRest,
@@ -21,10 +20,10 @@ use crate::{
 /// token, and the configured bot logins (used for comment/thread bot
 /// detection). Built once per list-load in `update::enrichment_cmds` and shared
 /// by `Arc` so the per-PR fan-out clones one pointer per command instead of the
-/// owner/repo/token/bot-login strings each time.
+/// repo/token/bot-login strings each time.
 #[derive(Debug, PartialEq, Eq)]
 pub struct RequestContext {
-    pub repo: RepoInfo,
+    pub repo: RepoSlug,
     pub token: Secret<String>,
     pub bot_logins: Vec<String>,
     /// Memo of the repo's Actions `workflow_id → name` map, shared across the
@@ -42,7 +41,7 @@ pub enum Cmd {
     /// enrichment fan-out, so it carries only repo + token rather than the
     /// shared `RequestContext` (it has no use for `bot_logins`).
     FetchOpenPRs {
-        repo: RepoInfo,
+        repo: RepoSlug,
         token: Secret<String>,
     },
     FetchReviewStatus {
@@ -186,7 +185,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             .await;
             match result {
                 Ok(repo) => {
-                    tracing::info!(owner = %repo.owner, repo = %repo.repo, "repo detected");
+                    tracing::info!(%repo, "repo detected");
                     let _ = tx.send(Msg::RepoDetected(Some(repo)));
                 }
                 Err(error) => {
@@ -202,7 +201,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             run_fetch_open_prs(repo, token, tx, limiter).await;
         }
         Cmd::FetchReviewStatus { ctx, pr_numbers } => {
-            let repo_slug = ctx.repo.slug();
+            let repo_slug = ctx.repo.clone();
             request(
                 &tx,
                 &limiter,
@@ -210,7 +209,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                 "fetch review status",
                 async move {
                     GraphQlClient::new(&ctx.token)?
-                        .fetch_review_status(&ctx.repo.owner, &ctx.repo.repo, &pr_numbers)
+                        .fetch_review_status(&ctx.repo, &pr_numbers)
                         .await
                 },
                 move |results| review_status_msgs(repo_slug, results),
@@ -219,21 +218,21 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
         }
         Cmd::FetchThreads { ctx, number } => {
             let key = PrKey {
-                repo_slug: ctx.repo.slug(),
+                repo_slug: ctx.repo.clone(),
                 number,
             };
             fetch_threads(&ctx, &key, &tx, &limiter).await;
         }
         Cmd::FetchReviews { ctx, number } => {
             let key = PrKey {
-                repo_slug: ctx.repo.slug(),
+                repo_slug: ctx.repo.clone(),
                 number,
             };
             fetch_reviews(&ctx, &key, &tx, &limiter).await;
         }
         Cmd::FetchIssueComments { ctx, number } => {
             let pr = PrKey {
-                repo_slug: ctx.repo.slug(),
+                repo_slug: ctx.repo.clone(),
                 number,
             };
             request(
@@ -243,12 +242,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                 "fetch issue comments",
                 async move {
                     OctocrabRest::new(&ctx.token)?
-                        .list_issue_comments(
-                            &ctx.repo.owner,
-                            &ctx.repo.repo,
-                            number,
-                            &ctx.bot_logins,
-                        )
+                        .list_issue_comments(&ctx.repo, number, &ctx.bot_logins)
                         .await
                 },
                 move |comments| vec![Msg::IssueCommentsArrived { pr, comments }],
@@ -256,7 +250,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             .await;
         }
         Cmd::FetchChecks { ctx, pr, head_sha } => {
-            let repo_slug = ctx.repo.slug();
+            let repo_slug = ctx.repo.clone();
             request(
                 &tx,
                 &limiter,
@@ -264,12 +258,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                 "fetch check runs",
                 async move {
                     let checks = OctocrabRest::new(&ctx.token)?
-                        .list_check_runs(
-                            &ctx.repo.owner,
-                            &ctx.repo.repo,
-                            &head_sha,
-                            &ctx.workflow_cache,
-                        )
+                        .list_check_runs(&ctx.repo, &head_sha, &ctx.workflow_cache)
                         .await?;
                     Ok((head_sha, checks))
                 },
@@ -285,7 +274,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
         }
         Cmd::FetchFiles { ctx, number } => {
             let key = PrKey {
-                repo_slug: ctx.repo.slug(),
+                repo_slug: ctx.repo.clone(),
                 number,
             };
             // Dispatching this command set the PR's `Enrichment::files` entry to
@@ -319,7 +308,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
                 "fetch PR detail",
                 async move {
                     OctocrabRest::new(&ctx.token)?
-                        .fetch_pr_detail(&ctx.repo.owner, &ctx.repo.repo, number)
+                        .fetch_pr_detail(&ctx.repo, number)
                         .await
                 },
                 move |body| vec![Msg::PRDetailArrived { pr: key, body }],
@@ -416,7 +405,7 @@ async fn fetch_review_status(
     limiter: &Arc<NetworkLimiter>,
 ) -> bool {
     let number = key.number;
-    let repo_slug = ctx.repo.slug();
+    let repo_slug = ctx.repo.clone();
     request(
         tx,
         limiter,
@@ -426,7 +415,7 @@ async fn fetch_review_status(
             let ctx = Arc::clone(ctx);
             async move {
                 GraphQlClient::new(&ctx.token)?
-                    .fetch_review_status(&ctx.repo.owner, &ctx.repo.repo, &[number])
+                    .fetch_review_status(&ctx.repo, &[number])
                     .await
             }
         },
@@ -471,7 +460,7 @@ async fn fetch_threads(
             let ctx = Arc::clone(ctx);
             async move {
                 GraphQlClient::new(&ctx.token)?
-                    .fetch_review_threads(&ctx.repo.owner, &ctx.repo.repo, number, &ctx.bot_logins)
+                    .fetch_review_threads(&ctx.repo, number, &ctx.bot_logins)
                     .await
             }
         },
@@ -499,7 +488,7 @@ async fn fetch_reviews(
             let ctx = Arc::clone(ctx);
             async move {
                 OctocrabRest::new(&ctx.token)?
-                    .list_reviews(&ctx.repo.owner, &ctx.repo.repo, number)
+                    .list_reviews(&ctx.repo, number)
                     .await
             }
         },
@@ -528,7 +517,7 @@ async fn fetch_files(
             let ctx = Arc::clone(ctx);
             async move {
                 OctocrabRest::new(&ctx.token)?
-                    .list_files(&ctx.repo.owner, &ctx.repo.repo, number)
+                    .list_files(&ctx.repo, number)
                     .await
             }
         },
@@ -538,16 +527,15 @@ async fn fetch_files(
 }
 
 async fn run_fetch_open_prs(
-    repo: RepoInfo,
+    repo: RepoSlug,
     token: Secret<String>,
     tx: mpsc::UnboundedSender<Msg>,
     limiter: Arc<NetworkLimiter>,
 ) {
-    let repo_slug = repo.slug();
     let client = match OctocrabRest::new(&token) {
         Ok(client) => client,
         Err(error) => {
-            let _ = tx.send(pr_list_failed(repo_slug, "build github client", error));
+            let _ = tx.send(pr_list_failed(repo, "build github client", error));
             return;
         }
     };
@@ -567,16 +555,16 @@ async fn run_fetch_open_prs(
     // background sub-cap (leaving headroom for the focused PR's fetches).
     // Repo-wide work, so it carries no PR affinity and is never focus-promoted.
     let _permit = limiter.acquire(None).await;
-    let result = client.list_open_prs(&repo.owner, &repo.repo, pr_tx).await;
+    let result = client.list_open_prs(&repo, pr_tx).await;
     let _ = forwarder.await;
 
     match result {
         Ok(()) => {
-            tracing::info!(owner = %repo.owner, repo = %repo.repo, "open PR listing finished");
-            let _ = tx.send(Msg::PrListLoaded { repo_slug });
+            tracing::info!(%repo, "open PR listing finished");
+            let _ = tx.send(Msg::PrListLoaded { repo_slug: repo });
         }
         Err(error) => {
-            let _ = tx.send(pr_list_failed(repo_slug, "list open PRs", error));
+            let _ = tx.send(pr_list_failed(repo, "list open PRs", error));
         }
     }
 }

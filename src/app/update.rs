@@ -8,7 +8,6 @@ use ratatui::crossterm::event::{
 
 use crate::{
     format::abbreviate_home,
-    git_remote::RepoInfo,
     github::rest::{PrKey, WorkflowNameCache},
     secret::Secret,
     worktree,
@@ -70,19 +69,18 @@ fn maybe_fetch_open_prs(model: &mut Model) -> Vec<Cmd> {
     let token = token.clone();
     let mut cmds = Vec::new();
     for repo in model.tracked_repos() {
-        let slug = repo.slug();
         // (Re)fetch only repos that have never been listed or whose last
         // listing failed; skip ones in flight or already loaded so a `R`-driven
         // config reload doesn't re-stream — and duplicate — PRs already pooled.
         // On first run none have a phase, so every repo fetches.
-        if !model.list.needs_listing(&slug) {
+        if !model.list.needs_listing(&repo) {
             continue;
         }
         // A failed listing may have streamed some PRs before erroring, but the
         // retry needs no up-front clear: `merge_listed` dedupes the re-stream
         // (keeping each survivor) and `finish_listing` prunes any now-closed
         // ones once `PrListLoaded` settles.
-        model.list.begin_fetch(&slug);
+        model.list.begin_fetch(&repo);
         cmds.push(Cmd::FetchOpenPRs {
             repo,
             token: token.clone(),
@@ -114,7 +112,7 @@ fn list_worktree_cmds(model: &Model) -> Vec<Cmd> {
     model
         .tracked_repos()
         .into_iter()
-        .filter_map(|repo| list_worktree_cmd(model, repo.slug()))
+        .filter_map(|repo| list_worktree_cmd(model, repo))
         .collect()
 }
 
@@ -176,7 +174,7 @@ fn pr_enrichment_cmds(ctx: &Arc<RequestContext>, number: u64) -> [Cmd; 3] {
 /// Build the `Arc<RequestContext>` shared by a fan-out of enrichment commands:
 /// the tracked repo, auth token, and configured bot logins.
 fn request_context(
-    repo: &RepoInfo,
+    repo: &RepoSlug,
     token: &Secret<String>,
     bot_logins: &[String],
 ) -> Arc<RequestContext> {

@@ -15,10 +15,7 @@ fn files_state(model: &Model, number: u64) -> Option<&FilesState> {
 fn model_with_prs(numbers: &[u64]) -> Model {
     let (mut model, _) = Model::new();
     model.auth_token = Some(Secret::new("ghp_test".to_owned()));
-    model.repo = RepoDetection::Detected(RepoInfo {
-        owner: "mayfieldiv".to_owned(),
-        repo: "legit".to_owned(),
-    });
+    model.repo = RepoDetection::Detected(RepoSlug::new("mayfieldiv/legit"));
     model.list.begin_fetch(&RepoSlug::new("mayfieldiv/legit"));
     for n in numbers {
         update(&mut model, Msg::PrArrived(sample_pr(*n, "p")));
@@ -42,10 +39,7 @@ fn first_pr_arriving_requests_its_files() {
     // should be fetched without any keypress.
     let (mut model, _) = Model::new();
     model.auth_token = Some(Secret::new("ghp_test".to_owned()));
-    model.repo = RepoDetection::Detected(RepoInfo {
-        owner: "mayfieldiv".to_owned(),
-        repo: "legit".to_owned(),
-    });
+    model.repo = RepoDetection::Detected(RepoSlug::new("mayfieldiv/legit"));
     model.list.begin_fetch(&RepoSlug::new("mayfieldiv/legit"));
 
     let cmds = update(&mut model, Msg::PrArrived(sample_pr(1, "first")));
@@ -169,10 +163,7 @@ fn files_arrived_categorises_and_stores_for_the_pr() {
 fn files_fetch_waits_for_auth() {
     // No auth token: selecting a PR must not dispatch a files fetch.
     let (mut model, _) = Model::new();
-    model.repo = RepoDetection::Detected(RepoInfo {
-        owner: "mayfieldiv".to_owned(),
-        repo: "legit".to_owned(),
-    });
+    model.repo = RepoDetection::Detected(RepoSlug::new("mayfieldiv/legit"));
     model.list.begin_fetch(&RepoSlug::new("mayfieldiv/legit"));
 
     let cmds = update(&mut model, Msg::PrArrived(sample_pr(1, "p")));

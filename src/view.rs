@@ -159,8 +159,7 @@ fn render_tabs(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Palet
     } else {
         0
     };
-    let labels =
-        std::iter::once("All".to_owned()).chain(repos.iter().map(|repo| repo.slug().to_string()));
+    let labels = std::iter::once("All".to_owned()).chain(repos.iter().map(RepoSlug::to_string));
     let mut spans = Vec::new();
     for (i, label) in labels.enumerate() {
         // The All tab (index 0) stays on the accent role; each per-repo tab

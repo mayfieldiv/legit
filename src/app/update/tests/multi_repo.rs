@@ -7,10 +7,7 @@ use crate::repo_slug::RepoSlug;
 fn fetch_fans_out_to_every_tracked_repo() {
     let (mut model, _) = Model::new();
     model.auth_token = Some(Secret::new("ghp_test".to_owned()));
-    model.repo = RepoDetection::Detected(RepoInfo {
-        owner: "mayfieldiv".to_owned(),
-        repo: "legit".to_owned(),
-    });
+    model.repo = RepoDetection::Detected(RepoSlug::new("mayfieldiv/legit"));
 
     let cmds = update(
         &mut model,
@@ -35,10 +32,7 @@ fn fetch_fans_out_to_every_tracked_repo() {
 fn detected_repo_already_in_config_is_fetched_once_with_config_casing() {
     let (mut model, _) = Model::new();
     model.auth_token = Some(Secret::new("ghp_test".to_owned()));
-    model.repo = RepoDetection::Detected(RepoInfo {
-        owner: "mayfieldiv".to_owned(),
-        repo: "legit".to_owned(),
-    });
+    model.repo = RepoDetection::Detected(RepoSlug::new("mayfieldiv/legit"));
 
     // GitHub slugs are case-insensitive; the configured casing wins.
     let cmds = update(
@@ -53,13 +47,10 @@ fn detected_repo_already_in_config_is_fetched_once_with_config_casing() {
 fn pr_list_loaded_fans_out_enrichment_only_for_that_repo() {
     let (mut model, _) = Model::new();
     model.auth_token = Some(Secret::new("ghp_test".to_owned()));
-    // `acme/web` is a tracked repo so its slug resolves back to a `RepoInfo`;
-    // `mayfieldiv/legit` is the CWD-detected repo.
+    // `acme/web` is a tracked (configured) repo; `mayfieldiv/legit` is the
+    // CWD-detected repo.
     model.config = config_with_repos(&["acme/web"]);
-    model.repo = RepoDetection::Detected(RepoInfo {
-        owner: "mayfieldiv".to_owned(),
-        repo: "legit".to_owned(),
-    });
+    model.repo = RepoDetection::Detected(RepoSlug::new("mayfieldiv/legit"));
     model.list.begin_fetch(&RepoSlug::new("acme/web"));
     model.list.begin_fetch(&RepoSlug::new("mayfieldiv/legit"));
     // Stream through the merge path so the PRs are recorded as seen this fetch
@@ -81,7 +72,7 @@ fn pr_list_loaded_fans_out_enrichment_only_for_that_repo() {
     assert_eq!(cmds.len(), 1 + 3);
     match &cmds[0] {
         Cmd::FetchReviewStatus { ctx, pr_numbers } => {
-            assert_eq!(ctx.repo.slug(), "acme/web");
+            assert_eq!(ctx.repo, "acme/web");
             assert_eq!(pr_numbers, &[7]);
         }
         other => panic!("first cmd should batch review status, got {other:?}"),

@@ -86,11 +86,7 @@ fn slug_less_repo_gets_no_repo_tab_and_no_worktree_listing() {
 
     let cmds = update(&mut model, Msg::ConfigLoaded(config));
 
-    let tabs: Vec<RepoSlug> = model
-        .tracked_repos()
-        .iter()
-        .map(|repo| repo.slug())
-        .collect();
+    let tabs = model.tracked_repos();
     assert_eq!(tabs, vec!["mayfieldiv/legit"]);
     let listed: Vec<&PathBuf> = cmds
         .iter()

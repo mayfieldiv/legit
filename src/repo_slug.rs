@@ -46,10 +46,12 @@ impl RepoSlug {
         Ok(Self(slug))
     }
 
-    /// Unvalidated construction — every remaining caller is being migrated to
-    /// [`RepoSlug::parse`]; deleted once `RepoInfo` is gone.
+    /// Test-fixture construction: [`RepoSlug::parse`] + unwrap, so fixtures
+    /// stay terse while every slug still enters through the one validating
+    /// parser.
+    #[cfg(test)]
     pub fn new(slug: impl Into<String>) -> Self {
-        Self(slug.into())
+        Self::parse(slug).expect("test slug must be valid")
     }
 
     /// The slug as entered — display casing, not the identity.

@@ -4,7 +4,6 @@ use ratatui::crossterm::event::KeyCode;
 use super::update;
 use crate::{
     app::{cmd::Cmd, model::ViewMode, msg::Msg},
-    git_remote::RepoInfo,
     github::rest::PrKey,
     github::types::{IssueComment, PRState, ReviewComment, ReviewStatus},
     secret::Secret,
@@ -91,10 +90,7 @@ fn model_with_one_pr() -> crate::app::model::Model {
     let mut model = enriched_model(&[42]);
     model.config_loaded = true;
     model.auth_token = Some(Secret::new("ghp_test".to_owned()));
-    model.repo = crate::app::model::RepoDetection::Detected(RepoInfo {
-        owner: "mayfieldiv".to_owned(),
-        repo: "legit".to_owned(),
-    });
+    model.repo = crate::app::model::RepoDetection::Detected(RepoSlug::new("mayfieldiv/legit"));
     model
         .list
         .complete_fetch(&RepoSlug::new("mayfieldiv/legit"));

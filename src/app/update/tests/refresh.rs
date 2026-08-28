@@ -163,10 +163,7 @@ fn two_repo_model() -> Model {
     let (mut model, _) = Model::new();
     model.auth_token = Some(Secret::new("ghp_test".to_owned()));
     model.config = config_with_repos(&["acme/web"]);
-    model.repo = RepoDetection::Detected(RepoInfo {
-        owner: "mayfieldiv".to_owned(),
-        repo: "legit".to_owned(),
-    });
+    model.repo = RepoDetection::Detected(RepoSlug::new("mayfieldiv/legit"));
     for (slug, number) in [("acme/web", 10u64), ("mayfieldiv/legit", 1)] {
         let key = RepoSlug::new(slug);
         model.list.begin_fetch(&key);
@@ -181,7 +178,7 @@ fn two_repo_model() -> Model {
 fn fetched_open_pr_slugs(cmds: &[Cmd]) -> Vec<RepoSlug> {
     cmds.iter()
         .filter_map(|c| match c {
-            Cmd::FetchOpenPRs { repo, .. } => Some(repo.slug()),
+            Cmd::FetchOpenPRs { repo, .. } => Some(repo.clone()),
             _ => None,
         })
         .collect()
@@ -394,9 +391,8 @@ fn shift_r_on_the_all_tab_relists_repos_to_discover_new_prs() {
     let cmds = update(&mut model, key_event(KeyCode::Char('R')));
 
     assert!(
-        cmds.iter().any(
-            |c| matches!(c, Cmd::FetchOpenPRs { repo, .. } if repo.slug() == "mayfieldiv/legit")
-        ),
+        cmds.iter()
+            .any(|c| matches!(c, Cmd::FetchOpenPRs { repo, .. } if *repo == "mayfieldiv/legit")),
         "R re-lists the repo to discover new PRs: {cmds:?}",
     );
 }
@@ -474,9 +470,8 @@ fn shift_r_on_an_empty_repo_tab_relists_that_repo() {
         "R still reloads config: {cmds:?}",
     );
     assert!(
-        cmds.iter().any(
-            |c| matches!(c, Cmd::FetchOpenPRs { repo, .. } if repo.slug() == "mayfieldiv/legit")
-        ),
+        cmds.iter()
+            .any(|c| matches!(c, Cmd::FetchOpenPRs { repo, .. } if *repo == "mayfieldiv/legit")),
         "R on an empty repo tab also re-fetches its listing: {cmds:?}",
     );
     assert!(

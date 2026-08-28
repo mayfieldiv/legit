@@ -141,7 +141,7 @@ fn smart_status_omits_empty_tiers() {
         &[0, 1],
         Grouping::SmartStatus,
         |_| Some(Tier::NeedsReview),
-        |_| RepoSlug::new("r"),
+        |_| RepoSlug::new("acme/web"),
     );
     assert_eq!(headers(&rows), vec!["Needs review"]);
 }
@@ -152,7 +152,7 @@ fn smart_status_single_tier_list() {
         &[0, 1, 2],
         Grouping::SmartStatus,
         |_| Some(Tier::MeBlocking),
-        |_| RepoSlug::new("r"),
+        |_| RepoSlug::new("acme/web"),
     );
     assert_eq!(headers(&rows), vec!["Me blocking"]);
     assert_eq!(pr_indices(&rows), vec![0, 1, 2]);
@@ -171,7 +171,7 @@ fn smart_status_undelivered_tiers_collect_under_loading() {
                 None
             }
         },
-        |_| RepoSlug::new("r"),
+        |_| RepoSlug::new("acme/web"),
     );
     assert_eq!(headers(&rows), vec!["Needs review", "Loading details…"]);
     assert_eq!(pr_indices(&rows), vec![0, 1, 2]);
@@ -179,7 +179,12 @@ fn smart_status_undelivered_tiers_collect_under_loading() {
 
 #[test]
 fn smart_status_empty_list_is_empty() {
-    let rows = display_rows(&[], Grouping::SmartStatus, |_| None, |_| RepoSlug::new("r"));
+    let rows = display_rows(
+        &[],
+        Grouping::SmartStatus,
+        |_| None,
+        |_| RepoSlug::new("acme/web"),
+    );
     assert!(rows.is_empty());
 }
 
@@ -190,7 +195,7 @@ fn smart_status_preserves_input_order_within_tier() {
         &[0, 1, 2],
         Grouping::SmartStatus,
         |_| Some(Tier::NeedsReview),
-        |_| RepoSlug::new("r"),
+        |_| RepoSlug::new("acme/web"),
     );
     assert_eq!(pr_indices(&rows), vec![0, 1, 2]);
 }
