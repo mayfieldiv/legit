@@ -323,7 +323,8 @@ fn read_map_node(node: RawMapNode, slug: &RepoSlug) -> EffortRead {
         map_number: node.number,
     };
     let title = node.title;
-    let destination = destination_from_map_body(&node.body);
+    let body_facts = scan_map_body(&node.body);
+    let destination = body_facts.destination;
     // Absent ≠ present-empty: the query always selects these connections, so
     // a payload without one is malformed, and treating it as empty would
     // manufacture facts (an empty Effort here; unclaimed / unblocked tickets
@@ -365,7 +366,7 @@ fn read_map_node(node: RawMapNode, slug: &RepoSlug) -> EffortRead {
     // Zero native sub-issues + a task-list body = the fallback dialect,
     // which v1 detects but never parses (§4.4) — degraded, not an
     // innocently empty Effort.
-    if tickets.is_empty() && body_has_task_list(&node.body) {
+    if tickets.is_empty() && body_facts.has_task_list {
         return EffortRead::Degraded {
             key,
             title,
@@ -476,66 +477,134 @@ fn parse_blocker(node: RawBlockerNode, slug: &RepoSlug, members: &HashSet<u64>) 
 
 // ── map-body dialect rules ───────────────────────────────────────────────────
 
-/// The first paragraph under the map body's `Destination` heading (any
-/// heading level — the wayfinder template says `##`, real maps drift) — the
-/// one-liner the effort card and ticket detail header show. Wrapped lines are
-/// joined; `None` when the body has no such heading or the section is empty.
-fn destination_from_map_body(body: &str) -> Option<String> {
-    let mut lines = body.lines();
-    lines.by_ref().find(|line| {
-        let trimmed = line.trim();
-        let level = trimmed.bytes().take_while(|&b| b == b'#').count();
-        (1..=6).contains(&level) && trimmed[level..].trim().eq_ignore_ascii_case("destination")
-    })?;
-    let mut paragraph: Vec<&str> = Vec::new();
-    for line in lines {
-        let trimmed = line.trim();
-        if trimmed.starts_with('#') {
-            break;
-        }
-        if trimmed.is_empty() {
-            if paragraph.is_empty() {
-                continue;
-            }
-            break;
-        }
-        paragraph.push(trimmed);
-    }
-    (!paragraph.is_empty()).then(|| paragraph.join(" "))
+/// What one Markdown parse of a map body yields: the Destination one-liner
+/// and the task-list half of the §4.4 fallback signal.
+struct MapBodyFacts {
+    /// The first paragraph under a `Destination` heading (any heading level,
+    /// ATX or setext — the wayfinder template says `##`, real maps drift),
+    /// wrapped lines joined. `None` when the body has no such heading or the
+    /// section is empty.
+    destination: Option<String>,
+    /// The body carries a GitHub task list (a real one — a `- [ ]` line
+    /// inside a code fence is not a task list).
+    has_task_list: bool,
 }
 
-/// Whether a map body carries a GitHub task list — half of the §4.4 fallback
-/// signal (with zero native sub-issues).
-fn body_has_task_list(body: &str) -> bool {
-    body.lines().any(|line| {
-        let Some(rest) = line.trim_start().strip_prefix(['-', '*', '+']) else {
-            return false;
+/// Scan a map body once with `pulldown-cmark` — the renderer's own parser,
+/// so heading and fence recognition can't drift from what the user sees.
+fn scan_map_body(body: &str) -> MapBodyFacts {
+    use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+
+    /// Progress of the Destination capture.
+    enum Dest {
+        /// Looking for a heading whose text is "destination".
+        Searching,
+        /// Inside a candidate heading, accumulating its text.
+        InHeading(String),
+        /// Heading matched; the next paragraph is the Destination — another
+        /// heading first means the section is empty.
+        AwaitingParagraph,
+        /// Capturing the Destination paragraph's text.
+        InParagraph(String),
+        Done(Option<String>),
+    }
+
+    let mut dest = Dest::Searching;
+    let mut has_task_list = false;
+    for event in Parser::new_ext(body, Options::ENABLE_TASKLISTS) {
+        if matches!(event, Event::TaskListMarker(_)) {
+            has_task_list = true;
+        }
+        dest = match (dest, &event) {
+            (Dest::Searching, Event::Start(Tag::Heading { .. })) => Dest::InHeading(String::new()),
+            (Dest::InHeading(mut text), Event::Text(t) | Event::Code(t)) => {
+                text.push_str(t);
+                Dest::InHeading(text)
+            }
+            (Dest::InHeading(text), Event::End(TagEnd::Heading(_))) => {
+                if text.trim().eq_ignore_ascii_case("destination") {
+                    Dest::AwaitingParagraph
+                } else {
+                    Dest::Searching
+                }
+            }
+            (Dest::AwaitingParagraph, Event::Start(Tag::Heading { .. })) => Dest::Done(None),
+            (Dest::AwaitingParagraph, Event::Start(Tag::Paragraph)) => {
+                Dest::InParagraph(String::new())
+            }
+            (Dest::InParagraph(mut text), Event::Text(t) | Event::Code(t)) => {
+                text.push_str(t);
+                Dest::InParagraph(text)
+            }
+            (Dest::InParagraph(mut text), Event::SoftBreak | Event::HardBreak) => {
+                text.push(' ');
+                Dest::InParagraph(text)
+            }
+            (Dest::InParagraph(text), Event::End(TagEnd::Paragraph)) => {
+                let trimmed = text.trim();
+                Dest::Done((!trimmed.is_empty()).then(|| trimmed.to_owned()))
+            }
+            (state, _) => state,
         };
-        let rest = rest.trim_start();
-        rest.starts_with("[ ]") || rest.starts_with("[x]") || rest.starts_with("[X]")
-    })
+    }
+    MapBodyFacts {
+        destination: match dest {
+            Dest::Done(destination) => destination,
+            _ => None,
+        },
+        has_task_list,
+    }
 }
 
 /// Whether a ticket body opens with the fallback dialect's dependency lines
 /// (`Part of #n` / `Blocked by: #n`) — the other half of the §4.4 signal,
 /// checked when a ticket body arrives (drill-in / single-ticket refresh).
-/// Only leading lines count, stopping at the first `##` heading, so refs in
-/// prose or code fences don't match; a bare "blocked by" with no issue ref
-/// doesn't either. Detection only — the lines are never parsed into the
+/// Parsed as Markdown: only text before the first `##`-or-deeper heading
+/// counts, and code blocks never match, so a ref in a fenced example or
+/// under a heading doesn't false-trigger. A bare "blocked by" with no issue
+/// ref doesn't either. Detection only — the lines are never parsed into the
 /// model, and where native data exists a stale `Part of` line is advisory.
 pub fn has_fallback_dependency_lines(body: &str) -> bool {
-    for line in body.lines() {
+    use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+
+    fn is_dependency_line(line: &str) -> bool {
         let trimmed = line.trim();
-        if trimmed.starts_with("##") {
-            break;
-        }
         let lower = trimmed.to_ascii_lowercase();
-        let is_dependency_line = lower.starts_with("part of ") || lower.starts_with("blocked by:");
-        if is_dependency_line && line_has_issue_ref(trimmed) {
-            return true;
+        (lower.starts_with("part of ") || lower.starts_with("blocked by:"))
+            && line_has_issue_ref(trimmed)
+    }
+
+    // Accumulate one rendered line at a time (soft/hard breaks and block
+    // ends both end a line), skipping code blocks and heading text.
+    let mut line = String::new();
+    let mut skipping = 0u32;
+    for event in Parser::new_ext(body, Options::empty()) {
+        match event {
+            Event::Start(Tag::Heading { level, .. }) if level > HeadingLevel::H1 => {
+                return false;
+            }
+            Event::Start(Tag::Heading { .. }) | Event::Start(Tag::CodeBlock(_)) => {
+                skipping += 1;
+            }
+            Event::End(TagEnd::Heading(_)) | Event::End(TagEnd::CodeBlock) => {
+                skipping -= 1;
+            }
+            Event::Text(text) | Event::Code(text) if skipping == 0 => {
+                line.push_str(&text);
+            }
+            Event::SoftBreak
+            | Event::HardBreak
+            | Event::End(TagEnd::Paragraph)
+            | Event::End(TagEnd::Item) => {
+                if is_dependency_line(&line) {
+                    return true;
+                }
+                line.clear();
+            }
+            _ => {}
         }
     }
-    false
+    is_dependency_line(&line)
 }
 
 /// An issue ref in any of the fallback dialect's accepted forms: `#123`,
