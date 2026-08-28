@@ -657,7 +657,7 @@ fn all_tab_shows_repo_column_whenever_multiple_repos_are_tracked() {
         Some(Tier::NeedsReview)
     });
     model.config.repos.push(crate::config::RepoConfig {
-        slug: Some("zeta/api".to_owned()),
+        slug: Some(RepoSlug::parse("zeta/api").unwrap()),
         ..Default::default()
     });
     model.relayout();
@@ -690,7 +690,7 @@ fn all_tab_multi_repo_rows_show_the_repo_column() {
         |_| Some(Tier::NeedsReview),
     );
     model.config.repos.push(crate::config::RepoConfig {
-        slug: Some("zeta/api".to_owned()),
+        slug: Some(RepoSlug::parse("zeta/api").unwrap()),
         ..Default::default()
     });
     model.relayout();
@@ -878,7 +878,7 @@ fn two_repo_model() -> Model {
         Some(Tier::NeedsReview)
     });
     model.config.repos = vec![crate::config::RepoConfig {
-        slug: Some("acme/api".to_owned()),
+        slug: Some(RepoSlug::parse("acme/api").unwrap()),
         ..Default::default()
     }];
     model

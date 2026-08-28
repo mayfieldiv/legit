@@ -213,7 +213,7 @@ fn config_with_main_worktree_paths(slugs: &[&str]) -> LegitConfig {
         repos: slugs
             .iter()
             .map(|slug| RepoConfig {
-                slug: Some((*slug).to_owned()),
+                slug: Some(RepoSlug::parse(*slug).unwrap()),
                 main_worktree_path: Some(format!("/src/{slug}")),
                 ..Default::default()
             })

@@ -13,7 +13,7 @@ use crate::{
 fn config_with_main_worktree_path() -> LegitConfig {
     LegitConfig {
         repos: vec![RepoConfig {
-            slug: Some("mayfieldiv/legit".to_owned()),
+            slug: Some(RepoSlug::parse("mayfieldiv/legit").unwrap()),
             main_worktree_path: Some("/src/legit".to_owned()),
             ..Default::default()
         }],
@@ -72,7 +72,7 @@ fn slug_less_repo_gets_no_repo_tab_and_no_worktree_listing() {
     let config = LegitConfig {
         repos: vec![
             RepoConfig {
-                slug: Some("mayfieldiv/legit".to_owned()),
+                slug: Some(RepoSlug::parse("mayfieldiv/legit").unwrap()),
                 main_worktree_path: Some("/src/legit".to_owned()),
                 ..Default::default()
             },

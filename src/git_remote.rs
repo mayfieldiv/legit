@@ -12,12 +12,10 @@ pub struct RepoInfo {
 }
 
 impl RepoInfo {
-    /// Parse an `owner/repo` slug (the config `repos` format) back into parts.
-    /// `None` for malformed slugs. The owner/repo split agrees with
-    /// `config::validate_repo_slug`: a `/` inside the repo part (a three-or-more
-    /// segment slug like `a/b/c`) is rejected, so the two parsers can't disagree
-    /// at the edges. Only `Model::tracked_repos` calls this, on slugs that have
-    /// already passed config validation, so `None` is an unreachable guard
+    /// Parse an `owner/repo` slug back into parts. `None` for malformed slugs.
+    /// The split rule is a structural subset of `RepoSlug::parse`, so a slug
+    /// that survived config load always parses. Only `Model::tracked_repos`
+    /// calls this, on such validated slugs, so `None` is an unreachable guard
     /// there rather than an error path.
     pub fn from_slug(slug: &str) -> Option<Self> {
         let (owner, repo) = slug.split_once('/')?;

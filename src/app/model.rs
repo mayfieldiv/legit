@@ -439,12 +439,10 @@ impl Model {
     /// occurrence's casing wins for tab labels; identity is `RepoSlug`, so
     /// casing can never split a repo in two.
     ///
-    /// This is the ONE site that turns config `repos` slugs into `RepoInfo`, so
-    /// it is where the validated-at-load invariant is leaned on: a config slug
-    /// that `RepoInfo::from_slug` can't parse is silently dropped, which only
-    /// happens if a malformed slug slipped past `config::validate_repo_slug` —
-    /// `ConfigLoadFailed` records a `fatal` error and blocks the fetch before
-    /// that, so it is unreachable.
+    /// This is the ONE site that turns config `repos` slugs into `RepoInfo`.
+    /// Config slugs are validated by `RepoSlug::parse` at load, and
+    /// `RepoInfo::from_slug` accepts a structural subset of the same rule, so
+    /// the `and_then` can't drop anything here.
     pub fn tracked_repos(&self) -> Vec<RepoInfo> {
         let mut repos: Vec<RepoInfo> = Vec::new();
         let push_unique = |repo: RepoInfo, repos: &mut Vec<RepoInfo>| {
@@ -455,7 +453,11 @@ impl Model {
         };
         // Slug-less repos are local-only: no Repo Tab, no PR machinery.
         for repo in &self.config.repos {
-            if let Some(info) = repo.slug.as_deref().and_then(RepoInfo::from_slug) {
+            if let Some(info) = repo
+                .slug
+                .as_ref()
+                .and_then(|slug| RepoInfo::from_slug(slug.as_str()))
+            {
                 push_unique(info, &mut repos);
             }
         }

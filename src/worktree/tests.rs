@@ -222,7 +222,7 @@ fn matches_by_branch_before_path() {
 fn resolves_worktree_paths_from_config() {
     let config = LegitConfig {
         repos: vec![RepoConfig {
-            slug: Some("acme/widgets".to_owned()),
+            slug: Some(RepoSlug::parse("acme/widgets").unwrap()),
             ..Default::default()
         }],
         ..Default::default()
@@ -238,7 +238,7 @@ fn resolves_worktree_paths_from_config() {
 
     let config = LegitConfig {
         repos: vec![RepoConfig {
-            slug: Some("acme/widgets".to_owned()),
+            slug: Some(RepoSlug::parse("acme/widgets").unwrap()),
             worktree_root: Some("/wts/widgets".to_owned()),
             ..Default::default()
         }],
@@ -252,7 +252,7 @@ fn resolves_worktree_paths_from_config() {
 
     let config = LegitConfig {
         repos: vec![RepoConfig {
-            slug: Some("acme/widgets".to_owned()),
+            slug: Some(RepoSlug::parse("acme/widgets").unwrap()),
             ..Default::default()
         }],
         worktree_root: Some("/srv/wts".to_owned()),
@@ -269,7 +269,7 @@ fn resolves_worktree_paths_from_config() {
 fn parse_worktree_leaf_round_trips_resolve_worktree_path_naming() {
     let config = LegitConfig {
         repos: vec![RepoConfig {
-            slug: Some("acme/widgets".to_owned()),
+            slug: Some(RepoSlug::parse("acme/widgets").unwrap()),
             ..Default::default()
         }],
         ..Default::default()
@@ -295,12 +295,12 @@ fn resolves_main_worktree_path_from_config() {
     let config = LegitConfig {
         repos: vec![
             RepoConfig {
-                slug: Some("acme/widgets".to_owned()),
+                slug: Some(RepoSlug::parse("acme/widgets").unwrap()),
                 main_worktree_path: Some("~/src/widgets".to_owned()),
                 ..Default::default()
             },
             RepoConfig {
-                slug: Some("acme/gadgets".to_owned()),
+                slug: Some(RepoSlug::parse("acme/gadgets").unwrap()),
                 ..Default::default()
             },
         ],

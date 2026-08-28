@@ -275,7 +275,7 @@ fn repo_config<'a>(config: &'a LegitConfig, slug: &RepoSlug) -> Option<&'a RepoC
     config
         .repos
         .iter()
-        .find(|repo| repo.slug.as_deref().is_some_and(|s| *slug == s))
+        .find(|repo| repo.slug.as_ref().is_some_and(|s| s == slug))
 }
 
 fn ensure_main_worktree(main_worktree: &Path) -> anyhow::Result<()> {
