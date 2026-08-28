@@ -15,7 +15,7 @@ use crate::{
 fn sample_pr(head_ref: &str, head_owner: &str) -> PR {
     PR {
         number: 42,
-        repo_slug: "acme/widgets".to_owned(),
+        repo_slug: RepoSlug::new("acme/widgets"),
         title: "patch".to_owned(),
         author: "octocat".to_owned(),
         created_at: fixed_created_at(),
@@ -222,14 +222,14 @@ fn matches_by_branch_before_path() {
 fn resolves_worktree_paths_from_config() {
     let config = LegitConfig {
         repos: vec![RepoConfig {
-            slug: Some("acme/widgets".to_owned()),
+            slug: Some(RepoSlug::parse("acme/widgets").unwrap()),
             ..Default::default()
         }],
         ..Default::default()
     };
 
     assert_eq!(
-        resolve_worktree_path(&config, "acme/widgets", 1234, "feature/foo")
+        resolve_worktree_path(&config, &RepoSlug::new("acme/widgets"), 1234, "feature/foo")
             .expect("default worktree path"),
         home_dir()
             .expect("home directory")
@@ -238,28 +238,29 @@ fn resolves_worktree_paths_from_config() {
 
     let config = LegitConfig {
         repos: vec![RepoConfig {
-            slug: Some("acme/widgets".to_owned()),
+            slug: Some(RepoSlug::parse("acme/widgets").unwrap()),
             worktree_root: Some("/wts/widgets".to_owned()),
             ..Default::default()
         }],
         ..Default::default()
     };
     assert_eq!(
-        resolve_worktree_path(&config, "acme/widgets", 7, "main")
+        resolve_worktree_path(&config, &RepoSlug::new("acme/widgets"), 7, "main")
             .expect("repo-specific worktree path"),
         PathBuf::from("/wts/widgets/7-main")
     );
 
     let config = LegitConfig {
         repos: vec![RepoConfig {
-            slug: Some("acme/widgets".to_owned()),
+            slug: Some(RepoSlug::parse("acme/widgets").unwrap()),
             ..Default::default()
         }],
         worktree_root: Some("/srv/wts".to_owned()),
         ..Default::default()
     };
     assert_eq!(
-        resolve_worktree_path(&config, "acme/widgets", 7, "main").expect("global worktree path"),
+        resolve_worktree_path(&config, &RepoSlug::new("acme/widgets"), 7, "main")
+            .expect("global worktree path"),
         PathBuf::from("/srv/wts/acme/widgets/7-main")
     );
 }
@@ -268,13 +269,18 @@ fn resolves_worktree_paths_from_config() {
 fn parse_worktree_leaf_round_trips_resolve_worktree_path_naming() {
     let config = LegitConfig {
         repos: vec![RepoConfig {
-            slug: Some("acme/widgets".to_owned()),
+            slug: Some(RepoSlug::parse("acme/widgets").unwrap()),
             ..Default::default()
         }],
         ..Default::default()
     };
-    let path = resolve_worktree_path(&config, "acme/widgets", 9248, "research/generic-thing")
-        .expect("worktree path");
+    let path = resolve_worktree_path(
+        &config,
+        &RepoSlug::new("acme/widgets"),
+        9248,
+        "research/generic-thing",
+    )
+    .expect("worktree path");
     let leaf = path.file_name().and_then(|n| n.to_str()).expect("leaf");
 
     assert_eq!(parse_worktree_leaf(leaf), Some(9248));
@@ -289,12 +295,12 @@ fn resolves_main_worktree_path_from_config() {
     let config = LegitConfig {
         repos: vec![
             RepoConfig {
-                slug: Some("acme/widgets".to_owned()),
+                slug: Some(RepoSlug::parse("acme/widgets").unwrap()),
                 main_worktree_path: Some("~/src/widgets".to_owned()),
                 ..Default::default()
             },
             RepoConfig {
-                slug: Some("acme/gadgets".to_owned()),
+                slug: Some(RepoSlug::parse("acme/gadgets").unwrap()),
                 ..Default::default()
             },
         ],
@@ -302,15 +308,18 @@ fn resolves_main_worktree_path_from_config() {
     };
 
     assert_eq!(
-        resolve_main_worktree(&config, "acme/widgets").expect("mainWorktreePath path"),
+        resolve_main_worktree(&config, &RepoSlug::new("acme/widgets"))
+            .expect("mainWorktreePath path"),
         Some(home_dir().expect("home directory").join("src/widgets"))
     );
     assert_eq!(
-        resolve_main_worktree(&config, "acme/gadgets").expect("missing mainWorktreePath"),
+        resolve_main_worktree(&config, &RepoSlug::new("acme/gadgets"))
+            .expect("missing mainWorktreePath"),
         None
     );
     assert_eq!(
-        resolve_main_worktree(&config, "acme/unknown").expect("unknown repo mainWorktreePath"),
+        resolve_main_worktree(&config, &RepoSlug::new("acme/unknown"))
+            .expect("unknown repo mainWorktreePath"),
         None
     );
 }
@@ -453,7 +462,7 @@ fn a_failing_hook_fails_creation_and_removes_the_partial_worktree() {
 #[test]
 fn pr_key_url_stays_available_for_worktree_messages() {
     let key = PrKey {
-        repo_slug: "acme/widgets".to_owned(),
+        repo_slug: RepoSlug::new("acme/widgets"),
         number: 42,
     };
 

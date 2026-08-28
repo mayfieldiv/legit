@@ -1,3 +1,4 @@
+use crate::repo_slug::RepoSlug;
 use std::path::PathBuf;
 
 use ratatui::crossterm::event::KeyCode;
@@ -12,7 +13,7 @@ use crate::{
 fn config_with_main_worktree_path() -> LegitConfig {
     LegitConfig {
         repos: vec![RepoConfig {
-            slug: Some("mayfieldiv/legit".to_owned()),
+            slug: Some(RepoSlug::parse("mayfieldiv/legit").unwrap()),
             main_worktree_path: Some("/src/legit".to_owned()),
             ..Default::default()
         }],
@@ -24,7 +25,7 @@ fn model_with_selected_pr(config: LegitConfig) -> Model {
     let (mut model, _) = Model::new();
     model.config = config;
     model.repo = RepoDetection::Failed;
-    model.list.begin_fetch("mayfieldiv/legit");
+    model.list.begin_fetch(&RepoSlug::new("mayfieldiv/legit"));
     update(&mut model, Msg::PrArrived(sample_pr(1, "p")));
     model
 }
@@ -71,7 +72,7 @@ fn slug_less_repo_gets_no_repo_tab_and_no_worktree_listing() {
     let config = LegitConfig {
         repos: vec![
             RepoConfig {
-                slug: Some("mayfieldiv/legit".to_owned()),
+                slug: Some(RepoSlug::parse("mayfieldiv/legit").unwrap()),
                 main_worktree_path: Some("/src/legit".to_owned()),
                 ..Default::default()
             },
@@ -85,12 +86,8 @@ fn slug_less_repo_gets_no_repo_tab_and_no_worktree_listing() {
 
     let cmds = update(&mut model, Msg::ConfigLoaded(config));
 
-    let tabs: Vec<String> = model
-        .tracked_repos()
-        .iter()
-        .map(|repo| repo.slug())
-        .collect();
-    assert_eq!(tabs, vec!["mayfieldiv/legit".to_owned()]);
+    let tabs = model.tracked_repos();
+    assert_eq!(tabs, vec!["mayfieldiv/legit"]);
     let listed: Vec<&PathBuf> = cmds
         .iter()
         .filter_map(|cmd| match cmd {
@@ -112,7 +109,7 @@ fn worktrees_arrived_stores_entries_and_matches_selected_pr_by_branch() {
     update(
         &mut model,
         Msg::WorktreesArrived {
-            repo_slug: "mayfieldiv/legit".to_owned(),
+            repo_slug: RepoSlug::new("mayfieldiv/legit"),
             entries: vec![worktree_entry("/tmp/legit-1", Some("feature/1"))],
         },
     );
@@ -126,7 +123,7 @@ fn worktrees_arrived_stores_entries_and_matches_selected_pr_by_branch() {
 fn worktrees_arrived_replaces_externally_deleted_entries() {
     let mut model = model_with_selected_pr(config_with_main_worktree_path());
     model.worktrees_by_repo.insert(
-        "mayfieldiv/legit".to_owned(),
+        RepoSlug::new("mayfieldiv/legit"),
         vec![worktree_entry("/tmp/deleted-legit-1", Some("feature/1"))],
     );
     assert!(
@@ -139,7 +136,7 @@ fn worktrees_arrived_replaces_externally_deleted_entries() {
     update(
         &mut model,
         Msg::WorktreesArrived {
-            repo_slug: "mayfieldiv/legit".to_owned(),
+            repo_slug: RepoSlug::new("mayfieldiv/legit"),
             entries: Vec::new(),
         },
     );
@@ -221,7 +218,7 @@ fn w_without_main_worktree_path_sets_error_status() {
 fn w_when_worktree_already_matches_reports_existing_path() {
     let mut model = model_with_selected_pr(config_with_main_worktree_path());
     model.worktrees_by_repo.insert(
-        "mayfieldiv/legit".to_owned(),
+        RepoSlug::new("mayfieldiv/legit"),
         vec![worktree_entry("/tmp/legit-1", Some("feature/1"))],
     );
 
@@ -256,7 +253,7 @@ fn w_copies_home_worktree_path_with_tilde() {
     let path = format!("{home}/legit-1");
     let mut model = model_with_selected_pr(config_with_main_worktree_path());
     model.worktrees_by_repo.insert(
-        "mayfieldiv/legit".to_owned(),
+        RepoSlug::new("mayfieldiv/legit"),
         vec![worktree_entry(&path, Some("feature/1"))],
     );
 
@@ -276,11 +273,15 @@ fn w_copies_home_worktree_path_with_tilde() {
 #[test]
 fn worktree_created_seeds_cache_and_re_lists_main_worktree_paths() {
     let mut model = model_with_selected_pr(config_with_main_worktree_path());
-    let path =
-        crate::worktree::resolve_worktree_path(&model.config, "mayfieldiv/legit", 1, "feature/1")
-            .expect("worktree path")
-            .to_string_lossy()
-            .to_string();
+    let path = crate::worktree::resolve_worktree_path(
+        &model.config,
+        &RepoSlug::new("mayfieldiv/legit"),
+        1,
+        "feature/1",
+    )
+    .expect("worktree path")
+    .to_string_lossy()
+    .to_string();
 
     let cmds = update(
         &mut model,

@@ -17,6 +17,7 @@ use serde_json::json;
 
 use crate::{
     github::types::{FullReviewThread, PRState, ReviewComment, ReviewStatus, is_bot},
+    repo_slug::RepoSlug,
     secret::Secret,
 };
 
@@ -382,8 +383,7 @@ impl GraphQlClient {
     #[tracing::instrument(name = "fetch_review_status", skip(self, pr_numbers))]
     pub async fn fetch_review_status(
         &self,
-        owner: &str,
-        repo: &str,
+        slug: &RepoSlug,
         pr_numbers: &[u64],
     ) -> Result<Vec<(u64, ReviewStatus)>> {
         let mut out = Vec::new();
@@ -406,7 +406,7 @@ impl GraphQlClient {
             );
             let body = GraphQlRequest {
                 query,
-                variables: json!({ "owner": owner, "repo": repo }),
+                variables: json!({ "owner": slug.owner(), "repo": slug.name() }),
             };
             let response: ReviewStatusResponse = self.post(&body).await?;
             out.extend(parse_review_status(response));
@@ -418,8 +418,7 @@ impl GraphQlClient {
     #[tracing::instrument(name = "fetch_review_threads", skip(self, bot_logins))]
     pub async fn fetch_review_threads(
         &self,
-        owner: &str,
-        repo: &str,
+        slug: &RepoSlug,
         number: u64,
         bot_logins: &[String],
     ) -> Result<Vec<FullReviewThread>> {
@@ -435,8 +434,8 @@ impl GraphQlClient {
             let body = GraphQlRequest {
                 query: QUERY.to_owned(),
                 variables: json!({
-                    "owner": owner,
-                    "repo": repo,
+                    "owner": slug.owner(),
+                    "repo": slug.name(),
                     "number": number,
                     "after": after,
                 }),

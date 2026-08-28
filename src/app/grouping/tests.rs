@@ -3,6 +3,7 @@
 
 use super::{DisplayRow, Grouping, display_rows};
 use crate::blocker::Tier;
+use crate::repo_slug::RepoSlug;
 
 /// Headers in display order.
 fn headers(rows: &[DisplayRow]) -> Vec<&str> {
@@ -46,7 +47,7 @@ fn none_emits_one_row_per_pr_no_headers() {
         &[0, 1, 2],
         Grouping::None,
         |_| None,
-        |_| "acme/web".to_owned(),
+        |_| RepoSlug::new("acme/web"),
     );
     assert!(headers(&rows).is_empty());
     assert_eq!(pr_indices(&rows), vec![0, 1, 2]);
@@ -54,7 +55,7 @@ fn none_emits_one_row_per_pr_no_headers() {
 
 #[test]
 fn none_empty_list_is_empty() {
-    let rows = display_rows(&[], Grouping::None, |_| None, |_| "acme/web".to_owned());
+    let rows = display_rows(&[], Grouping::None, |_| None, |_| RepoSlug::new("acme/web"));
     assert!(rows.is_empty());
 }
 
@@ -62,7 +63,12 @@ fn none_empty_list_is_empty() {
 
 #[test]
 fn repo_groups_under_single_slug_header() {
-    let rows = display_rows(&[0, 1], Grouping::Repo, |_| None, |_| "acme/web".to_owned());
+    let rows = display_rows(
+        &[0, 1],
+        Grouping::Repo,
+        |_| None,
+        |_| RepoSlug::new("acme/web"),
+    );
     assert_eq!(headers(&rows), vec!["acme/web"]);
     assert_eq!(pr_indices(&rows), vec![0, 1]);
 }
@@ -75,7 +81,7 @@ fn repo_groups_each_slug_separately_in_alphabetical_order() {
         &[0, 1, 2, 3],
         Grouping::Repo,
         |_| None,
-        |i| slugs[i].to_owned(),
+        |i| RepoSlug::new(slugs[i]),
     );
 
     assert_eq!(headers(&rows), vec!["acme/web", "zeta/repo"]);
@@ -87,14 +93,19 @@ fn repo_groups_each_slug_separately_in_alphabetical_order() {
 fn rows_carry_absolute_indices_for_a_visible_subset() {
     // Scope/filter admitted only indices 2 and 5 of the pooled list; the rows
     // must reference them absolutely so selection maps back to the right PR.
-    let rows = display_rows(&[2, 5], Grouping::None, |_| None, |_| "acme/web".to_owned());
+    let rows = display_rows(
+        &[2, 5],
+        Grouping::None,
+        |_| None,
+        |_| RepoSlug::new("acme/web"),
+    );
 
     assert_eq!(pr_indices(&rows), vec![2, 5]);
 }
 
 #[test]
 fn repo_empty_list_is_empty() {
-    let rows = display_rows(&[], Grouping::Repo, |_| None, |_| "acme/web".to_owned());
+    let rows = display_rows(&[], Grouping::Repo, |_| None, |_| RepoSlug::new("acme/web"));
     assert!(rows.is_empty());
 }
 
@@ -113,7 +124,7 @@ fn smart_status_orders_tiers_me_blocking_needs_review_waiting() {
         &[0, 1, 2, 3],
         Grouping::SmartStatus,
         |i| Some(tiers[i]),
-        |_| "acme/web".to_owned(),
+        |_| RepoSlug::new("acme/web"),
     );
     assert_eq!(
         headers(&rows),
@@ -130,7 +141,7 @@ fn smart_status_omits_empty_tiers() {
         &[0, 1],
         Grouping::SmartStatus,
         |_| Some(Tier::NeedsReview),
-        |_| "r".to_owned(),
+        |_| RepoSlug::new("acme/web"),
     );
     assert_eq!(headers(&rows), vec!["Needs review"]);
 }
@@ -141,7 +152,7 @@ fn smart_status_single_tier_list() {
         &[0, 1, 2],
         Grouping::SmartStatus,
         |_| Some(Tier::MeBlocking),
-        |_| "r".to_owned(),
+        |_| RepoSlug::new("acme/web"),
     );
     assert_eq!(headers(&rows), vec!["Me blocking"]);
     assert_eq!(pr_indices(&rows), vec![0, 1, 2]);
@@ -160,7 +171,7 @@ fn smart_status_undelivered_tiers_collect_under_loading() {
                 None
             }
         },
-        |_| "r".to_owned(),
+        |_| RepoSlug::new("acme/web"),
     );
     assert_eq!(headers(&rows), vec!["Needs review", "Loading details…"]);
     assert_eq!(pr_indices(&rows), vec![0, 1, 2]);
@@ -168,7 +179,12 @@ fn smart_status_undelivered_tiers_collect_under_loading() {
 
 #[test]
 fn smart_status_empty_list_is_empty() {
-    let rows = display_rows(&[], Grouping::SmartStatus, |_| None, |_| "r".to_owned());
+    let rows = display_rows(
+        &[],
+        Grouping::SmartStatus,
+        |_| None,
+        |_| RepoSlug::new("acme/web"),
+    );
     assert!(rows.is_empty());
 }
 
@@ -179,7 +195,7 @@ fn smart_status_preserves_input_order_within_tier() {
         &[0, 1, 2],
         Grouping::SmartStatus,
         |_| Some(Tier::NeedsReview),
-        |_| "r".to_owned(),
+        |_| RepoSlug::new("acme/web"),
     );
     assert_eq!(pr_indices(&rows), vec![0, 1, 2]);
 }

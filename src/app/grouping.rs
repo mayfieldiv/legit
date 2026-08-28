@@ -10,6 +10,7 @@
 //! author), repo groups alphabetically.
 
 use crate::blocker::Tier;
+use crate::repo_slug::RepoSlug;
 
 /// How the Open PR List is grouped. `g` cycles through these in order, wrapping
 /// back to `SmartStatus`.
@@ -61,7 +62,7 @@ pub fn display_rows(
     visible: &[usize],
     grouping: Grouping,
     tier_of: impl Fn(usize) -> Option<Tier>,
-    slug_of: impl Fn(usize) -> String,
+    slug_of: impl Fn(usize) -> RepoSlug,
 ) -> Vec<DisplayRow> {
     match grouping {
         Grouping::None => visible.iter().copied().map(DisplayRow::Pr).collect(),
@@ -104,11 +105,11 @@ fn smart_status_rows(
     rows
 }
 
-/// Generic single-key grouping (used by repo): bucket indices by the key
-/// `key_of(i)` produces, emit groups sorted alphabetically by key, headers
-/// labelled with the key.
-fn grouped_rows(visible: &[usize], key_of: impl Fn(usize) -> String) -> Vec<DisplayRow> {
-    let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+/// Slug-keyed grouping (used by repo): bucket indices by the slug
+/// `key_of(i)` produces, emit groups sorted alphabetically by slug identity,
+/// headers labelled with the slug's display casing.
+fn grouped_rows(visible: &[usize], key_of: impl Fn(usize) -> RepoSlug) -> Vec<DisplayRow> {
+    let mut groups: Vec<(RepoSlug, Vec<usize>)> = Vec::new();
     for &i in visible {
         let key = key_of(i);
         match groups.iter_mut().find(|(k, _)| *k == key) {
@@ -120,7 +121,7 @@ fn grouped_rows(visible: &[usize], key_of: impl Fn(usize) -> String) -> Vec<Disp
 
     let mut rows = Vec::with_capacity(visible.len() + groups.len());
     for (key, members) in groups {
-        rows.push(DisplayRow::Header(key));
+        rows.push(DisplayRow::Header(key.to_string()));
         rows.extend(members.into_iter().map(DisplayRow::Pr));
     }
     rows

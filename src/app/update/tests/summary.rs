@@ -1,3 +1,4 @@
+use crate::repo_slug::RepoSlug;
 use ratatui::crossterm::event::{Event, KeyCode};
 
 use crate::app::msg::Msg;
@@ -7,7 +8,9 @@ use super::{enriched_model, key_event, update, wheel_event_at};
 #[test]
 fn wheel_over_the_summary_scrolls_it_instead_of_the_list_viewport() {
     let mut model = enriched_model(&[1, 2, 3, 4, 5, 6]);
-    model.list.complete_fetch("mayfieldiv/legit");
+    model
+        .list
+        .complete_fetch(&RepoSlug::new("mayfieldiv/legit"));
     model.relayout();
     update(&mut model, Msg::TerminalEvent(Event::Resize(100, 8)));
     assert_eq!(model.list.selected_pr().unwrap().number, 1);
@@ -43,7 +46,9 @@ fn wheel_over_the_summary_scrolls_it_instead_of_the_list_viewport() {
 #[test]
 fn page_keys_scroll_the_summary_without_moving_selection_or_passing_the_end() {
     let mut model = enriched_model(&[1, 2]);
-    model.list.complete_fetch("mayfieldiv/legit");
+    model
+        .list
+        .complete_fetch(&RepoSlug::new("mayfieldiv/legit"));
     model.relayout();
     update(&mut model, Msg::TerminalEvent(Event::Resize(100, 8)));
     assert_eq!(model.list.selected_pr().unwrap().number, 1);
@@ -84,7 +89,9 @@ fn page_keys_scroll_the_summary_without_moving_selection_or_passing_the_end() {
 #[test]
 fn changing_the_selected_pr_resets_the_summary_to_the_top() {
     let mut model = enriched_model(&[1, 2]);
-    model.list.complete_fetch("mayfieldiv/legit");
+    model
+        .list
+        .complete_fetch(&RepoSlug::new("mayfieldiv/legit"));
     model.relayout();
     update(&mut model, Msg::TerminalEvent(Event::Resize(100, 8)));
     update(&mut model, key_event(KeyCode::PageDown));

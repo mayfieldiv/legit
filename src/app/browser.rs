@@ -8,6 +8,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use crate::repo_slug::RepoSlug;
 use anyhow::Context;
 
 use crate::github::rest::PR;
@@ -16,15 +17,16 @@ use super::cmd::Cmd;
 
 const DEVIN_ORIGIN: &str = "https://app.devin.ai/";
 
-pub fn pr_url(repo_slug: &str, number: u64) -> String {
+pub fn pr_url(repo_slug: &RepoSlug, number: u64) -> String {
     format!("https://github.com/{repo_slug}/pull/{number}")
 }
 
-pub fn devin_url(repo_slug: &str, number: u64) -> String {
-    let mut parts = repo_slug.split('/');
-    let owner = parts.next().unwrap_or("");
-    let repo = parts.next().unwrap_or("undefined");
-    format!("https://app.devin.ai/review/{owner}/{repo}/pull/{number}")
+pub fn devin_url(repo_slug: &RepoSlug, number: u64) -> String {
+    format!(
+        "https://app.devin.ai/review/{}/{}/pull/{number}",
+        repo_slug.owner(),
+        repo_slug.name(),
+    )
 }
 
 pub fn open_url(url: impl Into<String>) -> Cmd {
@@ -124,11 +126,12 @@ fn windows_open_command_parts(url: &str) -> (&'static str, [&str; 1]) {
 #[cfg(test)]
 mod tests {
     use super::{devin_url, open_label, pr_url, windows_open_command_parts};
+    use crate::repo_slug::RepoSlug;
 
     #[test]
     fn builds_github_pr_url() {
         assert_eq!(
-            pr_url("mayfieldiv/legit", 45),
+            pr_url(&RepoSlug::new("mayfieldiv/legit"), 45),
             "https://github.com/mayfieldiv/legit/pull/45"
         );
     }
@@ -136,7 +139,7 @@ mod tests {
     #[test]
     fn builds_devin_url_with_ts_format() {
         assert_eq!(
-            devin_url("mayfieldiv/legit", 45),
+            devin_url(&RepoSlug::new("mayfieldiv/legit"), 45),
             "https://app.devin.ai/review/mayfieldiv/legit/pull/45"
         );
     }

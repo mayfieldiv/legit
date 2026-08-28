@@ -17,6 +17,7 @@ use std::fmt;
 use crate::app::grouping::{DisplayRow, Grouping, display_rows};
 use crate::blocker::Tier;
 use crate::github::rest::{PR, PrKey};
+use crate::repo_slug::RepoSlug;
 
 /// The substring filter over the Open PR List. `/` opens editing; Enter locks
 /// the text in; Esc clears. `Applied("")` is unrepresentable — submitting an
@@ -97,9 +98,7 @@ impl FilterQuery {
     fn matches(&self, pr: &PR) -> bool {
         match self {
             Self::All => true,
-            Self::PrUrl { slug, number } => {
-                pr.repo_slug.eq_ignore_ascii_case(slug) && pr.number == *number
-            }
+            Self::PrUrl { slug, number } => pr.repo_slug == slug.as_str() && pr.number == *number,
             Self::WorktreePath(number) => pr.number == *number,
             Self::Substring(needle) => {
                 let number_needle = needle.strip_prefix('#').unwrap_or(needle);
@@ -197,7 +196,7 @@ pub struct PrList {
     /// reports deterministically (alphabetical) when several repos fail. The
     /// `Loading` phase also carries the cycle's seen-set for membership
     /// reconciliation (see `Phase`).
-    phases: BTreeMap<String, Phase>,
+    phases: BTreeMap<RepoSlug, Phase>,
     /// The substring filter narrowing the visible set (with the active tab).
     filter: Filter,
     grouping: Grouping,
@@ -235,7 +234,7 @@ impl PrList {
         Self::default()
     }
 
-    pub fn begin_fetch(&mut self, repo_slug: &str) {
+    pub fn begin_fetch(&mut self, repo_slug: &RepoSlug) {
         // A fresh `Loading` phase starts with an empty seen-set; this cycle's
         // arrivals populate it, defining which PRs the repo still has when
         // `finish_listing` reconciles. Replacing any prior phase drops a
@@ -244,11 +243,11 @@ impl PrList {
             .insert(repo_slug.to_owned(), Phase::Loading(HashSet::new()));
     }
 
-    pub fn complete_fetch(&mut self, repo_slug: &str) {
-        self.phases.insert(repo_slug.to_owned(), Phase::Loaded);
+    pub fn complete_fetch(&mut self, repo_slug: &RepoSlug) {
+        self.phases.insert(repo_slug.clone(), Phase::Loaded);
     }
 
-    pub fn fail_fetch(&mut self, repo_slug: &str, message: String) {
+    pub fn fail_fetch(&mut self, repo_slug: &RepoSlug, message: String) {
         self.phases
             .insert(repo_slug.to_owned(), Phase::Failed(message));
     }
@@ -285,7 +284,7 @@ impl PrList {
     /// PR was pruned, so the caller can `relayout` the now-stale rows. The
     /// initial listing sees every pooled PR, so it prunes nothing; an `R`-driven
     /// re-list prunes what's gone.
-    pub fn finish_listing(&mut self, repo_slug: &str) -> bool {
+    pub fn finish_listing(&mut self, repo_slug: &RepoSlug) -> bool {
         // Take the seen-set out of the `Loading` phase before pruning; the
         // `complete_fetch` below replaces the phase anyway. Owning it releases
         // the borrow on `self.phases` so we can mutate `self.prs`.
@@ -295,7 +294,7 @@ impl PrList {
         };
         let before = self.prs.len();
         self.prs
-            .retain(|pr| pr.repo_slug != repo_slug || seen.contains(&pr.number));
+            .retain(|pr| pr.repo_slug != *repo_slug || seen.contains(&pr.number));
         self.complete_fetch(repo_slug);
         self.prs.len() != before
     }
@@ -313,10 +312,10 @@ impl PrList {
     /// refreshes do not undo wheel scrolling; if the selection changes, scroll
     /// follows the new selection. Called by `update` after PRs arrive,
     /// enrichment lands, or the grouping/scope changes.
-    pub fn relayout(&mut self, scope: Option<&str>, tier_of: impl Fn(&PR) -> Option<Tier>) {
+    pub fn relayout(&mut self, scope: Option<&RepoSlug>, tier_of: impl Fn(&PR) -> Option<Tier>) {
         let query = FilterQuery::parse(self.filter.text());
         let mut visible: Vec<usize> = (0..self.prs.len())
-            .filter(|&i| scope.is_none_or(|slug| self.prs[i].repo_slug == slug))
+            .filter(|&i| scope.is_none_or(|slug| self.prs[i].repo_slug == *slug))
             .filter(|&i| query.matches(&self.prs[i]))
             .collect();
         visible.sort_by(|&a, &b| compare_recent_activity(&self.prs[a], &self.prs[b]));
@@ -367,16 +366,16 @@ impl PrList {
     /// than cached — so it can't drift from the current PRs. Read by refresh to
     /// tell a genuinely-empty repo (re-list it) from one whose PRs a filter just
     /// hid (leave them be).
-    pub fn any_in_scope(&self, scope: Option<&str>) -> bool {
+    pub fn any_in_scope(&self, scope: Option<&RepoSlug>) -> bool {
         self.prs
             .iter()
-            .any(|pr| scope.is_none_or(|s| pr.repo_slug == s))
+            .any(|pr| scope.is_none_or(|s| pr.repo_slug == *s))
     }
 
     /// True when the filter (not the tab) is why the list is empty: `scope`
     /// admitted PRs but the filter text matched none. Drives the
     /// "No matching PRs" placeholder.
-    pub fn filter_hid_everything(&self, scope: Option<&str>) -> bool {
+    pub fn filter_hid_everything(&self, scope: Option<&RepoSlug>) -> bool {
         self.visible_is_empty() && self.any_in_scope(scope) && !self.filter.text().is_empty()
     }
 
@@ -654,7 +653,7 @@ impl PrList {
     /// dispatched for it yet. Test-only; the view asks the scope-aware
     /// `is_loading` instead.
     #[cfg(test)]
-    pub fn phase_of(&self, repo_slug: &str) -> Option<&Phase> {
+    pub fn phase_of(&self, repo_slug: &RepoSlug) -> Option<&Phase> {
         self.phases.get(repo_slug)
     }
 
@@ -663,7 +662,7 @@ impl PrList {
     /// while a listing is in flight or has already loaded — re-dispatching then
     /// would re-stream and duplicate the pooled PRs. The config-reload gate
     /// (`R`) uses this to fetch only newly tracked or previously-failed repos.
-    pub fn needs_listing(&self, repo_slug: &str) -> bool {
+    pub fn needs_listing(&self, repo_slug: &RepoSlug) -> bool {
         match self.phases.get(repo_slug) {
             None | Some(Phase::Failed(_)) => true,
             Some(Phase::Loading(_) | Phase::Loaded) => false,
@@ -672,7 +671,7 @@ impl PrList {
 
     /// Whether a listing is still in flight for `scope`: a specific repo slug,
     /// or `None` meaning "any Tracked Repo" (the All tab).
-    pub fn is_loading(&self, scope: Option<&str>) -> bool {
+    pub fn is_loading(&self, scope: Option<&RepoSlug>) -> bool {
         match scope {
             Some(slug) => matches!(self.phases.get(slug), Some(Phase::Loading(_))),
             None => self.phases.values().any(|p| matches!(p, Phase::Loading(_))),

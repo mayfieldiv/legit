@@ -3,6 +3,8 @@ use std::{env, ffi::OsString, fs, io, path::PathBuf};
 use anyhow::{Context, ensure};
 use serde::{Deserialize, Serialize, de::Error as _};
 
+use crate::repo_slug::RepoSlug;
+
 // TODO: when the group/filter engine is ported from
 // `src/lib/group-filter-engine.ts`, derive these from the canonical
 // GroupBy/SortBy enums instead of maintaining loose string lists here.
@@ -35,8 +37,11 @@ pub struct FileRule {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoConfig {
+    /// Typed at the parse boundary: `RepoSlug`'s `Deserialize` runs
+    /// `RepoSlug::parse`, so a loaded config can only hold valid slugs and
+    /// nothing downstream re-validates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub slug: Option<String>,
+    pub slug: Option<RepoSlug>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub main_worktree_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -54,9 +59,6 @@ impl RepoConfig {
             self.slug.is_some() || self.main_worktree_path.is_some(),
             "invalid {label}: at least one of slug or mainWorktreePath is required"
         );
-        if let Some(slug) = &self.slug {
-            validate_repo_slug(&format!("{label}.slug"), slug)?;
-        }
         if let Some(path) = &self.main_worktree_path {
             validate_path(&format!("{label}.mainWorktreePath"), path)?;
         }
@@ -222,7 +224,7 @@ fn default_bot_logins() -> Vec<String> {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RepoObject {
-    slug: Option<String>,
+    slug: Option<RepoSlug>,
     main_worktree_path: Option<String>,
     worktree_root: Option<String>,
     wayfinder_roots: Option<Vec<String>>,
@@ -249,10 +251,11 @@ where
 /// instead of `#[serde(untagged)]` so a typo'd object key surfaces serde's
 /// precise `unknown field` error (via `RepoObject`'s `deny_unknown_fields`)
 /// rather than the untagged enum's opaque "did not match any variant".
-/// Validation is intentionally left to `LegitConfig::validate`, run in
-/// `load_from_path`, so every invalid entry surfaces one consistent "failed to
-/// validate" error rather than being silently dropped; `parse_config`'s path
-/// tracking prefixes shape errors with the entry's index.
+/// Slug syntax is checked right here (`RepoSlug::parse`, via `RepoSlug`'s
+/// `Deserialize` for the object form) — `parse_config`'s path tracking
+/// prefixes those errors with the failing entry's key, the same labelling
+/// `LegitConfig::validate` hand-builds. Cross-field rules, which serde can't
+/// express, stay in `validate`.
 impl<'de> Deserialize<'de> for RepoConfig {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -272,7 +275,7 @@ impl<'de> Deserialize<'de> for RepoConfig {
                 E: serde::de::Error,
             {
                 Ok(RepoConfig {
-                    slug: Some(value.to_owned()),
+                    slug: Some(RepoSlug::parse(value).map_err(E::custom)?),
                     ..RepoConfig::default()
                 })
             }
@@ -299,33 +302,6 @@ impl<'de> Deserialize<'de> for RepoConfig {
 
         deserializer.deserialize_any(RepoConfigVisitor)
     }
-}
-
-fn validate_repo_slug(field: &str, slug: &str) -> anyhow::Result<()> {
-    // `repo` holds everything after the first '/', so `repo.contains('/')`
-    // rejects three-or-more-segment slugs alongside the empty-segment cases.
-    let (owner, repo) = slug.split_once('/').unwrap_or_default();
-    ensure!(
-        !owner.is_empty() && !repo.is_empty() && !repo.contains('/'),
-        "invalid {field} {slug:?}: expected exactly owner/repo"
-    );
-
-    for part in [owner, repo] {
-        ensure!(
-            part != "." && part != "..",
-            "invalid {field} {slug:?}: path traversal segments are not allowed"
-        );
-        ensure!(
-            part.chars().all(is_repo_slug_char),
-            "invalid {field} {slug:?}: only ASCII letters, numbers, '.', '_', and '-' are allowed"
-        );
-    }
-
-    Ok(())
-}
-
-fn is_repo_slug_char(ch: char) -> bool {
-    ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-')
 }
 
 fn validate_path(field: &str, path: &str) -> anyhow::Result<()> {

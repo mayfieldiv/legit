@@ -1,3 +1,4 @@
+use crate::repo_slug::RepoSlug;
 use std::collections::HashMap;
 
 use chrono::TimeZone;
@@ -34,12 +35,12 @@ fn parses_open_pr_from_list_endpoint() {
             "base": { "ref": "main" }
         }"#,
     );
-    let pr = parse_pr(raw, "mayfieldiv/legit");
+    let pr = parse_pr(raw, &RepoSlug::new("mayfieldiv/legit"));
     assert_eq!(
         pr,
         PR {
             number: 42,
-            repo_slug: "mayfieldiv/legit".to_owned(),
+            repo_slug: RepoSlug::new("mayfieldiv/legit"),
             title: "Add streaming PR list".to_owned(),
             author: "octocat".to_owned(),
             created_at: chrono::Utc.with_ymd_and_hms(2026, 5, 1, 10, 0, 0).unwrap(),
@@ -87,7 +88,7 @@ fn defaults_missing_author_to_ghost() {
             "base": { "ref": "main" }
         }"#,
     );
-    let pr = parse_pr(raw, "mayfieldiv/legit");
+    let pr = parse_pr(raw, &RepoSlug::new("mayfieldiv/legit"));
     assert_eq!(pr.author, "ghost");
 }
 
@@ -106,7 +107,10 @@ fn parses_closed_pr_as_closed() {
             "base": { "ref": "main" }
         }"#,
     );
-    assert_eq!(parse_pr(raw, "mayfieldiv/legit").state, PRState::Closed);
+    assert_eq!(
+        parse_pr(raw, &RepoSlug::new("mayfieldiv/legit")).state,
+        PRState::Closed
+    );
 }
 
 #[test]
@@ -124,7 +128,10 @@ fn parses_merged_pr_as_merged() {
             "base": { "ref": "main" }
         }"#,
     );
-    assert_eq!(parse_pr(raw, "mayfieldiv/legit").state, PRState::Merged);
+    assert_eq!(
+        parse_pr(raw, &RepoSlug::new("mayfieldiv/legit")).state,
+        PRState::Merged
+    );
 }
 
 #[test]
@@ -140,7 +147,10 @@ fn defaults_missing_head_repo_owner_to_empty() {
             "base": { "ref": "main" }
         }"#,
     );
-    assert_eq!(parse_pr(raw, "mayfieldiv/legit").head_repository_owner, "");
+    assert_eq!(
+        parse_pr(raw, &RepoSlug::new("mayfieldiv/legit")).head_repository_owner,
+        ""
+    );
 }
 
 #[test]
@@ -156,7 +166,7 @@ fn list_endpoint_omits_additions_and_deletions() {
             "base": { "ref": "main" }
         }"#,
     );
-    let pr = parse_pr(raw, "mayfieldiv/legit");
+    let pr = parse_pr(raw, &RepoSlug::new("mayfieldiv/legit"));
     assert_eq!(pr.additions, 0);
     assert_eq!(pr.deletions, 0);
     assert_eq!(pr.mergeable, "UNKNOWN");

@@ -1,6 +1,7 @@
 mod app;
 mod auth;
 mod blocker;
+mod canonical_path;
 mod chip;
 mod clipboard;
 mod color;
@@ -11,11 +12,13 @@ mod git_remote;
 mod github;
 mod markdown;
 mod palette;
+mod repo_slug;
 mod runtime;
 mod secret;
 mod subprocess;
 #[cfg(test)]
 mod test_fixtures;
+mod ticket;
 mod tracing_setup;
 mod view;
 mod worktree;

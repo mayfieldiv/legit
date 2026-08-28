@@ -6,6 +6,7 @@ use std::{
 };
 
 use super::{LegitConfig, RepoConfig, home_dir_from, load_from_path, resolve_config_path_with};
+use crate::repo_slug::RepoSlug;
 
 #[test]
 fn missing_config_returns_defaults() {
@@ -34,8 +35,14 @@ fn partial_config_fills_defaults_and_tolerates_legacy_repos() {
 
     assert_eq!(config.user, "mayfield");
     assert_eq!(config.repos.len(), 2);
-    assert_eq!(config.repos[0].slug.as_deref(), Some("acme/widgets"));
-    assert_eq!(config.repos[1].slug.as_deref(), Some("acme/gadgets"));
+    assert_eq!(
+        config.repos[0].slug.as_ref().map(RepoSlug::as_str),
+        Some("acme/widgets")
+    );
+    assert_eq!(
+        config.repos[1].slug.as_ref().map(RepoSlug::as_str),
+        Some("acme/gadgets")
+    );
     assert_eq!(
         config.repos[1].main_worktree_path.as_deref(),
         Some("/src/gadgets")
@@ -53,7 +60,7 @@ fn structured_repo_with_invalid_slug_fails() {
     );
 
     assert!(
-        error.contains("invalid repos[0].slug \"no-slash\""),
+        error.contains("repos[0].slug") && error.contains("invalid repo slug \"no-slash\""),
         "{error}"
     );
     assert!(error.contains("expected exactly owner/repo"));
@@ -66,14 +73,20 @@ fn slug_error_names_the_offending_entry() {
         r#"{"repos": ["acme/widgets", {"slug": "bogus"}]}"#,
     );
 
-    assert!(error.contains("invalid repos[1].slug \"bogus\""), "{error}");
+    assert!(
+        error.contains("repos[1].slug") && error.contains("invalid repo slug \"bogus\""),
+        "{error}"
+    );
 }
 
 #[test]
 fn legacy_repo_with_invalid_slug_fails() {
     let error = load_error("legacy-invalid-slug", r#"{"repos": ["bogus"]}"#);
 
-    assert!(error.contains("invalid repos[0].slug"), "{error}");
+    assert!(
+        error.contains("repos[0]") && error.contains("invalid repo slug"),
+        "{error}"
+    );
     assert!(error.contains("expected exactly owner/repo"));
 }
 
@@ -81,7 +94,10 @@ fn legacy_repo_with_invalid_slug_fails() {
 fn structured_repo_rejects_path_traversal_slug() {
     let error = load_error("path-traversal-slug", r#"{"repos": [{"slug": "acme/.."}]}"#);
 
-    assert!(error.contains("invalid repos[0].slug"), "{error}");
+    assert!(
+        error.contains("repos[0].slug") && error.contains("invalid repo slug"),
+        "{error}"
+    );
     assert!(error.contains("path traversal"));
 }
 
@@ -89,7 +105,10 @@ fn structured_repo_rejects_path_traversal_slug() {
 fn slug_with_extra_segment_fails() {
     let error = load_error("extra-segment-slug", r#"{"repos": ["acme/widgets/extra"]}"#);
 
-    assert!(error.contains("invalid repos[0].slug"), "{error}");
+    assert!(
+        error.contains("repos[0]") && error.contains("invalid repo slug"),
+        "{error}"
+    );
     assert!(error.contains("expected exactly owner/repo"));
 }
 
@@ -97,7 +116,10 @@ fn slug_with_extra_segment_fails() {
 fn slug_with_disallowed_char_fails() {
     let error = load_error("bad-char-slug", r#"{"repos": ["acme/wid gets"]}"#);
 
-    assert!(error.contains("invalid repos[0].slug"), "{error}");
+    assert!(
+        error.contains("repos[0]") && error.contains("invalid repo slug"),
+        "{error}"
+    );
     assert!(error.contains("only ASCII letters"));
 }
 
@@ -149,7 +171,7 @@ fn repo_object_round_trips_every_field() {
         config.repos,
         vec![
             RepoConfig {
-                slug: Some("acme/widgets".to_owned()),
+                slug: Some(RepoSlug::parse("acme/widgets").unwrap()),
                 main_worktree_path: Some("~/src/widgets".to_owned()),
                 worktree_root: Some("/wt".to_owned()),
                 wayfinder_roots: Some(vec!["docs/wayfinder".to_owned(), "/abs/maps".to_owned()]),
@@ -328,7 +350,7 @@ fn has_any_worktree_root_includes_global_and_per_repo_roots() {
 
     config.worktree_root = None;
     config.repos = vec![RepoConfig {
-        slug: Some("acme/widgets".to_owned()),
+        slug: Some(RepoSlug::parse("acme/widgets").unwrap()),
         worktree_root: Some("/repo".to_owned()),
         ..Default::default()
     }];

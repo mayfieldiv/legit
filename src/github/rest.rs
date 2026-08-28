@@ -9,6 +9,7 @@ use tokio::sync::{OnceCell, mpsc};
 use crate::{
     file_category::FileChange,
     github::types::{CheckRun, IssueComment, PRState, Review, ReviewStatus, is_bot},
+    repo_slug::RepoSlug,
     secret::Secret,
 };
 
@@ -28,7 +29,7 @@ pub struct PR {
     /// the caller from the repo it was fetched for (not parsed from the wire)
     /// — PR numbers are only unique within a repo, so every cross-repo keyed
     /// structure pairs this with `number` (see `PrKey`).
-    pub repo_slug: String,
+    pub repo_slug: RepoSlug,
     pub title: String,
     pub author: String,
     pub created_at: DateTime<Utc>,
@@ -70,7 +71,7 @@ pub struct Label {
 /// blockers) keys on slug + number.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PrKey {
-    pub repo_slug: String,
+    pub repo_slug: RepoSlug,
     pub number: u64,
 }
 
@@ -271,7 +272,7 @@ struct RawRepo {
 /// Parse a raw REST pull request into the domain `PR`. The wire shape doesn't
 /// carry the slug of the repo the listing was made against, so the caller
 /// supplies it. Pure; tested directly.
-fn parse_pr(raw: RawRestPR, repo_slug: &str) -> PR {
+fn parse_pr(raw: RawRestPR, repo_slug: &RepoSlug) -> PR {
     // GitHub reports merged PRs as state="closed" with merged_at set. Split
     // them into a distinct MERGED state so the UI can distinguish them from
     // PRs closed without being merged. The list endpoint omits `state`
@@ -297,7 +298,7 @@ fn parse_pr(raw: RawRestPR, repo_slug: &str) -> PR {
 
     PR {
         number: raw.number,
-        repo_slug: repo_slug.to_owned(),
+        repo_slug: repo_slug.clone(),
         title: raw.title,
         author: raw
             .user
@@ -353,11 +354,10 @@ impl WorkflowNameCache {
     async fn get_or_init(
         &self,
         rest: &OctocrabRest,
-        owner: &str,
-        repo: &str,
+        slug: &RepoSlug,
     ) -> Result<&HashMap<u64, String>> {
         self.0
-            .get_or_try_init(|| rest.workflow_names_by_id(owner, repo))
+            .get_or_try_init(|| rest.workflow_names_by_id(slug))
             .await
     }
 }
@@ -394,17 +394,16 @@ impl OctocrabRest {
         Ok(Self { client })
     }
 
-    /// List every open PR for `owner/repo`, sending each one through `out` as
+    /// List every open PR for `slug`, sending each one through `out` as
     /// it streams in from the REST API. Returns once the listing finishes (or
     /// when `out` closes); errors are returned via `Result`.
     #[tracing::instrument(name = "list_open_prs", skip(self, out))]
     pub async fn list_open_prs(
         &self,
-        owner: &str,
-        repo: &str,
+        slug: &RepoSlug,
         out: mpsc::UnboundedSender<PR>,
     ) -> Result<()> {
-        let route = format!("/repos/{owner}/{repo}/pulls");
+        let route = format!("/repos/{slug}/pulls");
         let params = ListParams {
             state: "open",
             per_page: 100,
@@ -413,14 +412,13 @@ impl OctocrabRest {
             .client
             .get(&route, Some(&params))
             .await
-            .with_context(|| format!("listing open PRs for {owner}/{repo}"))?;
+            .with_context(|| format!("listing open PRs for {slug}"))?;
 
-        let repo_slug = format!("{owner}/{repo}");
         loop {
             let items = page.take_items();
             let count = items.len();
             for raw in items {
-                let pr = parse_pr(raw, &repo_slug);
+                let pr = parse_pr(raw, slug);
                 if out.send(pr).is_err() {
                     tracing::debug!("pr receiver dropped; stopping pagination");
                     return Ok(());
@@ -432,7 +430,7 @@ impl OctocrabRest {
                 .client
                 .get_page::<RawRestPR>(&page.next)
                 .await
-                .with_context(|| format!("fetching next page of PRs for {owner}/{repo}"))?
+                .with_context(|| format!("fetching next page of PRs for {slug}"))?
             {
                 Some(next_page) => page = next_page,
                 None => return Ok(()),
@@ -443,12 +441,12 @@ impl OctocrabRest {
     /// Fetch all non-pending reviews for a PR, reduced to the latest decision
     /// per user.
     #[tracing::instrument(name = "list_reviews", skip(self))]
-    pub async fn list_reviews(&self, owner: &str, repo: &str, number: u64) -> Result<Vec<Review>> {
-        let route = format!("/repos/{owner}/{repo}/pulls/{number}/reviews");
+    pub async fn list_reviews(&self, slug: &RepoSlug, number: u64) -> Result<Vec<Review>> {
+        let route = format!("/repos/{slug}/pulls/{number}/reviews");
         let raw = self
             .get_all::<RawReview>(&route)
             .await
-            .with_context(|| format!("listing reviews for {owner}/{repo}#{number}"))?;
+            .with_context(|| format!("listing reviews for {slug}#{number}"))?;
         Ok(parse_reviews(raw))
     }
 
@@ -456,16 +454,15 @@ impl OctocrabRest {
     #[tracing::instrument(name = "list_issue_comments", skip(self, bot_logins))]
     pub async fn list_issue_comments(
         &self,
-        owner: &str,
-        repo: &str,
+        slug: &RepoSlug,
         number: u64,
         bot_logins: &[String],
     ) -> Result<Vec<IssueComment>> {
-        let route = format!("/repos/{owner}/{repo}/issues/{number}/comments");
+        let route = format!("/repos/{slug}/issues/{number}/comments");
         let raw = self
             .get_all::<RawIssueComment>(&route)
             .await
-            .with_context(|| format!("listing issue comments for {owner}/{repo}#{number}"))?;
+            .with_context(|| format!("listing issue comments for {slug}#{number}"))?;
         Ok(parse_issue_comments(raw, bot_logins))
     }
 
@@ -478,14 +475,13 @@ impl OctocrabRest {
     #[tracing::instrument(name = "list_check_runs", skip(self, cache))]
     pub async fn list_check_runs(
         &self,
-        owner: &str,
-        repo: &str,
+        slug: &RepoSlug,
         commit_sha: &str,
         cache: &WorkflowNameCache,
     ) -> Result<Vec<CheckRun>> {
         let (workflows, raw) = tokio::join!(
-            self.workflow_names_by_suite(owner, repo, commit_sha, cache),
-            self.fetch_raw_check_runs(owner, repo, commit_sha),
+            self.workflow_names_by_suite(slug, commit_sha, cache),
+            self.fetch_raw_check_runs(slug, commit_sha),
         );
         let workflows = workflows.unwrap_or_else(|error| {
             tracing::warn!(%error, "workflow-name lookup failed; using bare check names");
@@ -501,11 +497,10 @@ impl OctocrabRest {
     #[tracing::instrument(name = "fetch_raw_check_runs", skip(self))]
     async fn fetch_raw_check_runs(
         &self,
-        owner: &str,
-        repo: &str,
+        slug: &RepoSlug,
         commit_sha: &str,
     ) -> Result<RawCheckRunsResponse> {
-        let route = format!("/repos/{owner}/{repo}/commits/{commit_sha}/check-runs");
+        let route = format!("/repos/{slug}/commits/{commit_sha}/check-runs");
         let mut check_runs = Vec::new();
         let mut page = 1u32;
         loop {
@@ -518,7 +513,7 @@ impl OctocrabRest {
                 .get(&route, Some(&params))
                 .await
                 .with_context(|| {
-                    format!("listing check runs for {owner}/{repo}@{commit_sha} (page {page})")
+                    format!("listing check runs for {slug}@{commit_sha} (page {page})")
                 })?;
             let count = response.check_runs.len();
             check_runs.extend(response.check_runs);
@@ -544,14 +539,13 @@ impl OctocrabRest {
     #[tracing::instrument(name = "workflow_names_by_suite", skip(self, cache))]
     async fn workflow_names_by_suite(
         &self,
-        owner: &str,
-        repo: &str,
+        slug: &RepoSlug,
         head_sha: &str,
         cache: &WorkflowNameCache,
     ) -> Result<HashMap<u64, String>> {
         let (names_by_id, suite_workflow_ids) = tokio::try_join!(
-            cache.get_or_init(self, owner, repo),
-            self.suite_workflow_ids(owner, repo, head_sha),
+            cache.get_or_init(self, slug),
+            self.suite_workflow_ids(slug, head_sha),
         )?;
         Ok(suite_workflow_ids
             .into_iter()
@@ -572,11 +566,10 @@ impl OctocrabRest {
     #[tracing::instrument(name = "suite_workflow_ids", skip(self))]
     async fn suite_workflow_ids(
         &self,
-        owner: &str,
-        repo: &str,
+        slug: &RepoSlug,
         head_sha: &str,
     ) -> Result<HashMap<u64, u64>> {
-        let route = format!("/repos/{owner}/{repo}/actions/runs");
+        let route = format!("/repos/{slug}/actions/runs");
         let mut by_suite = HashMap::new();
         let mut page = 1u32;
         loop {
@@ -590,7 +583,7 @@ impl OctocrabRest {
                 .get(&route, Some(&params))
                 .await
                 .with_context(|| {
-                    format!("listing workflow runs for {owner}/{repo}@{head_sha} (page {page})")
+                    format!("listing workflow runs for {slug}@{head_sha} (page {page})")
                 })?;
             let count = response.workflow_runs.len();
             for run in response.workflow_runs {
@@ -611,8 +604,8 @@ impl OctocrabRest {
     /// for [`workflow_names_by_suite`]; the response nests workflows under
     /// `workflows` and paginates by `page`.
     #[tracing::instrument(name = "workflow_names_by_id", skip(self))]
-    async fn workflow_names_by_id(&self, owner: &str, repo: &str) -> Result<HashMap<u64, String>> {
-        let route = format!("/repos/{owner}/{repo}/actions/workflows");
+    async fn workflow_names_by_id(&self, slug: &RepoSlug) -> Result<HashMap<u64, String>> {
+        let route = format!("/repos/{slug}/actions/workflows");
         let mut by_id = HashMap::new();
         let mut page = 1u32;
         loop {
@@ -624,7 +617,7 @@ impl OctocrabRest {
                 .client
                 .get(&route, Some(&params))
                 .await
-                .with_context(|| format!("listing workflows for {owner}/{repo} (page {page})"))?;
+                .with_context(|| format!("listing workflows for {slug} (page {page})"))?;
             let count = response.workflows.len();
             for workflow in response.workflows {
                 by_id.insert(workflow.id, workflow.name);
@@ -638,17 +631,17 @@ impl OctocrabRest {
     }
 
     /// Fetch a single PR's body (markdown). The single-PR endpoint at
-    /// `/repos/{owner}/{repo}/pulls/{number}` is used because the list
+    /// `/repos/{slug}/pulls/{number}` is used because the list
     /// endpoint omits `body`; all other PR fields are sourced from the
     /// enriched list PR rather than this response.
     #[tracing::instrument(name = "fetch_pr_detail", skip(self))]
-    pub async fn fetch_pr_detail(&self, owner: &str, repo: &str, number: u64) -> Result<String> {
-        let route = format!("/repos/{owner}/{repo}/pulls/{number}");
+    pub async fn fetch_pr_detail(&self, slug: &RepoSlug, number: u64) -> Result<String> {
+        let route = format!("/repos/{slug}/pulls/{number}");
         let raw: RawRestPRDetail = self
             .client
             .get(&route, None::<&()>)
             .await
-            .with_context(|| format!("fetching PR detail for {owner}/{repo}#{number}"))?;
+            .with_context(|| format!("fetching PR detail for {slug}#{number}"))?;
         Ok(raw.body.unwrap_or_default())
     }
 
@@ -657,17 +650,12 @@ impl OctocrabRest {
     /// `fetchCategorizedFiles` minus the categorisation, which `update` does
     /// against the config `file_rules`.
     #[tracing::instrument(name = "list_files", skip(self))]
-    pub async fn list_files(
-        &self,
-        owner: &str,
-        repo: &str,
-        number: u64,
-    ) -> Result<Vec<FileChange>> {
-        let route = format!("/repos/{owner}/{repo}/pulls/{number}/files");
+    pub async fn list_files(&self, slug: &RepoSlug, number: u64) -> Result<Vec<FileChange>> {
+        let route = format!("/repos/{slug}/pulls/{number}/files");
         let raw = self
             .get_all::<RawFile>(&route)
             .await
-            .with_context(|| format!("listing files for {owner}/{repo}#{number}"))?;
+            .with_context(|| format!("listing files for {slug}#{number}"))?;
         Ok(raw
             .into_iter()
             .map(|file| FileChange {

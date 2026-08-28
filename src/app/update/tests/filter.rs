@@ -172,7 +172,7 @@ fn filter_composes_with_the_active_tab_scope() {
     assert!(
         model
             .list
-            .filter_hid_everything(model.active_scope().as_deref())
+            .filter_hid_everything(model.active_scope().as_ref())
     );
 }
 

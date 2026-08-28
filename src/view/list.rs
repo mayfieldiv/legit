@@ -40,9 +40,9 @@ pub fn render(
         // both checks are judged against the active tab's scope (a repo tab
         // shows its own repo's PRs and listing state, the All tab any repo).
         let scope = model.active_scope();
-        let text = if pr_list.filter_hid_everything(scope.as_deref()) {
+        let text = if pr_list.filter_hid_everything(scope.as_ref()) {
             "No matching PRs"
-        } else if pr_list.is_loading(scope.as_deref()) {
+        } else if pr_list.is_loading(scope.as_ref()) {
             "Loading pull requests…"
         } else {
             "No open pull requests"
@@ -344,11 +344,11 @@ fn row_line(
     if layout.show_repo {
         // The repo cell takes the repo's stable Repo Color, so a mixed All-tab
         // list groups visually by repo while scanning.
-        let repo = truncate_middle(format_repo_short(&pr.repo_slug), REPO_COL);
+        let repo = truncate_middle(format_repo_short(pr.repo_slug.as_str()), REPO_COL);
         cells.push(Cell {
             text: repo,
             width: REPO_COL,
-            style: Style::default().fg(repo_color(&pr.repo_slug)),
+            style: Style::default().fg(repo_color(pr.repo_slug.as_str())),
         });
     }
     let title_slot = cells.len();

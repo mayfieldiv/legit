@@ -119,8 +119,8 @@ fn render_header(
         Span::styled(pr.author.clone(), Style::default().fg(palette.author)),
         Span::styled(" · ", Style::default().fg(palette.separator)),
         Span::styled(
-            pr.repo_slug.clone(),
-            Style::default().fg(repo_color(&pr.repo_slug)),
+            pr.repo_slug.to_string(),
+            Style::default().fg(repo_color(pr.repo_slug.as_str())),
         ),
         Span::styled(" · ", Style::default().fg(palette.separator)),
         Span::styled("created ", Style::default().fg(palette.muted)),

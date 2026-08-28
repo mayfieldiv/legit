@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::github::types::{PRState, ReviewStatus};
+use crate::repo_slug::RepoSlug;
 
 fn review_status(head_sha: Option<&str>) -> ReviewStatus {
     ReviewStatus {
@@ -23,7 +24,7 @@ fn pr_list_loaded_fans_out_enrichment_per_pr() {
     let cmds = update(
         &mut model,
         Msg::PrListLoaded {
-            repo_slug: "mayfieldiv/legit".to_owned(),
+            repo_slug: RepoSlug::new("mayfieldiv/legit"),
         },
     );
 
@@ -57,7 +58,7 @@ fn pr_list_loaded_with_empty_list_fans_out_nothing() {
     let cmds = update(
         &mut model,
         Msg::PrListLoaded {
-            repo_slug: "mayfieldiv/legit".to_owned(),
+            repo_slug: RepoSlug::new("mayfieldiv/legit"),
         },
     );
 
@@ -67,17 +68,14 @@ fn pr_list_loaded_with_empty_list_fans_out_nothing() {
 #[test]
 fn pr_list_loaded_without_auth_fans_out_nothing() {
     let (mut model, _) = Model::new();
-    model.repo = RepoDetection::Detected(RepoInfo {
-        owner: "mayfieldiv".to_owned(),
-        repo: "legit".to_owned(),
-    });
-    model.list.begin_fetch("mayfieldiv/legit");
+    model.repo = RepoDetection::Detected(RepoSlug::new("mayfieldiv/legit"));
+    model.list.begin_fetch(&RepoSlug::new("mayfieldiv/legit"));
     model.list.push(sample_pr(1, "p"));
 
     let cmds = update(
         &mut model,
         Msg::PrListLoaded {
-            repo_slug: "mayfieldiv/legit".to_owned(),
+            repo_slug: RepoSlug::new("mayfieldiv/legit"),
         },
     );
 
@@ -151,7 +149,7 @@ fn review_status_arrived_for_unknown_pr_is_a_noop() {
 fn review_status_arrived_skips_checks_already_fetched_for_sha() {
     let mut model = enriched_model(&[1]);
     model.enrichment.checks.insert(
-        ("mayfieldiv/legit".to_owned(), "abc123".to_owned()),
+        (RepoSlug::new("mayfieldiv/legit"), "abc123".to_owned()),
         Vec::new(),
     );
 
@@ -177,7 +175,7 @@ fn same_sha_in_another_repo_still_fetches_checks() {
     model.config = config_with_repos(&["acme/web"]);
     model.list.push(sample_pr_in("acme/web", 7, "fork pr"));
     model.enrichment.checks.insert(
-        ("mayfieldiv/legit".to_owned(), "abc123".to_owned()),
+        (RepoSlug::new("mayfieldiv/legit"), "abc123".to_owned()),
         Vec::new(),
     );
 
@@ -185,7 +183,7 @@ fn same_sha_in_another_repo_still_fetches_checks() {
         &mut model,
         Msg::ReviewStatusArrived {
             pr: PrKey {
-                repo_slug: "acme/web".to_owned(),
+                repo_slug: RepoSlug::new("acme/web"),
                 number: 7,
             },
             status: review_status(Some("abc123")),
@@ -194,7 +192,7 @@ fn same_sha_in_another_repo_still_fetches_checks() {
 
     match cmds.as_slice() {
         [Cmd::FetchChecks { ctx, pr, head_sha }] => {
-            assert_eq!(ctx.repo.slug(), "acme/web");
+            assert_eq!(ctx.repo, "acme/web");
             assert_eq!(head_sha, "abc123");
             // Carries the PR the SHA came from, so the limiter can focus-promote it.
             assert_eq!(pr.repo_slug, "acme/web");
@@ -264,7 +262,7 @@ fn checks_arrived_stores_checks_by_repo_and_head_sha() {
     update(
         &mut model,
         Msg::ChecksArrived {
-            repo_slug: "mayfieldiv/legit".to_owned(),
+            repo_slug: RepoSlug::new("mayfieldiv/legit"),
             head_sha: "abc123".to_owned(),
             checks: vec![check.clone()],
         },
@@ -274,7 +272,7 @@ fn checks_arrived_stores_checks_by_repo_and_head_sha() {
         model
             .enrichment
             .checks
-            .get(&("mayfieldiv/legit".to_owned(), "abc123".to_owned())),
+            .get(&(RepoSlug::new("mayfieldiv/legit"), "abc123".to_owned())),
         Some(&vec![check])
     );
 }
