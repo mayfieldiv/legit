@@ -111,6 +111,99 @@ pub struct IssueComment {
     pub is_bot: bool,
 }
 
+// ── wayfinder ticket transport types ─────────────────────────────────────────
+
+/// Lifecycle state for a GitHub issue. REST reports `open`/`closed`, GraphQL
+/// `OPEN`/`CLOSED`; [`IssueState::parse`] accepts both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IssueState {
+    Open,
+    Closed,
+}
+
+impl IssueState {
+    /// Parse either transport's casing. An absent or unrecognised value
+    /// defaults to `Open` — the safe direction both ways it's used: an open
+    /// Ticket stays visible, and an open blocker keeps its dependent off the
+    /// Frontier. Mirrors `parse_pr_state`'s `_ => Open` fallback.
+    pub fn parse(state: Option<&str>) -> Self {
+        match state {
+            Some(s) if s.eq_ignore_ascii_case("closed") => IssueState::Closed,
+            _ => IssueState::Open,
+        }
+    }
+}
+
+/// The transport-to-domain state mapping both the GraphQL map read and the
+/// REST single-ticket refresh normalize through.
+impl From<IssueState> for crate::ticket::TicketState {
+    fn from(state: IssueState) -> Self {
+        match state {
+            IssueState::Open => Self::Open,
+            IssueState::Closed => Self::Closed,
+        }
+    }
+}
+
+/// A Map issue's sub-issue progress counters, as GitHub reports them on every
+/// issue payload. Drives the effort card's `N/M decided` counts. Deserializes
+/// from both transports' casings (REST snake_case, GraphQL camelCase).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+pub struct SubIssuesSummary {
+    #[serde(default)]
+    pub total: u64,
+    #[serde(default)]
+    pub completed: u64,
+    #[serde(default, alias = "percentCompleted")]
+    pub percent_completed: u64,
+}
+
+/// An issue's dependency counters (`issue_dependencies_summary` /
+/// `issueDependenciesSummary`). `blocked_by`/`blocking` count OPEN
+/// counterparts only; the `total_*` pair counts open and closed.
+///
+/// Never derive blocked-ness from these: the summary is eventually consistent
+/// (~10s after a close), so a read right after a blocker closes still counts
+/// it. Blocked-ness comes from the `blockedBy` *list* filtered on each node's
+/// state (spec §4.2); these ride along as display-only data.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+pub struct DependenciesSummary {
+    #[serde(default, alias = "blockedBy")]
+    pub blocked_by: u64,
+    #[serde(default, alias = "blocking")]
+    pub blocking: u64,
+    #[serde(default, alias = "totalBlockedBy")]
+    pub total_blocked_by: u64,
+    #[serde(default, alias = "totalBlocking")]
+    pub total_blocking: u64,
+}
+
+/// A GitHub issue as the ticket surface consumes it — the REST single-issue
+/// refresh's parsed output (the `PR` analog for issues). The whole-map GraphQL
+/// read normalizes straight into `ticket::Effort` instead; this type serves
+/// the per-ticket paths (drill-in body, single-ticket refresh, label listing).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Issue {
+    pub number: u64,
+    pub title: String,
+    pub state: IssueState,
+    pub url: String,
+    /// The issue's markdown body; empty when the author left it blank.
+    pub body: String,
+    /// Label names only — the ticket surface derives Type from them and
+    /// renders no label chips.
+    pub labels: Vec<String>,
+    /// Assignee logins; the first one is the Claim.
+    pub assignees: Vec<String>,
+    pub sub_issues_summary: SubIssuesSummary,
+    pub dependencies_summary: DependenciesSummary,
+    /// API URL of the parent issue, when this issue is a sub-issue. On every
+    /// payload, which is why `GET …/parent` (404 when parentless) is never
+    /// called — every 404 stays a genuine error, including the
+    /// missing-Issues-scope case, which surfaces as 404.
+    pub parent_issue_url: Option<String>,
+}
+
 /// Whether a commenter is a bot. Mirrors the TS rule: a GraphQL `Bot` typename
 /// (or REST `user.type == "Bot"`), a `[bot]` login suffix, or a configured
 /// `botLogins` entry. `type_name` carries whichever the source provides.
