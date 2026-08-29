@@ -126,7 +126,7 @@ fn parses_wayfinder_map_into_effort() {
     assert_eq!(
         tickets[1].dependencies,
         vec![Dependency::SameEffort(same_effort_key(116))],
-        "a closed same-effort blocker is kept (the detail page shows it ✓)"
+        "a closed same-effort Dependency is kept (the detail page shows it ✓)"
     );
 
     // No `wayfinder:` label at all → an empty Type, shown verbatim, Mode Either.
@@ -180,7 +180,7 @@ fn map_parse_flags_more_maps_beyond_first_page() {
 }
 
 #[test]
-fn unreadable_blocker_repo_degrades_to_unknown_dependency() {
+fn unreadable_dependency_repo_degrades_to_unknown_dependency() {
     let raw = r#"{ "data": { "repository": { "issues": {
         "pageInfo": { "hasNextPage": false, "endCursor": null },
         "nodes": [ {
@@ -209,9 +209,9 @@ fn unreadable_blocker_repo_degrades_to_unknown_dependency() {
 }
 
 #[test]
-fn truncated_blocker_list_keeps_ticket_off_the_frontier() {
+fn truncated_blocked_by_list_keeps_ticket_off_the_frontier() {
     // `first:50` is GitHub's hard cap, so this "can't happen" — but if it
-    // ever does, the unseen blockers must not put the ticket on the Frontier.
+    // ever does, unseen Dependencies must not put the ticket on the Frontier.
     let raw = r#"{ "data": { "repository": { "issues": {
         "pageInfo": { "hasNextPage": false, "endCursor": null },
         "nodes": [ {
@@ -234,7 +234,7 @@ fn truncated_blocker_list_keeps_ticket_off_the_frontier() {
 fn truncated_sub_issue_list_degrades_the_map() {
     // `first:100` is GitHub's hard sub-issue cap, so this "can't happen" —
     // but a partial ticket set would silently drop tickets and misread the
-    // missing ones' same-effort blockers as External, so the map degrades.
+    // missing ones' same-effort Dependencies as External, so the map degrades.
     let raw = r#"{ "data": { "repository": { "issues": {
         "pageInfo": { "hasNextPage": false, "endCursor": null },
         "nodes": [ {

@@ -52,7 +52,7 @@ impl Wayfinder {
     }
 
     /// One whole-map read: every open wayfinder map in `slug`, with
-    /// sub-issues and their blockers, normalized into Efforts. The N+1
+    /// sub-issues and their Dependencies, normalized into Efforts. The N+1
     /// collapse that puts this on GraphQL: one query, measured cost 10 of
     /// 5,000 points/hr, flat in map size (spec §4.1).
     #[tracing::instrument(name = "read_efforts", skip(self))]
@@ -200,7 +200,7 @@ struct RawTicketNode {
     #[serde(default)]
     labels: Option<RawLabelConnection>,
     #[serde(default)]
-    blocked_by: Option<RawConnection<RawBlockerNode>>,
+    blocked_by: Option<RawConnection<RawBlockedByNode>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -226,14 +226,14 @@ struct RawLabelName {
 }
 
 #[derive(Debug, Deserialize)]
-struct RawBlockerNode {
+struct RawBlockedByNode {
     number: u64,
     #[serde(default)]
     state: Option<String>,
     #[serde(default)]
     title: Option<String>,
-    /// The blocker's home repo. Read from the payload, never assumed: a
-    /// blocker in another repo is an External Dependency.
+    /// The dependency target's home repo. Read from the payload, never
+    /// assumed: a target in another repo is an External Dependency.
     #[serde(default)]
     repository: Option<RawRepoName>,
 }
@@ -351,8 +351,8 @@ fn normalize_map(
     let sub_issues = sub_issues.ok_or_else(|| "payload missing subIssues connection".to_owned())?;
     // `first:100` is the hard sub-issue cap per parent, so a next page
     // "can't" exist; if it ever does, a partial ticket set would silently
-    // drop tickets and misread the missing ones' same-effort blockers as
-    // External — no conservative reading, so the map degrades (§5.5).
+    // drop tickets and misread the missing ones' same-effort Dependencies
+    // as External — no conservative reading, so the map degrades (§5.5).
     if sub_issues.page_info.has_next_page {
         return Err("sub-issue list truncated at GitHub's 100-per-parent cap".to_owned());
     }
@@ -360,7 +360,8 @@ fn normalize_map(
         .nodes
         .ok_or_else(|| "payload missing subIssues nodes".to_owned())?;
     // Same-effort membership is "is a sub-issue of this map", not "lives in
-    // this repo": a same-repo blocker outside the map stays External.
+    // this repo": a same-repo dependency target outside the map stays
+    // External.
     let members: HashSet<u64> = ticket_nodes.iter().map(|t| t.number).collect();
     let tickets: Vec<Ticket> = ticket_nodes
         .into_iter()
@@ -399,23 +400,23 @@ fn parse_ticket_node(
             node.number
         )
     })?;
-    let blockers_truncated = blocked_by.page_info.has_next_page;
-    let blocker_nodes = blocked_by
+    let blocked_by_truncated = blocked_by.page_info.has_next_page;
+    let blocked_by_nodes = blocked_by
         .nodes
         .with_context(|| format!("ticket #{} payload missing blockedBy nodes", node.number))?;
     let claim = claim_from_assignees(assignees.into_iter().map(|assignee| assignee.login));
     let labels = node.labels.map(|c| c.nodes).unwrap_or_default();
     let ty = ticket_type_from_labels(labels.iter().map(|label| label.name.as_str()));
-    let mut dependencies: Vec<Dependency> = blocker_nodes
+    let mut dependencies: Vec<Dependency> = blocked_by_nodes
         .into_iter()
-        .map(|blocker| parse_blocker(blocker, slug, members))
+        .map(|target| parse_dependency(target, slug, members))
         .collect();
     // `first:50` is GitHub's hard relation cap, so this "can't" be true —
-    // but unseen blockers must never put a ticket on the Frontier, so a
-    // truncated list degrades to an Unknown Dependency.
-    if blockers_truncated {
+    // but unseen Dependencies must never put a ticket on the Frontier, so
+    // a truncated list degrades to an Unknown Dependency.
+    if blocked_by_truncated {
         dependencies.push(Dependency::Unknown {
-            raw: "additional blockers".to_owned(),
+            raw: "additional dependencies".to_owned(),
         });
     }
     Ok(Ticket {
@@ -431,7 +432,7 @@ fn parse_ticket_node(
     })
 }
 
-fn parse_blocker(node: RawBlockerNode, slug: &RepoSlug, members: &HashSet<u64>) -> Dependency {
+fn parse_dependency(node: RawBlockedByNode, slug: &RepoSlug, members: &HashSet<u64>) -> Dependency {
     let repo = match node.repository {
         Some(repo) => match RepoSlug::parse(&repo.name_with_owner) {
             Ok(parsed) => parsed,
