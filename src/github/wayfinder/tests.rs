@@ -1,6 +1,6 @@
 use super::{
-    EffortRead, RawRestIssue, TicketRefresh, WayfinderMapResponse, has_fallback_dependency_lines,
-    parse_issue, parse_refresh, parse_wayfinder_maps, scan_map_body,
+    EffortRead, EffortReadBatch, RawRestIssue, TicketRefresh, WayfinderMapResponse,
+    has_fallback_dependency_lines, parse_issue, parse_refresh, parse_wayfinder_maps, scan_map_body,
 };
 use crate::github::graphql::ensure_no_errors;
 use crate::github::types::{DependenciesSummary, Issue, IssueState, SubIssuesSummary};
@@ -11,6 +11,11 @@ use crate::ticket::{
 
 fn map_slug() -> RepoSlug {
     RepoSlug::new("mayfieldiv/legit")
+}
+
+fn parse_batch(raw: &str) -> anyhow::Result<EffortReadBatch> {
+    let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
+    parse_wayfinder_maps(response, &map_slug())
 }
 
 fn same_effort_key(number: u64) -> TicketKey {
@@ -87,9 +92,7 @@ fn parses_wayfinder_map_into_effort() {
             } ]
         } }
     } }"###;
-    let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
-
-    let batch = parse_wayfinder_maps(response, &map_slug()).expect("parse");
+    let batch = parse_batch(raw).expect("parse");
 
     assert!(!batch.has_more_maps);
     assert_eq!(batch.efforts.len(), 1);
@@ -171,9 +174,7 @@ fn map_parse_flags_more_maps_beyond_first_page() {
         "pageInfo": { "hasNextPage": true, "endCursor": "c1" },
         "nodes": []
     } } } }"#;
-    let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
-
-    let batch = parse_wayfinder_maps(response, &map_slug()).expect("parse");
+    let batch = parse_batch(raw).expect("parse");
 
     assert!(batch.has_more_maps);
 }
@@ -194,9 +195,7 @@ fn unreadable_blocker_repo_degrades_to_unknown_dependency() {
             } ] }
         } ]
     } } } }"#;
-    let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
-
-    let batch = parse_wayfinder_maps(response, &map_slug()).expect("parse");
+    let batch = parse_batch(raw).expect("parse");
 
     let effort = ready(&batch.efforts[0]);
     let ticket = effort.tickets().next().unwrap();
@@ -225,9 +224,7 @@ fn truncated_blocker_list_keeps_ticket_off_the_frontier() {
             } ] }
         } ]
     } } } }"#;
-    let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
-
-    let batch = parse_wayfinder_maps(response, &map_slug()).expect("parse");
+    let batch = parse_batch(raw).expect("parse");
 
     let effort = ready(&batch.efforts[0]);
     assert!(effort.tickets().next().unwrap().is_blocked());
@@ -250,9 +247,7 @@ fn truncated_sub_issue_list_degrades_the_map() {
             } ] }
         } ]
     } } } }"#;
-    let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
-
-    let batch = parse_wayfinder_maps(response, &map_slug()).expect("parse");
+    let batch = parse_batch(raw).expect("parse");
 
     let EffortRead::Degraded { title, reason, .. } = &batch.efforts[0] else {
         panic!("expected Degraded, got {:?}", batch.efforts[0]);
@@ -283,9 +278,7 @@ fn map_with_task_list_body_and_no_sub_issues_degrades_as_fallback_dialect() {
             }
         ]
     } } } }"###;
-    let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
-
-    let batch = parse_wayfinder_maps(response, &map_slug()).expect("parse");
+    let batch = parse_batch(raw).expect("parse");
 
     let EffortRead::Degraded {
         key,
@@ -342,9 +335,7 @@ fn a_malformed_map_degrades_without_discarding_the_others() {
             }
         ]
     } } } }"#;
-    let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
-
-    let batch = parse_wayfinder_maps(response, &map_slug()).expect("parse");
+    let batch = parse_batch(raw).expect("parse");
 
     assert_eq!(batch.efforts.len(), 2);
     let EffortRead::Degraded {
@@ -407,9 +398,7 @@ fn absent_authoritative_connections_degrade_the_map() {
             }
         ]
     } } } }"#;
-    let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
-
-    let batch = parse_wayfinder_maps(response, &map_slug()).expect("parse");
+    let batch = parse_batch(raw).expect("parse");
 
     let reason = |read: &EffortRead| -> String {
         match read {
@@ -459,9 +448,7 @@ fn absent_nodes_inside_present_connections_degrade_the_map() {
             }
         ]
     } } } }"#;
-    let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
-
-    let batch = parse_wayfinder_maps(response, &map_slug()).expect("parse");
+    let batch = parse_batch(raw).expect("parse");
 
     let reason = |read: &EffortRead| -> String {
         match read {
@@ -482,9 +469,7 @@ fn issues_connection_without_nodes_is_an_error() {
     let raw = r#"{ "data": { "repository": { "issues": {
         "pageInfo": { "hasNextPage": false, "endCursor": null }
     } } } }"#;
-    let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
-
-    let err = parse_wayfinder_maps(response, &map_slug()).expect_err("malformed payload");
+    let err = parse_batch(raw).expect_err("malformed payload");
     assert!(err.to_string().contains("repository.issues nodes"));
 }
 
@@ -494,9 +479,7 @@ fn payload_without_issues_connection_is_an_error() {
     // payload lacking `repository.issues` is malformed — parsing it as an
     // empty batch would be indistinguishable from a repo with no maps.
     let raw = r#"{ "data": { "repository": null } }"#;
-    let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
-
-    let err = parse_wayfinder_maps(response, &map_slug()).expect_err("malformed payload");
+    let err = parse_batch(raw).expect_err("malformed payload");
     assert!(err.to_string().contains("repository.issues"));
 }
 
