@@ -159,15 +159,20 @@ struct RawRateLimit {
 #[derive(Debug, Deserialize)]
 struct WayfinderMapRepo {
     #[serde(default)]
-    issues: Option<RawMapConnection>,
+    issues: Option<RawConnection<RawMapNode>>,
 }
 
+/// A paged GraphQL connection as the map query selects it. `nodes` is
+/// `Option`, never defaulted to empty: for these lists absent ≠
+/// present-empty (a silently-empty authoritative list manufactures facts,
+/// §5.5), so each caller decides how absence degrades.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct RawMapConnection {
+struct RawConnection<T> {
     page_info: RawPageInfo,
-    #[serde(default)]
-    nodes: Vec<RawMapNode>,
+    // No `#[serde(default)]`: it would force a spurious `T: Default` bound
+    // (serde-rs/serde#1541); an `Option` field is already `None` when absent.
+    nodes: Option<Vec<T>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -179,15 +184,7 @@ struct RawMapNode {
     #[serde(default)]
     body: String,
     #[serde(default)]
-    sub_issues: Option<RawTicketConnection>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawTicketConnection {
-    page_info: RawPageInfo,
-    #[serde(default)]
-    nodes: Vec<RawTicketNode>,
+    sub_issues: Option<RawConnection<RawTicketNode>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -203,13 +200,13 @@ struct RawTicketNode {
     #[serde(default)]
     labels: Option<RawLabelConnection>,
     #[serde(default)]
-    blocked_by: Option<RawBlockerConnection>,
+    blocked_by: Option<RawConnection<RawBlockerNode>>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RawLoginConnection {
     #[serde(default)]
-    nodes: Vec<RawLogin>,
+    nodes: Option<Vec<RawLogin>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -226,14 +223,6 @@ struct RawLabelConnection {
 #[derive(Debug, Deserialize)]
 struct RawLabelName {
     name: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawBlockerConnection {
-    page_info: RawPageInfo,
-    #[serde(default)]
-    nodes: Vec<RawBlockerNode>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -292,10 +281,10 @@ pub struct EffortReadBatch {
 /// inputs come from each ticket's `blockedBy` list (filtered on state at
 /// derivation time) — never from the eventually-consistent
 /// `issueDependenciesSummary` counters, which this parse doesn't even read.
-/// Errs when the payload lacks the `repository.issues` connection: with
-/// GraphQL-level errors already surfaced, such a payload is malformed, and
-/// an empty batch would be indistinguishable from a repo with no maps —
-/// a startup failure must never be silently missing (§5.5).
+/// Errs when the payload lacks the `repository.issues` connection or its
+/// `nodes`: with GraphQL-level errors already surfaced, such a payload is
+/// malformed, and an empty batch would be indistinguishable from a repo
+/// with no maps — a startup failure must never be silently missing (§5.5).
 fn parse_wayfinder_maps(
     response: WayfinderMapResponse,
     slug: &RepoSlug,
@@ -305,9 +294,11 @@ fn parse_wayfinder_maps(
         .and_then(|d| d.repository)
         .and_then(|r| r.issues)
         .context("payload missing repository.issues connection")?;
+    let nodes = connection
+        .nodes
+        .context("payload missing repository.issues nodes")?;
     Ok(EffortReadBatch {
-        efforts: connection
-            .nodes
+        efforts: nodes
             .into_iter()
             .map(|node| read_map_node(node, slug))
             .collect(),
@@ -344,18 +335,19 @@ fn read_map_node(node: RawMapNode, slug: &RepoSlug) -> EffortRead {
 /// The fallible half of one map's normalization. An `Err` is the
 /// human-readable degradation reason the effort card renders (§5.5).
 fn normalize_map(
-    sub_issues: Option<RawTicketConnection>,
+    sub_issues: Option<RawConnection<RawTicketNode>>,
     has_task_list: bool,
     key: &EffortKey,
     title: &str,
     destination: &Option<String>,
     slug: &RepoSlug,
 ) -> Result<Effort, String> {
-    // Absent ≠ present-empty: the query always selects these connections, so
-    // a payload without one is malformed, and treating it as empty would
-    // manufacture facts (an empty Effort here; unclaimed / unblocked tickets
-    // in `parse_ticket_node`) that can put a ticket falsely on the Frontier.
-    // No conservative reading exists, so the map degrades (§5.5).
+    // Absent ≠ present-empty: the query always selects these connections and
+    // their `nodes`, so a payload missing either is malformed, and treating
+    // it as empty would manufacture facts (an empty Effort here; unclaimed /
+    // unblocked tickets in `parse_ticket_node`) that can put a ticket falsely
+    // on the Frontier. No conservative reading exists, so the map degrades
+    // (§5.5).
     let sub_issues = sub_issues.ok_or_else(|| "payload missing subIssues connection".to_owned())?;
     // `first:100` is the hard sub-issue cap per parent, so a next page
     // "can't" exist; if it ever does, a partial ticket set would silently
@@ -364,7 +356,9 @@ fn normalize_map(
     if sub_issues.page_info.has_next_page {
         return Err("sub-issue list truncated at GitHub's 100-per-parent cap".to_owned());
     }
-    let ticket_nodes = sub_issues.nodes;
+    let ticket_nodes = sub_issues
+        .nodes
+        .ok_or_else(|| "payload missing subIssues nodes".to_owned())?;
     // Same-effort membership is "is a sub-issue of this map", not "lives in
     // this repo": a same-repo blocker outside the map stays External.
     let members: HashSet<u64> = ticket_nodes.iter().map(|t| t.number).collect();
@@ -383,41 +377,43 @@ fn normalize_map(
         .map_err(|error| format!("{error:#}"))
 }
 
-/// Normalize one sub-issue node. Errs when a Frontier-authoritative
-/// connection (`assignees`, `blockedBy`) is absent — treating absence as
-/// empty would read as unclaimed/unblocked and could manufacture a false
-/// Frontier Ticket, so the whole map degrades instead (see `read_map_node`).
-/// `labels` stays defaulted: Type only feeds the Mode filter, never the
-/// Frontier, so an absent list is safely an empty Type.
+/// Normalize one sub-issue node. Errs when a Frontier-authoritative list
+/// (`assignees`, `blockedBy`) is absent at either level, connection or
+/// `nodes` — treating absence as empty would read as unclaimed/unblocked
+/// and could manufacture a false Frontier Ticket, so the whole map degrades
+/// instead (see `read_map_node`). `labels` stays defaulted: Type only feeds
+/// the Mode filter, never the Frontier, so an absent list is safely an
+/// empty Type.
 fn parse_ticket_node(
     node: RawTicketNode,
     slug: &RepoSlug,
     members: &HashSet<u64>,
 ) -> Result<Ticket> {
-    let assignees = node.assignees.with_context(|| {
-        format!(
-            "ticket #{} payload missing assignees connection",
-            node.number
-        )
-    })?;
+    let assignees = node
+        .assignees
+        .and_then(|connection| connection.nodes)
+        .with_context(|| format!("ticket #{} payload missing assignees", node.number))?;
     let blocked_by = node.blocked_by.with_context(|| {
         format!(
             "ticket #{} payload missing blockedBy connection",
             node.number
         )
     })?;
-    let claim = claim_from_assignees(assignees.nodes.into_iter().map(|assignee| assignee.login));
+    let blockers_truncated = blocked_by.page_info.has_next_page;
+    let blocker_nodes = blocked_by
+        .nodes
+        .with_context(|| format!("ticket #{} payload missing blockedBy nodes", node.number))?;
+    let claim = claim_from_assignees(assignees.into_iter().map(|assignee| assignee.login));
     let labels = node.labels.map(|c| c.nodes).unwrap_or_default();
     let ty = ticket_type_from_labels(labels.iter().map(|label| label.name.as_str()));
-    let mut dependencies: Vec<Dependency> = blocked_by
-        .nodes
+    let mut dependencies: Vec<Dependency> = blocker_nodes
         .into_iter()
         .map(|blocker| parse_blocker(blocker, slug, members))
         .collect();
     // `first:50` is GitHub's hard relation cap, so this "can't" be true —
     // but unseen blockers must never put a ticket on the Frontier, so a
     // truncated list degrades to an Unknown Dependency.
-    if blocked_by.page_info.has_next_page {
+    if blockers_truncated {
         dependencies.push(Dependency::Unknown {
             raw: "additional blockers".to_owned(),
         });

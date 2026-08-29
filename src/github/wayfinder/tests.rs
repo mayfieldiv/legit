@@ -429,6 +429,65 @@ fn absent_authoritative_connections_degrade_the_map() {
 }
 
 #[test]
+fn absent_nodes_inside_present_connections_degrade_the_map() {
+    // The same absent ≠ present-empty rule one level deeper: a connection
+    // whose `nodes` list is missing must not read as an empty list.
+    let raw = r#"{ "data": { "repository": { "issues": {
+        "pageInfo": { "hasNextPage": false, "endCursor": null },
+        "nodes": [
+            {
+                "number": 1, "title": "subIssues without nodes", "state": "OPEN", "url": "u", "body": "",
+                "subIssues": { "pageInfo": { "hasNextPage": false, "endCursor": null } }
+            },
+            {
+                "number": 2, "title": "assignees without nodes", "state": "OPEN", "url": "u", "body": "",
+                "subIssues": { "pageInfo": { "hasNextPage": false, "endCursor": null }, "nodes": [ {
+                    "number": 10, "title": "t", "state": "OPEN",
+                    "assignees": {},
+                    "labels": { "nodes": [] },
+                    "blockedBy": { "pageInfo": { "hasNextPage": false, "endCursor": null }, "nodes": [] }
+                } ] }
+            },
+            {
+                "number": 3, "title": "blockedBy without nodes", "state": "OPEN", "url": "u", "body": "",
+                "subIssues": { "pageInfo": { "hasNextPage": false, "endCursor": null }, "nodes": [ {
+                    "number": 11, "title": "t", "state": "OPEN",
+                    "assignees": { "nodes": [] }, "labels": { "nodes": [] },
+                    "blockedBy": { "pageInfo": { "hasNextPage": false, "endCursor": null }, "nodes": null }
+                } ] }
+            }
+        ]
+    } } } }"#;
+    let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
+
+    let batch = parse_wayfinder_maps(response, &map_slug()).expect("parse");
+
+    let reason = |read: &EffortRead| -> String {
+        match read {
+            EffortRead::Degraded { reason, .. } => reason.clone(),
+            ready => panic!("expected Degraded, got {ready:?}"),
+        }
+    };
+    assert!(reason(&batch.efforts[0]).contains("subIssues nodes"));
+    assert!(reason(&batch.efforts[1]).contains("#10 payload missing assignees"));
+    assert!(
+        reason(&batch.efforts[2]).contains("#11 payload missing blockedBy nodes"),
+        "an explicit null degrades like a missing key"
+    );
+}
+
+#[test]
+fn issues_connection_without_nodes_is_an_error() {
+    let raw = r#"{ "data": { "repository": { "issues": {
+        "pageInfo": { "hasNextPage": false, "endCursor": null }
+    } } } }"#;
+    let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
+
+    let err = parse_wayfinder_maps(response, &map_slug()).expect_err("malformed payload");
+    assert!(err.to_string().contains("repository.issues nodes"));
+}
+
+#[test]
 fn payload_without_issues_connection_is_an_error() {
     // With GraphQL-level errors already surfaced by `ensure_no_errors`, a
     // payload lacking `repository.issues` is malformed — parsing it as an
