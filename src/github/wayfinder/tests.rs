@@ -32,6 +32,13 @@ fn ready(read: &EffortRead) -> &Effort {
     }
 }
 
+fn degraded_reason(read: &EffortRead) -> &str {
+    match read {
+        EffortRead::Degraded { reason, .. } => reason,
+        ready => panic!("expected Degraded, got {ready:?}"),
+    }
+}
+
 #[test]
 fn parses_wayfinder_map_into_effort() {
     let raw = r###"{ "data": {
@@ -400,15 +407,9 @@ fn absent_authoritative_connections_degrade_the_map() {
     } } } }"#;
     let batch = parse_batch(raw).expect("parse");
 
-    let reason = |read: &EffortRead| -> String {
-        match read {
-            EffortRead::Degraded { reason, .. } => reason.clone(),
-            ready => panic!("expected Degraded, got {ready:?}"),
-        }
-    };
-    assert!(reason(&batch.efforts[0]).contains("subIssues"));
-    assert!(reason(&batch.efforts[1]).contains("#10 payload missing assignees"));
-    assert!(reason(&batch.efforts[2]).contains("#11 payload missing blockedBy"));
+    assert!(degraded_reason(&batch.efforts[0]).contains("subIssues"));
+    assert!(degraded_reason(&batch.efforts[1]).contains("#10 payload missing assignees"));
+    assert!(degraded_reason(&batch.efforts[2]).contains("#11 payload missing blockedBy"));
     // `labels` absent stays Ready: Type only feeds the Mode filter, never
     // the Frontier, so an absent list is safely an empty Type.
     let effort = ready(&batch.efforts[3]);
@@ -450,16 +451,10 @@ fn absent_nodes_inside_present_connections_degrade_the_map() {
     } } } }"#;
     let batch = parse_batch(raw).expect("parse");
 
-    let reason = |read: &EffortRead| -> String {
-        match read {
-            EffortRead::Degraded { reason, .. } => reason.clone(),
-            ready => panic!("expected Degraded, got {ready:?}"),
-        }
-    };
-    assert!(reason(&batch.efforts[0]).contains("subIssues nodes"));
-    assert!(reason(&batch.efforts[1]).contains("#10 payload missing assignees"));
+    assert!(degraded_reason(&batch.efforts[0]).contains("subIssues nodes"));
+    assert!(degraded_reason(&batch.efforts[1]).contains("#10 payload missing assignees"));
     assert!(
-        reason(&batch.efforts[2]).contains("#11 payload missing blockedBy nodes"),
+        degraded_reason(&batch.efforts[2]).contains("#11 payload missing blockedBy nodes"),
         "an explicit null degrades like a missing key"
     );
 }
