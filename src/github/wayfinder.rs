@@ -7,10 +7,6 @@
 //! single-issue REST refresh. Which transport serves which read, the map
 //! label, the wire shapes, normalization into [`Effort`], and the map-body
 //! dialect rules are all implementation.
-//!
-//! Parsing is split into pure functions (`parse_wayfinder_maps`,
-//! `parse_issue`) tested directly against fixture JSON — the same posture
-//! as `github::rest::parse_pr`.
 
 // TODO(#120): remove once the fetch layer dispatches map reads and ticket
 // refreshes.
@@ -652,7 +648,6 @@ struct RawRestIssue {
     parent_issue_url: Option<String>,
 }
 
-/// Parse a raw REST issue into the domain `Issue`. Pure; tested directly.
 fn parse_issue(raw: RawRestIssue) -> Issue {
     Issue {
         number: raw.number,

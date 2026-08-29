@@ -480,7 +480,7 @@ fn destination_extracts_first_paragraph_under_the_heading() {
 #[test]
 fn destination_heading_recognition_is_real_markdown() {
     // Closed ATX (`## … ##`) and setext headings are valid Markdown for the
-    // same heading text; the line-prefix scanner this replaced missed both.
+    // same heading text.
     assert_eq!(
         destination("## Destination ##\n\nClosed ATX heading.\n").as_deref(),
         Some("Closed ATX heading.")

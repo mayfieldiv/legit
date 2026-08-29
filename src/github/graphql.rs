@@ -2,8 +2,6 @@
 //! queries REST can't serve well: the batched per-repo review-status query
 //! and the full review-thread query (with `isResolved` + bot detection) —
 //! both mirroring the GraphQL half of the TS `src/lib/github-transport.ts`.
-//! The wayfinder whole-map read rides this client too, from behind
-//! `github::wayfinder`'s interface.
 //!
 //! Parsing is split into pure functions (`parse_review_status`,
 //! `parse_review_threads`) tested directly against fixture JSON — the same
@@ -216,8 +214,7 @@ struct RawThreadConnection {
     nodes: Vec<RawReviewThread>,
 }
 
-/// The standard GraphQL connection cursor pair. Shared with the wayfinder
-/// module's map-read shapes.
+/// The standard GraphQL connection cursor pair.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RawPageInfo {
@@ -334,8 +331,7 @@ fn parse_thread_comment(comment: RawThreadComment, bot_logins: &[String]) -> Rev
 
 // ── transport ────────────────────────────────────────────────────────────────
 
-/// One GraphQL POST body. Crate-visible so the wayfinder module can send its
-/// whole-map query through [`GraphQlClient::post`].
+/// One GraphQL POST body.
 #[derive(serde::Serialize)]
 pub(crate) struct GraphQlRequest {
     pub(crate) query: String,
@@ -361,8 +357,7 @@ impl GraphQlClient {
         })
     }
 
-    /// Send one query, surfacing HTTP and GraphQL-level failures. The
-    /// internal seam the wayfinder module's map read rides.
+    /// Send one query, surfacing HTTP and GraphQL-level failures.
     pub(crate) async fn post<T: serde::de::DeserializeOwned + GraphQlErrors>(
         &self,
         body: &GraphQlRequest,

@@ -466,8 +466,7 @@ impl OctocrabRest {
         Ok(parse_issue_comments(raw, bot_logins))
     }
 
-    /// One un-paginated GET, decoded permissively — the internal seam the
-    /// wayfinder module's single-ticket refresh rides.
+    /// One un-paginated GET, decoded permissively.
     pub(crate) async fn get_resource<T: DeserializeOwned>(
         &self,
         route: &str,
