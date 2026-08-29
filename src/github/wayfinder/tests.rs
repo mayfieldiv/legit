@@ -89,7 +89,7 @@ fn parses_wayfinder_map_into_effort() {
     } }"###;
     let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
 
-    let batch = parse_wayfinder_maps(response, &map_slug());
+    let batch = parse_wayfinder_maps(response, &map_slug()).expect("parse");
 
     assert!(!batch.more_maps);
     assert_eq!(batch.efforts.len(), 1);
@@ -173,7 +173,7 @@ fn map_parse_flags_more_maps_beyond_first_page() {
     } } } }"#;
     let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
 
-    let batch = parse_wayfinder_maps(response, &map_slug());
+    let batch = parse_wayfinder_maps(response, &map_slug()).expect("parse");
 
     assert!(batch.more_maps);
 }
@@ -196,7 +196,7 @@ fn unreadable_blocker_repo_degrades_to_unknown_dependency() {
     } } } }"#;
     let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
 
-    let batch = parse_wayfinder_maps(response, &map_slug());
+    let batch = parse_wayfinder_maps(response, &map_slug()).expect("parse");
 
     let effort = ready(&batch.efforts[0]);
     let ticket = effort.tickets().next().unwrap();
@@ -227,7 +227,7 @@ fn truncated_blocker_list_keeps_ticket_off_the_frontier() {
     } } } }"#;
     let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
 
-    let batch = parse_wayfinder_maps(response, &map_slug());
+    let batch = parse_wayfinder_maps(response, &map_slug()).expect("parse");
 
     let effort = ready(&batch.efforts[0]);
     assert!(effort.tickets().next().unwrap().is_blocked());
@@ -252,7 +252,7 @@ fn truncated_sub_issue_list_degrades_the_map() {
     } } } }"#;
     let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
 
-    let batch = parse_wayfinder_maps(response, &map_slug());
+    let batch = parse_wayfinder_maps(response, &map_slug()).expect("parse");
 
     let EffortRead::Degraded { title, reason, .. } = &batch.efforts[0] else {
         panic!("expected Degraded, got {:?}", batch.efforts[0]);
@@ -285,7 +285,7 @@ fn map_with_task_list_body_and_no_sub_issues_degrades_as_fallback_dialect() {
     } } } }"###;
     let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
 
-    let batch = parse_wayfinder_maps(response, &map_slug());
+    let batch = parse_wayfinder_maps(response, &map_slug()).expect("parse");
 
     // Task-list body with zero sub-issues: degraded (§4.4), with the map's
     // identity and context intact for the effort card's error line.
@@ -345,7 +345,7 @@ fn a_malformed_map_degrades_without_discarding_the_others() {
     } } } }"#;
     let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
 
-    let batch = parse_wayfinder_maps(response, &map_slug());
+    let batch = parse_wayfinder_maps(response, &map_slug()).expect("parse");
 
     // GitHub order is preserved: the broken map degrades in place, the
     // healthy one stays Ready.
@@ -408,7 +408,7 @@ fn absent_authoritative_connections_degrade_the_map() {
     } } } }"#;
     let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
 
-    let batch = parse_wayfinder_maps(response, &map_slug());
+    let batch = parse_wayfinder_maps(response, &map_slug()).expect("parse");
 
     let reason = |read: &EffortRead| -> String {
         match read {
@@ -426,6 +426,18 @@ fn absent_authoritative_connections_degrade_the_map() {
         effort.tickets().next().unwrap().ty,
         TicketType(String::new())
     );
+}
+
+#[test]
+fn payload_without_issues_connection_is_an_error() {
+    // With GraphQL-level errors already surfaced by `ensure_no_errors`, a
+    // payload lacking `repository.issues` is malformed — parsing it as an
+    // empty batch would be indistinguishable from a repo with no maps.
+    let raw = r#"{ "data": { "repository": null } }"#;
+    let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
+
+    let err = parse_wayfinder_maps(response, &map_slug()).expect_err("malformed payload");
+    assert!(err.to_string().contains("repository.issues"));
 }
 
 #[test]

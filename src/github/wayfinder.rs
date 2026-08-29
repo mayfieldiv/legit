@@ -101,7 +101,7 @@ impl Wayfinder {
                 "map read cost"
             );
         }
-        let batch = parse_wayfinder_maps(response, slug);
+        let batch = parse_wayfinder_maps(response, slug)?;
         if batch.more_maps {
             // The fixed query reads one `first:10` window; a repo with more
             // open maps gets the surplus reported, not silently dropped.
@@ -296,25 +296,27 @@ pub struct EffortReadBatch {
 /// inputs come from each ticket's `blockedBy` list (filtered on state at
 /// derivation time) — never from the eventually-consistent
 /// `issueDependenciesSummary` counters, which this parse doesn't even read.
-fn parse_wayfinder_maps(response: WayfinderMapResponse, slug: &RepoSlug) -> EffortReadBatch {
+/// Errs when the payload lacks the `repository.issues` connection: with
+/// GraphQL-level errors already surfaced, such a payload is malformed, and
+/// an empty batch would be indistinguishable from a repo with no maps —
+/// a startup failure must never be silently missing (§5.5).
+fn parse_wayfinder_maps(
+    response: WayfinderMapResponse,
+    slug: &RepoSlug,
+) -> Result<EffortReadBatch> {
     let connection = response
         .data
         .and_then(|d| d.repository)
-        .and_then(|r| r.issues);
-    let Some(connection) = connection else {
-        return EffortReadBatch {
-            efforts: Vec::new(),
-            more_maps: false,
-        };
-    };
-    EffortReadBatch {
+        .and_then(|r| r.issues)
+        .context("payload missing repository.issues connection")?;
+    Ok(EffortReadBatch {
         efforts: connection
             .nodes
             .into_iter()
             .map(|node| read_map_node(node, slug))
             .collect(),
         more_maps: connection.page_info.has_next_page,
-    }
+    })
 }
 
 fn read_map_node(node: RawMapNode, slug: &RepoSlug) -> EffortRead {
