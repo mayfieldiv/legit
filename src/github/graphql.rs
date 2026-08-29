@@ -1,12 +1,6 @@
-//! Hand-written GitHub GraphQL transport (reqwest + serde). Covers the
-//! queries REST can't serve well: the batched per-repo review-status query
-//! and the full review-thread query (with `isResolved` + bot detection) —
-//! both mirroring the GraphQL half of the TS `src/lib/github-transport.ts`.
-//!
-//! Parsing is split into pure functions (`parse_review_status`,
-//! `parse_review_threads`) tested directly against fixture JSON — the same
-//! posture as `github::rest::parse_pr`. The `GraphQlClient` owns only the
-//! HTTP; concurrency limiting happens at the command layer.
+//! Hand-written GitHub GraphQL transport (reqwest + serde) for the queries
+//! REST can't serve well. [`GraphQlClient`] owns only the HTTP; concurrency
+//! limiting happens at the command layer.
 
 use std::collections::HashMap;
 
@@ -214,7 +208,6 @@ struct RawThreadConnection {
     nodes: Vec<RawReviewThread>,
 }
 
-/// The standard GraphQL connection cursor pair.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RawPageInfo {
@@ -331,7 +324,6 @@ fn parse_thread_comment(comment: RawThreadComment, bot_logins: &[String]) -> Rev
 
 // ── transport ────────────────────────────────────────────────────────────────
 
-/// One GraphQL POST body.
 #[derive(serde::Serialize)]
 pub(crate) struct GraphQlRequest {
     pub(crate) query: String,
