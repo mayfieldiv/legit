@@ -489,61 +489,57 @@ struct MapBodyFacts {
 fn scan_map_body(body: &str) -> MapBodyFacts {
     use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
-    /// Progress of the Destination capture.
-    enum Dest {
-        /// Looking for a heading whose text is "destination".
-        Searching,
-        /// Inside a candidate heading, accumulating its text.
-        InHeading(String),
-        /// Heading matched; the next paragraph is the Destination — another
-        /// heading first means the section is empty.
+    enum DestinationScan {
+        SearchingForHeading,
+        CollectingHeadingText(String),
         AwaitingParagraph,
-        /// Capturing the Destination paragraph's text.
-        InParagraph(String),
+        CapturingParagraph(String),
         Done(Option<String>),
     }
+    use DestinationScan::*;
 
-    let mut dest = Dest::Searching;
+    let mut scan = SearchingForHeading;
     let mut has_task_list = false;
     for event in Parser::new_ext(body, Options::ENABLE_TASKLISTS) {
         if matches!(event, Event::TaskListMarker(_)) {
             has_task_list = true;
         }
-        dest = match (dest, &event) {
-            (Dest::Searching, Event::Start(Tag::Heading { .. })) => Dest::InHeading(String::new()),
-            (Dest::InHeading(mut text), Event::Text(t) | Event::Code(t)) => {
-                text.push_str(t);
-                Dest::InHeading(text)
+        scan = match (scan, &event) {
+            (SearchingForHeading, Event::Start(Tag::Heading { .. })) => {
+                CollectingHeadingText(String::new())
             }
-            (Dest::InHeading(text), Event::End(TagEnd::Heading(_))) => {
+            (CollectingHeadingText(mut text), Event::Text(t) | Event::Code(t)) => {
+                text.push_str(t);
+                CollectingHeadingText(text)
+            }
+            (CollectingHeadingText(text), Event::End(TagEnd::Heading(_))) => {
                 if text.trim().eq_ignore_ascii_case("destination") {
-                    Dest::AwaitingParagraph
+                    AwaitingParagraph
                 } else {
-                    Dest::Searching
+                    SearchingForHeading
                 }
             }
-            (Dest::AwaitingParagraph, Event::Start(Tag::Heading { .. })) => Dest::Done(None),
-            (Dest::AwaitingParagraph, Event::Start(Tag::Paragraph)) => {
-                Dest::InParagraph(String::new())
-            }
-            (Dest::InParagraph(mut text), Event::Text(t) | Event::Code(t)) => {
+            // A heading before any paragraph: the Destination section is empty.
+            (AwaitingParagraph, Event::Start(Tag::Heading { .. })) => Done(None),
+            (AwaitingParagraph, Event::Start(Tag::Paragraph)) => CapturingParagraph(String::new()),
+            (CapturingParagraph(mut text), Event::Text(t) | Event::Code(t)) => {
                 text.push_str(t);
-                Dest::InParagraph(text)
+                CapturingParagraph(text)
             }
-            (Dest::InParagraph(mut text), Event::SoftBreak | Event::HardBreak) => {
+            (CapturingParagraph(mut text), Event::SoftBreak | Event::HardBreak) => {
                 text.push(' ');
-                Dest::InParagraph(text)
+                CapturingParagraph(text)
             }
-            (Dest::InParagraph(text), Event::End(TagEnd::Paragraph)) => {
+            (CapturingParagraph(text), Event::End(TagEnd::Paragraph)) => {
                 let trimmed = text.trim();
-                Dest::Done((!trimmed.is_empty()).then(|| trimmed.to_owned()))
+                Done((!trimmed.is_empty()).then(|| trimmed.to_owned()))
             }
             (state, _) => state,
         };
     }
     MapBodyFacts {
-        destination: match dest {
-            Dest::Done(destination) => destination,
+        destination: match scan {
+            Done(destination) => destination,
             _ => None,
         },
         has_task_list,
