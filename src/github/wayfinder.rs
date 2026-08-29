@@ -360,10 +360,11 @@ fn normalize_map(
     // No conservative reading exists, so the map degrades (§5.5).
     let sub_issues = sub_issues.ok_or_else(|| "payload missing subIssues connection".to_owned())?;
     // `first:100` is the hard sub-issue cap per parent, so a next page
-    // "can't" exist; if it ever does, say so rather than silently showing a
-    // partial Effort.
+    // "can't" exist; if it ever does, a partial ticket set would silently
+    // drop tickets and misread the missing ones' same-effort blockers as
+    // External — no conservative reading, so the map degrades (§5.5).
     if sub_issues.page_info.has_next_page {
-        tracing::warn!(?key, "sub-issue list truncated at 100");
+        return Err("sub-issue list truncated at GitHub's 100-per-parent cap".to_owned());
     }
     let ticket_nodes = sub_issues.nodes;
     // Same-effort membership is "is a sub-issue of this map", not "lives in

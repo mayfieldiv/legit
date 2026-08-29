@@ -234,6 +234,37 @@ fn truncated_blocker_list_keeps_ticket_off_the_frontier() {
 }
 
 #[test]
+fn truncated_sub_issue_list_degrades_the_map() {
+    // `first:100` is GitHub's hard sub-issue cap, so this "can't happen" —
+    // but a partial ticket set would silently drop tickets and misread the
+    // missing ones' same-effort blockers as External, so the map degrades.
+    let raw = r#"{ "data": { "repository": { "issues": {
+        "pageInfo": { "hasNextPage": false, "endCursor": null },
+        "nodes": [ {
+            "number": 1, "title": "huge map", "state": "OPEN", "url": "u", "body": "",
+            "subIssuesSummary": { "total": 150, "completed": 0, "percentCompleted": 0 },
+            "subIssues": { "pageInfo": { "hasNextPage": true, "endCursor": "c" }, "nodes": [ {
+                "number": 2, "title": "t", "state": "OPEN",
+                "assignees": { "nodes": [] }, "labels": { "nodes": [] },
+                "blockedBy": { "pageInfo": { "hasNextPage": false, "endCursor": null }, "nodes": [] }
+            } ] }
+        } ]
+    } } } }"#;
+    let response: WayfinderMapResponse = serde_json::from_str(raw).expect("deserialize");
+
+    let batch = parse_wayfinder_maps(response, &map_slug());
+
+    let EffortRead::Degraded { title, reason, .. } = &batch.efforts[0] else {
+        panic!("expected Degraded, got {:?}", batch.efforts[0]);
+    };
+    assert_eq!(title, "huge map");
+    assert!(
+        reason.contains("truncated"),
+        "reason names the cause: {reason}"
+    );
+}
+
+#[test]
 fn map_with_task_list_body_and_no_sub_issues_degrades_as_fallback_dialect() {
     let raw = r###"{ "data": { "repository": { "issues": {
         "pageInfo": { "hasNextPage": false, "endCursor": null },
