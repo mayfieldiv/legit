@@ -102,7 +102,7 @@ impl Wayfinder {
             );
         }
         let batch = parse_wayfinder_maps(response, slug)?;
-        if batch.more_maps {
+        if batch.has_more_maps {
             // The fixed query reads one `first:10` window; a repo with more
             // open maps gets the surplus reported, not silently dropped.
             tracing::warn!(%slug, "more than 10 open wayfinder maps; reading the first 10");
@@ -289,7 +289,7 @@ pub struct EffortReadBatch {
     pub efforts: Vec<EffortRead>,
     /// The repo has more open maps than the query's `first:10` window. The
     /// query is fixed (spec §4.1), so the surplus is reported, not fetched.
-    pub more_maps: bool,
+    pub has_more_maps: bool,
 }
 
 /// Parse a whole-map response into per-map [`EffortRead`]s. Blocked-ness
@@ -315,7 +315,7 @@ fn parse_wayfinder_maps(
             .into_iter()
             .map(|node| read_map_node(node, slug))
             .collect(),
-        more_maps: connection.page_info.has_next_page,
+        has_more_maps: connection.page_info.has_next_page,
     })
 }
 

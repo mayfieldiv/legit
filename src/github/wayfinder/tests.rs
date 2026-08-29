@@ -91,7 +91,7 @@ fn parses_wayfinder_map_into_effort() {
 
     let batch = parse_wayfinder_maps(response, &map_slug()).expect("parse");
 
-    assert!(!batch.more_maps);
+    assert!(!batch.has_more_maps);
     assert_eq!(batch.efforts.len(), 1);
     let effort = ready(&batch.efforts[0]);
     assert_eq!(
@@ -175,7 +175,7 @@ fn map_parse_flags_more_maps_beyond_first_page() {
 
     let batch = parse_wayfinder_maps(response, &map_slug()).expect("parse");
 
-    assert!(batch.more_maps);
+    assert!(batch.has_more_maps);
 }
 
 #[test]
