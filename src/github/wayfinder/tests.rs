@@ -124,9 +124,11 @@ fn parses_wayfinder_map_into_effort() {
     assert_eq!(tickets[0].title, "Domain types");
     assert_eq!(tickets[0].state, TicketState::Closed);
     assert_eq!(tickets[0].claim, Some(Claim::By("mayfieldiv".to_owned())));
-    // The Type is the `wayfinder:<type>` label, prefix stripped; other labels
-    // (triage vocabulary) never masquerade as a Type.
-    assert_eq!(tickets[0].ty, TicketType("task".to_owned()));
+    assert_eq!(
+        tickets[0].ty,
+        TicketType("task".to_owned()),
+        "the Type is the wayfinder:<type> label, prefix stripped — triage labels never masquerade as a Type"
+    );
     assert!(tickets[0].dependencies.is_empty());
 
     assert_eq!(tickets[1].claim, None);
@@ -136,14 +138,15 @@ fn parses_wayfinder_map_into_effort() {
         "a closed same-effort Dependency is kept (the detail page shows it ✓)"
     );
 
-    // No `wayfinder:` label at all → an empty Type, shown verbatim, Mode Either.
-    assert_eq!(tickets[2].ty, TicketType(String::new()));
+    assert_eq!(
+        tickets[2].ty,
+        TicketType(String::new()),
+        "no wayfinder: label yields an empty Type, shown verbatim, Mode Either"
+    );
     assert_eq!(
         tickets[2].dependencies,
         vec![
-            // Same repo (case-insensitively) + a sub-issue of this map.
             Dependency::SameEffort(same_effort_key(117)),
-            // Another repo: External, with the captured state and title.
             Dependency::External(ExternalDependency {
                 key: TicketKey::GitHub {
                     repo_slug: RepoSlug::new("other/repo"),
@@ -152,27 +155,29 @@ fn parses_wayfinder_map_into_effort() {
                 state: TicketState::Open,
                 title: Some("External thing".to_owned()),
             }),
-            // Same repo but not one of this map's sub-issues: also External —
-            // the payload's state/title are captured, so lookup must not
-            // degrade it to Unknown.
             Dependency::External(ExternalDependency {
                 key: same_effort_key(55),
                 state: TicketState::Closed,
                 title: Some("Same repo, not in map".to_owned()),
             }),
-        ]
+        ],
+        "same-effort = a sub-issue of this map, case-insensitively same repo; anything else is \
+         External (never Unknown) with the payload's state and title captured — even a same-repo \
+         issue outside the map"
     );
 
-    // Blocked-ness comes from the dependency list filtered on state — #117's
-    // only blocker is closed, so it is on the Frontier; #120 waits on #117.
     assert!(
         effort
             .ticket(&same_effort_key(117))
             .unwrap()
             .is_on_frontier(),
-        "closed blockers must not block"
+        "blocked-ness derives from the dependency list filtered on state — a closed Dependency \
+         target must not block"
     );
-    assert!(effort.ticket(&same_effort_key(120)).unwrap().is_blocked());
+    assert!(
+        effort.ticket(&same_effort_key(120)).unwrap().is_blocked(),
+        "an open same-effort Dependency blocks"
+    );
 }
 
 #[test]
@@ -311,9 +316,12 @@ fn map_with_task_list_body_and_no_sub_issues_degrades_as_fallback_dialect() {
         "reason names the cause: {reason}"
     );
 
-    // An empty map without a task list is just empty — still Ready.
     let effort = ready(&batch.efforts[1]);
-    assert_eq!(effort.tickets().count(), 0);
+    assert_eq!(
+        effort.tickets().count(),
+        0,
+        "an empty map without a task list is innocently empty — Ready, not Degraded"
+    );
     assert_eq!(effort.destination.as_deref(), Some("Nothing charted yet."));
 }
 
@@ -517,8 +525,6 @@ fn destination_extracts_first_paragraph_under_the_heading() {
 
 #[test]
 fn destination_heading_recognition_is_real_markdown() {
-    // Closed ATX (`## … ##`) and setext headings are valid Markdown for the
-    // same heading text.
     assert_eq!(
         destination("## Destination ##\n\nClosed ATX heading.\n").as_deref(),
         Some("Closed ATX heading.")
@@ -527,10 +533,10 @@ fn destination_heading_recognition_is_real_markdown() {
         destination("Destination\n-----------\n\nSetext heading.\n").as_deref(),
         Some("Setext heading.")
     );
-    // A "heading" inside a code fence is code, not a heading.
     assert_eq!(
         destination("```\n# Destination\n\nnot a destination\n```\n"),
-        None
+        None,
+        "a heading inside a code fence is code, not a heading"
     );
 }
 
