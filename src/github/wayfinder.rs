@@ -113,13 +113,13 @@ impl Wayfinder {
     /// 404 here stays a genuine error (including a token without Issues read
     /// scope, which surfaces as 404, not 403).
     #[tracing::instrument(name = "refresh_ticket", skip(self))]
-    pub async fn refresh_ticket(&self, slug: &RepoSlug, number: u64) -> Result<Issue> {
+    pub async fn refresh_ticket(&self, slug: &RepoSlug, number: u64) -> Result<TicketRefresh> {
         let route = format!("/repos/{slug}/issues/{number}");
         let raw: RawRestIssue = OctocrabRest::new(&self.token)?
             .get_resource(&route)
             .await
             .with_context(|| format!("fetching issue {slug}#{number}"))?;
-        Ok(parse_issue(raw))
+        Ok(parse_refresh(raw))
     }
 }
 
@@ -551,14 +551,13 @@ fn scan_map_body(body: &str) -> MapBodyFacts {
 }
 
 /// Whether a ticket body opens with the fallback dialect's dependency lines
-/// (`Part of #n` / `Blocked by: #n`) — the other half of the §4.4 signal,
-/// checked when a ticket body arrives (drill-in / single-ticket refresh).
-/// Parsed as Markdown: only text before the first `##`-or-deeper heading
-/// counts, and code blocks never match, so a ref in a fenced example or
-/// under a heading doesn't false-trigger. A bare "blocked by" with no issue
-/// ref doesn't either. Detection only — the lines are never parsed into the
-/// model, and where native data exists a stale `Part of` line is advisory.
-pub fn has_fallback_dependency_lines(body: &str) -> bool {
+/// (`Part of #n` / `Blocked by: #n`) — the ticket-body half of the §4.4
+/// signal. Parsed as Markdown: only text before the first `##`-or-deeper
+/// heading counts, and code blocks never match, so a ref in a fenced
+/// example or under a heading doesn't false-trigger. A bare "blocked by"
+/// with no issue ref doesn't either. Detection only — the lines are never
+/// parsed into the model.
+fn has_fallback_dependency_lines(body: &str) -> bool {
     use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
     fn is_dependency_line(line: &str) -> bool {
@@ -617,6 +616,18 @@ fn line_has_issue_ref(line: &str) -> bool {
 
 // ── single-ticket refresh: wire shape ────────────────────────────────────────
 
+/// One ticket's refresh outcome: the issue plus the §4.4 fallback-dialect
+/// verdict, decided here so no caller learns the body dialect.
+#[derive(Debug)]
+pub struct TicketRefresh {
+    pub issue: Issue,
+    /// The body opens with fallback dependency lines (`Part of #n` /
+    /// `Blocked by: #n`) and the payload carries no native parent or
+    /// dependencies — the Effort shows a degradation notice (§4.4). With
+    /// native data present the lines are advisory and this stays `false`.
+    pub fallback_dialect: bool,
+}
+
 /// Permissive wire shape for a GitHub issue, from the single-issue endpoint
 /// (`GET /repos/:owner/:repo/issues/:number`). Same posture as `RawRestPR`:
 /// everything GitHub may omit is optional or defaulted. Private — the
@@ -656,6 +667,19 @@ fn parse_issue(raw: RawRestIssue) -> Issue {
         sub_issues_summary: raw.sub_issues_summary,
         dependencies_summary: raw.issue_dependencies_summary,
         parent_issue_url: raw.parent_issue_url,
+    }
+}
+
+fn parse_refresh(raw: RawRestIssue) -> TicketRefresh {
+    let issue = parse_issue(raw);
+    // `total_blocked_by` counts open and closed native blockers, so zero
+    // really means "no native dependencies", not "all blockers closed".
+    let native_links =
+        issue.parent_issue_url.is_some() || issue.dependencies_summary.total_blocked_by > 0;
+    let fallback_dialect = !native_links && has_fallback_dependency_lines(&issue.body);
+    TicketRefresh {
+        issue,
+        fallback_dialect,
     }
 }
 

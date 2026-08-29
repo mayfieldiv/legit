@@ -1,6 +1,6 @@
 use super::{
-    EffortRead, RawRestIssue, WayfinderMapResponse, has_fallback_dependency_lines, parse_issue,
-    parse_wayfinder_maps, scan_map_body,
+    EffortRead, RawRestIssue, TicketRefresh, WayfinderMapResponse, has_fallback_dependency_lines,
+    parse_issue, parse_refresh, parse_wayfinder_maps, scan_map_body,
 };
 use crate::github::graphql::ensure_no_errors;
 use crate::github::types::{DependenciesSummary, Issue, IssueState, SubIssuesSummary};
@@ -669,6 +669,35 @@ fn issue_parse_defaults_everything_but_number_and_title() {
     assert_eq!(issue.sub_issues_summary, SubIssuesSummary::default());
     assert_eq!(issue.dependencies_summary, DependenciesSummary::default());
     assert_eq!(issue.parent_issue_url, None);
+}
+
+#[test]
+fn refresh_flags_fallback_dialect_only_without_native_links() {
+    let refresh = |json: &str| -> TicketRefresh {
+        parse_refresh(serde_json::from_str(json).expect("deserialize"))
+    };
+
+    assert!(
+        refresh(r#"{ "number": 7, "title": "t", "body": "Part of #123\n\nBody." }"#)
+            .fallback_dialect
+    );
+    assert!(!refresh(r#"{ "number": 7, "title": "t", "body": "Just a body." }"#).fallback_dialect);
+    assert!(
+        !refresh(
+            r#"{ "number": 7, "title": "t", "body": "Part of #123",
+                 "parent_issue_url": "https://api.github.com/repos/o/r/issues/123" }"#
+        )
+        .fallback_dialect,
+        "native parent wins; a stale Part of line is advisory (§4.4)"
+    );
+    assert!(
+        !refresh(
+            r#"{ "number": 7, "title": "t", "body": "Blocked by: #4",
+                 "issue_dependencies_summary": { "total_blocked_by": 1 } }"#
+        )
+        .fallback_dialect,
+        "native dependencies win over body lines (§4.4)"
+    );
 }
 
 #[test]
