@@ -287,8 +287,6 @@ fn map_with_task_list_body_and_no_sub_issues_degrades_as_fallback_dialect() {
 
     let batch = parse_wayfinder_maps(response, &map_slug()).expect("parse");
 
-    // Task-list body with zero sub-issues: degraded (§4.4), with the map's
-    // identity and context intact for the effort card's error line.
     let EffortRead::Degraded {
         key,
         title,
@@ -303,7 +301,8 @@ fn map_with_task_list_body_and_no_sub_issues_degrades_as_fallback_dialect() {
         EffortKey::GitHub {
             repo_slug: map_slug(),
             map_number: 1,
-        }
+        },
+        "degradation keeps the map's identity for the effort card's error line"
     );
     assert_eq!(title, "fallback map");
     assert_eq!(*destination, None);
@@ -347,8 +346,6 @@ fn a_malformed_map_degrades_without_discarding_the_others() {
 
     let batch = parse_wayfinder_maps(response, &map_slug()).expect("parse");
 
-    // GitHub order is preserved: the broken map degrades in place, the
-    // healthy one stays Ready.
     assert_eq!(batch.efforts.len(), 2);
     let EffortRead::Degraded {
         key, title, reason, ..
@@ -368,7 +365,11 @@ fn a_malformed_map_degrades_without_discarding_the_others() {
         reason.contains("duplicate"),
         "error names the cause: {reason}"
     );
-    assert_eq!(ready(&batch.efforts[1]).title, "healthy");
+    assert_eq!(
+        ready(&batch.efforts[1]).title,
+        "healthy",
+        "sibling maps survive in GitHub order"
+    );
 }
 
 #[test]
