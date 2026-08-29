@@ -325,64 +325,63 @@ fn read_map_node(node: RawMapNode, slug: &RepoSlug) -> EffortRead {
     let title = node.title;
     let body_facts = scan_map_body(&node.body);
     let destination = body_facts.destination;
+    match normalize_map(
+        node.sub_issues,
+        body_facts.has_task_list,
+        &key,
+        &title,
+        &destination,
+        slug,
+    ) {
+        Ok(effort) => EffortRead::Ready(effort),
+        Err(reason) => EffortRead::Degraded {
+            key,
+            title,
+            destination,
+            reason,
+        },
+    }
+}
+
+/// The fallible half of one map's normalization. An `Err` is the
+/// human-readable degradation reason the effort card renders (§5.5).
+fn normalize_map(
+    sub_issues: Option<RawTicketConnection>,
+    has_task_list: bool,
+    key: &EffortKey,
+    title: &str,
+    destination: &Option<String>,
+    slug: &RepoSlug,
+) -> Result<Effort, String> {
     // Absent ≠ present-empty: the query always selects these connections, so
     // a payload without one is malformed, and treating it as empty would
     // manufacture facts (an empty Effort here; unclaimed / unblocked tickets
     // in `parse_ticket_node`) that can put a ticket falsely on the Frontier.
     // No conservative reading exists, so the map degrades (§5.5).
-    let Some(sub_issues) = node.sub_issues else {
-        return EffortRead::Degraded {
-            key,
-            title,
-            destination,
-            reason: "payload missing subIssues connection".to_owned(),
-        };
-    };
+    let sub_issues = sub_issues.ok_or_else(|| "payload missing subIssues connection".to_owned())?;
     // `first:100` is the hard sub-issue cap per parent, so a next page
     // "can't" exist; if it ever does, say so rather than silently showing a
     // partial Effort.
     if sub_issues.page_info.has_next_page {
-        tracing::warn!(map = node.number, "sub-issue list truncated at 100");
+        tracing::warn!(?key, "sub-issue list truncated at 100");
     }
     let ticket_nodes = sub_issues.nodes;
     // Same-effort membership is "is a sub-issue of this map", not "lives in
     // this repo": a same-repo blocker outside the map stays External.
     let members: HashSet<u64> = ticket_nodes.iter().map(|t| t.number).collect();
-    let tickets: Vec<Ticket> = match ticket_nodes
+    let tickets: Vec<Ticket> = ticket_nodes
         .into_iter()
         .map(|t| parse_ticket_node(t, slug, &members))
         .collect::<Result<_>>()
-    {
-        Ok(tickets) => tickets,
-        Err(error) => {
-            return EffortRead::Degraded {
-                key,
-                title,
-                destination,
-                reason: format!("{error:#}"),
-            };
-        }
-    };
+        .map_err(|error| format!("{error:#}"))?;
     // Zero native sub-issues + a task-list body = the fallback dialect,
     // which v1 detects but never parses (§4.4) — degraded, not an
     // innocently empty Effort.
-    if tickets.is_empty() && body_facts.has_task_list {
-        return EffortRead::Degraded {
-            key,
-            title,
-            destination,
-            reason: "task-list map (fallback dialect) — not parsed in v1".to_owned(),
-        };
+    if tickets.is_empty() && has_task_list {
+        return Err("task-list map (fallback dialect) — not parsed in v1".to_owned());
     }
-    match Effort::new(key.clone(), title.clone(), destination.clone(), tickets) {
-        Ok(effort) => EffortRead::Ready(effort),
-        Err(error) => EffortRead::Degraded {
-            key,
-            title,
-            destination,
-            reason: format!("{error:#}"),
-        },
-    }
+    Effort::new(key.clone(), title.to_owned(), destination.clone(), tickets)
+        .map_err(|error| format!("{error:#}"))
 }
 
 /// Normalize one sub-issue node. Errs when a Frontier-authoritative
