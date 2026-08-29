@@ -546,31 +546,45 @@ fn scan_map_body(body: &str) -> MapBodyFacts {
     }
 }
 
-/// Whether a ticket body opens with the fallback dialect's dependency lines
-/// (`Part of #n` / `Blocked by: #n`) — the ticket-body half of the §4.4
-/// signal. Parsed as Markdown: only text before the first `##`-or-deeper
-/// heading counts, and code blocks never match, so a ref in a fenced
-/// example or under a heading doesn't false-trigger. A bare "blocked by"
-/// with no issue ref doesn't either. Detection only — the lines are never
-/// parsed into the model.
-fn has_fallback_dependency_lines(body: &str) -> bool {
+/// Which of the fallback dialect's dependency lines open a ticket body —
+/// the ticket-body half of the §4.4 signal, kept per line kind so
+/// native-wins can compare each line with its own native representation.
+#[derive(Debug, Default, PartialEq)]
+struct FallbackLines {
+    /// A leading `Part of #n` line.
+    part_of: bool,
+    /// A leading `Blocked by: #n` line.
+    blocked_by: bool,
+}
+
+/// Scan a ticket body for the fallback dialect's dependency lines. Parsed
+/// as Markdown: only text before the first `##`-or-deeper heading counts,
+/// and code blocks never match, so a ref in a fenced example or under a
+/// heading doesn't false-trigger. A bare "blocked by" with no issue ref
+/// doesn't either. Detection only — the lines are never parsed into the
+/// model.
+fn scan_fallback_lines(body: &str) -> FallbackLines {
     use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
-    fn is_dependency_line(line: &str) -> bool {
+    fn classify(line: &str, found: &mut FallbackLines) {
         let trimmed = line.trim();
+        if !line_has_issue_ref(trimmed) {
+            return;
+        }
         let lower = trimmed.to_ascii_lowercase();
-        (lower.starts_with("part of ") || lower.starts_with("blocked by:"))
-            && line_has_issue_ref(trimmed)
+        found.part_of |= lower.starts_with("part of ");
+        found.blocked_by |= lower.starts_with("blocked by:");
     }
 
     // Accumulate one rendered line at a time (soft/hard breaks and block
     // ends both end a line), skipping code blocks and heading text.
+    let mut found = FallbackLines::default();
     let mut line = String::new();
     let mut skipping = 0u32;
     for event in Parser::new_ext(body, Options::empty()) {
         match event {
             Event::Start(Tag::Heading { level, .. }) if level > HeadingLevel::H1 => {
-                return false;
+                return found;
             }
             Event::Start(Tag::Heading { .. }) | Event::Start(Tag::CodeBlock(_)) => {
                 skipping += 1;
@@ -585,15 +599,14 @@ fn has_fallback_dependency_lines(body: &str) -> bool {
             | Event::HardBreak
             | Event::End(TagEnd::Paragraph)
             | Event::End(TagEnd::Item) => {
-                if is_dependency_line(&line) {
-                    return true;
-                }
+                classify(&line, &mut found);
                 line.clear();
             }
             _ => {}
         }
     }
-    is_dependency_line(&line)
+    classify(&line, &mut found);
+    found
 }
 
 /// An issue ref in any of the fallback dialect's accepted forms: `#123`,
@@ -617,10 +630,12 @@ fn line_has_issue_ref(line: &str) -> bool {
 #[derive(Debug)]
 pub struct TicketRefresh {
     pub issue: Issue,
-    /// The body opens with fallback dependency lines (`Part of #n` /
-    /// `Blocked by: #n`) and the payload carries no native parent or
-    /// dependencies — the Effort shows a degradation notice (§4.4). With
-    /// native data present the lines are advisory and this stays `false`.
+    /// The body opens with a fallback dependency line whose native
+    /// counterpart is absent — `Part of #n` with no native parent, or
+    /// `Blocked by: #n` with no native dependencies — so the Effort shows
+    /// a degradation notice (§4.4). Native-wins is per representation: a
+    /// line whose own native counterpart exists is advisory and never sets
+    /// this.
     pub fallback_dialect: bool,
 }
 
@@ -668,11 +683,13 @@ fn parse_issue(raw: RawRestIssue) -> Issue {
 
 fn parse_refresh(raw: RawRestIssue) -> TicketRefresh {
     let issue = parse_issue(raw);
-    // `total_blocked_by` counts open and closed native blockers, so zero
-    // really means "no native dependencies", not "all blockers closed".
-    let native_links =
-        issue.parent_issue_url.is_some() || issue.dependencies_summary.total_blocked_by > 0;
-    let fallback_dialect = !native_links && has_fallback_dependency_lines(&issue.body);
+    let lines = scan_fallback_lines(&issue.body);
+    // Native-wins compares each line kind with its own representation
+    // (§4.4): a native parent says nothing about a `Blocked by:` line, and
+    // vice versa. `total_blocked_by` counts open and closed native
+    // dependencies, so zero really means "none exist", not "all closed".
+    let fallback_dialect = (lines.part_of && issue.parent_issue_url.is_none())
+        || (lines.blocked_by && issue.dependencies_summary.total_blocked_by == 0);
     TicketRefresh {
         issue,
         fallback_dialect,

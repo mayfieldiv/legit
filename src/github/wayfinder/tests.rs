@@ -1,6 +1,6 @@
 use super::{
-    EffortRead, EffortReadBatch, RawRestIssue, TicketRefresh, WayfinderMapResponse,
-    has_fallback_dependency_lines, parse_issue, parse_refresh, parse_wayfinder_maps, scan_map_body,
+    EffortRead, EffortReadBatch, FallbackLines, RawRestIssue, TicketRefresh, WayfinderMapResponse,
+    parse_issue, parse_refresh, parse_wayfinder_maps, scan_fallback_lines, scan_map_body,
 };
 use crate::github::graphql::ensure_no_errors;
 use crate::github::types::{DependenciesSummary, Issue, IssueState, SubIssuesSummary};
@@ -550,31 +550,42 @@ fn task_list_detection_ignores_code_fences() {
 
 #[test]
 fn detects_fallback_dependency_lines_in_leading_body_lines() {
-    assert!(has_fallback_dependency_lines("Part of #123\n\nSome body."));
-    assert!(has_fallback_dependency_lines(
-        "Blocked by: #4, #5\n\nSome body."
-    ));
+    let part_of = |body: &str| scan_fallback_lines(body).part_of;
+    let blocked_by = |body: &str| scan_fallback_lines(body).blocked_by;
+
+    assert!(part_of("Part of #123\n\nSome body."));
+    assert!(blocked_by("Blocked by: #4, #5\n\nSome body."));
+    assert_eq!(
+        scan_fallback_lines("Part of #1\nBlocked by: #2"),
+        FallbackLines {
+            part_of: true,
+            blocked_by: true,
+        },
+        "each line kind is detected independently, never conflated"
+    );
     assert!(
-        has_fallback_dependency_lines("part of mayfieldiv/legit#123"),
+        !blocked_by("Part of #1"),
+        "a Part of line never reads as Blocked by"
+    );
+    assert!(
+        part_of("part of mayfieldiv/legit#123"),
         "case-insensitive, slug-qualified refs count"
     );
     assert!(
-        !has_fallback_dependency_lines("## Question\n\nPart of #123 appears after a heading"),
+        !part_of("## Question\n\nPart of #123 appears after a heading"),
         "scanning stops at the first heading"
     );
     assert!(
-        !has_fallback_dependency_lines("Blocked by: the weather"),
+        !blocked_by("Blocked by: the weather"),
         "a dependency line needs an issue ref"
     );
-    assert!(!has_fallback_dependency_lines(
-        "This ticket is part of the plan."
-    ));
+    assert!(!part_of("This ticket is part of the plan."));
     assert!(
-        !has_fallback_dependency_lines("```\nPart of #123\n```\n\nSome body."),
+        !part_of("```\nPart of #123\n```\n\nSome body."),
         "a dependency line inside a code fence is an example, not a dependency"
     );
     assert!(
-        has_fallback_dependency_lines("Intro sentence.\nBlocked by: #4\n\n## Notes"),
+        blocked_by("Intro sentence.\nBlocked by: #4\n\n## Notes"),
         "any leading line before the first ## heading counts, not just the first"
     );
 }
@@ -656,7 +667,7 @@ fn issue_parse_defaults_everything_but_number_and_title() {
 }
 
 #[test]
-fn refresh_flags_fallback_dialect_only_without_native_links() {
+fn refresh_flags_fallback_lines_lacking_their_native_counterpart() {
     let refresh = |json: &str| -> TicketRefresh {
         parse_refresh(serde_json::from_str(json).expect("deserialize"))
     };
@@ -680,7 +691,23 @@ fn refresh_flags_fallback_dialect_only_without_native_links() {
                  "issue_dependencies_summary": { "total_blocked_by": 1 } }"#
         )
         .fallback_dialect,
-        "native dependencies win over body lines (§4.4)"
+        "native dependencies win over a Blocked by line (§4.4)"
+    );
+    assert!(
+        refresh(
+            r#"{ "number": 7, "title": "t", "body": "Blocked by: #4",
+                 "parent_issue_url": "https://api.github.com/repos/o/r/issues/123" }"#
+        )
+        .fallback_dialect,
+        "native-wins is per representation: a parent covers Part of, not Blocked by (§4.4)"
+    );
+    assert!(
+        refresh(
+            r#"{ "number": 7, "title": "t", "body": "Part of #123",
+                 "issue_dependencies_summary": { "total_blocked_by": 1 } }"#
+        )
+        .fallback_dialect,
+        "native-wins is per representation: dependencies cover Blocked by, not Part of (§4.4)"
     );
 }
 
