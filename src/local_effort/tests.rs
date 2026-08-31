@@ -331,6 +331,32 @@ fn discovery_fans_out_across_worktrees_and_skips_missing_ones() {
     assert_eq!(titles, vec!["Alpha".to_owned(), "Beta".to_owned()]);
 }
 
+// The linked-worktree analog isn't reachable in a fixture: git itself
+// reports a permission-blocked worktree as prunable, so the spec'd
+// prunable skip fires first. The probe in worktree_bases guards the
+// residue — a listed, non-prunable path whose metadata read still fails.
+#[cfg(unix)]
+#[test]
+fn an_unprobeable_main_worktree_reports_the_probe_error() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let holder = dir.path().join("holder");
+    let main = holder.join("main");
+    init_repo(&main);
+    fs::set_permissions(&holder, fs::Permissions::from_mode(0o000)).unwrap();
+
+    let result = super::discover_repo_efforts(&repo_config(&main, None));
+    // Restore before asserting so the tempdir can clean up either way.
+    fs::set_permissions(&holder, fs::Permissions::from_mode(0o755)).unwrap();
+    let err = format!("{:#}", result.unwrap_err());
+    assert!(
+        err.contains("probing"),
+        "an unprobeable Main Worktree reports the probe failure, not \
+         'does not exist': {err}"
+    );
+}
+
 #[test]
 fn configured_roots_replace_the_built_in_probe_list() {
     let dir = tempfile::tempdir().unwrap();

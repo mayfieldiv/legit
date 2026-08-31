@@ -156,22 +156,30 @@ fn configured_roots_for_cwd<'a>(
 
 /// The working trees a repo's Wayfinder Roots resolve against: every linked
 /// worktree of the Main Worktree that still exists and isn't prunable, or
-/// the base directory alone when it isn't a git repo at all.
+/// the base directory alone when it isn't a git repo at all. Only a missing
+/// worktree skips — an unprobeable one errs (§5.5: skip covers exactly
+/// missing/prunable, never an unreadable path).
 fn worktree_bases(main: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    let probe = |path: &Path| probe_file_type(path).map_err(anyhow::Error::msg);
     anyhow::ensure!(
-        main.is_dir(),
+        probe(main)?.is_some_and(|ty| ty.is_dir()),
         "main worktree {} does not exist",
         main.display()
     );
     if !is_git_worktree(main) {
         return Ok(vec![main.to_owned()]);
     }
-    Ok(list_worktrees(main)?
-        .into_iter()
-        .filter(|entry| entry.prunable.is_none() && !entry.bare)
-        .map(|entry| PathBuf::from(entry.path))
-        .filter(|path| path.is_dir())
-        .collect())
+    let mut bases = Vec::new();
+    for entry in list_worktrees(main)? {
+        if entry.prunable.is_some() || entry.bare {
+            continue;
+        }
+        let path = PathBuf::from(entry.path);
+        if probe(&path)?.is_some_and(|ty| ty.is_dir()) {
+            bases.push(path);
+        }
+    }
+    Ok(bases)
 }
 
 /// Whether `dir` is inside a git repository — decides worktree fan-out vs
