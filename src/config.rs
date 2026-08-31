@@ -75,18 +75,7 @@ impl RepoConfig {
         }
         Ok(())
     }
-}
 
-/// How a Tracked Repo is told apart from every other: PR-capable repos by
-/// slug ([`RepoSlug`] equality is case-insensitive, as GitHub's is),
-/// slug-less repos by canonical Main Worktree identity.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RepoIdentity {
-    Slug(RepoSlug),
-    Path(CanonicalPathBuf),
-}
-
-impl RepoConfig {
     /// The name this repo is shown under: its slug, or for a slug-less repo
     /// the basename of its expanded Main Worktree path. Pure — usable before
     /// the directory exists.
@@ -108,7 +97,11 @@ impl RepoConfig {
     /// one directory, and any weaker fallback either changes the identity the
     /// moment the directory appears or swallows real I/O errors. Callers read
     /// the error as "no identity yet" — a not-yet-cloned local-only repo has
-    /// nothing discoverable anyway.
+    /// nothing discoverable anyway. (Identity answers dedup with one key;
+    /// "is this the cwd repo?" in `local_effort` deliberately matches on
+    /// looser evidence.)
+    // TODO(#120): consumed when the ticket surface dedups Tracked Repos.
+    #[allow(dead_code)]
     pub fn identity(&self) -> anyhow::Result<RepoIdentity> {
         if let Some(slug) = &self.slug {
             return Ok(RepoIdentity::Slug(slug.clone()));
@@ -126,6 +119,15 @@ impl RepoConfig {
             .as_deref()
             .context("repo has neither slug nor mainWorktreePath")
     }
+}
+
+/// How a Tracked Repo is told apart from every other: PR-capable repos by
+/// slug ([`RepoSlug`] equality is case-insensitive, as GitHub's is),
+/// slug-less repos by canonical Main Worktree identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RepoIdentity {
+    Slug(RepoSlug),
+    Path(CanonicalPathBuf),
 }
 
 /// The one name every `repos` entry has (slug and mainWorktreePath are both

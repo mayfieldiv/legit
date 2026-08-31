@@ -92,7 +92,7 @@ fn parses_an_older_dialect_effort() {
     assert_eq!(
         frontier,
         vec!["Settle the navigation model".to_owned()],
-        "the closed blocker leaves its dependent on the Frontier"
+        "the closed Dependency target leaves its dependent on the Frontier"
     );
 }
 
@@ -446,6 +446,58 @@ fn configured_roots_win_for_the_cwd_repo_on_a_path_match() {
         effort_titles(&reads),
         vec!["Override".to_owned()],
         "the matched entry's wayfinderRoots replace the built-ins for the walk"
+    );
+}
+
+#[test]
+fn a_slugged_entry_still_path_matches_when_the_cwd_has_no_remote() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("clone");
+    init_repo(&repo);
+    write(&repo.join("docs/wayfinder/builtin/map.md"), "# Built-in\n");
+    write(&repo.join("maps/override/map.md"), "# Override\n");
+
+    let config = crate::config::LegitConfig {
+        repos: vec![crate::config::RepoConfig {
+            slug: Some(crate::repo_slug::RepoSlug::new("acme/widgets")),
+            main_worktree_path: Some(repo.to_str().unwrap().to_owned()),
+            wayfinder_roots: Some(vec!["maps".to_owned()]),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let reads = super::discover_cwd_efforts(&repo, &config).unwrap();
+    assert_eq!(
+        effort_titles(&reads),
+        vec!["Override".to_owned()],
+        "matching takes either evidence: no origin remote, but the entry's \
+         Main Worktree names the toplevel"
+    );
+}
+
+#[test]
+fn dialect_vocabularies_do_not_cross() {
+    let dir = tempfile::tempdir().unwrap();
+    let older = dir.path().join("older");
+    write(&older.join("map.md"), "# Older\n");
+    write(
+        &older.join("tickets/01-a.md"),
+        "---\nstatus: resolved\n---\n\n# A\n",
+    );
+    let (_, _, _, reason) = degraded(read_effort(&older).unwrap());
+    assert!(
+        reason.contains("resolved"),
+        "the older dialect's lifecycle is open/closed only: {reason}"
+    );
+
+    let newer = dir.path().join("newer");
+    write(&newer.join("map.md"), "# Newer\n");
+    write(&newer.join("issues/01-a.md"), "# A\n\nStatus: closed\n");
+    let (_, _, _, reason) = degraded(read_effort(&newer).unwrap());
+    assert!(
+        reason.contains("closed"),
+        "the newer dialect's lifecycle is claimed/resolved only: {reason}"
     );
 }
 

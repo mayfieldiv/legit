@@ -16,7 +16,7 @@ use anyhow::Context;
 
 use crate::{
     canonical_path::CanonicalPathBuf,
-    config::{RepoConfig, RepoIdentity, resolve_config_path},
+    config::{RepoConfig, resolve_config_path},
     map_body::{first_h1, scan_map_body},
     subprocess::{GitEnv, git_command, run_command},
     ticket::{
@@ -108,11 +108,14 @@ fn git_toplevel(cwd: &Path) -> Option<PathBuf> {
 }
 
 /// The configured `wayfinderRoots` that replace the built-ins for the cwd
-/// walk, when the cwd repo's identity matches a `repos` entry carrying them:
-/// the cwd repo is identified by its origin-remote slug and by its toplevel
+/// walk, when the cwd repo matches a `repos` entry carrying them. Matching
+/// takes either evidence of "same repo": the entry's slug equals the cwd's
+/// origin-remote slug, or the entry's Main Worktree names the toplevel
 /// (canonical identity, so spelling differences and symlinks can't defeat
-/// it), and compared with each entry's [`RepoIdentity`]. A match failure of
-/// any kind — no remote, an entry with no identity yet — just means "not the
+/// it). Deliberately looser than [`crate::config::RepoIdentity`], which answers dedup with
+/// one key — a slugged entry whose clone is the toplevel is still the cwd
+/// repo even with the remote missing or renamed. A match failure of any
+/// kind — no remote, an unresolvable configured path — just means "not the
 /// cwd repo", never an error: the walk falls back to the built-ins.
 fn configured_roots_for_cwd<'a>(
     config: &'a crate::config::LegitConfig,
@@ -127,21 +130,28 @@ fn configured_roots_for_cwd<'a>(
     if candidates.is_empty() {
         return None;
     }
-    let mut cwd_identities = Vec::new();
     // One subprocess, and only when a slugged candidate needs it.
-    if candidates.iter().any(|repo| repo.slug.is_some())
-        && let Ok(slug) = crate::git_remote::detect_repo(cwd)
-    {
-        cwd_identities.push(RepoIdentity::Slug(slug));
-    }
-    if let Ok(dir) = CanonicalPathBuf::canonicalize(toplevel) {
-        cwd_identities.push(RepoIdentity::Path(dir));
-    }
+    let cwd_slug = candidates
+        .iter()
+        .any(|repo| repo.slug.is_some())
+        .then(|| crate::git_remote::detect_repo(cwd).ok())
+        .flatten();
+    let toplevel = CanonicalPathBuf::canonicalize(toplevel).ok();
     candidates
         .into_iter()
         .find(|repo| {
-            repo.identity()
-                .is_ok_and(|identity| cwd_identities.contains(&identity))
+            let slug_matches = match (&repo.slug, &cwd_slug) {
+                (Some(entry), Some(cwd_slug)) => entry == cwd_slug,
+                _ => false,
+            };
+            let path_matches = match (&repo.main_worktree_path, &toplevel) {
+                (Some(path), Some(toplevel)) => resolve_config_path(path)
+                    .ok()
+                    .and_then(|path| CanonicalPathBuf::canonicalize(path).ok())
+                    .is_some_and(|path| path == *toplevel),
+                _ => false,
+            };
+            slug_matches || path_matches
         })
         .and_then(|repo| repo.wayfinder_roots.as_deref())
 }
@@ -215,9 +225,11 @@ fn read_efforts_under(
     for dir in effort_dirs {
         let identity = CanonicalPathBuf::canonicalize(&dir)
             .with_context(|| format!("canonicalizing effort dir {}", dir.display()))?;
-        if seen.insert(identity) {
-            reads.push(read_effort(&dir)?);
+        if seen.contains(&identity) {
+            continue;
         }
+        reads.push(read_effort_at(identity.clone()));
+        seen.insert(identity);
     }
     Ok(reads)
 }
@@ -227,28 +239,34 @@ fn read_efforts_under(
 /// canonicalized — without that there is no identity to degrade under;
 /// every parse failure past that point degrades the Effort instead (spec
 /// §5.5: never a crash, never silent).
-pub fn read_effort(dir: &Path) -> anyhow::Result<EffortRead> {
-    let dir = CanonicalPathBuf::canonicalize(dir)
-        .with_context(|| format!("canonicalizing effort dir {}", dir.display()))?;
+fn read_effort(dir: &Path) -> anyhow::Result<EffortRead> {
+    CanonicalPathBuf::canonicalize(dir)
+        .with_context(|| format!("canonicalizing effort dir {}", dir.display()))
+        .map(read_effort_at)
+}
+
+/// [`read_effort`] past the identity boundary: with a canonical directory in
+/// hand there is nothing left to fail with — only to degrade.
+fn read_effort_at(dir: CanonicalPathBuf) -> EffortRead {
     let key = EffortKey::Local { dir: dir.clone() };
     // Map context is read first so a later ticket failure degrades with the
     // best available title/Destination rather than losing them.
     let (title, destination) = match read_map(&dir) {
         Ok(map) => map,
         Err(reason) => {
-            return Ok(EffortRead::Degraded {
+            return EffortRead::Degraded {
                 key,
                 title: dir_title(&dir),
                 destination: None,
                 reason,
-            });
+            };
         }
     };
     let read = read_tickets(&dir).and_then(|tickets| {
         Effort::new(key.clone(), title.clone(), destination.clone(), tickets)
             .map_err(|error| format!("{error:#}"))
     });
-    Ok(match read {
+    match read {
         Ok(effort) => EffortRead::Ready(effort),
         Err(reason) => EffortRead::Degraded {
             key,
@@ -256,7 +274,7 @@ pub fn read_effort(dir: &Path) -> anyhow::Result<EffortRead> {
             destination,
             reason,
         },
-    })
+    }
 }
 
 /// Probe one Wayfinder Root for Effort directories. A root either *is* a
@@ -264,7 +282,7 @@ pub fn read_effort(dir: &Path) -> anyhow::Result<EffortRead> {
 /// subdirectories — both shapes exist in the wild (spec §2.2). A missing or
 /// effort-less root probes empty; an unreadable one errs, surfaced per repo
 /// by discovery (§5.5).
-pub fn probe_root(root: &Path) -> anyhow::Result<Vec<PathBuf>> {
+fn probe_root(root: &Path) -> anyhow::Result<Vec<PathBuf>> {
     if !root.is_dir() {
         return Ok(Vec::new());
     }
@@ -381,10 +399,10 @@ fn list_member_files(dir: &Path) -> Result<Vec<MemberFile>, String> {
 /// `None` for a file without the numeric prefix (it can't be a target).
 fn filename_number(path: &Path) -> Option<u64> {
     let stem = path.file_stem()?.to_str()?;
-    let digits: &str = &stem[..stem
+    let end = stem
         .find(|c: char| !c.is_ascii_digit())
-        .unwrap_or(stem.len())];
-    (!digits.is_empty()).then(|| digits.parse().ok())?
+        .unwrap_or(stem.len());
+    stem[..end].parse().ok()
 }
 
 /// The display slug of a ticket file (`01-inventory`) — the title of last
@@ -399,13 +417,7 @@ fn file_slug(path: &Path) -> String {
 /// against the Effort's member files.
 fn parse_ticket_file(member: &MemberFile, members: &[MemberFile]) -> Result<Ticket, String> {
     let content = fs::read_to_string(&member.path).map_err(|error| format!("reading: {error}"))?;
-    // Per-file dialect detection: frontmatter marks the older dialect,
-    // anything else reads as the newer one.
-    let (fields, body) = if content.starts_with("---\n") {
-        parse_older_dialect(&content)?
-    } else {
-        (parse_newer_dialect(&content)?, content.as_str())
-    };
+    let (fields, body) = parse_ticket_dialects(&content)?;
 
     let (state, claim) = fields.lifecycle()?;
     let mut dependencies = Vec::new();
@@ -459,12 +471,7 @@ fn resolve_external_ref(ticket_path: &Path, reference: &str, members: &[MemberFi
     let Ok(content) = fs::read_to_string(&path) else {
         return unknown();
     };
-    let parsed = if content.starts_with("---\n") {
-        parse_older_dialect(&content)
-    } else {
-        parse_newer_dialect(&content).map(|fields| (fields, content.as_str()))
-    };
-    let Ok((fields, body)) = parsed else {
+    let Ok((fields, body)) = parse_ticket_dialects(&content) else {
         return unknown();
     };
     let Ok((state, _)) = fields.lifecycle() else {
@@ -477,12 +484,20 @@ fn resolve_external_ref(ticket_path: &Path, reference: &str, members: &[MemberFi
     })
 }
 
-/// A ticket file's lifecycle-bearing fields, as either dialect spells them
+/// Which local ticket dialect a file spelled its fields in — kept on the
+/// parsed fields because the lifecycle vocabularies never cross: `open`/
+/// `closed` belongs to the older dialect, `claimed`/`resolved` to the newer,
+/// and a value from the wrong one degrades rather than guesses.
+#[derive(Clone, Copy)]
+enum Dialect {
+    Older,
+    Newer,
+}
+
+/// A ticket file's lifecycle-bearing fields, as its dialect spells them
 /// (#106). Every field is optional; unknown keys are ignored.
-#[derive(Default)]
 struct TicketFields {
-    /// Older dialect: `open`/`closed`. Newer dialect: `claimed`/`resolved` —
-    /// its only lifecycle vocabulary, carrying the claim too.
+    dialect: Dialect,
     status: Option<String>,
     ty: Option<String>,
     /// Older dialect only. `Some("")` when the key is present with no value —
@@ -494,40 +509,67 @@ struct TicketFields {
 }
 
 impl TicketFields {
-    /// Normalize the two lifecycle axes out of the dialect vocabularies. The
+    fn new(dialect: Dialect) -> Self {
+        Self {
+            dialect,
+            status: None,
+            ty: None,
+            assignee: None,
+            blocked_by: Vec::new(),
+            external_blocked_by: Vec::new(),
+        }
+    }
+
+    /// Normalize the two lifecycle axes out of the dialect's vocabulary. The
     /// status field is the only lifecycle authority (spec §3.2) — body prose
     /// (`## Closure`, superseded blockquotes, handoff notes) never is.
     fn lifecycle(&self) -> Result<(TicketState, Option<Claim>), String> {
-        // Present-but-empty `assignee:` is unclaimed — observed in the wild.
-        let assignee = self
-            .assignee
-            .clone()
-            .filter(|assignee| !assignee.is_empty())
-            .map(Claim::By);
-        match self.status.as_deref() {
-            None => Ok((TicketState::Open, assignee)),
-            Some(value) if value.eq_ignore_ascii_case("open") => Ok((TicketState::Open, assignee)),
-            Some(value) if value.eq_ignore_ascii_case("closed") => {
-                Ok((TicketState::Closed, assignee))
+        let status = self.status.as_deref().map(str::to_ascii_lowercase);
+        match self.dialect {
+            Dialect::Older => {
+                // Present-but-empty `assignee:` is unclaimed — observed in
+                // the wild.
+                let assignee = self
+                    .assignee
+                    .clone()
+                    .filter(|assignee| !assignee.is_empty())
+                    .map(Claim::By);
+                match status.as_deref() {
+                    None | Some("open") => Ok((TicketState::Open, assignee)),
+                    Some("closed") => Ok((TicketState::Closed, assignee)),
+                    Some(other) => Err(format!("unrecognized status {other:?}")),
+                }
             }
-            // Newer dialect: claimed-ness without a claimant name.
-            Some(value) if value.eq_ignore_ascii_case("claimed") => {
-                Ok((TicketState::Open, Some(Claim::Anonymous)))
-            }
-            Some(value) if value.eq_ignore_ascii_case("resolved") => {
-                Ok((TicketState::Closed, None))
-            }
-            Some(other) => Err(format!("unrecognized status {other:?}")),
+            Dialect::Newer => match status.as_deref() {
+                None => Ok((TicketState::Open, None)),
+                // Claimed-ness without a claimant name — the dialect has no
+                // assignee field.
+                Some("claimed") => Ok((TicketState::Open, Some(Claim::Anonymous))),
+                Some("resolved") => Ok((TicketState::Closed, None)),
+                Some(other) => Err(format!("unrecognized Status {other:?}")),
+            },
         }
+    }
+}
+
+/// Split a ticket file into its fields and the Markdown body its title is
+/// read from, detecting the dialect per file: frontmatter marks the older
+/// one, anything else reads as the newer.
+fn parse_ticket_dialects(content: &str) -> Result<(TicketFields, &str), String> {
+    if content.starts_with("---\n") {
+        parse_older_dialect(content)
+    } else {
+        Ok((parse_newer_dialect(content), content))
     }
 }
 
 /// Parse the newer dialect's prose field lines: `Status:`, `Type:`, and
 /// `Blocked by: NN, NN` in the leading lines, before the first section
 /// heading (`##` or deeper) — past it, matching text is body prose, never
-/// lifecycle.
-fn parse_newer_dialect(content: &str) -> Result<TicketFields, String> {
-    let mut fields = TicketFields::default();
+/// lifecycle. Infallible: an unrecognized Status value is a `lifecycle`
+/// error, and everything else here is prose to skip.
+fn parse_newer_dialect(content: &str) -> TicketFields {
+    let mut fields = TicketFields::new(Dialect::Newer);
     for line in content.lines() {
         let line = line.trim();
         if line.starts_with("##") {
@@ -550,7 +592,7 @@ fn parse_newer_dialect(content: &str) -> Result<TicketFields, String> {
                 .collect();
         }
     }
-    Ok(fields)
+    fields
 }
 
 /// Split a ticket file into its `---`-delimited YAML frontmatter fields and
@@ -562,7 +604,7 @@ fn parse_older_dialect(content: &str) -> Result<(TicketFields, &str), String> {
     let Some((raw_fields, body)) = rest.split_once("\n---") else {
         return Err("unterminated frontmatter".to_owned());
     };
-    let mut fields = TicketFields::default();
+    let mut fields = TicketFields::new(Dialect::Older);
     for (key, value) in parse_frontmatter_fields(raw_fields)? {
         match (key.as_str(), value) {
             ("status", FieldValue::Scalar(value)) => fields.status = Some(value),
