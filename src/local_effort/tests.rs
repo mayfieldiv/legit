@@ -657,6 +657,33 @@ fn an_unreadable_ticket_dir_degrades_the_effort() {
 }
 
 #[test]
+fn duplicate_ticket_numbers_degrade_rather_than_binding_arbitrarily() {
+    let dir = tempfile::tempdir().unwrap();
+    let effort_dir = dir.path().join("effort");
+    write(&effort_dir.join("map.md"), "# Effort\n");
+    write(
+        &effort_dir.join("tickets/01-first.md"),
+        "---\nstatus: closed\n---\n\n# First\n",
+    );
+    write(
+        &effort_dir.join("tickets/01-second.md"),
+        "---\nstatus: open\n---\n\n# Second\n",
+    );
+    write(
+        &effort_dir.join("tickets/02-dependent.md"),
+        "---\nstatus: open\nblocked-by: [1]\n---\n\n# Dependent\n",
+    );
+
+    let (_, _, _, reason) = degraded(read_effort(&effort_dir).unwrap());
+    assert!(
+        reason.contains("duplicate ticket number 1")
+            && reason.contains("01-first.md")
+            && reason.contains("01-second.md"),
+        "a blocked-by ref to a shared number would bind arbitrarily: {reason}"
+    );
+}
+
+#[test]
 fn an_unrecognized_status_degrades_rather_than_guessing() {
     let dir = tempfile::tempdir().unwrap();
     let effort_dir = dir.path().join("effort");

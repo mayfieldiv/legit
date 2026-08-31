@@ -143,7 +143,9 @@ fn read_tickets(dir: &Path) -> Result<Vec<Ticket>, String> {
 
 /// Enumerate the Effort's ticket files: `.md` files directly inside each
 /// ticket directory, in filename order (effort order). Subdirectories —
-/// `assets/`, ticket-scoped or not — are never tickets.
+/// `assets/`, ticket-scoped or not — are never tickets. Errs when two
+/// members share a numeric prefix — a `blocked-by` ref to that number would
+/// resolve to an arbitrary one of them, silently changing Frontier state.
 fn list_member_files(dir: &Path) -> Result<Vec<MemberFile>, String> {
     let mut members = Vec::new();
     for sub in TICKET_DIRS {
@@ -175,6 +177,18 @@ fn list_member_files(dir: &Path) -> Result<Vec<MemberFile>, String> {
                 path,
                 key,
             });
+        }
+    }
+    for (i, member) in members.iter().enumerate() {
+        let Some(number) = member.number else {
+            continue;
+        };
+        if let Some(prev) = members[..i].iter().find(|prev| prev.number == Some(number)) {
+            return Err(format!(
+                "duplicate ticket number {number}: {} and {}",
+                prev.path.display(),
+                member.path.display()
+            ));
         }
     }
     Ok(members)
