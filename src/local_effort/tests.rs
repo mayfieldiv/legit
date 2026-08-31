@@ -214,6 +214,46 @@ fn field_lines_after_a_section_heading_are_prose_not_lifecycle() {
     assert_eq!(ticket.dependencies, vec![]);
 }
 
+#[test]
+fn a_root_is_a_single_effort_or_contains_effort_subdirectories() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Single-effort root: a map directly inside, filename matched
+    // case-insensitively (`MAP.md` exists in the wild).
+    let single = dir.path().join(".wayfinder");
+    write(&single.join("MAP.md"), "# Single\n");
+    write(&single.join("issues/01-a.md"), "# A\n");
+    assert_eq!(super::probe_root(&single).unwrap(), vec![single.clone()]);
+
+    // Container root: each subdirectory holding a map is an Effort; other
+    // subdirectories (assets and strays) are not.
+    let container = dir.path().join("docs/wayfinder");
+    write(&container.join("menu-redesign/map.md"), "# Menu\n");
+    write(&container.join("approval-polling/map.md"), "# Approval\n");
+    write(&container.join("assets/diagram.png"), "not a map");
+    write(&container.join("stray.md"), "# Not a map file\n");
+    assert_eq!(
+        super::probe_root(&container).unwrap(),
+        vec![
+            container.join("approval-polling"),
+            container.join("menu-redesign"),
+        ],
+        "effort subdirectories in name order; mapless subdirs skipped"
+    );
+
+    // A missing root or one with no efforts probes empty, not as an error.
+    assert_eq!(
+        super::probe_root(&dir.path().join("absent")).unwrap(),
+        Vec::<std::path::PathBuf>::new()
+    );
+    let empty = dir.path().join(".scratch");
+    fs::create_dir(&empty).unwrap();
+    assert_eq!(
+        super::probe_root(&empty).unwrap(),
+        Vec::<std::path::PathBuf>::new()
+    );
+}
+
 fn degraded(read: EffortRead) -> (EffortKey, String, Option<String>, String) {
     match read {
         EffortRead::Ready(effort) => panic!("expected Degraded, parsed {:?}", effort.title),

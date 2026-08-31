@@ -63,6 +63,34 @@ pub fn read_effort(dir: &Path) -> anyhow::Result<EffortRead> {
     })
 }
 
+/// Probe one Wayfinder Root for Effort directories. A root either *is* a
+/// single Effort (a map file directly inside) or *contains* Effort
+/// subdirectories — both shapes exist in the wild (spec §2.2). A missing or
+/// effort-less root probes empty; an unreadable one errs, surfaced per repo
+/// by discovery (§5.5).
+pub fn probe_root(root: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    if !root.is_dir() {
+        return Ok(Vec::new());
+    }
+    if find_map_file(root)
+        .map_err(anyhow::Error::msg)?
+        .is_some()
+    {
+        return Ok(vec![root.to_owned()]);
+    }
+    let entries =
+        fs::read_dir(root).with_context(|| format!("reading root {}", root.display()))?;
+    let mut efforts = Vec::new();
+    for entry in entries.filter_map(|entry| entry.ok()) {
+        let path = entry.path();
+        if path.is_dir() && find_map_file(&path).map_err(anyhow::Error::msg)?.is_some() {
+            efforts.push(path);
+        }
+    }
+    efforts.sort();
+    Ok(efforts)
+}
+
 /// The Effort title of last resort: the effort directory's name.
 fn dir_title(dir: &Path) -> String {
     dir.file_name()
