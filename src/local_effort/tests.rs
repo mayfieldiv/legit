@@ -382,6 +382,99 @@ fn a_repo_without_a_main_worktree_path_discovers_nothing() {
     assert!(super::discover_repo_efforts(&repo).unwrap().is_empty());
 }
 
+// ── cwd discovery ────────────────────────────────────────────────────────────
+
+#[test]
+fn cwd_walk_probes_each_level_up_to_the_git_toplevel() {
+    let dir = tempfile::tempdir().unwrap();
+    // A root above the repo must never be probed.
+    write(&dir.path().join("docs/wayfinder/above/map.md"), "# Above\n");
+    let repo = dir.path().join("monorepo");
+    init_repo(&repo);
+    write(&repo.join(".scratch/top/map.md"), "# Top\n");
+    write(
+        &repo.join("apps/mac-agent/docs/wayfinder/nested/map.md"),
+        "# Nested\n",
+    );
+    let cwd = repo.join("apps/mac-agent/src");
+    fs::create_dir_all(&cwd).unwrap();
+
+    let reads = super::discover_cwd_efforts(&cwd, &crate::config::LegitConfig::default()).unwrap();
+    let mut titles = effort_titles(&reads);
+    titles.sort();
+    assert_eq!(
+        titles,
+        vec!["Nested".to_owned(), "Top".to_owned()],
+        "every level from cwd to the toplevel is probed; nothing above it"
+    );
+}
+
+#[test]
+fn a_non_git_cwd_is_probed_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    write(&dir.path().join("plain/.wayfinder/map.md"), "# Plain\n");
+    write(
+        &dir.path().join("docs/wayfinder/parent/map.md"),
+        "# Parent\n",
+    );
+    let cwd = dir.path().join("plain");
+
+    let reads = super::discover_cwd_efforts(&cwd, &crate::config::LegitConfig::default()).unwrap();
+    assert_eq!(effort_titles(&reads), vec!["Plain".to_owned()]);
+}
+
+#[test]
+fn configured_roots_win_for_the_cwd_repo_on_a_path_match() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    write(&repo.join("docs/wayfinder/builtin/map.md"), "# Built-in\n");
+    write(&repo.join("custom/override/map.md"), "# Override\n");
+    let cwd = repo.join("deep/inside");
+    fs::create_dir_all(&cwd).unwrap();
+
+    // The entry names the same directory through a dot-ridden spelling; the
+    // match is on canonical identity, not string equality.
+    let spelled = dir.path().join(".").join("repo");
+    let config = crate::config::LegitConfig {
+        repos: vec![repo_config(&spelled, Some(&["custom"]))],
+        ..Default::default()
+    };
+
+    let reads = super::discover_cwd_efforts(&cwd, &config).unwrap();
+    assert_eq!(
+        effort_titles(&reads),
+        vec!["Override".to_owned()],
+        "the matched entry's wayfinderRoots replace the built-ins for the walk"
+    );
+}
+
+#[test]
+fn configured_roots_win_for_the_cwd_repo_on_a_slug_match() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("clone");
+    init_repo(&repo);
+    git(
+        &repo,
+        &["remote", "add", "origin", "git@github.com:acme/widgets.git"],
+    );
+    write(&repo.join("docs/wayfinder/builtin/map.md"), "# Built-in\n");
+    write(&repo.join("maps/override/map.md"), "# Override\n");
+
+    let config = crate::config::LegitConfig {
+        repos: vec![crate::config::RepoConfig {
+            // Different casing: slug matching is RepoSlug's, case-insensitive.
+            slug: Some(crate::repo_slug::RepoSlug::new("ACME/Widgets")),
+            wayfinder_roots: Some(vec!["maps".to_owned()]),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let reads = super::discover_cwd_efforts(&repo, &config).unwrap();
+    assert_eq!(effort_titles(&reads), vec!["Override".to_owned()]);
+}
+
 fn degraded(read: EffortRead) -> (EffortKey, String, Option<String>, String) {
     match read {
         EffortRead::Ready(effort) => panic!("expected Degraded, parsed {:?}", effort.title),

@@ -50,6 +50,107 @@ pub fn discover_repo_efforts(repo: &RepoConfig) -> anyhow::Result<Vec<EffortRead
     read_efforts_under(&bases, repo.wayfinder_roots.as_deref())
 }
 
+/// Discover and parse every local Effort visible from the working directory:
+/// walk cwd → its git toplevel, probing each level (which finds nested
+/// monorepo roots like `apps/mac-agent/docs/wayfinder/`); a cwd outside any
+/// git repo is probed alone. When the cwd repo matches a configured entry
+/// carrying `wayfinderRoots` — by slug (the origin remote) or by canonical
+/// Main Worktree identity — the explicit roots win over the built-ins
+/// (spec §2.2).
+pub fn discover_cwd_efforts(
+    cwd: &Path,
+    config: &crate::config::LegitConfig,
+) -> anyhow::Result<Vec<EffortRead>> {
+    let levels = cwd_walk_levels(cwd)?;
+    let toplevel = levels.last().expect("the walk holds at least the cwd");
+    let roots = configured_roots_for_cwd(config, cwd, toplevel);
+    read_efforts_under(&levels, roots)
+}
+
+/// The directories the cwd walk probes: the canonical cwd up to and
+/// including its git toplevel, or the cwd alone outside a repo. The
+/// toplevel is last, so callers can read the repo boundary off the walk.
+fn cwd_walk_levels(cwd: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    let cwd =
+        fs::canonicalize(cwd).with_context(|| format!("canonicalizing cwd {}", cwd.display()))?;
+    let Some(toplevel) = git_toplevel(&cwd).and_then(|top| fs::canonicalize(top).ok()) else {
+        return Ok(vec![cwd]);
+    };
+    if !cwd.starts_with(&toplevel) {
+        // A toplevel that isn't a cwd ancestor (exotic symlink layouts):
+        // there is no walk between them, so probe just the cwd.
+        return Ok(vec![cwd]);
+    }
+    let mut levels = Vec::new();
+    let mut level = cwd.as_path();
+    loop {
+        levels.push(level.to_owned());
+        if level == toplevel {
+            return Ok(levels);
+        }
+        level = level
+            .parent()
+            .expect("starts_with guarantees the toplevel is an ancestor");
+    }
+}
+
+/// The git toplevel of the repo holding `cwd`, `None` outside any repo.
+/// Ambient env: like `detect_repo`, this deliberately reads the user's real
+/// cwd repo.
+fn git_toplevel(cwd: &Path) -> Option<PathBuf> {
+    let mut command = git_command(GitEnv::Ambient);
+    command
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(cwd);
+    run_command("git rev-parse --show-toplevel", &mut command)
+        .ok()
+        .map(|stdout| PathBuf::from(stdout.trim()))
+}
+
+/// The configured `wayfinderRoots` that replace the built-ins for the cwd
+/// walk, when the cwd repo matches a `repos` entry carrying them. A slugged
+/// entry matches the cwd's origin-remote slug; any entry matches by its
+/// Main Worktree naming the toplevel (canonical identity, so spelling
+/// differences and symlinks can't defeat it). A match failure of any kind —
+/// no remote, an unresolvable configured path — just means "not the cwd
+/// repo", never an error: the walk falls back to the built-ins.
+fn configured_roots_for_cwd<'a>(
+    config: &'a crate::config::LegitConfig,
+    cwd: &Path,
+    toplevel: &Path,
+) -> Option<&'a [String]> {
+    let candidates: Vec<&RepoConfig> = config
+        .repos
+        .iter()
+        .filter(|repo| repo.wayfinder_roots.is_some())
+        .collect();
+    if candidates.is_empty() {
+        return None;
+    }
+    // One subprocess, and only when a slugged candidate needs it.
+    let cwd_slug = candidates
+        .iter()
+        .any(|repo| repo.slug.is_some())
+        .then(|| crate::git_remote::detect_repo(cwd).ok())
+        .flatten();
+    for repo in candidates {
+        let slug_matches = match (&repo.slug, &cwd_slug) {
+            (Some(entry), Some(cwd_slug)) => entry == cwd_slug,
+            _ => false,
+        };
+        let path_matches = repo
+            .main_worktree_path
+            .as_deref()
+            .and_then(|path| resolve_config_path(path).ok())
+            .and_then(|path| fs::canonicalize(path).ok())
+            .is_some_and(|path| path == toplevel);
+        if slug_matches || path_matches {
+            return repo.wayfinder_roots.as_deref();
+        }
+    }
+    None
+}
+
 /// The working trees a repo's Wayfinder Roots resolve against: every linked
 /// worktree of the Main Worktree that still exists and isn't prunable, or
 /// the base directory alone when it isn't a git repo at all.
