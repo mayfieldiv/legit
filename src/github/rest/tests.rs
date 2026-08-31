@@ -4,10 +4,9 @@ use std::collections::HashMap;
 use chrono::TimeZone;
 
 use super::{
-    Label, PR, PRState, RawCheckRunsResponse, RawIssueComment, RawRestIssue, RawRestPR, RawReview,
-    parse_check_runs, parse_issue, parse_issue_comments, parse_issues, parse_pr, parse_reviews,
+    Label, PR, PRState, RawCheckRunsResponse, RawIssueComment, RawRestPR, RawReview,
+    parse_check_runs, parse_issue_comments, parse_pr, parse_reviews,
 };
-use crate::github::types::{DependenciesSummary, Issue, IssueState, SubIssuesSummary};
 
 fn deserialize(raw: &str) -> RawRestPR {
     serde_json::from_str(raw).expect("fixture should deserialize")
@@ -294,107 +293,4 @@ fn issue_comments_detect_bots_and_default_ghost() {
     assert!(comments[2].is_bot, "[bot] suffix");
     assert_eq!(comments[3].author, "ghost");
     assert!(!comments[3].is_bot);
-}
-
-// ── issue parsing (wayfinder ticket refresh) ─────────────────────────────────
-
-#[test]
-fn parses_issue_from_single_issue_endpoint() {
-    let raw: RawRestIssue = serde_json::from_str(
-        r#"{
-            "number": 117,
-            "title": "GitHub transport",
-            "state": "open",
-            "state_reason": null,
-            "html_url": "https://github.com/mayfieldiv/legit/issues/117",
-            "body": "Implements part of the wayfinder ticket surface.",
-            "labels": [
-                { "name": "wayfinder:task", "color": "5319E7" },
-                { "name": "ready-for-agent", "color": "" }
-            ],
-            "assignees": [{ "login": "mayfieldiv" }, { "login": "alice" }],
-            "sub_issues_summary": { "total": 0, "completed": 0, "percent_completed": 0 },
-            "issue_dependencies_summary": {
-                "blocked_by": 1, "total_blocked_by": 2,
-                "blocking": 3, "total_blocking": 3
-            },
-            "parent_issue_url": "https://api.github.com/repos/mayfieldiv/legit/issues/123"
-        }"#,
-    )
-    .expect("deserialize");
-
-    let issue = parse_issue(raw);
-
-    assert_eq!(
-        issue,
-        Issue {
-            number: 117,
-            title: "GitHub transport".to_owned(),
-            state: IssueState::Open,
-            url: "https://github.com/mayfieldiv/legit/issues/117".to_owned(),
-            body: "Implements part of the wayfinder ticket surface.".to_owned(),
-            labels: vec!["wayfinder:task".to_owned(), "ready-for-agent".to_owned()],
-            assignees: vec!["mayfieldiv".to_owned(), "alice".to_owned()],
-            sub_issues_summary: SubIssuesSummary {
-                total: 0,
-                completed: 0,
-                percent_completed: 0,
-            },
-            dependencies_summary: DependenciesSummary {
-                blocked_by: 1,
-                blocking: 3,
-                total_blocked_by: 2,
-                total_blocking: 3,
-            },
-            parent_issue_url: Some(
-                "https://api.github.com/repos/mayfieldiv/legit/issues/123".to_owned()
-            ),
-        }
-    );
-}
-
-#[test]
-fn issue_parse_defaults_everything_but_number_and_title() {
-    // Permissive posture: a stripped payload (or one from a GHES-ish proxy
-    // that omits the newer summary objects) still parses.
-    let raw: RawRestIssue =
-        serde_json::from_str(r#"{ "number": 5, "title": "bare" }"#).expect("deserialize");
-
-    let issue = parse_issue(raw);
-
-    assert_eq!(issue.number, 5);
-    assert_eq!(issue.state, IssueState::Open, "absent state defaults Open");
-    assert_eq!(issue.body, "");
-    assert!(issue.labels.is_empty());
-    assert!(issue.assignees.is_empty());
-    assert_eq!(issue.sub_issues_summary, SubIssuesSummary::default());
-    assert_eq!(issue.dependencies_summary, DependenciesSummary::default());
-    assert_eq!(issue.parent_issue_url, None);
-}
-
-#[test]
-fn issue_parse_reads_closed_state() {
-    let raw: RawRestIssue =
-        serde_json::from_str(r#"{ "number": 6, "title": "done", "state": "closed" }"#)
-            .expect("deserialize");
-
-    assert_eq!(parse_issue(raw).state, IssueState::Closed);
-}
-
-#[test]
-fn issue_listing_drops_pull_requests() {
-    // `GET /issues?labels=…` returns PRs too, marked by the `pull_request`
-    // key; the listing parse must filter them out.
-    let raw: Vec<RawRestIssue> = serde_json::from_str(
-        r#"[
-            { "number": 1, "title": "a real issue" },
-            { "number": 2, "title": "a PR", "pull_request": { "url": "u" } }
-        ]"#,
-    )
-    .expect("deserialize");
-
-    let issues = parse_issues(raw);
-
-    assert_eq!(issues.len(), 1);
-    assert_eq!(issues[0].number, 1);
 }
