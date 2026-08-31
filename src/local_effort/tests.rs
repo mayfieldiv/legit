@@ -214,6 +214,72 @@ fn field_lines_after_a_section_heading_are_prose_not_lifecycle() {
     assert_eq!(ticket.dependencies, vec![]);
 }
 
+fn degraded(read: EffortRead) -> (EffortKey, String, Option<String>, String) {
+    match read {
+        EffortRead::Ready(effort) => panic!("expected Degraded, parsed {:?}", effort.title),
+        EffortRead::Degraded {
+            key,
+            title,
+            destination,
+            reason,
+        } => (key, title, destination, reason),
+    }
+}
+
+#[test]
+fn an_unparseable_ticket_degrades_the_effort_keeping_map_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let effort_dir = dir.path().join("effort");
+    write(
+        &effort_dir.join("map.md"),
+        "# Real title\n\n## Destination\n\nSomewhere.\n",
+    );
+    write(&effort_dir.join("tickets/01-fine.md"), "# Fine\n");
+    write(
+        &effort_dir.join("tickets/02-broken.md"),
+        "---\nstatus: open\nnot a yaml line\n---\n\n# Broken\n",
+    );
+
+    let (key, title, destination, reason) = degraded(read_effort(&effort_dir).unwrap());
+    assert_eq!(
+        key,
+        EffortKey::Local {
+            dir: CanonicalPathBuf::canonicalize(&effort_dir).unwrap()
+        }
+    );
+    assert_eq!(title, "Real title");
+    assert_eq!(destination.as_deref(), Some("Somewhere."));
+    assert!(
+        reason.contains("02-broken.md"),
+        "the reason names the failing file: {reason}"
+    );
+}
+
+#[test]
+fn an_unrecognized_status_degrades_rather_than_guessing() {
+    let dir = tempfile::tempdir().unwrap();
+    let effort_dir = dir.path().join("effort");
+    write(&effort_dir.join("map.md"), "# Effort\n");
+    write(
+        &effort_dir.join("tickets/01-a.md"),
+        "---\nstatus: wontfix\n---\n\n# A\n",
+    );
+
+    let (_, _, _, reason) = degraded(read_effort(&effort_dir).unwrap());
+    assert!(reason.contains("wontfix"), "{reason}");
+}
+
+#[test]
+fn a_directory_without_a_map_degrades_under_its_dir_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let effort_dir = dir.path().join("mapless");
+    write(&effort_dir.join("tickets/01-a.md"), "# A\n");
+
+    let (_, title, _, reason) = degraded(read_effort(&effort_dir).unwrap());
+    assert_eq!(title, "mapless");
+    assert!(reason.contains("map.md"), "{reason}");
+}
+
 #[test]
 fn parses_a_newer_dialect_effort() {
     let dir = tempfile::tempdir().unwrap();
