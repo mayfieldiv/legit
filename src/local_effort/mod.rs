@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 
-use self::format::{find_map_file, read_effort_at};
+use self::format::{find_map_file, probe_file_type, read_effort_at};
 use crate::{
     canonical_path::CanonicalPathBuf,
     config::{RepoConfig, resolve_config_path},
@@ -235,10 +235,12 @@ fn read_efforts_under(
 /// Probe one Wayfinder Root for Effort directories. A root either *is* a
 /// single Effort (a map file directly inside) or *contains* Effort
 /// subdirectories — both shapes exist in the wild (spec §2.2). A missing or
-/// effort-less root probes empty; an unreadable one errs, surfaced per repo
-/// by discovery (§5.5).
+/// effort-less root probes empty; an unreadable one — its own metadata,
+/// its listing, or an entry's — errs, surfaced per repo by discovery (§5.5:
+/// never silently omit an Effort).
 fn probe_root(root: &Path) -> anyhow::Result<Vec<PathBuf>> {
-    if !root.is_dir() {
+    let probe = |path: &Path| probe_file_type(path).map_err(anyhow::Error::msg);
+    if !probe(root)?.is_some_and(|ty| ty.is_dir()) {
         return Ok(Vec::new());
     }
     if find_map_file(root).map_err(anyhow::Error::msg)?.is_some() {
@@ -246,9 +248,12 @@ fn probe_root(root: &Path) -> anyhow::Result<Vec<PathBuf>> {
     }
     let entries = fs::read_dir(root).with_context(|| format!("reading root {}", root.display()))?;
     let mut efforts = Vec::new();
-    for entry in entries.filter_map(|entry| entry.ok()) {
+    for entry in entries {
+        let entry = entry.with_context(|| format!("reading root {}", root.display()))?;
         let path = entry.path();
-        if path.is_dir() && find_map_file(&path).map_err(anyhow::Error::msg)?.is_some() {
+        if probe(&path)?.is_some_and(|ty| ty.is_dir())
+            && find_map_file(&path).map_err(anyhow::Error::msg)?.is_some()
+        {
             efforts.push(path);
         }
     }

@@ -4,6 +4,7 @@
 //! normalized or visibly degraded, never silently partial (spec §3, §5.5).
 
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
@@ -82,22 +83,37 @@ fn read_map(dir: &Path) -> Result<(String, Option<String>), String> {
     Ok((title, scan_map_body(&body).destination))
 }
 
+/// The file type at `path`, following symlinks. `None` when nothing is
+/// there (a missing path or dangling symlink); any other failure errs — an
+/// unreadable path must surface, never read as absent (§5.5).
+pub(super) fn probe_file_type(path: &Path) -> Result<Option<fs::FileType>, String> {
+    match fs::metadata(path) {
+        Ok(metadata) => Ok(Some(metadata.file_type())),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("probing {}: {error}", path.display())),
+    }
+}
+
 /// The map file marking `dir` as an Effort, matched case-insensitively
 /// (`MAP.md` exists in the wild). Lexicographically first on the pathological
 /// case of several case-variants coexisting, for determinism.
 pub(super) fn find_map_file(dir: &Path) -> Result<Option<PathBuf>, String> {
     let entries =
         fs::read_dir(dir).map_err(|error| format!("reading {}: {error}", dir.display()))?;
-    let mut candidates: Vec<PathBuf> = entries
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.is_file()
-                && path
-                    .file_name()
-                    .is_some_and(|name| name.eq_ignore_ascii_case("map.md"))
-        })
-        .collect();
+    let mut candidates = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("reading {}: {error}", dir.display()))?;
+        let path = entry.path();
+        if !path
+            .file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case("map.md"))
+        {
+            continue;
+        }
+        if probe_file_type(&path)?.is_some_and(|ty| ty.is_file()) {
+            candidates.push(path);
+        }
+    }
     candidates.sort();
     Ok(candidates.into_iter().next())
 }
@@ -132,16 +148,22 @@ fn list_member_files(dir: &Path) -> Result<Vec<MemberFile>, String> {
     let mut members = Vec::new();
     for sub in TICKET_DIRS {
         let ticket_dir = dir.join(sub);
-        if !ticket_dir.is_dir() {
+        if !probe_file_type(&ticket_dir)?.is_some_and(|ty| ty.is_dir()) {
             continue;
         }
         let entries = fs::read_dir(&ticket_dir)
             .map_err(|error| format!("reading {}: {error}", ticket_dir.display()))?;
-        let mut paths: Vec<PathBuf> = entries
-            .filter_map(|entry| entry.ok())
-            .map(|entry| entry.path())
-            .filter(|path| path.is_file() && path.extension().is_some_and(|ext| ext == "md"))
-            .collect();
+        let mut paths = Vec::new();
+        for entry in entries {
+            let entry =
+                entry.map_err(|error| format!("reading {}: {error}", ticket_dir.display()))?;
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "md")
+                && probe_file_type(&path)?.is_some_and(|ty| ty.is_file())
+            {
+                paths.push(path);
+            }
+        }
         paths.sort();
         for path in paths {
             let key = TicketKey::Local {
@@ -212,11 +234,13 @@ fn parse_ticket_file(member: &MemberFile, members: &[MemberFile]) -> Result<Tick
 
 /// Resolve one `external-blocked-by` ref — a relative path from the ticket
 /// file's directory (`../../<effort>/tickets/NN-slug.md` in the corpus). A
-/// readable target parses for the state and title the edge carries; a path
-/// that lands back inside this Effort folds to a SameEffort edge; anything
-/// unresolvable or unreadable is an Unknown Dependency with the raw ref kept
-/// for display — never an error, so one dead ref doesn't degrade the Effort
-/// (the ticket it blocks stays off the Frontier either way).
+/// readable ticket target parses for the state and title the edge carries; a
+/// path that lands back inside this Effort folds to a SameEffort edge;
+/// anything unresolvable, unreadable, or not a ticket at all (a file outside
+/// a ticket directory — `assets/` markdown included) is an Unknown
+/// Dependency with the raw ref kept for display — never an error, so one
+/// dead ref doesn't degrade the Effort (the ticket it blocks stays off the
+/// Frontier either way).
 fn resolve_external_ref(ticket_path: &Path, reference: &str, members: &[MemberFile]) -> Dependency {
     let unknown = || Dependency::Unknown {
         raw: reference.to_owned(),
@@ -227,6 +251,16 @@ fn resolve_external_ref(ticket_path: &Path, reference: &str, members: &[MemberFi
     let Ok(path) = CanonicalPathBuf::canonicalize(base.join(reference)) else {
         return unknown();
     };
+    // Only a file directly inside a ticket directory can be a ticket —
+    // the target-side mirror of list_member_files' "assets dirs are never
+    // tickets".
+    let in_ticket_dir = path
+        .parent()
+        .and_then(Path::file_name)
+        .is_some_and(|name| TICKET_DIRS.iter().any(|dir| name == *dir));
+    if !in_ticket_dir {
+        return unknown();
+    }
     let key = TicketKey::Local { path: path.clone() };
     if let Some(member) = members.iter().find(|member| member.key == key) {
         return Dependency::SameEffort(member.key.clone());
@@ -258,7 +292,8 @@ enum Dialect {
 }
 
 /// A ticket file's lifecycle-bearing fields, as its dialect spells them
-/// (#106). Every field is optional; unknown keys are ignored.
+/// (#106). Every field is optional to parse — `lifecycle` decides which
+/// absences mean anything; unknown keys are ignored.
 struct TicketFields {
     dialect: Dialect,
     status: Option<String>,
@@ -298,8 +333,13 @@ impl TicketFields {
                     .filter(|assignee| !assignee.is_empty())
                     .map(Claim::By);
                 match status.as_deref() {
-                    None | Some("open") => Ok((TicketState::Open, assignee)),
+                    Some("open") => Ok((TicketState::Open, assignee)),
                     Some("closed") => Ok((TicketState::Closed, assignee)),
+                    // Absent-means-Open belongs to the newer dialect alone
+                    // (spec §3.2); no observed older-dialect file omits
+                    // status, so absence degrades rather than guessing a
+                    // ticket onto the Frontier.
+                    None => Err("missing status".to_owned()),
                     Some(other) => Err(format!("unrecognized status {other:?}")),
                 }
             }

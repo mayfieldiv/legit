@@ -569,6 +569,94 @@ fn an_unparseable_ticket_degrades_the_effort_keeping_map_context() {
 }
 
 #[test]
+fn an_older_dialect_ticket_missing_status_degrades() {
+    let dir = tempfile::tempdir().unwrap();
+    let effort_dir = dir.path().join("effort");
+    write(&effort_dir.join("map.md"), "# Effort\n");
+    write(
+        &effort_dir.join("tickets/01-a.md"),
+        "---\ntype: task\n---\n\n# A\n",
+    );
+
+    let (_, _, _, reason) = degraded(read_effort(&effort_dir).unwrap());
+    assert!(
+        reason.contains("status"),
+        "absent-means-Open belongs to the newer dialect alone: {reason}"
+    );
+}
+
+#[test]
+fn an_external_ref_to_a_non_ticket_file_is_unknown() {
+    let dir = tempfile::tempdir().unwrap();
+    let sibling = dir.path().join("menu-redesign");
+    write(&sibling.join("map.md"), "# Menu redesign\n");
+    write(
+        &sibling.join("tickets/assets/notes.md"),
+        "# Notes, not a ticket\n",
+    );
+
+    let effort_dir = dir.path().join("effort");
+    write(&effort_dir.join("map.md"), "# Effort\n");
+    write(
+        &effort_dir.join("tickets/01-a.md"),
+        "---\nstatus: open\nexternal-blocked-by:\n  - ../../menu-redesign/tickets/assets/notes.md\n---\n\n# A\n",
+    );
+
+    let effort = ready(read_effort(&effort_dir).unwrap());
+    let ticket = effort.tickets().next().expect("one ticket");
+    assert_eq!(
+        ticket.dependencies,
+        vec![Dependency::Unknown {
+            raw: "../../menu-redesign/tickets/assets/notes.md".to_owned()
+        }],
+        "readable markdown outside a ticket directory is never a ticket"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_root_errs_rather_than_probing_empty() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let locked = dir.path().join("locked");
+    let root = locked.join("docs/wayfinder");
+    write(&root.join("alpha/map.md"), "# Alpha\n");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+
+    let result = super::probe_root(&root);
+    // Restore before asserting so the tempdir can clean up either way.
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(
+        result.is_err(),
+        "an unreadable root must err, never probe as absent"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_ticket_dir_degrades_the_effort() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let effort_dir = dir.path().join("effort");
+    write(&effort_dir.join("map.md"), "# Effort\n");
+    let ticket_dir = effort_dir.join("tickets");
+    write(
+        &ticket_dir.join("01-a.md"),
+        "---\nstatus: open\n---\n\n# A\n",
+    );
+    fs::set_permissions(&ticket_dir, fs::Permissions::from_mode(0o000)).unwrap();
+
+    let read = read_effort(&effort_dir).unwrap();
+    // Restore before asserting so the tempdir can clean up either way.
+    fs::set_permissions(&ticket_dir, fs::Permissions::from_mode(0o755)).unwrap();
+    let (_, title, _, reason) = degraded(read);
+    assert_eq!(title, "Effort");
+    assert!(reason.contains("tickets"), "{reason}");
+}
+
+#[test]
 fn an_unrecognized_status_degrades_rather_than_guessing() {
     let dir = tempfile::tempdir().unwrap();
     let effort_dir = dir.path().join("effort");
