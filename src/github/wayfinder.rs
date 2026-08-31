@@ -27,6 +27,7 @@ use crate::{
             ticket_type_from_labels,
         },
     },
+    map_body::scan_map_body,
     repo_slug::RepoSlug,
     secret::Secret,
     ticket::{Dependency, Effort, EffortKey, EffortRead, ExternalDependency, Ticket, TicketKey},
@@ -441,83 +442,6 @@ fn parse_dependency(node: RawBlockedByNode, slug: &RepoSlug, members: &HashSet<u
             state: IssueState::parse(node.state.as_deref()).into(),
             title: node.title,
         })
-    }
-}
-
-// ── map-body dialect rules ───────────────────────────────────────────────────
-
-/// What one Markdown parse of a map body yields: the Destination one-liner
-/// and the task-list half of the §4.4 fallback signal.
-struct MapBodyFacts {
-    /// The first paragraph under a `Destination` heading (any heading level,
-    /// ATX or setext — the wayfinder template says `##`, real maps drift),
-    /// wrapped lines joined. `None` when the body has no such heading or the
-    /// section is empty.
-    destination: Option<String>,
-    /// The body carries a GitHub task list (a real one — a `- [ ]` line
-    /// inside a code fence is not a task list).
-    has_task_list: bool,
-}
-
-/// Scan a map body once with `pulldown-cmark` — the renderer's own parser,
-/// so heading and fence recognition can't drift from what the user sees.
-fn scan_map_body(body: &str) -> MapBodyFacts {
-    use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
-
-    enum DestinationScan {
-        SearchingForHeading,
-        CollectingHeadingText(String),
-        AwaitingParagraph,
-        CapturingParagraph(String),
-        Done(Option<String>),
-    }
-    use DestinationScan::*;
-
-    let mut scan = SearchingForHeading;
-    let mut has_task_list = false;
-    for event in Parser::new_ext(body, Options::ENABLE_TASKLISTS) {
-        if matches!(event, Event::TaskListMarker(_)) {
-            has_task_list = true;
-        }
-        scan = match (scan, &event) {
-            (SearchingForHeading, Event::Start(Tag::Heading { .. })) => {
-                CollectingHeadingText(String::new())
-            }
-            (CollectingHeadingText(mut text), Event::Text(t) | Event::Code(t)) => {
-                text.push_str(t);
-                CollectingHeadingText(text)
-            }
-            (CollectingHeadingText(text), Event::End(TagEnd::Heading(_))) => {
-                if text.trim().eq_ignore_ascii_case("destination") {
-                    AwaitingParagraph
-                } else {
-                    SearchingForHeading
-                }
-            }
-            // A heading before any paragraph: the Destination section is empty.
-            (AwaitingParagraph, Event::Start(Tag::Heading { .. })) => Done(None),
-            (AwaitingParagraph, Event::Start(Tag::Paragraph)) => CapturingParagraph(String::new()),
-            (CapturingParagraph(mut text), Event::Text(t) | Event::Code(t)) => {
-                text.push_str(t);
-                CapturingParagraph(text)
-            }
-            (CapturingParagraph(mut text), Event::SoftBreak | Event::HardBreak) => {
-                text.push(' ');
-                CapturingParagraph(text)
-            }
-            (CapturingParagraph(text), Event::End(TagEnd::Paragraph)) => {
-                let trimmed = text.trim();
-                Done((!trimmed.is_empty()).then(|| trimmed.to_owned()))
-            }
-            (state, _) => state,
-        };
-    }
-    MapBodyFacts {
-        destination: match scan {
-            Done(destination) => destination,
-            _ => None,
-        },
-        has_task_list,
     }
 }
 
