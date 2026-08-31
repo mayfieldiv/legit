@@ -204,14 +204,6 @@ fn filename_number(path: &Path) -> Option<u64> {
     stem[..end].parse().ok()
 }
 
-/// The display slug of a ticket file (`01-inventory`) — the title of last
-/// resort for a file with no H1.
-fn file_slug(path: &Path) -> String {
-    path.file_stem()
-        .map(|stem| stem.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string())
-}
-
 /// Parse one ticket file into a [`Ticket`], resolving its `blocked-by` refs
 /// against the Effort's member files.
 fn parse_ticket_file(member: &MemberFile, members: &[MemberFile]) -> Result<Ticket, String> {
@@ -238,7 +230,9 @@ fn parse_ticket_file(member: &MemberFile, members: &[MemberFile]) -> Result<Tick
 
     Ok(Ticket {
         key: member.key.clone(),
-        title: first_h1(body).unwrap_or_else(|| file_slug(&member.path)),
+        // Never the filename slug: that's the display ref (spec §6.2),
+        // derivable from the key, not a title of last resort.
+        title: first_h1(body).ok_or_else(|| "no H1 title".to_owned())?,
         state,
         claim,
         ty: TicketType(fields.ty.unwrap_or_default()),

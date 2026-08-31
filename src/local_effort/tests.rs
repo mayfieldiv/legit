@@ -109,10 +109,10 @@ fn tolerates_the_corpus_edge_cases() {
         "---\nstatus: closed\ntype: research\nassignee:\nblocked-by: []\n---\n\n# Audit the targets\n\n> **Superseded** by the later rescope.\n\n## Closure\n\nFolded into 02.\n",
     );
     // A human-plus-agent assignee value passes through verbatim; an
-    // unknown type does too. No H1 anywhere, so the slug is the title.
+    // unknown type does too.
     write(
         &effort_dir.join("tickets/02-migrate.md"),
-        "---\nstatus: open\ntype: spike\nassignee: mreynolds (claude)\nblocked-by: [9]\n---\n\nProse without a heading.\n",
+        "---\nstatus: open\ntype: spike\nassignee: mreynolds (claude)\nblocked-by: [9]\n---\n\n# Migrate the targets\n",
     );
 
     let effort = ready(read_effort(&effort_dir).unwrap());
@@ -130,7 +130,6 @@ fn tolerates_the_corpus_edge_cases() {
     );
 
     let migrate = &tickets[1];
-    assert_eq!(migrate.title, "02-migrate", "no H1 falls back to the slug");
     assert_eq!(
         migrate.claim,
         Some(Claim::By("mreynolds (claude)".to_owned()))
@@ -654,6 +653,23 @@ fn an_unreadable_ticket_dir_degrades_the_effort() {
     let (_, title, _, reason) = degraded(read);
     assert_eq!(title, "Effort");
     assert!(reason.contains("tickets"), "{reason}");
+}
+
+#[test]
+fn a_ticket_without_an_h1_title_degrades() {
+    let dir = tempfile::tempdir().unwrap();
+    let effort_dir = dir.path().join("effort");
+    write(&effort_dir.join("map.md"), "# Effort\n");
+    write(
+        &effort_dir.join("tickets/01-a.md"),
+        "---\nstatus: open\n---\n\nProse without a heading.\n",
+    );
+
+    let (_, _, _, reason) = degraded(read_effort(&effort_dir).unwrap());
+    assert!(
+        reason.contains("no H1 title"),
+        "the title is the H1, never the filename slug: {reason}"
+    );
 }
 
 #[test]
