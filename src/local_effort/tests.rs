@@ -6,7 +6,7 @@
 use std::fs;
 use std::path::Path;
 
-use super::read_effort;
+use super::format::read_effort;
 use crate::canonical_path::CanonicalPathBuf;
 use crate::ticket::{Claim, Dependency, Effort, EffortKey, EffortRead, TicketKey, TicketState};
 
