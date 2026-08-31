@@ -3,6 +3,9 @@
 //! dialects (#106), normalized here into an [`EffortRead`] — fully
 //! normalized or visibly degraded, never silently partial (spec §3, §5.5).
 
+#[cfg(test)]
+mod tests;
+
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
