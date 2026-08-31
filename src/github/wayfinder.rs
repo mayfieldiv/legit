@@ -574,19 +574,19 @@ fn scan_fallback_lines(body: &str) -> FallbackLines {
     // ends both end a line), skipping code blocks and heading text.
     let mut found = FallbackLines::default();
     let mut line = String::new();
-    let mut skipping = 0u32;
+    let mut ignored_container_depth = 0u32;
     for event in Parser::new_ext(body, Options::empty()) {
         match event {
             Event::Start(Tag::Heading { level, .. }) if level > HeadingLevel::H1 => {
                 return found;
             }
             Event::Start(Tag::Heading { .. }) | Event::Start(Tag::CodeBlock(_)) => {
-                skipping += 1;
+                ignored_container_depth += 1;
             }
             Event::End(TagEnd::Heading(_)) | Event::End(TagEnd::CodeBlock) => {
-                skipping -= 1;
+                ignored_container_depth -= 1;
             }
-            Event::Text(text) | Event::Code(text) if skipping == 0 => {
+            Event::Text(text) | Event::Code(text) if ignored_container_depth == 0 => {
                 line.push_str(&text);
             }
             Event::SoftBreak
