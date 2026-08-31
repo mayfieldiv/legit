@@ -254,6 +254,134 @@ fn a_root_is_a_single_effort_or_contains_effort_subdirectories() {
     );
 }
 
+// ── per-repo discovery ───────────────────────────────────────────────────────
+
+/// Run git in a fixture repo, config-pinned so the environment can't break
+/// the fixture (identity, signing).
+fn git(dir: &Path, args: &[&str]) {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args([
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@invalid",
+            "-c",
+            "commit.gpgsign=false",
+        ])
+        .args(args)
+        .output()
+        .expect("git runs");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn init_repo(dir: &Path) {
+    fs::create_dir_all(dir).unwrap();
+    git(dir, &["init", "--quiet"]);
+    git(dir, &["commit", "--quiet", "--allow-empty", "-m", "root"]);
+}
+
+fn repo_config(main_worktree: &Path, roots: Option<&[&str]>) -> crate::config::RepoConfig {
+    crate::config::RepoConfig {
+        main_worktree_path: Some(main_worktree.to_str().unwrap().to_owned()),
+        wayfinder_roots: roots.map(|roots| roots.iter().map(|r| (*r).to_owned()).collect()),
+        ..Default::default()
+    }
+}
+
+fn effort_titles(reads: &[EffortRead]) -> Vec<String> {
+    reads
+        .iter()
+        .map(|read| match read {
+            EffortRead::Ready(effort) => effort.title.clone(),
+            EffortRead::Degraded { title, .. } => panic!("degraded: {title}"),
+        })
+        .collect()
+}
+
+#[test]
+fn discovery_fans_out_across_worktrees_and_skips_missing_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main");
+    init_repo(&main);
+    write(&main.join("docs/wayfinder/alpha/map.md"), "# Alpha\n");
+
+    let linked = dir.path().join("linked");
+    git(
+        &main,
+        &["worktree", "add", "--quiet", linked.to_str().unwrap()],
+    );
+    write(&linked.join(".scratch/beta/map.md"), "# Beta\n");
+
+    // A worktree whose directory is gone (prunable) is skipped, not an error.
+    let vanished = dir.path().join("vanished");
+    git(
+        &main,
+        &["worktree", "add", "--quiet", vanished.to_str().unwrap()],
+    );
+    fs::remove_dir_all(&vanished).unwrap();
+
+    let reads = super::discover_repo_efforts(&repo_config(&main, None)).unwrap();
+    let mut titles = effort_titles(&reads);
+    titles.sort();
+    assert_eq!(titles, vec!["Alpha".to_owned(), "Beta".to_owned()]);
+}
+
+#[test]
+fn configured_roots_replace_the_built_in_probe_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main");
+    init_repo(&main);
+    write(&main.join("docs/wayfinder/builtin/map.md"), "# Built-in\n");
+    write(&main.join("custom/maps/custom/map.md"), "# Custom\n");
+
+    let reads = super::discover_repo_efforts(&repo_config(&main, Some(&["custom/maps"]))).unwrap();
+    assert_eq!(
+        effort_titles(&reads),
+        vec!["Custom".to_owned()],
+        "explicit wayfinderRoots replace the built-ins, never extend them"
+    );
+}
+
+#[test]
+fn a_non_git_base_is_probed_alone_and_absolute_roots_probe_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("plain");
+    write(&base.join(".wayfinder/MAP.md"), "# Single\n");
+
+    let shared = dir.path().join("shared-efforts");
+    write(&shared.join("gamma/map.md"), "# Gamma\n");
+    let roots = [".wayfinder".to_owned(), shared.to_str().unwrap().to_owned()];
+    let roots: Vec<&str> = roots.iter().map(String::as_str).collect();
+
+    let reads = super::discover_repo_efforts(&repo_config(&base, Some(&roots))).unwrap();
+    let mut titles = effort_titles(&reads);
+    titles.sort();
+    assert_eq!(titles, vec!["Gamma".to_owned(), "Single".to_owned()]);
+}
+
+#[test]
+fn a_missing_main_worktree_is_an_error_not_an_empty_discovery() {
+    let dir = tempfile::tempdir().unwrap();
+    let err =
+        super::discover_repo_efforts(&repo_config(&dir.path().join("nope"), None)).unwrap_err();
+    assert!(format!("{err:#}").contains("nope"), "{err:#}");
+}
+
+#[test]
+fn a_repo_without_a_main_worktree_path_discovers_nothing() {
+    let repo = crate::config::RepoConfig {
+        slug: Some(crate::repo_slug::RepoSlug::new("acme/widgets")),
+        ..Default::default()
+    };
+    assert!(super::discover_repo_efforts(&repo).unwrap().is_empty());
+}
+
 fn degraded(read: EffortRead) -> (EffortKey, String, Option<String>, String) {
     match read {
         EffortRead::Ready(effort) => panic!("expected Degraded, parsed {:?}", effort.title),

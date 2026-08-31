@@ -8,6 +8,7 @@
 // TODO(#120): remove once the fetch layer dispatches local probes.
 #![allow(dead_code)]
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -15,16 +16,115 @@ use anyhow::Context;
 
 use crate::{
     canonical_path::CanonicalPathBuf,
+    config::{RepoConfig, resolve_config_path},
     map_body::{first_h1, scan_map_body},
+    subprocess::{GitEnv, git_command, run_command},
     ticket::{
         Claim, Dependency, Effort, EffortKey, EffortRead, ExternalDependency, Ticket, TicketKey,
         TicketState, TicketType,
     },
+    worktree::list_worktrees,
 };
 
 /// The directories a ticket file may live in, probed in this order in every
 /// Effort: the older dialect's `tickets/`, the newer dialect's `issues/`.
 const TICKET_DIRS: &[&str] = &["tickets", "issues"];
+
+/// The built-in Wayfinder Root probe list. A repo's configured
+/// `wayfinderRoots` *replaces* it for that repo, never extends it.
+const BUILT_IN_ROOTS: &[&str] = &["docs/wayfinder", ".wayfinder", ".scratch"];
+
+/// Discover and parse every local Effort of one Tracked Repo: start at its
+/// Main Worktree, fan out across `git worktree list` (skipping missing and
+/// prunable entries; a non-git base is probed alone), and probe each base's
+/// Wayfinder Roots (spec §2.2). A repo with no `mainWorktreePath` has no
+/// filesystem to probe and discovers nothing. Errs on a missing Main
+/// Worktree or unreadable roots — the per-repo probe failure the effort
+/// surface must render, never silently map to zero Efforts (§5.5).
+pub fn discover_repo_efforts(repo: &RepoConfig) -> anyhow::Result<Vec<EffortRead>> {
+    let Some(path) = repo.main_worktree_path.as_deref() else {
+        return Ok(Vec::new());
+    };
+    let main = resolve_config_path(path)?;
+    let bases = worktree_bases(&main)?;
+    read_efforts_under(&bases, repo.wayfinder_roots.as_deref())
+}
+
+/// The working trees a repo's Wayfinder Roots resolve against: every linked
+/// worktree of the Main Worktree that still exists and isn't prunable, or
+/// the base directory alone when it isn't a git repo at all.
+fn worktree_bases(main: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    anyhow::ensure!(
+        main.is_dir(),
+        "main worktree {} does not exist",
+        main.display()
+    );
+    if !is_git_worktree(main) {
+        return Ok(vec![main.to_owned()]);
+    }
+    Ok(list_worktrees(main)?
+        .into_iter()
+        .filter(|entry| entry.prunable.is_none() && !entry.bare)
+        .map(|entry| PathBuf::from(entry.path))
+        .filter(|path| path.is_dir())
+        .collect())
+}
+
+/// Whether `dir` is inside a git repository — decides worktree fan-out vs
+/// probing the base alone. Scrubbed env like every path-scoped git call: an
+/// inherited `GIT_DIR` could otherwise answer for a different repo.
+fn is_git_worktree(dir: &Path) -> bool {
+    let mut command = git_command(GitEnv::Scrubbed);
+    command.arg("-C").arg(dir).args(["rev-parse", "--git-dir"]);
+    run_command("git rev-parse --git-dir", &mut command).is_ok()
+}
+
+/// Probe `roots` (configured, or the built-in list) under every base and
+/// parse each Effort directory found — once: the same directory reached from
+/// several bases or roots (symlinks, an absolute root shared by worktrees)
+/// dedups on its canonical identity.
+fn read_efforts_under(
+    bases: &[PathBuf],
+    roots: Option<&[String]>,
+) -> anyhow::Result<Vec<EffortRead>> {
+    let built_in: Vec<String> = BUILT_IN_ROOTS
+        .iter()
+        .map(|root| (*root).to_owned())
+        .collect();
+    let roots = roots.unwrap_or(&built_in);
+
+    let mut effort_dirs = Vec::new();
+    for root in roots {
+        // `~`-prefixed and absolute roots stand alone; relative ones resolve
+        // against each probed worktree base (never the cwd, which is what
+        // `resolve_config_path` would do with them).
+        let expanded = if root == "~" || root.starts_with("~/") {
+            Some(resolve_config_path(root)?)
+        } else {
+            let path = PathBuf::from(root);
+            path.is_absolute().then_some(path)
+        };
+        match expanded {
+            Some(absolute) => effort_dirs.extend(probe_root(&absolute)?),
+            None => {
+                for base in bases {
+                    effort_dirs.extend(probe_root(&base.join(root))?);
+                }
+            }
+        }
+    }
+
+    let mut seen = HashSet::new();
+    let mut reads = Vec::new();
+    for dir in effort_dirs {
+        let identity = CanonicalPathBuf::canonicalize(&dir)
+            .with_context(|| format!("canonicalizing effort dir {}", dir.display()))?;
+        if seen.insert(identity) {
+            reads.push(read_effort(&dir)?);
+        }
+    }
+    Ok(reads)
+}
 
 /// Parse one Effort directory (a directory holding a `map.md`) into an
 /// [`EffortRead`]. Errs only when the directory itself can't be
@@ -72,14 +172,10 @@ pub fn probe_root(root: &Path) -> anyhow::Result<Vec<PathBuf>> {
     if !root.is_dir() {
         return Ok(Vec::new());
     }
-    if find_map_file(root)
-        .map_err(anyhow::Error::msg)?
-        .is_some()
-    {
+    if find_map_file(root).map_err(anyhow::Error::msg)?.is_some() {
         return Ok(vec![root.to_owned()]);
     }
-    let entries =
-        fs::read_dir(root).with_context(|| format!("reading root {}", root.display()))?;
+    let entries = fs::read_dir(root).with_context(|| format!("reading root {}", root.display()))?;
     let mut efforts = Vec::new();
     for entry in entries.filter_map(|entry| entry.ok()) {
         let path = entry.path();
