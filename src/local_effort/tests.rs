@@ -97,6 +97,80 @@ fn parses_an_older_dialect_effort() {
 }
 
 #[test]
+fn tolerates_the_corpus_edge_cases() {
+    let dir = tempfile::tempdir().unwrap();
+    let effort_dir = dir.path().join("swift-6-strict-safety");
+    write(&effort_dir.join("map.md"), "# Swift 6 strict safety\n");
+    // The one real present-but-empty assignee, which also closes under
+    // `## Closure` instead of `## Resolution`; superseded is a blockquote
+    // callout, never a status.
+    write(
+        &effort_dir.join("tickets/01-audit.md"),
+        "---\nstatus: closed\ntype: research\nassignee:\nblocked-by: []\n---\n\n# Audit the targets\n\n> **Superseded** by the later rescope.\n\n## Closure\n\nFolded into 02.\n",
+    );
+    // A human-plus-agent assignee value passes through verbatim; an
+    // unknown type does too. No H1 anywhere, so the slug is the title.
+    write(
+        &effort_dir.join("tickets/02-migrate.md"),
+        "---\nstatus: open\ntype: spike\nassignee: mreynolds (claude)\nblocked-by: [9]\n---\n\nProse without a heading.\n",
+    );
+
+    let effort = ready(read_effort(&effort_dir).unwrap());
+    let tickets: Vec<_> = effort.tickets().collect();
+
+    let audit = &tickets[0];
+    assert_eq!(
+        audit.claim, None,
+        "a present-but-empty assignee key is unclaimed"
+    );
+    assert_eq!(
+        audit.state,
+        TicketState::Closed,
+        "Closure/superseded prose never overrides the status field"
+    );
+
+    let migrate = &tickets[1];
+    assert_eq!(migrate.title, "02-migrate", "no H1 falls back to the slug");
+    assert_eq!(
+        migrate.claim,
+        Some(Claim::By("mreynolds (claude)".to_owned()))
+    );
+    assert_eq!(migrate.ty.0, "spike", "unknown Types pass through verbatim");
+    assert_eq!(migrate.ty.mode(), crate::ticket::Mode::Either);
+    assert_eq!(
+        migrate.dependencies,
+        vec![Dependency::Unknown {
+            raw: "9".to_owned()
+        }],
+        "a blocked-by ref naming no member file can't be found"
+    );
+    assert!(
+        !effort
+            .tickets()
+            .nth(1)
+            .expect("second ticket exists")
+            .is_on_frontier(),
+        "an Unknown Dependency keeps the ticket off the Frontier"
+    );
+}
+
+#[test]
+fn field_lines_after_a_section_heading_are_prose_not_lifecycle() {
+    let dir = tempfile::tempdir().unwrap();
+    let effort_dir = dir.path().join("effort");
+    write(&effort_dir.join("map.md"), "# Effort\n");
+    write(
+        &effort_dir.join("issues/01-thing.md"),
+        "# The thing\n\nType: task\n\n## Progress\n\nStatus: resolved\nBlocked by: 02\n",
+    );
+
+    let effort = ready(read_effort(&effort_dir).unwrap());
+    let ticket = effort.tickets().next().expect("one ticket");
+    assert_eq!(ticket.state, TicketState::Open);
+    assert_eq!(ticket.dependencies, vec![]);
+}
+
+#[test]
 fn parses_a_newer_dialect_effort() {
     let dir = tempfile::tempdir().unwrap();
     let effort_dir = dir.path().join("approval-polling");
