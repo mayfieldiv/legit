@@ -20,7 +20,6 @@ pub struct MapBodyFacts {
     pub has_task_list: bool,
 }
 
-/// Scan a map body once.
 pub fn scan_map_body(body: &str) -> MapBodyFacts {
     enum DestinationScan {
         SearchingForHeading,
