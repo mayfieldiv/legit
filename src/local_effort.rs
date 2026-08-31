@@ -16,7 +16,7 @@ use anyhow::Context;
 
 use crate::{
     canonical_path::CanonicalPathBuf,
-    config::{RepoConfig, resolve_config_path},
+    config::{RepoConfig, RepoIdentity, resolve_config_path},
     map_body::{first_h1, scan_map_body},
     subprocess::{GitEnv, git_command, run_command},
     ticket::{
@@ -108,12 +108,12 @@ fn git_toplevel(cwd: &Path) -> Option<PathBuf> {
 }
 
 /// The configured `wayfinderRoots` that replace the built-ins for the cwd
-/// walk, when the cwd repo matches a `repos` entry carrying them. A slugged
-/// entry matches the cwd's origin-remote slug; any entry matches by its
-/// Main Worktree naming the toplevel (canonical identity, so spelling
-/// differences and symlinks can't defeat it). A match failure of any kind —
-/// no remote, an unresolvable configured path — just means "not the cwd
-/// repo", never an error: the walk falls back to the built-ins.
+/// walk, when the cwd repo's identity matches a `repos` entry carrying them:
+/// the cwd repo is identified by its origin-remote slug and by its toplevel
+/// (canonical identity, so spelling differences and symlinks can't defeat
+/// it), and compared with each entry's [`RepoIdentity`]. A match failure of
+/// any kind — no remote, an entry with no identity yet — just means "not the
+/// cwd repo", never an error: the walk falls back to the built-ins.
 fn configured_roots_for_cwd<'a>(
     config: &'a crate::config::LegitConfig,
     cwd: &Path,
@@ -127,28 +127,23 @@ fn configured_roots_for_cwd<'a>(
     if candidates.is_empty() {
         return None;
     }
+    let mut cwd_identities = Vec::new();
     // One subprocess, and only when a slugged candidate needs it.
-    let cwd_slug = candidates
-        .iter()
-        .any(|repo| repo.slug.is_some())
-        .then(|| crate::git_remote::detect_repo(cwd).ok())
-        .flatten();
-    for repo in candidates {
-        let slug_matches = match (&repo.slug, &cwd_slug) {
-            (Some(entry), Some(cwd_slug)) => entry == cwd_slug,
-            _ => false,
-        };
-        let path_matches = repo
-            .main_worktree_path
-            .as_deref()
-            .and_then(|path| resolve_config_path(path).ok())
-            .and_then(|path| fs::canonicalize(path).ok())
-            .is_some_and(|path| path == toplevel);
-        if slug_matches || path_matches {
-            return repo.wayfinder_roots.as_deref();
-        }
+    if candidates.iter().any(|repo| repo.slug.is_some())
+        && let Ok(slug) = crate::git_remote::detect_repo(cwd)
+    {
+        cwd_identities.push(RepoIdentity::Slug(slug));
     }
-    None
+    if let Ok(dir) = CanonicalPathBuf::canonicalize(toplevel) {
+        cwd_identities.push(RepoIdentity::Path(dir));
+    }
+    candidates
+        .into_iter()
+        .find(|repo| {
+            repo.identity()
+                .is_ok_and(|identity| cwd_identities.contains(&identity))
+        })
+        .and_then(|repo| repo.wayfinder_roots.as_deref())
 }
 
 /// The working trees a repo's Wayfinder Roots resolve against: every linked

@@ -416,3 +416,75 @@ fn load_error(name: &str, raw: &str) -> String {
 
     format!("{error:#}")
 }
+
+#[test]
+fn display_name_prefers_slug_then_expanded_basename() {
+    let with_slug = RepoConfig {
+        slug: Some(RepoSlug::new("acme/widgets")),
+        main_worktree_path: Some("~/src/widgets".to_owned()),
+        ..Default::default()
+    };
+    assert_eq!(with_slug.display_name().expect("slug"), "acme/widgets");
+
+    let slug_less = RepoConfig {
+        main_worktree_path: Some("~/src/local-only/".to_owned()),
+        ..Default::default()
+    };
+    assert_eq!(slug_less.display_name().expect("basename"), "local-only");
+
+    // A path with no final component (`..` is a parent walk, not a name)
+    // falls back to the whole path rather than failing or showing "..".
+    let parent_walk = RepoConfig {
+        main_worktree_path: Some("/src/widgets/..".to_owned()),
+        ..Default::default()
+    };
+    assert_eq!(
+        parent_walk.display_name().expect("fallback"),
+        "/src/widgets/.."
+    );
+}
+
+#[test]
+fn slug_less_identity_is_the_canonical_main_worktree_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let worktree = dir.path().join("widgets");
+    fs::create_dir(&worktree).unwrap();
+
+    // Two spellings of the same directory carry one identity.
+    let direct = RepoConfig {
+        main_worktree_path: Some(worktree.to_str().unwrap().to_owned()),
+        ..Default::default()
+    };
+    let dotted = RepoConfig {
+        main_worktree_path: Some(dir.path().join("./widgets").to_str().unwrap().to_owned()),
+        ..Default::default()
+    };
+    assert_eq!(
+        direct.identity().expect("existing dir"),
+        dotted.identity().expect("existing dir")
+    );
+    assert_eq!(
+        direct.identity().expect("existing dir"),
+        super::RepoIdentity::Path(
+            crate::canonical_path::CanonicalPathBuf::canonicalize(&worktree).unwrap()
+        )
+    );
+
+    // Identity requires existence: a not-yet-cloned Main Worktree has no
+    // identity yet, rather than one that silently changes when it appears.
+    let missing = RepoConfig {
+        main_worktree_path: Some(dir.path().join("nope").to_str().unwrap().to_owned()),
+        ..Default::default()
+    };
+    assert!(missing.identity().is_err());
+
+    let slugged = RepoConfig {
+        slug: Some(RepoSlug::new("ACME/Widgets")),
+        ..Default::default()
+    };
+    assert_eq!(
+        slugged.identity().expect("slug identity is pure"),
+        super::RepoIdentity::Slug(RepoSlug::new("acme/widgets")),
+        "slug identity compares case-insensitively"
+    );
+}
