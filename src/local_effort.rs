@@ -179,19 +179,15 @@ fn file_slug(path: &Path) -> String {
 /// against the Effort's member files.
 fn parse_ticket_file(member: &MemberFile, members: &[MemberFile]) -> Result<Ticket, String> {
     let content = fs::read_to_string(&member.path).map_err(|error| format!("reading: {error}"))?;
-    let (fields, body) = parse_older_dialect(&content)?;
-
-    let state = match fields.status.as_deref() {
-        None => TicketState::Open,
-        Some(value) if value.eq_ignore_ascii_case("open") => TicketState::Open,
-        Some(value) if value.eq_ignore_ascii_case("closed") => TicketState::Closed,
-        Some(other) => return Err(format!("unrecognized status {other:?}")),
+    // Per-file dialect detection: frontmatter marks the older dialect,
+    // anything else reads as the newer one.
+    let (fields, body) = if content.starts_with("---\n") {
+        parse_older_dialect(&content)?
+    } else {
+        (parse_newer_dialect(&content)?, content.as_str())
     };
-    // Present-but-empty `assignee:` is unclaimed — observed in the wild.
-    let claim = fields
-        .assignee
-        .filter(|assignee| !assignee.is_empty())
-        .map(Claim::By);
+
+    let (state, claim) = fields.lifecycle()?;
     let mut dependencies = Vec::new();
     for reference in fields.blocked_by {
         let number: u64 = reference
@@ -216,17 +212,80 @@ fn parse_ticket_file(member: &MemberFile, members: &[MemberFile]) -> Result<Tick
     })
 }
 
-/// The older dialect's frontmatter fields, as observed in the corpus (#106).
-/// Every field is optional; unknown keys are ignored.
+/// A ticket file's lifecycle-bearing fields, as either dialect spells them
+/// (#106). Every field is optional; unknown keys are ignored.
 #[derive(Default)]
 struct TicketFields {
+    /// Older dialect: `open`/`closed`. Newer dialect: `claimed`/`resolved` —
+    /// its only lifecycle vocabulary, carrying the claim too.
     status: Option<String>,
     ty: Option<String>,
-    /// `Some("")` when the key is present with no value — unclaimed, but
-    /// distinct from an absent key only in intent, not normalization.
+    /// Older dialect only. `Some("")` when the key is present with no value —
+    /// unclaimed, but distinct from an absent key only in intent, not
+    /// normalization.
     assignee: Option<String>,
     blocked_by: Vec<String>,
     external_blocked_by: Vec<String>,
+}
+
+impl TicketFields {
+    /// Normalize the two lifecycle axes out of the dialect vocabularies. The
+    /// status field is the only lifecycle authority (spec §3.2) — body prose
+    /// (`## Closure`, superseded blockquotes, handoff notes) never is.
+    fn lifecycle(&self) -> Result<(TicketState, Option<Claim>), String> {
+        // Present-but-empty `assignee:` is unclaimed — observed in the wild.
+        let assignee = self
+            .assignee
+            .clone()
+            .filter(|assignee| !assignee.is_empty())
+            .map(Claim::By);
+        match self.status.as_deref() {
+            None => Ok((TicketState::Open, assignee)),
+            Some(value) if value.eq_ignore_ascii_case("open") => Ok((TicketState::Open, assignee)),
+            Some(value) if value.eq_ignore_ascii_case("closed") => {
+                Ok((TicketState::Closed, assignee))
+            }
+            // Newer dialect: claimed-ness without a claimant name.
+            Some(value) if value.eq_ignore_ascii_case("claimed") => {
+                Ok((TicketState::Open, Some(Claim::Anonymous)))
+            }
+            Some(value) if value.eq_ignore_ascii_case("resolved") => {
+                Ok((TicketState::Closed, None))
+            }
+            Some(other) => Err(format!("unrecognized status {other:?}")),
+        }
+    }
+}
+
+/// Parse the newer dialect's prose field lines: `Status:`, `Type:`, and
+/// `Blocked by: NN, NN` in the leading lines, before the first section
+/// heading (`##` or deeper) — past it, matching text is body prose, never
+/// lifecycle.
+fn parse_newer_dialect(content: &str) -> Result<TicketFields, String> {
+    let mut fields = TicketFields::default();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.starts_with("##") {
+            break;
+        }
+        let field = |prefix: &str| {
+            line.get(..prefix.len())
+                .filter(|head| head.eq_ignore_ascii_case(prefix))
+                .map(|_| line[prefix.len()..].trim().to_owned())
+        };
+        if let Some(value) = field("Status:") {
+            fields.status = Some(value);
+        } else if let Some(value) = field("Type:") {
+            fields.ty = Some(value);
+        } else if let Some(value) = field("Blocked by:") {
+            fields.blocked_by = value
+                .split(',')
+                .map(|item| item.trim().to_owned())
+                .filter(|item| !item.is_empty())
+                .collect();
+        }
+    }
+    Ok(fields)
 }
 
 /// Split a ticket file into its `---`-delimited YAML frontmatter fields and

@@ -95,3 +95,63 @@ fn parses_an_older_dialect_effort() {
         "the closed blocker leaves its dependent on the Frontier"
     );
 }
+
+#[test]
+fn parses_a_newer_dialect_effort() {
+    let dir = tempfile::tempdir().unwrap();
+    let effort_dir = dir.path().join("approval-polling");
+    write(
+        &effort_dir.join("map.md"),
+        "# Approval polling\n\n## Destination\n\nPolling shipped.\n",
+    );
+    write(
+        &effort_dir.join("issues/01-schema.md"),
+        "# Pick the schema\n\nStatus: resolved\nType: task\n\n## Question\n\nWhich schema?\n",
+    );
+    write(
+        &effort_dir.join("issues/02-endpoint.md"),
+        "# Shape the endpoint\n\nStatus: claimed\nType: grilling\nBlocked by: 01\n",
+    );
+    write(
+        &effort_dir.join("issues/03-rollout.md"),
+        "# Plan the rollout\n\nType: task\nBlocked by: 01, 02\n",
+    );
+
+    let effort = ready(read_effort(&effort_dir).unwrap());
+    let tickets: Vec<_> = effort.tickets().collect();
+    assert_eq!(tickets.len(), 3);
+
+    let schema = &tickets[0];
+    assert_eq!(schema.state, TicketState::Closed, "resolved maps to Closed");
+    assert_eq!(schema.claim, None, "a resolved Ticket carries no Claim");
+    assert_eq!(schema.ty.0, "task");
+
+    let endpoint = &tickets[1];
+    assert_eq!(endpoint.state, TicketState::Open);
+    assert_eq!(
+        endpoint.claim,
+        Some(Claim::Anonymous),
+        "the dialect records claimed-ness without a claimant name"
+    );
+    assert_eq!(
+        endpoint.dependencies,
+        vec![Dependency::SameEffort(local_ticket_key(
+            &effort_dir.join("issues/01-schema.md")
+        ))]
+    );
+
+    let rollout = &tickets[2];
+    assert_eq!(
+        (rollout.state, rollout.claim.clone()),
+        (TicketState::Open, None),
+        "no Status line means Open and unclaimed"
+    );
+    assert_eq!(rollout.dependencies.len(), 2);
+
+    let frontier: Vec<_> = effort.frontier().map(|t| t.title.clone()).collect();
+    assert_eq!(
+        frontier,
+        Vec::<String>::new(),
+        "rollout waits on the open claimed endpoint; endpoint is claimed"
+    );
+}
