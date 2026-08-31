@@ -155,6 +155,50 @@ fn tolerates_the_corpus_edge_cases() {
 }
 
 #[test]
+fn external_blocked_by_resolves_to_external_and_unknown_dependencies() {
+    let dir = tempfile::tempdir().unwrap();
+    // A sibling effort holding the readable target, as the corpus spells it:
+    // relative paths into another effort's tickets/ dir.
+    let sibling = dir.path().join("menu-redesign");
+    write(&sibling.join("map.md"), "# Menu redesign\n");
+    write(
+        &sibling.join("tickets/04-copy.md"),
+        "---\nstatus: closed\ntype: task\n---\n\n# Settle the copy\n",
+    );
+
+    let effort_dir = dir.path().join("swift-6-strict-safety");
+    write(&effort_dir.join("map.md"), "# Swift 6 strict safety\n");
+    write(
+        &effort_dir.join("tickets/01-adopt.md"),
+        "---\nstatus: open\ntype: task\nexternal-blocked-by:\n  - ../../menu-redesign/tickets/04-copy.md\n  - ../../gone/tickets/02-missing.md\n---\n\n# Adopt strict concurrency\n",
+    );
+
+    let effort = ready(read_effort(&effort_dir).unwrap());
+    let ticket = effort.tickets().next().expect("one ticket");
+
+    assert_eq!(
+        ticket.dependencies,
+        vec![
+            Dependency::External(crate::ticket::ExternalDependency {
+                key: local_ticket_key(&sibling.join("tickets/04-copy.md")),
+                state: TicketState::Closed,
+                title: Some("Settle the copy".to_owned()),
+            }),
+            Dependency::Unknown {
+                raw: "../../gone/tickets/02-missing.md".to_owned()
+            },
+        ],
+        "a readable target outside the effort is External with its parsed \
+         state and title; an unreadable one is Unknown with the raw ref"
+    );
+    assert!(
+        !ticket.is_on_frontier(),
+        "the Unknown Dependency keeps the ticket off the Frontier despite \
+         the closed External target"
+    );
+}
+
+#[test]
 fn field_lines_after_a_section_heading_are_prose_not_lifecycle() {
     let dir = tempfile::tempdir().unwrap();
     let effort_dir = dir.path().join("effort");

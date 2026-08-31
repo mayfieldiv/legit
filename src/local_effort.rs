@@ -17,8 +17,8 @@ use crate::{
     canonical_path::CanonicalPathBuf,
     map_body::{first_h1, scan_map_body},
     ticket::{
-        Claim, Dependency, Effort, EffortKey, EffortRead, Ticket, TicketKey, TicketState,
-        TicketType,
+        Claim, Dependency, Effort, EffortKey, EffortRead, ExternalDependency, Ticket, TicketKey,
+        TicketState, TicketType,
     },
 };
 
@@ -201,6 +201,9 @@ fn parse_ticket_file(member: &MemberFile, members: &[MemberFile]) -> Result<Tick
             None => Dependency::Unknown { raw: reference },
         });
     }
+    for reference in fields.external_blocked_by {
+        dependencies.push(resolve_external_ref(&member.path, &reference, members));
+    }
 
     Ok(Ticket {
         key: member.key.clone(),
@@ -209,6 +212,48 @@ fn parse_ticket_file(member: &MemberFile, members: &[MemberFile]) -> Result<Tick
         claim,
         ty: TicketType(fields.ty.unwrap_or_default()),
         dependencies,
+    })
+}
+
+/// Resolve one `external-blocked-by` ref — a relative path from the ticket
+/// file's directory (`../../<effort>/tickets/NN-slug.md` in the corpus). A
+/// readable target parses for the state and title the edge carries; a path
+/// that lands back inside this Effort folds to a SameEffort edge; anything
+/// unresolvable or unreadable is an Unknown Dependency with the raw ref kept
+/// for display — never an error, so one dead ref doesn't degrade the Effort
+/// (the ticket it blocks stays off the Frontier either way).
+fn resolve_external_ref(ticket_path: &Path, reference: &str, members: &[MemberFile]) -> Dependency {
+    let unknown = || Dependency::Unknown {
+        raw: reference.to_owned(),
+    };
+    let Some(base) = ticket_path.parent() else {
+        return unknown();
+    };
+    let Ok(path) = CanonicalPathBuf::canonicalize(base.join(reference)) else {
+        return unknown();
+    };
+    let key = TicketKey::Local { path: path.clone() };
+    if let Some(member) = members.iter().find(|member| member.key == key) {
+        return Dependency::SameEffort(member.key.clone());
+    }
+    let Ok(content) = fs::read_to_string(&path) else {
+        return unknown();
+    };
+    let parsed = if content.starts_with("---\n") {
+        parse_older_dialect(&content)
+    } else {
+        parse_newer_dialect(&content).map(|fields| (fields, content.as_str()))
+    };
+    let Ok((fields, body)) = parsed else {
+        return unknown();
+    };
+    let Ok((state, _)) = fields.lifecycle() else {
+        return unknown();
+    };
+    Dependency::External(ExternalDependency {
+        key,
+        state,
+        title: first_h1(body),
     })
 }
 
