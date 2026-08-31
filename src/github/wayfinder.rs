@@ -32,14 +32,10 @@ use crate::{
     ticket::{Dependency, Effort, EffortKey, ExternalDependency, Ticket, TicketKey},
 };
 
-/// The label that marks a GitHub issue as a wayfinder Map. Owned here — no
-/// caller decides (or sees) how maps are discovered.
 const MAP_LABEL: &str = "wayfinder:map";
 
-/// The GitHub reader for the wayfinder ticket surface. Holds only the token;
-/// each method builds its transport per call (the command layer's idiom) and
-/// issues exactly one HTTP request, so the caller's `request(...)` wrapper
-/// stays one permit per call.
+/// Each operation constructs its transport per call and issues exactly one
+/// HTTP request.
 pub struct Wayfinder {
     token: Secret<String>,
 }
@@ -164,8 +160,8 @@ struct WayfinderMapRepo {
 
 /// A paged GraphQL connection as the map query selects it. `nodes` is
 /// `Option`, never defaulted to empty: for these lists absent ≠
-/// present-empty (a silently-empty authoritative list manufactures facts,
-/// §5.5), so each caller decides how absence degrades.
+/// present-empty because a silently-empty authoritative list manufactures
+/// facts (§5.5).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RawConnection<T> {
@@ -251,18 +247,16 @@ struct RawRepoName {
 /// Effort or visibly degraded, never a silently partial one.
 #[derive(Debug)]
 pub enum EffortRead {
-    /// The map normalized cleanly.
     Ready(Effort),
     /// The map couldn't be represented as a complete Effort — a
     /// normalization failure, or the §4.4 body-line fallback dialect
     /// (detected, never parsed in v1). Identity and map context survive the
-    /// failure so the effort card can render its error line (§5.5) with a
-    /// real title instead of a bare number.
+    /// failure.
     Degraded {
         key: EffortKey,
         title: String,
         destination: Option<String>,
-        /// Human-readable cause, shown on the card.
+        /// Human-readable cause.
         reason: String,
     },
 }
@@ -332,8 +326,8 @@ fn read_map_node(node: RawMapNode, slug: &RepoSlug) -> EffortRead {
     }
 }
 
-/// The fallible half of one map's normalization. An `Err` is the
-/// human-readable degradation reason the effort card renders (§5.5).
+/// Returns a human-readable reason when normalization cannot produce a
+/// complete Effort.
 fn normalize_map(
     sub_issues: Option<RawConnection<RawTicketNode>>,
     has_task_list: bool,
@@ -382,9 +376,8 @@ fn normalize_map(
 /// (`assignees`, `blockedBy`) is absent at either level, connection or
 /// `nodes` — treating absence as empty would read as unclaimed/unblocked
 /// and could manufacture a false Frontier Ticket, so the whole map degrades
-/// instead (see `read_map_node`). `labels` stays defaulted: Type only feeds
-/// the Mode filter, never the Frontier, so an absent list is safely an
-/// empty Type.
+/// instead. `labels` stays defaulted: Type only feeds the Mode filter, never
+/// the Frontier, so an absent list is safely an empty Type.
 fn parse_ticket_node(
     node: RawTicketNode,
     slug: &RepoSlug,
@@ -627,23 +620,21 @@ fn line_has_issue_ref(line: &str) -> bool {
 // ── single-ticket refresh: wire shape ────────────────────────────────────────
 
 /// One ticket's refresh outcome: the issue plus the §4.4 fallback-dialect
-/// verdict, decided here so no caller learns the body dialect.
+/// verdict.
 #[derive(Debug)]
 pub struct TicketRefresh {
     pub issue: Issue,
     /// The body opens with a fallback dependency line whose native
     /// counterpart is absent — `Part of #n` with no native parent, or
-    /// `Blocked by: #n` with no native dependencies — so the Effort shows
-    /// a degradation notice (§4.4). Native-wins is per representation: a
-    /// line whose own native counterpart exists is advisory and never sets
-    /// this.
+    /// `Blocked by: #n` with no native dependencies. Native-wins is per
+    /// representation: a line whose own native counterpart exists is
+    /// advisory and never sets this.
     pub fallback_dialect: bool,
 }
 
 /// Permissive wire shape for a GitHub issue, from the single-issue endpoint
-/// (`GET /repos/:owner/:repo/issues/:number`). Same posture as `RawRestPR`:
-/// everything GitHub may omit is optional or defaulted. Private — the
-/// module's contract is `Issue`.
+/// (`GET /repos/:owner/:repo/issues/:number`). Everything GitHub may omit is
+/// optional or defaulted.
 #[derive(Debug, Deserialize)]
 struct RawRestIssue {
     number: u64,
