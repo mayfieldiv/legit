@@ -1,12 +1,13 @@
 use super::{
-    EffortRead, EffortReadBatch, FallbackLines, RawRestIssue, TicketRefresh, WayfinderMapResponse,
-    parse_issue, parse_refresh, parse_wayfinder_maps, scan_fallback_lines, scan_map_body,
+    EffortReadBatch, FallbackLines, RawRestIssue, TicketRefresh, WayfinderMapResponse, parse_issue,
+    parse_refresh, parse_wayfinder_maps, scan_fallback_lines, scan_map_body,
 };
 use crate::github::graphql::ensure_no_errors;
 use crate::github::types::{DependenciesSummary, Issue, IssueState, SubIssuesSummary};
 use crate::repo_slug::RepoSlug;
 use crate::ticket::{
-    Claim, Dependency, Effort, EffortKey, ExternalDependency, TicketKey, TicketState, TicketType,
+    Claim, Dependency, Effort, EffortKey, EffortRead, ExternalDependency, TicketKey, TicketState,
+    TicketType,
 };
 
 fn map_slug() -> RepoSlug {

@@ -29,7 +29,7 @@ use crate::{
     },
     repo_slug::RepoSlug,
     secret::Secret,
-    ticket::{Dependency, Effort, EffortKey, ExternalDependency, Ticket, TicketKey},
+    ticket::{Dependency, Effort, EffortKey, EffortRead, ExternalDependency, Ticket, TicketKey},
 };
 
 const MAP_LABEL: &str = "wayfinder:map";
@@ -241,25 +241,6 @@ struct RawRepoName {
 }
 
 // ── whole-map read: normalization ────────────────────────────────────────────
-
-/// One map's outcome from the whole-map read — the §5.5 per-Effort
-/// degradation boundary made structural: a map is either a fully normalized
-/// Effort or visibly degraded, never a silently partial one.
-#[derive(Debug)]
-pub enum EffortRead {
-    Ready(Effort),
-    /// The map couldn't be represented as a complete Effort — a
-    /// normalization failure, or the §4.4 body-line fallback dialect
-    /// (detected, never parsed in v1). Identity and map context survive the
-    /// failure.
-    Degraded {
-        key: EffortKey,
-        title: String,
-        destination: Option<String>,
-        /// Human-readable cause.
-        reason: String,
-    },
-}
 
 /// Every open wayfinder map in one repo — the result of one map read, in
 /// GitHub's order.

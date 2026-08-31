@@ -151,6 +151,26 @@ pub struct Ticket {
     pub dependencies: Vec<Dependency>,
 }
 
+/// One Effort's outcome from a source read — the per-Effort degradation
+/// boundary (spec §5.5) made structural: an Effort is either fully
+/// normalized or visibly degraded, never silently partial. Both transports
+/// (the GitHub map read and the local Effort parse) produce it.
+#[derive(Debug)]
+pub enum EffortRead {
+    Ready(Effort),
+    /// The source couldn't be represented as a complete Effort — a
+    /// normalization failure, an unparseable ticket or map file, or a
+    /// detected-but-unparsed fallback dialect. Identity and map context
+    /// survive the failure.
+    Degraded {
+        key: EffortKey,
+        title: String,
+        destination: Option<String>,
+        /// Human-readable cause.
+        reason: String,
+    },
+}
+
 /// A unit of wayfinding work: one Map plus its Tickets. The Map's own data
 /// (title, Destination) lives directly on the Effort — the Map is the
 /// artifact anchoring it, not a separate model type. Belongs to exactly one
