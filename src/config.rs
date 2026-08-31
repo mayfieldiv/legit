@@ -95,11 +95,10 @@ impl RepoConfig {
     /// See [`RepoIdentity`]. A slug-less entry's identity requires its Main
     /// Worktree to exist: canonicalization is what unifies two spellings of
     /// one directory, and any weaker fallback either changes the identity the
-    /// moment the directory appears or swallows real I/O errors. Callers read
-    /// the error as "no identity yet" — a not-yet-cloned local-only repo has
-    /// nothing discoverable anyway. (Identity answers dedup with one key;
-    /// "is this the cwd repo?" in `local_effort` deliberately matches on
-    /// looser evidence.)
+    /// moment the directory appears or swallows real I/O errors. An error
+    /// therefore means "no identity yet" — a not-yet-cloned local-only repo
+    /// has nothing discoverable anyway. Identity answers dedup with one key,
+    /// deliberately stricter than "is this the cwd repo?" matching.
     // TODO(#120): consumed when the ticket surface dedups Tracked Repos.
     #[allow(dead_code)]
     pub fn identity(&self) -> anyhow::Result<RepoIdentity> {
