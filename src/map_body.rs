@@ -78,9 +78,8 @@ pub fn scan_map_body(body: &str) -> MapBodyFacts {
     }
 }
 
-/// The text of the first H1 heading — a local map's or ticket file's title
-/// (never the filename slug: slugs drift after rescopes). `None` when the
-/// body has no H1.
+/// The text of the first *non-empty* H1 — a bare `#` line doesn't end the
+/// search. `None` when the body has no titled H1.
 pub fn first_h1(body: &str) -> Option<String> {
     let mut text: Option<String> = None;
     for event in Parser::new_ext(body, Options::empty()) {

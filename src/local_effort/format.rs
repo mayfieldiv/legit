@@ -68,7 +68,6 @@ pub(super) fn read_effort_at(dir: CanonicalPathBuf) -> EffortRead {
     }
 }
 
-/// The Effort title of last resort: the effort directory's name.
 fn dir_title(dir: &Path) -> String {
     dir.file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -207,8 +206,6 @@ fn filename_number(path: &Path) -> Option<u64> {
     stem[..end].parse().ok()
 }
 
-/// Parse one ticket file into a [`Ticket`], resolving its `blocked-by` refs
-/// against the Effort's member files.
 fn parse_ticket_file(member: &MemberFile, members: &[MemberFile]) -> Result<Ticket, String> {
     let content = fs::read_to_string(&member.path).map_err(|error| format!("reading: {error}"))?;
     let (fields, body) = parse_ticket_dialects(&content)?;
@@ -366,9 +363,6 @@ impl TicketFields {
     }
 }
 
-/// Split a ticket file into its fields and the Markdown body its title is
-/// read from, detecting the dialect per file: frontmatter marks the older
-/// one, anything else reads as the newer.
 fn parse_ticket_dialects(content: &str) -> Result<(TicketFields, &str), String> {
     if frontmatter_fields_after_open(content).is_some() {
         parse_older_dialect(content)
@@ -418,8 +412,6 @@ fn parse_newer_dialect(content: &str) -> TicketFields {
     fields
 }
 
-/// Split a ticket file into its `---`-delimited YAML frontmatter fields and
-/// the Markdown body after them.
 fn parse_older_dialect(content: &str) -> Result<(TicketFields, &str), String> {
     let Some(rest) = frontmatter_fields_after_open(content) else {
         return Err("no frontmatter".to_owned());
@@ -518,7 +510,6 @@ fn parse_frontmatter_fields(raw: &str) -> Result<Vec<(String, FieldValue)>, Stri
     Ok(fields)
 }
 
-/// Strip one matching pair of surrounding quotes, YAML-style.
 fn unquote(value: &str) -> &str {
     for quote in ['"', '\''] {
         if let Some(inner) = value
