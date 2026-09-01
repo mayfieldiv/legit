@@ -370,11 +370,20 @@ impl TicketFields {
 /// read from, detecting the dialect per file: frontmatter marks the older
 /// one, anything else reads as the newer.
 fn parse_ticket_dialects(content: &str) -> Result<(TicketFields, &str), String> {
-    if content.starts_with("---\n") {
+    if frontmatter_fields_after_open(content).is_some() {
         parse_older_dialect(content)
     } else {
         Ok((parse_newer_dialect(content), content))
     }
+}
+
+/// The content past an opening `---` frontmatter fence, `None` when the file
+/// doesn't open with one. CRLF counts: the fence is a line ending, the one
+/// place `str::lines`' own CRLF handling can't cover for this parser.
+fn frontmatter_fields_after_open(content: &str) -> Option<&str> {
+    content
+        .strip_prefix("---\n")
+        .or_else(|| content.strip_prefix("---\r\n"))
 }
 
 /// Parse the newer dialect's prose field lines: `Status:`, `Type:`, and
@@ -412,7 +421,7 @@ fn parse_newer_dialect(content: &str) -> TicketFields {
 /// Split a ticket file into its `---`-delimited YAML frontmatter fields and
 /// the Markdown body after them.
 fn parse_older_dialect(content: &str) -> Result<(TicketFields, &str), String> {
-    let Some(rest) = content.strip_prefix("---\n") else {
+    let Some(rest) = frontmatter_fields_after_open(content) else {
         return Err("no frontmatter".to_owned());
     };
     let Some((raw_fields, body)) = rest.split_once("\n---") else {

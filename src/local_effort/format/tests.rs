@@ -169,6 +169,38 @@ fn parses_a_newer_dialect_effort() {
 }
 
 #[test]
+fn parses_an_older_dialect_ticket_with_crlf_line_endings() {
+    let dir = tempfile::tempdir().unwrap();
+    let effort_dir = dir.path().join("effort");
+    write(&effort_dir.join("map.md"), "# Effort\n");
+    write(
+        &effort_dir.join("tickets/01-a.md"),
+        "---\r\nstatus: closed\r\ntype: task\r\nassignee: mreynolds\r\nblocked-by: [2]\r\n---\r\n\r\n# Windows ticket\r\n",
+    );
+    write(
+        &effort_dir.join("tickets/02-b.md"),
+        "---\r\nstatus: open\r\n---\r\n\r\n# Second\r\n",
+    );
+
+    let effort = ready(read_effort(&effort_dir).unwrap());
+    let ticket = effort.tickets().next().expect("one ticket");
+    assert_eq!(
+        ticket.title, "Windows ticket",
+        "CRLF frontmatter still marks the older dialect"
+    );
+    assert_eq!(ticket.state, TicketState::Closed);
+    assert_eq!(ticket.claim, Some(Claim::By("mreynolds".to_owned())));
+    assert_eq!(ticket.ty.0, "task");
+    assert_eq!(
+        ticket.dependencies,
+        vec![Dependency::SameEffort(local_ticket_key(
+            &effort_dir.join("tickets/02-b.md")
+        ))],
+        "field values shed their carriage returns"
+    );
+}
+
+#[test]
 fn tolerates_the_corpus_edge_cases() {
     let dir = tempfile::tempdir().unwrap();
     let effort_dir = dir.path().join("swift-6-strict-safety");
