@@ -10,6 +10,8 @@ mod file_category;
 mod format;
 mod git_remote;
 mod github;
+mod local_effort;
+mod map_body;
 mod markdown;
 mod palette;
 mod repo_slug;

@@ -3,6 +3,7 @@ use std::{env, ffi::OsString, fs, io, path::PathBuf};
 use anyhow::{Context, ensure};
 use serde::{Deserialize, Serialize, de::Error as _};
 
+use crate::canonical_path::CanonicalPathBuf;
 use crate::repo_slug::RepoSlug;
 
 // TODO: when the group/filter engine is ported from
@@ -74,6 +75,58 @@ impl RepoConfig {
         }
         Ok(())
     }
+
+    /// The name this repo is shown under: its slug, or for a slug-less repo
+    /// the basename of its expanded Main Worktree path. Pure — usable before
+    /// the directory exists.
+    // TODO(#120): consumed when the effort rail attributes local Efforts.
+    #[allow(dead_code)]
+    pub fn display_name(&self) -> anyhow::Result<String> {
+        if let Some(slug) = &self.slug {
+            return Ok(slug.as_str().to_owned());
+        }
+        let resolved = resolve_config_path(self.main_worktree_path()?)?;
+        Ok(resolved
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| resolved.display().to_string()))
+    }
+
+    /// See [`RepoIdentity`]. A slug-less entry's identity requires its Main
+    /// Worktree to exist: canonicalization is what unifies two spellings of
+    /// one directory, and any weaker fallback either changes the identity the
+    /// moment the directory appears or swallows real I/O errors. An error
+    /// therefore means "no identity yet" — a not-yet-cloned local-only repo
+    /// has nothing discoverable anyway. Identity answers dedup with one key,
+    /// deliberately stricter than "is this the cwd repo?" matching.
+    // TODO(#120): consumed when the ticket surface dedups Tracked Repos.
+    #[allow(dead_code)]
+    pub fn identity(&self) -> anyhow::Result<RepoIdentity> {
+        if let Some(slug) = &self.slug {
+            return Ok(RepoIdentity::Slug(slug.clone()));
+        }
+        let resolved = resolve_config_path(self.main_worktree_path()?)?;
+        CanonicalPathBuf::canonicalize(&resolved)
+            .with_context(|| format!("canonicalizing mainWorktreePath {}", resolved.display()))
+            .map(RepoIdentity::Path)
+    }
+
+    /// The slug-less case's one required field. `validate` guarantees it for
+    /// a loaded config; this only fails on a hand-built `RepoConfig`.
+    fn main_worktree_path(&self) -> anyhow::Result<&str> {
+        self.main_worktree_path
+            .as_deref()
+            .context("repo has neither slug nor mainWorktreePath")
+    }
+}
+
+/// How a Tracked Repo is told apart from every other: PR-capable repos by
+/// slug ([`RepoSlug`] equality is case-insensitive, as GitHub's is),
+/// slug-less repos by canonical Main Worktree identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RepoIdentity {
+    Slug(RepoSlug),
+    Path(CanonicalPathBuf),
 }
 
 /// The one name every `repos` entry has (slug and mainWorktreePath are both

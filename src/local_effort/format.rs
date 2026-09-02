@@ -1,0 +1,508 @@
+//! The local Effort format: what one Effort directory says. A map file
+//! marks the directory; each ticket file spells its fields in one of two
+//! dialects (#106), normalized here into an [`EffortRead`] — fully
+//! normalized or visibly degraded, never silently partial (spec §3, §5.5).
+
+#[cfg(test)]
+mod tests;
+
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+
+use crate::{
+    canonical_path::CanonicalPathBuf,
+    map_body::{first_h1, scan_map_body},
+    ticket::{
+        Claim, Dependency, Effort, EffortKey, EffortRead, ExternalDependency, Ticket, TicketKey,
+        TicketState, TicketType,
+    },
+};
+
+/// The directories a ticket file may live in, probed in this order in every
+/// Effort: the older dialect's `tickets/`, the newer dialect's `issues/`.
+const TICKET_DIRS: &[&str] = &["tickets", "issues"];
+
+/// Parse one Effort directory (a directory holding a `map.md`) into an
+/// [`EffortRead`]. Infallible: the canonical directory is the identity to
+/// degrade under, so every failure past it degrades the Effort instead of
+/// erring (spec §5.5: never a crash, never silent).
+pub(super) fn read_effort_at(dir: CanonicalPathBuf) -> EffortRead {
+    let key = EffortKey::Local { dir: dir.clone() };
+    // Map context is read first so a later ticket failure degrades with the
+    // best available title/Destination rather than losing them.
+    let (title, destination) = match read_map(&dir) {
+        Ok(map) => map,
+        Err(reason) => {
+            return EffortRead::Degraded {
+                key,
+                title: dir_title(&dir),
+                destination: None,
+                reason,
+            };
+        }
+    };
+    let read = read_tickets(&dir).and_then(|tickets| {
+        Effort::new(key.clone(), title.clone(), destination.clone(), tickets)
+            .map_err(|error| format!("{error:#}"))
+    });
+    match read {
+        Ok(effort) => EffortRead::Ready(effort),
+        Err(reason) => EffortRead::Degraded {
+            key,
+            title,
+            destination,
+            reason,
+        },
+    }
+}
+
+fn dir_title(dir: &Path) -> String {
+    dir.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| dir.display().to_string())
+}
+
+/// Read the Effort's map file: title (the H1, falling back to the directory
+/// name — real maps may open with an HTML marker comment and no heading) and
+/// Destination.
+fn read_map(dir: &Path) -> Result<(String, Option<String>), String> {
+    let path = find_map_file(dir)?.ok_or("no map.md in effort directory")?;
+    let body = fs::read_to_string(&path)
+        .map_err(|error| format!("reading {}: {error}", path.display()))?;
+    let title = first_h1(&body).unwrap_or_else(|| dir_title(dir));
+    Ok((title, scan_map_body(&body).destination))
+}
+
+/// The file type at `path`, following symlinks. `None` when nothing is
+/// there (a missing path or dangling symlink); any other failure errs — an
+/// unreadable path must surface, never read as absent (§5.5).
+pub(super) fn probe_file_type(path: &Path) -> Result<Option<fs::FileType>, String> {
+    match fs::metadata(path) {
+        Ok(metadata) => Ok(Some(metadata.file_type())),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("probing {}: {error}", path.display())),
+    }
+}
+
+/// The map file marking `dir` as an Effort, matched case-insensitively
+/// (`MAP.md` exists in the wild). Lexicographically first on the pathological
+/// case of several case-variants coexisting, for determinism.
+pub(super) fn find_map_file(dir: &Path) -> Result<Option<PathBuf>, String> {
+    let entries =
+        fs::read_dir(dir).map_err(|error| format!("reading {}: {error}", dir.display()))?;
+    let mut candidates = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("reading {}: {error}", dir.display()))?;
+        let path = entry.path();
+        if path
+            .file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case("map.md"))
+            && probe_file_type(&path)?.is_some_and(|ty| ty.is_file())
+        {
+            candidates.push(path);
+        }
+    }
+    candidates.sort();
+    Ok(candidates.into_iter().next())
+}
+
+/// One ticket file found in the Effort's ticket directories, before parsing:
+/// its identity plus the numeric filename prefix `blocked-by` refs resolve
+/// against.
+struct MemberFile {
+    path: PathBuf,
+    key: TicketKey,
+    number: Option<u64>,
+}
+
+/// Read and normalize every ticket file in the Effort. Any per-file failure
+/// degrades the whole Effort — a misparsed authoritative field could put a
+/// Ticket falsely on the Frontier, and there is no conservative reading.
+fn read_tickets(dir: &Path) -> Result<Vec<Ticket>, String> {
+    let members = list_member_files(dir)?;
+    members
+        .iter()
+        .map(|member| {
+            parse_ticket_file(member, &members)
+                .map_err(|reason| format!("{}: {reason}", member.path.display()))
+        })
+        .collect()
+}
+
+/// Enumerate the Effort's ticket files: `.md` files directly inside each
+/// ticket directory, in filename order (effort order). Subdirectories —
+/// `assets/`, ticket-scoped or not — are never tickets. Errs when two
+/// members share a numeric prefix — a `blocked-by` ref to that number would
+/// resolve to an arbitrary one of them, silently changing Frontier state.
+fn list_member_files(dir: &Path) -> Result<Vec<MemberFile>, String> {
+    let mut members = Vec::new();
+    for sub in TICKET_DIRS {
+        let ticket_dir = dir.join(sub);
+        if !probe_file_type(&ticket_dir)?.is_some_and(|ty| ty.is_dir()) {
+            continue;
+        }
+        let entries = fs::read_dir(&ticket_dir)
+            .map_err(|error| format!("reading {}: {error}", ticket_dir.display()))?;
+        let mut paths = Vec::new();
+        for entry in entries {
+            let entry =
+                entry.map_err(|error| format!("reading {}: {error}", ticket_dir.display()))?;
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "md")
+                && probe_file_type(&path)?.is_some_and(|ty| ty.is_file())
+            {
+                paths.push(path);
+            }
+        }
+        paths.sort();
+        for path in paths {
+            let key = TicketKey::Local {
+                path: CanonicalPathBuf::canonicalize(&path)
+                    .map_err(|error| format!("canonicalizing {}: {error}", path.display()))?,
+            };
+            members.push(MemberFile {
+                number: filename_number(&path),
+                path,
+                key,
+            });
+        }
+    }
+    for (i, member) in members.iter().enumerate() {
+        let Some(number) = member.number else {
+            continue;
+        };
+        if let Some(prev) = members[..i].iter().find(|prev| prev.number == Some(number)) {
+            return Err(format!(
+                "duplicate ticket number {number}: {} and {}",
+                prev.path.display(),
+                member.path.display()
+            ));
+        }
+    }
+    Ok(members)
+}
+
+/// The `NN` of an `NN-slug.md` filename — what a `blocked-by` ref names.
+/// `None` for a file without the numeric prefix (it can't be a target).
+fn filename_number(path: &Path) -> Option<u64> {
+    let stem = path.file_stem()?.to_str()?;
+    let end = stem
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(stem.len());
+    stem[..end].parse().ok()
+}
+
+fn parse_ticket_file(member: &MemberFile, members: &[MemberFile]) -> Result<Ticket, String> {
+    let content = fs::read_to_string(&member.path).map_err(|error| format!("reading: {error}"))?;
+    let (fields, body) = parse_ticket_dialects(&content)?;
+
+    let (state, claim) = fields.lifecycle()?;
+    let mut dependencies = Vec::new();
+    for reference in fields.blocked_by {
+        let number: u64 = reference
+            .parse()
+            .map_err(|_| format!("blocked-by ref {reference:?} is not a ticket number"))?;
+        dependencies.push(match members.iter().find(|m| m.number == Some(number)) {
+            Some(target) => Dependency::SameEffort(target.key.clone()),
+            // No member file carries that number: the target can't be
+            // found, and an unseen Dependency must never put the ticket
+            // on the Frontier.
+            None => Dependency::Unknown { raw: reference },
+        });
+    }
+    for reference in fields.external_blocked_by {
+        dependencies.push(resolve_external_ref(&member.path, &reference, members));
+    }
+
+    Ok(Ticket {
+        key: member.key.clone(),
+        // Never the filename slug: that's the display ref (spec §6.2),
+        // derivable from the key, not a title of last resort.
+        title: first_h1(body).ok_or_else(|| "no H1 title".to_owned())?,
+        state,
+        claim,
+        ty: TicketType(fields.ty.unwrap_or_default()),
+        dependencies,
+    })
+}
+
+/// Resolve one `external-blocked-by` ref — a relative path from the ticket
+/// file's directory (`../../<effort>/tickets/NN-slug.md` in the corpus). A
+/// readable ticket target parses for the state and title the edge carries; a
+/// path that lands back inside this Effort folds to a SameEffort edge;
+/// anything unresolvable, unreadable, or not a ticket at all (a file outside
+/// a ticket directory — `assets/` markdown included) is an Unknown
+/// Dependency with the raw ref kept for display — never an error, so one
+/// dead ref doesn't degrade the Effort (the ticket it blocks stays off the
+/// Frontier either way).
+fn resolve_external_ref(ticket_path: &Path, reference: &str, members: &[MemberFile]) -> Dependency {
+    resolve_external_target(ticket_path, reference, members).unwrap_or_else(|| {
+        Dependency::Unknown {
+            raw: reference.to_owned(),
+        }
+    })
+}
+
+/// [`resolve_external_ref`]'s resolvable half: `None` for every way the ref
+/// fails to name a readable ticket.
+fn resolve_external_target(
+    ticket_path: &Path,
+    reference: &str,
+    members: &[MemberFile],
+) -> Option<Dependency> {
+    let path = CanonicalPathBuf::canonicalize(ticket_path.parent()?.join(reference)).ok()?;
+    // Only a file directly inside a ticket directory can be a ticket —
+    // the target-side mirror of list_member_files' "assets dirs are never
+    // tickets".
+    let in_ticket_dir = path
+        .parent()
+        .and_then(Path::file_name)
+        .is_some_and(|name| TICKET_DIRS.iter().any(|dir| name == *dir));
+    if !in_ticket_dir {
+        return None;
+    }
+    let key = TicketKey::Local { path: path.clone() };
+    if members.iter().any(|member| member.key == key) {
+        return Some(Dependency::SameEffort(key));
+    }
+    let content = fs::read_to_string(&path).ok()?;
+    let (fields, body) = parse_ticket_dialects(&content).ok()?;
+    let (state, _) = fields.lifecycle().ok()?;
+    Some(Dependency::External(ExternalDependency {
+        key,
+        state,
+        title: first_h1(body),
+    }))
+}
+
+/// Which local ticket dialect a file spelled its fields in — kept on the
+/// parsed fields because the lifecycle vocabularies never cross: `open`/
+/// `closed` belongs to the older dialect, `claimed`/`resolved` to the newer,
+/// and a value from the wrong one degrades rather than guesses.
+#[derive(Clone, Copy)]
+enum Dialect {
+    Older,
+    Newer,
+}
+
+/// A ticket file's lifecycle-bearing fields, as its dialect spells them
+/// (#106). Every field is optional to parse — `lifecycle` decides which
+/// absences mean anything; unknown keys are ignored.
+struct TicketFields {
+    dialect: Dialect,
+    status: Option<String>,
+    ty: Option<String>,
+    /// Older dialect only. `Some("")` when the key is present with no value —
+    /// unclaimed, but distinct from an absent key only in intent, not
+    /// normalization.
+    assignee: Option<String>,
+    blocked_by: Vec<String>,
+    external_blocked_by: Vec<String>,
+}
+
+impl TicketFields {
+    fn new(dialect: Dialect) -> Self {
+        Self {
+            dialect,
+            status: None,
+            ty: None,
+            assignee: None,
+            blocked_by: Vec::new(),
+            external_blocked_by: Vec::new(),
+        }
+    }
+
+    /// Normalize the two lifecycle axes out of the dialect's vocabulary. The
+    /// status field is the only lifecycle authority (spec §3.2) — body prose
+    /// (`## Closure`, superseded blockquotes, handoff notes) never is.
+    fn lifecycle(&self) -> Result<(TicketState, Option<Claim>), String> {
+        let status = self.status.as_deref().map(str::to_ascii_lowercase);
+        match self.dialect {
+            Dialect::Older => {
+                // Present-but-empty `assignee:` is unclaimed — observed in
+                // the wild.
+                let assignee = self
+                    .assignee
+                    .clone()
+                    .filter(|assignee| !assignee.is_empty())
+                    .map(Claim::By);
+                match status.as_deref() {
+                    Some("open") => Ok((TicketState::Open, assignee)),
+                    Some("closed") => Ok((TicketState::Closed, assignee)),
+                    // Absent-means-Open belongs to the newer dialect alone
+                    // (spec §3.2); no observed older-dialect file omits
+                    // status, so absence degrades rather than guessing a
+                    // ticket onto the Frontier.
+                    None => Err("missing status".to_owned()),
+                    Some(other) => Err(format!("unrecognized status {other:?}")),
+                }
+            }
+            Dialect::Newer => match status.as_deref() {
+                None => Ok((TicketState::Open, None)),
+                // Claimed-ness without a claimant name — the dialect has no
+                // assignee field.
+                Some("claimed") => Ok((TicketState::Open, Some(Claim::Anonymous))),
+                Some("resolved") => Ok((TicketState::Closed, None)),
+                Some(other) => Err(format!("unrecognized Status {other:?}")),
+            },
+        }
+    }
+}
+
+fn parse_ticket_dialects(content: &str) -> Result<(TicketFields, &str), String> {
+    match frontmatter_fields_after_open(content) {
+        Some(rest) => parse_older_dialect(rest),
+        None => Ok((parse_newer_dialect(content), content)),
+    }
+}
+
+/// The content past an opening `---` frontmatter fence, `None` when the file
+/// doesn't open with one. CRLF counts: the fence is a line ending, the one
+/// place `str::lines`' own CRLF handling can't cover for this parser.
+fn frontmatter_fields_after_open(content: &str) -> Option<&str> {
+    content
+        .strip_prefix("---\n")
+        .or_else(|| content.strip_prefix("---\r\n"))
+}
+
+/// Parse the newer dialect's prose field lines: `Status:`, `Type:`, and
+/// `Blocked by: NN, NN` in the leading lines, before the first section
+/// heading (`##` or deeper) — past it, matching text is body prose, never
+/// lifecycle. Infallible: an unrecognized Status value is a `lifecycle`
+/// error, and everything else here is prose to skip.
+fn parse_newer_dialect(content: &str) -> TicketFields {
+    let mut fields = TicketFields::new(Dialect::Newer);
+    for line in content.lines() {
+        let line = line.trim();
+        if line.starts_with("##") {
+            break;
+        }
+        let field = |prefix: &str| {
+            line.get(..prefix.len())
+                .filter(|head| head.eq_ignore_ascii_case(prefix))
+                .map(|_| line[prefix.len()..].trim().to_owned())
+        };
+        if let Some(value) = field("Status:") {
+            fields.status = Some(value);
+        } else if let Some(value) = field("Type:") {
+            fields.ty = Some(value);
+        } else if let Some(value) = field("Blocked by:") {
+            fields.blocked_by = value
+                .split(',')
+                .map(|item| item.trim().to_owned())
+                .filter(|item| !item.is_empty())
+                .collect();
+        }
+    }
+    fields
+}
+
+/// Parse the older dialect from `rest`, the content past the opening
+/// frontmatter fence.
+fn parse_older_dialect(rest: &str) -> Result<(TicketFields, &str), String> {
+    let Some((raw_fields, body)) = rest.split_once("\n---") else {
+        return Err("unterminated frontmatter".to_owned());
+    };
+    let mut fields = TicketFields::new(Dialect::Older);
+    for (key, value) in parse_frontmatter_fields(raw_fields)? {
+        match (key.as_str(), value) {
+            ("status", FieldValue::Scalar(value)) => fields.status = Some(value),
+            ("type", FieldValue::Scalar(value)) => fields.ty = Some(value),
+            ("assignee", FieldValue::Scalar(value)) => fields.assignee = Some(value),
+            ("blocked-by", FieldValue::List(items)) => fields.blocked_by = items,
+            ("external-blocked-by", FieldValue::List(items)) => {
+                fields.external_blocked_by = items;
+            }
+            // An empty scalar where a list belongs is an empty list.
+            ("blocked-by" | "external-blocked-by", FieldValue::Scalar(value))
+                if value.is_empty() => {}
+            (key @ ("status" | "type" | "assignee"), FieldValue::List(_)) => {
+                return Err(format!(
+                    "frontmatter key {key:?} holds a list, expected a value"
+                ));
+            }
+            (key @ ("blocked-by" | "external-blocked-by"), FieldValue::Scalar(_)) => {
+                return Err(format!(
+                    "frontmatter key {key:?} holds a value, expected a list"
+                ));
+            }
+            // Unknown keys pass through: tolerant parsing (spec §3).
+            _ => {}
+        }
+    }
+    Ok((fields, body))
+}
+
+/// A frontmatter value: a scalar (quotes stripped) or a list (inline
+/// `[a, b]` flow style or indented `- item` block style — both observed).
+enum FieldValue {
+    Scalar(String),
+    List(Vec<String>),
+}
+
+/// Hand-parsed `key: value` frontmatter — the corpus's narrow YAML subset
+/// (scalars and string/int lists), deliberately not a YAML engine: every
+/// observed file fits, and a line outside the subset degrades the Effort
+/// rather than guessing.
+fn parse_frontmatter_fields(raw: &str) -> Result<Vec<(String, FieldValue)>, String> {
+    let lines: Vec<&str> = raw.lines().collect();
+    let mut fields = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        i += 1;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Some((raw_key, raw_value)) = line.split_once(':') else {
+            return Err(format!("malformed frontmatter line {line:?}"));
+        };
+        let key = raw_key.trim().to_owned();
+        let raw_value = raw_value.trim();
+        let value = if raw_value.is_empty() {
+            // Either an empty value or the head of a block list.
+            let mut items = Vec::new();
+            while let Some(item) = lines
+                .get(i)
+                .map(|line| line.trim())
+                .and_then(|line| line.strip_prefix('-'))
+            {
+                items.push(unquote(item.trim()).to_owned());
+                i += 1;
+            }
+            if items.is_empty() {
+                FieldValue::Scalar(String::new())
+            } else {
+                FieldValue::List(items)
+            }
+        } else if let Some(inner) = raw_value.strip_prefix('[') {
+            let inner = inner
+                .strip_suffix(']')
+                .ok_or_else(|| format!("unterminated list in frontmatter line {line:?}"))?;
+            FieldValue::List(
+                inner
+                    .split(',')
+                    .map(|item| unquote(item.trim()).to_owned())
+                    .filter(|item| !item.is_empty())
+                    .collect(),
+            )
+        } else {
+            FieldValue::Scalar(unquote(raw_value).to_owned())
+        };
+        fields.push((key, value));
+    }
+    Ok(fields)
+}
+
+fn unquote(value: &str) -> &str {
+    for quote in ['"', '\''] {
+        if let Some(inner) = value
+            .strip_prefix(quote)
+            .and_then(|rest| rest.strip_suffix(quote))
+        {
+            return inner;
+        }
+    }
+    value
+}
