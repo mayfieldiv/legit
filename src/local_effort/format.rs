@@ -10,8 +10,6 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use anyhow::Context;
-
 use crate::{
     canonical_path::CanonicalPathBuf,
     map_body::{first_h1, scan_map_body},
@@ -26,18 +24,9 @@ use crate::{
 const TICKET_DIRS: &[&str] = &["tickets", "issues"];
 
 /// Parse one Effort directory (a directory holding a `map.md`) into an
-/// [`EffortRead`]. Errs only when the directory itself can't be
-/// canonicalized — without that there is no identity to degrade under;
-/// every parse failure past that point degrades the Effort instead (spec
-/// §5.5: never a crash, never silent).
-pub(super) fn read_effort(dir: &Path) -> anyhow::Result<EffortRead> {
-    CanonicalPathBuf::canonicalize(dir)
-        .with_context(|| format!("canonicalizing effort dir {}", dir.display()))
-        .map(read_effort_at)
-}
-
-/// [`read_effort`] past the identity boundary: with a canonical directory in
-/// hand there is nothing left to fail with — only to degrade.
+/// [`EffortRead`]. Infallible: the canonical directory is the identity to
+/// degrade under, so every failure past it degrades the Effort instead of
+/// erring (spec §5.5: never a crash, never silent).
 pub(super) fn read_effort_at(dir: CanonicalPathBuf) -> EffortRead {
     let key = EffortKey::Local { dir: dir.clone() };
     // Map context is read first so a later ticket failure degrades with the
@@ -106,13 +95,11 @@ pub(super) fn find_map_file(dir: &Path) -> Result<Option<PathBuf>, String> {
     for entry in entries {
         let entry = entry.map_err(|error| format!("reading {}: {error}", dir.display()))?;
         let path = entry.path();
-        if !path
+        if path
             .file_name()
             .is_some_and(|name| name.eq_ignore_ascii_case("map.md"))
+            && probe_file_type(&path)?.is_some_and(|ty| ty.is_file())
         {
-            continue;
-        }
-        if probe_file_type(&path)?.is_some_and(|ty| ty.is_file()) {
             candidates.push(path);
         }
     }
@@ -250,15 +237,21 @@ fn parse_ticket_file(member: &MemberFile, members: &[MemberFile]) -> Result<Tick
 /// dead ref doesn't degrade the Effort (the ticket it blocks stays off the
 /// Frontier either way).
 fn resolve_external_ref(ticket_path: &Path, reference: &str, members: &[MemberFile]) -> Dependency {
-    let unknown = || Dependency::Unknown {
-        raw: reference.to_owned(),
-    };
-    let Some(base) = ticket_path.parent() else {
-        return unknown();
-    };
-    let Ok(path) = CanonicalPathBuf::canonicalize(base.join(reference)) else {
-        return unknown();
-    };
+    resolve_external_target(ticket_path, reference, members).unwrap_or_else(|| {
+        Dependency::Unknown {
+            raw: reference.to_owned(),
+        }
+    })
+}
+
+/// [`resolve_external_ref`]'s resolvable half: `None` for every way the ref
+/// fails to name a readable ticket.
+fn resolve_external_target(
+    ticket_path: &Path,
+    reference: &str,
+    members: &[MemberFile],
+) -> Option<Dependency> {
+    let path = CanonicalPathBuf::canonicalize(ticket_path.parent()?.join(reference)).ok()?;
     // Only a file directly inside a ticket directory can be a ticket —
     // the target-side mirror of list_member_files' "assets dirs are never
     // tickets".
@@ -267,26 +260,20 @@ fn resolve_external_ref(ticket_path: &Path, reference: &str, members: &[MemberFi
         .and_then(Path::file_name)
         .is_some_and(|name| TICKET_DIRS.iter().any(|dir| name == *dir));
     if !in_ticket_dir {
-        return unknown();
+        return None;
     }
     let key = TicketKey::Local { path: path.clone() };
-    if let Some(member) = members.iter().find(|member| member.key == key) {
-        return Dependency::SameEffort(member.key.clone());
+    if members.iter().any(|member| member.key == key) {
+        return Some(Dependency::SameEffort(key));
     }
-    let Ok(content) = fs::read_to_string(&path) else {
-        return unknown();
-    };
-    let Ok((fields, body)) = parse_ticket_dialects(&content) else {
-        return unknown();
-    };
-    let Ok((state, _)) = fields.lifecycle() else {
-        return unknown();
-    };
-    Dependency::External(ExternalDependency {
+    let content = fs::read_to_string(&path).ok()?;
+    let (fields, body) = parse_ticket_dialects(&content).ok()?;
+    let (state, _) = fields.lifecycle().ok()?;
+    Some(Dependency::External(ExternalDependency {
         key,
         state,
         title: first_h1(body),
-    })
+    }))
 }
 
 /// Which local ticket dialect a file spelled its fields in — kept on the
@@ -364,10 +351,9 @@ impl TicketFields {
 }
 
 fn parse_ticket_dialects(content: &str) -> Result<(TicketFields, &str), String> {
-    if frontmatter_fields_after_open(content).is_some() {
-        parse_older_dialect(content)
-    } else {
-        Ok((parse_newer_dialect(content), content))
+    match frontmatter_fields_after_open(content) {
+        Some(rest) => parse_older_dialect(rest),
+        None => Ok((parse_newer_dialect(content), content)),
     }
 }
 
@@ -412,10 +398,9 @@ fn parse_newer_dialect(content: &str) -> TicketFields {
     fields
 }
 
-fn parse_older_dialect(content: &str) -> Result<(TicketFields, &str), String> {
-    let Some(rest) = frontmatter_fields_after_open(content) else {
-        return Err("no frontmatter".to_owned());
-    };
+/// Parse the older dialect from `rest`, the content past the opening
+/// frontmatter fence.
+fn parse_older_dialect(rest: &str) -> Result<(TicketFields, &str), String> {
     let Some((raw_fields, body)) = rest.split_once("\n---") else {
         return Err("unterminated frontmatter".to_owned());
     };

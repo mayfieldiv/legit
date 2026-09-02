@@ -71,25 +71,17 @@ pub fn discover_cwd_efforts(
 fn cwd_walk_levels(cwd: &Path) -> anyhow::Result<Vec<PathBuf>> {
     let cwd =
         fs::canonicalize(cwd).with_context(|| format!("canonicalizing cwd {}", cwd.display()))?;
-    let Some(toplevel) = git_toplevel(&cwd).and_then(|top| fs::canonicalize(top).ok()) else {
-        return Ok(vec![cwd]);
-    };
-    if !cwd.starts_with(&toplevel) {
+    let toplevel = git_toplevel(&cwd)
+        .and_then(|top| fs::canonicalize(top).ok())
         // A toplevel that isn't a cwd ancestor (exotic symlink layouts):
         // there is no walk between them, so probe just the cwd.
-        return Ok(vec![cwd]);
-    }
-    let mut levels = Vec::new();
-    let mut level = cwd.as_path();
-    loop {
-        levels.push(level.to_owned());
-        if level == toplevel {
-            return Ok(levels);
-        }
-        level = level
-            .parent()
-            .expect("starts_with guarantees the toplevel is an ancestor");
-    }
+        .filter(|top| cwd.starts_with(top))
+        .unwrap_or_else(|| cwd.clone());
+    Ok(cwd
+        .ancestors()
+        .take_while(|level| level.starts_with(&toplevel))
+        .map(Path::to_owned)
+        .collect())
 }
 
 /// The git toplevel of the repo holding `cwd`, `None` outside any repo.
@@ -125,9 +117,6 @@ fn configured_roots_for_cwd<'a>(
         .iter()
         .filter(|repo| repo.wayfinder_roots.is_some())
         .collect();
-    if candidates.is_empty() {
-        return None;
-    }
     // One subprocess, and only when a slugged candidate needs it.
     let cwd_slug = candidates
         .iter()
@@ -138,10 +127,9 @@ fn configured_roots_for_cwd<'a>(
     candidates
         .into_iter()
         .find(|repo| {
-            let slug_matches = match (&repo.slug, &cwd_slug) {
-                (Some(entry), Some(cwd_slug)) => entry == cwd_slug,
-                _ => false,
-            };
+            let slug_matches = cwd_slug
+                .as_ref()
+                .is_some_and(|cwd_slug| repo.slug.as_ref() == Some(cwd_slug));
             let path_matches = match (&repo.main_worktree_path, &toplevel) {
                 (Some(path), Some(toplevel)) => resolve_config_path(path)
                     .ok()
@@ -199,11 +187,10 @@ fn read_efforts_under(
     bases: &[PathBuf],
     roots: Option<&[String]>,
 ) -> anyhow::Result<Vec<EffortRead>> {
-    let built_in: Vec<String> = BUILT_IN_ROOTS
-        .iter()
-        .map(|root| (*root).to_owned())
-        .collect();
-    let roots = roots.unwrap_or(&built_in);
+    let roots: Vec<&str> = roots.map_or_else(
+        || BUILT_IN_ROOTS.to_vec(),
+        |roots| roots.iter().map(String::as_str).collect(),
+    );
 
     let mut effort_dirs = Vec::new();
     for root in roots {
@@ -231,11 +218,9 @@ fn read_efforts_under(
     for dir in effort_dirs {
         let identity = CanonicalPathBuf::canonicalize(&dir)
             .with_context(|| format!("canonicalizing effort dir {}", dir.display()))?;
-        if seen.contains(&identity) {
-            continue;
+        if seen.insert(identity.clone()) {
+            reads.push(read_effort_at(identity));
         }
-        reads.push(read_effort_at(identity.clone()));
-        seen.insert(identity);
     }
     Ok(reads)
 }

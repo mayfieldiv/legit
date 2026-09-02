@@ -6,13 +6,12 @@
 use std::fs;
 use std::path::Path;
 
-use super::read_effort;
+use super::super::tests::write;
 use crate::canonical_path::CanonicalPathBuf;
 use crate::ticket::{Claim, Dependency, Effort, EffortKey, EffortRead, TicketKey, TicketState};
 
-fn write(path: &Path, content: &str) {
-    fs::create_dir_all(path.parent().expect("fixture paths have parents")).unwrap();
-    fs::write(path, content).unwrap();
+fn read_effort(dir: &Path) -> EffortRead {
+    super::read_effort_at(CanonicalPathBuf::canonicalize(dir).expect("fixture dir exists"))
 }
 
 fn ready(read: EffortRead) -> Effort {
@@ -57,7 +56,7 @@ fn parses_an_older_dialect_effort() {
         "---\nstatus: open\ntype: grilling\nblocked-by: [1]\n---\n\n# Settle the navigation model\n",
     );
 
-    let effort = ready(read_effort(&effort_dir).unwrap());
+    let effort = ready(read_effort(&effort_dir));
 
     assert_eq!(
         effort.key,
@@ -129,7 +128,7 @@ fn parses_a_newer_dialect_effort() {
         "# Plan the rollout\n\nType: task\nBlocked by: 01, 02\n",
     );
 
-    let effort = ready(read_effort(&effort_dir).unwrap());
+    let effort = ready(read_effort(&effort_dir));
     let tickets: Vec<_> = effort.tickets().collect();
     assert_eq!(tickets.len(), 3);
 
@@ -182,7 +181,7 @@ fn parses_an_older_dialect_ticket_with_crlf_line_endings() {
         "---\r\nstatus: open\r\n---\r\n\r\n# Second\r\n",
     );
 
-    let effort = ready(read_effort(&effort_dir).unwrap());
+    let effort = ready(read_effort(&effort_dir));
     let ticket = effort.tickets().next().expect("one ticket");
     assert_eq!(
         ticket.title, "Windows ticket",
@@ -219,7 +218,7 @@ fn tolerates_the_corpus_edge_cases() {
         "---\nstatus: open\ntype: spike\nassignee: mreynolds (claude)\nblocked-by: [9]\n---\n\n# Migrate the targets\n",
     );
 
-    let effort = ready(read_effort(&effort_dir).unwrap());
+    let effort = ready(read_effort(&effort_dir));
     let tickets: Vec<_> = effort.tickets().collect();
 
     let audit = &tickets[0];
@@ -276,7 +275,7 @@ fn external_blocked_by_resolves_to_external_and_unknown_dependencies() {
         "---\nstatus: open\ntype: task\nexternal-blocked-by:\n  - ../../menu-redesign/tickets/04-copy.md\n  - ../../gone/tickets/02-missing.md\n---\n\n# Adopt strict concurrency\n",
     );
 
-    let effort = ready(read_effort(&effort_dir).unwrap());
+    let effort = ready(read_effort(&effort_dir));
     let ticket = effort.tickets().next().expect("one ticket");
 
     assert_eq!(
@@ -318,7 +317,7 @@ fn an_external_ref_to_a_non_ticket_file_is_unknown() {
         "---\nstatus: open\nexternal-blocked-by:\n  - ../../menu-redesign/tickets/assets/notes.md\n---\n\n# A\n",
     );
 
-    let effort = ready(read_effort(&effort_dir).unwrap());
+    let effort = ready(read_effort(&effort_dir));
     let ticket = effort.tickets().next().expect("one ticket");
     assert_eq!(
         ticket.dependencies,
@@ -339,7 +338,7 @@ fn field_lines_after_a_section_heading_are_prose_not_lifecycle() {
         "# The thing\n\nType: task\n\n## Progress\n\nStatus: resolved\nBlocked by: 02\n",
     );
 
-    let effort = ready(read_effort(&effort_dir).unwrap());
+    let effort = ready(read_effort(&effort_dir));
     let ticket = effort.tickets().next().expect("one ticket");
     assert_eq!(ticket.state, TicketState::Open);
     assert_eq!(ticket.dependencies, vec![]);
@@ -354,7 +353,7 @@ fn dialect_vocabularies_do_not_cross() {
         &older.join("tickets/01-a.md"),
         "---\nstatus: resolved\n---\n\n# A\n",
     );
-    let (_, _, _, reason) = degraded(read_effort(&older).unwrap());
+    let (_, _, _, reason) = degraded(read_effort(&older));
     assert!(
         reason.contains("resolved"),
         "the older dialect's lifecycle is open/closed only: {reason}"
@@ -363,7 +362,7 @@ fn dialect_vocabularies_do_not_cross() {
     let newer = dir.path().join("newer");
     write(&newer.join("map.md"), "# Newer\n");
     write(&newer.join("issues/01-a.md"), "# A\n\nStatus: closed\n");
-    let (_, _, _, reason) = degraded(read_effort(&newer).unwrap());
+    let (_, _, _, reason) = degraded(read_effort(&newer));
     assert!(
         reason.contains("closed"),
         "the newer dialect's lifecycle is claimed/resolved only: {reason}"
@@ -384,7 +383,7 @@ fn an_unparseable_ticket_degrades_the_effort_keeping_map_context() {
         "---\nstatus: open\nnot a yaml line\n---\n\n# Broken\n",
     );
 
-    let (key, title, destination, reason) = degraded(read_effort(&effort_dir).unwrap());
+    let (key, title, destination, reason) = degraded(read_effort(&effort_dir));
     assert_eq!(
         key,
         EffortKey::Local {
@@ -409,7 +408,7 @@ fn an_older_dialect_ticket_missing_status_degrades() {
         "---\ntype: task\n---\n\n# A\n",
     );
 
-    let (_, _, _, reason) = degraded(read_effort(&effort_dir).unwrap());
+    let (_, _, _, reason) = degraded(read_effort(&effort_dir));
     assert!(
         reason.contains("status"),
         "absent-means-Open belongs to the newer dialect alone: {reason}"
@@ -426,7 +425,7 @@ fn a_ticket_without_an_h1_title_degrades() {
         "---\nstatus: open\n---\n\nProse without a heading.\n",
     );
 
-    let (_, _, _, reason) = degraded(read_effort(&effort_dir).unwrap());
+    let (_, _, _, reason) = degraded(read_effort(&effort_dir));
     assert!(
         reason.contains("no H1 title"),
         "the title is the H1, never the filename slug: {reason}"
@@ -451,7 +450,7 @@ fn duplicate_ticket_numbers_degrade_rather_than_binding_arbitrarily() {
         "---\nstatus: open\nblocked-by: [1]\n---\n\n# Dependent\n",
     );
 
-    let (_, _, _, reason) = degraded(read_effort(&effort_dir).unwrap());
+    let (_, _, _, reason) = degraded(read_effort(&effort_dir));
     assert!(
         reason.contains("duplicate ticket number 1")
             && reason.contains("01-first.md")
@@ -470,7 +469,7 @@ fn an_unrecognized_status_degrades_rather_than_guessing() {
         "---\nstatus: wontfix\n---\n\n# A\n",
     );
 
-    let (_, _, _, reason) = degraded(read_effort(&effort_dir).unwrap());
+    let (_, _, _, reason) = degraded(read_effort(&effort_dir));
     assert!(reason.contains("wontfix"), "{reason}");
 }
 
@@ -480,7 +479,7 @@ fn a_directory_without_a_map_degrades_under_its_dir_name() {
     let effort_dir = dir.path().join("mapless");
     write(&effort_dir.join("tickets/01-a.md"), "# A\n");
 
-    let (_, title, _, reason) = degraded(read_effort(&effort_dir).unwrap());
+    let (_, title, _, reason) = degraded(read_effort(&effort_dir));
     assert_eq!(title, "mapless");
     assert!(reason.contains("map.md"), "{reason}");
 }
@@ -500,7 +499,7 @@ fn an_unreadable_ticket_dir_degrades_the_effort() {
     );
     fs::set_permissions(&ticket_dir, fs::Permissions::from_mode(0o000)).unwrap();
 
-    let read = read_effort(&effort_dir).unwrap();
+    let read = read_effort(&effort_dir);
     // Restore before asserting so the tempdir can clean up either way.
     fs::set_permissions(&ticket_dir, fs::Permissions::from_mode(0o755)).unwrap();
     let (_, title, _, reason) = degraded(read);

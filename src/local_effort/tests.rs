@@ -8,7 +8,7 @@ use std::path::Path;
 
 use crate::ticket::EffortRead;
 
-fn write(path: &Path, content: &str) {
+pub(super) fn write(path: &Path, content: &str) {
     fs::create_dir_all(path.parent().expect("fixture paths have parents")).unwrap();
     fs::write(path, content).unwrap();
 }
