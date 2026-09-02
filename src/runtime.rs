@@ -28,7 +28,7 @@ use crate::{
 const MAX_CONCURRENT_REQUESTS: usize = 16;
 
 /// Sub-cap on background-effective requests (the open-PR listing and the
-/// enrichment fan-out); the remaining slots stay free for the focused PR's
+/// enrichment fan-out); the remaining slots stay free for the focused entity's
 /// fetches. Lane derivation and borrow semantics live in `github::limiter`.
 const MAX_BACKGROUND_REQUESTS: usize = 8;
 
@@ -107,10 +107,10 @@ fn process_msg(
         tracing::debug!(commands = cmds.len(), "update returned commands");
     }
     // Push the (possibly moved) focus to the limiter before the commands this
-    // message produced can acquire, so a fetch for the newly-focused PR ranks
-    // interactive from its first scheduling decision — and the previous PR's
-    // pending fetches demote. A no-op when focus is unchanged.
-    limiter.set_focus(model.focused_pr_key());
+    // message produced can acquire, so a fetch for the newly-focused entity
+    // ranks interactive from its first scheduling decision — and the previous
+    // entity's pending fetches demote. A no-op when focus is unchanged.
+    limiter.set_focus(model.focused_entity());
     spawn_cmds(cmds, msg_tx, limiter);
 }
 
