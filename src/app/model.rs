@@ -6,7 +6,7 @@ use crate::{
     blocker::{BlockerOptions, BlockerResult, compute_blocker},
     config::LegitConfig,
     file_category::FileCategorization,
-    github::limiter::NetworkStats,
+    github::limiter::{Affinity, NetworkStats},
     github::rest::{PR, PrKey},
     github::types::{CheckRun, FullReviewThread, IssueComment, Review},
     markdown::Block,
@@ -463,14 +463,14 @@ impl Model {
         self.tracked_repos().into_iter().find(|repo| repo == slug)
     }
 
-    /// The PR the user is focused on for fetch prioritisation: the open detail
-    /// PR, else the selected list PR. The runtime pushes this to the network
-    /// limiter so the focused PR's pending fetches are granted ahead of the
-    /// background fan-out.
-    pub fn focused_pr_key(&self) -> Option<PrKey> {
+    /// The entity the user is focused on for fetch prioritisation: the open
+    /// detail PR, else the selected list PR.
+    // TODO(#121): yield the ticket surface's open or selected Ticket while it
+    // is the active surface.
+    pub fn focused_entity(&self) -> Option<Affinity> {
         match &self.view_mode {
-            ViewMode::Detail(detail) => Some(detail.key.clone()),
-            ViewMode::List => self.list.selected_pr().map(PR::key),
+            ViewMode::Detail(detail) => Some(Affinity::Pr(detail.key.clone())),
+            ViewMode::List => self.list.selected_pr().map(|pr| Affinity::Pr(pr.key())),
         }
     }
 

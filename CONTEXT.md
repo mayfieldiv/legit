@@ -138,6 +138,9 @@ Which lane a network request takes through the shared concurrency limiter — fu
 
 Because priority is derived, it shifts while a request is still queued (see [[Focus Promotion]]).
 
+**Affinity**:
+The PR or **Ticket** a network request serves, carried by the request so its [[Fetch Priority]] can be derived from the **Focused PR**. Unit-wide work (the open-PR listing, an **Effort**'s map read) carries none and is never promoted.
+
 **Focused PR**:
 The single PR whose pending work the limiter prioritises: the open **PR Detail**, or — in the list view — the selected PR. Changing the selection or drilling in/out moves the focus. The limiter tracks one focused entity across surfaces: on the ticket surface it is the open or selected **Ticket**, and toggling surfaces moves the focus there, demoting the other surface's pending fetches.
 

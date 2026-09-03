@@ -8,21 +8,25 @@
 //! request be re-ranked while it is still waiting — the whole point of focus
 //! promotion below.
 //!
-//! Each request carries the PR it serves (its affinity), or `None` for
-//! repo-wide work. Its **effective lane** is fully derived, never declared:
-//! **interactive** while its PR is the one the user is focused on (the open
-//! detail PR, else the selected list PR), **background** otherwise. The pump
+//! Each request carries the PR or Ticket it serves (its [`Affinity`]), or
+//! `None` for unit-wide work (the open-PR listing, an Effort's map read). Its
+//! **effective lane** is fully derived, never declared: **interactive** while
+//! its affinity is the one the user is focused on (the open detail PR or
+//! Ticket, else the selected list row), **background** otherwise. The pump
 //! grants interactive-effective waiters up to the `total` cap, and
 //! background-effective ones only while the smaller `background` sub-cap has
-//! room — so `total - background` slots are always free for the focused PR's
-//! fetches. Borrowing is asymmetric: interactive reaches into background's
-//! idle slots, background never the reverse.
+//! room — so `total - background` slots are always free for the focused
+//! entity's fetches. Borrowing is asymmetric: interactive reaches into
+//! background's idle slots, background never the reverse.
 //!
 //! **Focus promotion.** `set_focus` re-ranks the queue: pending requests for
-//! the newly-focused PR become interactive-effective, so any the background
+//! the newly-focused entity become interactive-effective, so any the background
 //! sub-cap was holding back are granted at once (on borrowed slots), and
-//! pending requests for the previously-focused PR demote back. Only *pending*
-//! requests re-rank — an in-flight one already holds its slot.
+//! pending requests for the previously-focused entity demote back. Only
+//! *pending* requests re-rank — an in-flight one already holds its slot. One
+//! entity is focused globally, across both surfaces: toggling from the PR
+//! surface to the ticket surface demotes the PR's pending fetches, and toggling
+//! back restores them.
 
 use std::{
     collections::VecDeque,
@@ -31,7 +35,16 @@ use std::{
 
 use tokio::sync::{oneshot, watch};
 
-use crate::github::rest::PrKey;
+use crate::{github::rest::PrKey, ticket::TicketKey};
+
+/// The PR or Ticket a request serves, for focus-derived prioritisation.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Affinity {
+    Pr(PrKey),
+    // TODO(#120): remove once the fetch layer dispatches per-ticket fetches.
+    #[allow(dead_code)]
+    Ticket(TicketKey),
+}
 
 /// Live view of the transport's HTTP concurrency.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -48,10 +61,10 @@ struct Waiter {
     /// Identifies this waiter so a cancelled `acquire` can find and remove it
     /// (`AcquireGuard::drop`).
     id: u64,
-    /// The PR this request serves — interactive-effective while it is focused —
-    /// or `None` for repo-wide work (the listing, the batched review-status
-    /// query), which can never be focused.
-    pr: Option<PrKey>,
+    /// The entity this request serves — interactive-effective while it is
+    /// focused — or `None` for unit-wide work (the listing, the batched
+    /// review-status query, a map read), which can never be focused.
+    affinity: Option<Affinity>,
     tx: oneshot::Sender<Permit>,
 }
 
@@ -62,8 +75,8 @@ struct Inner {
     background_max: usize,
     total_in_flight: usize,
     background_in_flight: usize,
-    /// The PR the user is focused on, whose pending requests rank as interactive.
-    focused: Option<PrKey>,
+    /// The entity the user is focused on, whose pending requests rank as interactive.
+    focused: Option<Affinity>,
     next_id: u64,
     queue: VecDeque<Waiter>,
 }
@@ -76,12 +89,12 @@ impl Inner {
         }
     }
 
-    /// A waiter is interactive-effective while the PR it serves is the focused one.
+    /// A waiter is interactive-effective while the entity it serves is the focused one.
     fn is_interactive(&self, waiter: &Waiter) -> bool {
         waiter
-            .pr
+            .affinity
             .as_ref()
-            .is_some_and(|pr| self.focused.as_ref() == Some(pr))
+            .is_some_and(|affinity| self.focused.as_ref() == Some(affinity))
     }
 
     /// Remove and return the next waiter to grant, plus whether it counts
@@ -195,17 +208,17 @@ impl NetworkLimiter {
         })
     }
 
-    /// Queue a request serving `pr` (`None` for repo-wide work), blocking until
-    /// the pump grants it a slot. The caller is counted as `waiting` until then
-    /// and `in_flight` once the returned `Permit` is held; dropping the permit
-    /// frees the slot.
-    pub async fn acquire(self: &Arc<Self>, pr: Option<PrKey>) -> Permit {
+    /// Queue a request serving `affinity` (`None` for unit-wide work), blocking
+    /// until the pump grants it a slot. The caller is counted as `waiting` until
+    /// then and `in_flight` once the returned `Permit` is held; dropping the
+    /// permit frees the slot.
+    pub async fn acquire(self: &Arc<Self>, affinity: Option<Affinity>) -> Permit {
         let (tx, rx) = oneshot::channel();
         let id = {
             let mut inner = self.inner.lock().unwrap();
             let id = inner.next_id;
             inner.next_id += 1;
-            inner.queue.push_back(Waiter { id, pr, tx });
+            inner.queue.push_back(Waiter { id, affinity, tx });
             // The pump may grant this very waiter immediately; the permit is
             // buffered in `rx` and picked up by the await below.
             self.pump_and_publish(inner);
@@ -223,11 +236,11 @@ impl NetworkLimiter {
         permit
     }
 
-    /// Set the PR the user is focused on (the open detail PR, else the selected
-    /// list PR). Pending requests for it are re-ranked into the interactive lane;
-    /// any the background sub-cap was holding back are granted at once. A no-op
-    /// when focus is unchanged.
-    pub fn set_focus(self: &Arc<Self>, focused: Option<PrKey>) {
+    /// Set the entity the user is focused on (the open detail PR or Ticket, else
+    /// the active surface's selected row). Pending requests for it are re-ranked
+    /// into the interactive lane; any the background sub-cap was holding back
+    /// are granted at once. A no-op when focus is unchanged.
+    pub fn set_focus(self: &Arc<Self>, focused: Option<Affinity>) {
         let mut inner = self.inner.lock().unwrap();
         if inner.focused == focused {
             return;
@@ -300,16 +313,24 @@ impl NetworkLimiter {
 
 #[cfg(test)]
 mod tests {
-    use super::{NetworkLimiter, NetworkStats};
+    use super::{Affinity, NetworkLimiter, NetworkStats};
     use crate::github::rest::PrKey;
     use crate::repo_slug::RepoSlug;
+    use crate::ticket::TicketKey;
     use std::sync::Arc;
 
-    fn key(number: u64) -> PrKey {
-        PrKey {
+    fn pr_affinity(number: u64) -> Affinity {
+        Affinity::Pr(PrKey {
             repo_slug: RepoSlug::new("owner/repo"),
             number,
-        }
+        })
+    }
+
+    fn ticket_affinity(number: u64) -> Affinity {
+        Affinity::Ticket(TicketKey::GitHub {
+            repo_slug: RepoSlug::new("owner/repo"),
+            number,
+        })
     }
 
     /// Spin the single-threaded runtime until `cond` holds. `#[tokio::test]` is
@@ -419,16 +440,16 @@ mod tests {
         // PR's fetches can fill all 4 total slots — they draw against `total`
         // alone.
         let limiter = NetworkLimiter::new(4, 2);
-        limiter.set_focus(Some(key(1)));
+        limiter.set_focus(Some(pr_affinity(1)));
         let mut held = Vec::new();
         for _ in 0..4 {
-            held.push(limiter.acquire(Some(key(1))).await);
+            held.push(limiter.acquire(Some(pr_affinity(1))).await);
         }
         assert_eq!(limiter.snapshot().in_flight, 4);
 
         // The 5th interactive request hits the total cap and queues.
         let blocked = Arc::clone(&limiter);
-        let pending = tokio::spawn(async move { blocked.acquire(Some(key(1))).await });
+        let pending = tokio::spawn(async move { blocked.acquire(Some(pr_affinity(1))).await });
         spin_until(&limiter, |s| s.waiting == 1).await;
         assert_eq!(
             limiter.snapshot(),
@@ -450,17 +471,17 @@ mod tests {
     async fn background_capped_at_subcap_while_interactive_uses_the_rest() {
         // total 4, background sub-cap 2. PR #9 is focused; #1-#3 are not.
         let limiter = NetworkLimiter::new(4, 2);
-        limiter.set_focus(Some(key(9)));
+        limiter.set_focus(Some(pr_affinity(9)));
         let bg = vec![
-            limiter.acquire(Some(key(1))).await,
-            limiter.acquire(Some(key(2))).await,
+            limiter.acquire(Some(pr_affinity(1))).await,
+            limiter.acquire(Some(pr_affinity(2))).await,
         ];
         assert_eq!(limiter.snapshot().in_flight, 2);
 
         // A 3rd background request queues even though 2 total slots are free —
         // background can never exceed its sub-cap.
         let blocked = Arc::clone(&limiter);
-        let pending = tokio::spawn(async move { blocked.acquire(Some(key(3))).await });
+        let pending = tokio::spawn(async move { blocked.acquire(Some(pr_affinity(3))).await });
         spin_until(&limiter, |s| s.waiting == 1).await;
         assert_eq!(
             limiter.snapshot(),
@@ -472,8 +493,8 @@ mod tests {
 
         // The focused PR still takes both remaining total slots at once — it
         // isn't blocked by the saturated background sub-cap.
-        let i1 = limiter.acquire(Some(key(9))).await;
-        let i2 = limiter.acquire(Some(key(9))).await;
+        let i1 = limiter.acquire(Some(pr_affinity(9))).await;
+        let i2 = limiter.acquire(Some(pr_affinity(9))).await;
         assert_eq!(limiter.snapshot().in_flight, 4);
 
         // Releasing a background slot lets the queued 3rd background through.
@@ -489,12 +510,12 @@ mod tests {
         // total 2, background sub-cap 1: one slot is reserved for interactive work.
         let limiter = NetworkLimiter::new(2, 1);
         // Fill the sole background slot.
-        let held = limiter.acquire(Some(key(1))).await;
+        let held = limiter.acquire(Some(pr_affinity(1))).await;
 
         // A second background request for PR #2 can't run: the sub-cap is full,
         // so it queues even though one total slot is free.
         let blocked = Arc::clone(&limiter);
-        let pending = tokio::spawn(async move { blocked.acquire(Some(key(2))).await });
+        let pending = tokio::spawn(async move { blocked.acquire(Some(pr_affinity(2))).await });
         spin_until(&limiter, |s| s.waiting == 1).await;
         assert_eq!(
             limiter.snapshot(),
@@ -506,7 +527,7 @@ mod tests {
 
         // Focus PR #2: its queued request is promoted to interactive-effective,
         // which ignores the background sub-cap and grabs the free total slot.
-        limiter.set_focus(Some(key(2)));
+        limiter.set_focus(Some(pr_affinity(2)));
         let resumed = pending.await.expect("pending acquire task");
         assert_eq!(
             limiter.snapshot(),
@@ -522,15 +543,17 @@ mod tests {
     #[tokio::test]
     async fn queued_interactive_waiter_outranks_an_older_background_one() {
         let limiter = NetworkLimiter::new(1, 1);
-        limiter.set_focus(Some(key(9)));
+        limiter.set_focus(Some(pr_affinity(9)));
         let held = limiter.acquire(None).await;
 
         // Queue a background request first, then one for the focused PR.
         let blocked = Arc::clone(&limiter);
-        let queued_background = tokio::spawn(async move { blocked.acquire(Some(key(1))).await });
+        let queued_background =
+            tokio::spawn(async move { blocked.acquire(Some(pr_affinity(1))).await });
         spin_until(&limiter, |s| s.waiting == 1).await;
         let blocked = Arc::clone(&limiter);
-        let queued_interactive = tokio::spawn(async move { blocked.acquire(Some(key(9))).await });
+        let queued_interactive =
+            tokio::spawn(async move { blocked.acquire(Some(pr_affinity(9))).await });
         spin_until(&limiter, |s| s.waiting == 2).await;
 
         // Freeing the slot grants the younger interactive waiter, not the older
@@ -559,20 +582,20 @@ mod tests {
         // total 2, background sub-cap 1. Fill both slots (one background, one
         // for the then-focused PR #9) so the next focused PR's request queues.
         let limiter = NetworkLimiter::new(2, 1);
-        limiter.set_focus(Some(key(9)));
-        let background_held = limiter.acquire(Some(key(1))).await;
-        let interactive_held = limiter.acquire(Some(key(9))).await;
+        limiter.set_focus(Some(pr_affinity(9)));
+        let background_held = limiter.acquire(Some(pr_affinity(1))).await;
+        let interactive_held = limiter.acquire(Some(pr_affinity(9))).await;
 
-        limiter.set_focus(Some(key(2)));
+        limiter.set_focus(Some(pr_affinity(2)));
         let blocked = Arc::clone(&limiter);
-        let pending = tokio::spawn(async move { blocked.acquire(Some(key(2))).await });
+        let pending = tokio::spawn(async move { blocked.acquire(Some(pr_affinity(2))).await });
         spin_until(&limiter, |s| s.waiting == 1).await;
 
         // Focus moves elsewhere: the pending request ranks background again, so
         // the freed interactive slot can't grant it — the sub-cap is still full.
         // (Were it still interactive-effective, the drop would grant it at once:
         // grants commit synchronously inside the permit's drop.)
-        limiter.set_focus(Some(key(3)));
+        limiter.set_focus(Some(pr_affinity(3)));
         drop(interactive_held);
         assert_eq!(
             limiter.snapshot(),
@@ -586,5 +609,88 @@ mod tests {
         drop(background_held);
         let resumed = pending.await.expect("pending acquire task");
         drop(resumed);
+    }
+
+    /// Focus promotion is kind-agnostic: with total 2 and background sub-cap 1,
+    /// an unfocused PR holds the sole background slot, so a fetch for `target`
+    /// queues despite the free total slot — until `target` is focused.
+    async fn focusing_promotes_a_pending_request_for(target: Affinity) {
+        let limiter = NetworkLimiter::new(2, 1);
+        let held = limiter.acquire(Some(pr_affinity(1))).await;
+        let blocked = Arc::clone(&limiter);
+        let pending = {
+            let target = target.clone();
+            tokio::spawn(async move { blocked.acquire(Some(target)).await })
+        };
+        spin_until(&limiter, |s| s.waiting == 1).await;
+
+        limiter.set_focus(Some(target));
+        let resumed = pending.await.expect("pending acquire task");
+        assert_eq!(
+            limiter.snapshot(),
+            NetworkStats {
+                in_flight: 2,
+                waiting: 0
+            }
+        );
+        drop(resumed);
+        drop(held);
+    }
+
+    #[tokio::test]
+    async fn focusing_a_ticket_promotes_its_pending_request() {
+        focusing_promotes_a_pending_request_for(ticket_affinity(40)).await;
+    }
+
+    /// The surface toggle, seen from the limiter: `from` is focused and has a
+    /// fetch queued behind the total cap (2, background sub-cap 1, the
+    /// background slot held by an unfocused PR). Focusing `to` demotes that
+    /// fetch, so the slot its sibling frees can't grant it while the sub-cap
+    /// is full; focusing `from` again restores it onto the free slot at once.
+    async fn toggling_focus_demotes_then_restores_pending_fetches(from: Affinity, to: Affinity) {
+        let limiter = NetworkLimiter::new(2, 1);
+        limiter.set_focus(Some(from.clone()));
+        let background_held = limiter.acquire(Some(pr_affinity(7))).await;
+        let interactive_held = limiter.acquire(Some(from.clone())).await;
+        let blocked = Arc::clone(&limiter);
+        let pending = {
+            let from = from.clone();
+            tokio::spawn(async move { blocked.acquire(Some(from)).await })
+        };
+        spin_until(&limiter, |s| s.waiting == 1).await;
+
+        limiter.set_focus(Some(to));
+        drop(interactive_held);
+        assert_eq!(
+            limiter.snapshot(),
+            NetworkStats {
+                in_flight: 1,
+                waiting: 1
+            }
+        );
+
+        limiter.set_focus(Some(from));
+        let resumed = pending.await.expect("pending acquire task");
+        assert_eq!(
+            limiter.snapshot(),
+            NetworkStats {
+                in_flight: 2,
+                waiting: 0
+            }
+        );
+        drop(resumed);
+        drop(background_held);
+    }
+
+    #[tokio::test]
+    async fn toggling_to_the_ticket_surface_demotes_pending_pr_fetches_until_toggled_back() {
+        toggling_focus_demotes_then_restores_pending_fetches(pr_affinity(1), ticket_affinity(40))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn toggling_to_the_pr_surface_demotes_pending_ticket_fetches_until_toggled_back() {
+        toggling_focus_demotes_then_restores_pending_fetches(ticket_affinity(40), pr_affinity(1))
+            .await;
     }
 }
