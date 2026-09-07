@@ -7,7 +7,7 @@ use crate::{
     app::{browser, msg::Msg},
     auth, clipboard, config, git_remote,
     github::graphql::GraphQlClient,
-    github::limiter::NetworkLimiter,
+    github::limiter::{Affinity, NetworkLimiter},
     github::rest::OctocrabRest,
     github::rest::PrKey,
     github::rest::WorkflowNameCache,
@@ -238,7 +238,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             request(
                 &tx,
                 &limiter,
-                Some(pr.clone()),
+                Some(Affinity::Pr(pr.clone())),
                 "fetch issue comments",
                 async move {
                     OctocrabRest::new(&ctx.token)?
@@ -254,7 +254,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             request(
                 &tx,
                 &limiter,
-                Some(pr),
+                Some(Affinity::Pr(pr)),
                 "fetch check runs",
                 async move {
                     let checks = OctocrabRest::new(&ctx.token)?
@@ -304,7 +304,7 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             request(
                 &tx,
                 &limiter,
-                Some(key.clone()),
+                Some(Affinity::Pr(key.clone())),
                 "fetch PR detail",
                 async move {
                     OctocrabRest::new(&ctx.token)?
@@ -409,15 +409,12 @@ async fn fetch_review_status(
     request(
         tx,
         limiter,
-        Some(key.clone()),
+        Some(Affinity::Pr(key.clone())),
         "fetch review status",
-        {
-            let ctx = Arc::clone(ctx);
-            async move {
-                GraphQlClient::new(&ctx.token)?
-                    .fetch_review_status(&ctx.repo, &[number])
-                    .await
-            }
+        async {
+            GraphQlClient::new(&ctx.token)?
+                .fetch_review_status(&ctx.repo, &[number])
+                .await
         },
         move |results| review_status_msgs(repo_slug, results),
     )
@@ -454,15 +451,12 @@ async fn fetch_threads(
     request(
         tx,
         limiter,
-        Some(key.clone()),
+        Some(Affinity::Pr(key.clone())),
         "fetch review threads",
-        {
-            let ctx = Arc::clone(ctx);
-            async move {
-                GraphQlClient::new(&ctx.token)?
-                    .fetch_review_threads(&ctx.repo, number, &ctx.bot_logins)
-                    .await
-            }
+        async {
+            GraphQlClient::new(&ctx.token)?
+                .fetch_review_threads(&ctx.repo, number, &ctx.bot_logins)
+                .await
         },
         move |threads| vec![Msg::ThreadsArrived { pr, threads }],
     )
@@ -482,15 +476,12 @@ async fn fetch_reviews(
     request(
         tx,
         limiter,
-        Some(key.clone()),
+        Some(Affinity::Pr(key.clone())),
         "fetch reviews",
-        {
-            let ctx = Arc::clone(ctx);
-            async move {
-                OctocrabRest::new(&ctx.token)?
-                    .list_reviews(&ctx.repo, number)
-                    .await
-            }
+        async {
+            OctocrabRest::new(&ctx.token)?
+                .list_reviews(&ctx.repo, number)
+                .await
         },
         move |reviews| vec![Msg::ReviewsArrived { pr, reviews }],
     )
@@ -511,15 +502,12 @@ async fn fetch_files(
     request(
         tx,
         limiter,
-        Some(key.clone()),
+        Some(Affinity::Pr(key.clone())),
         "fetch files",
-        {
-            let ctx = Arc::clone(ctx);
-            async move {
-                OctocrabRest::new(&ctx.token)?
-                    .list_files(&ctx.repo, number)
-                    .await
-            }
+        async {
+            OctocrabRest::new(&ctx.token)?
+                .list_files(&ctx.repo, number)
+                .await
         },
         move |files| vec![Msg::FilesArrived { pr, files }],
     )
@@ -573,9 +561,10 @@ async fn run_fetch_open_prs(
 /// messages it produces — or, on error, one `CommandFailed` (covering the
 /// client build inside the request too). Captures the build-permit-dispatch
 /// shape every per-PR enrichment command shares; `context` names the operation
-/// so the failure reads e.g. "fetch reviews: ...". `pr` is the PR the fetch
-/// serves — prioritised by the limiter while that PR is focused — or `None`
-/// for repo-wide work. `op` is a lazy future, so the permit is held only
+/// so the failure reads e.g. "fetch reviews: ...". `affinity` is the entity the
+/// fetch serves — prioritised by the limiter while it is focused — or `None`
+/// for unit-wide work that can never be focused (the batched review-status
+/// query, a map read). `op` is a lazy future, so the permit is held only
 /// across the actual await, not while it's constructed.
 ///
 /// Returns whether the request succeeded so a caller that recorded in-flight
@@ -585,12 +574,12 @@ async fn run_fetch_open_prs(
 async fn request<T>(
     tx: &mpsc::UnboundedSender<Msg>,
     limiter: &Arc<NetworkLimiter>,
-    pr: Option<PrKey>,
+    affinity: Option<Affinity>,
     context: &'static str,
     op: impl Future<Output = anyhow::Result<T>>,
     to_msgs: impl FnOnce(T) -> Vec<Msg>,
 ) -> bool {
-    let _permit = limiter.acquire(pr).await;
+    let _permit = limiter.acquire(affinity).await;
     match op.await {
         Ok(value) => {
             for msg in to_msgs(value) {
