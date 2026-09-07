@@ -2,7 +2,7 @@ use crate::repo_slug::RepoSlug;
 use ratatui::crossterm::event::Event;
 
 use crate::{
-    app::ticket_list::LocalProbe,
+    app::ticket_list::DiscoveryUnit,
     config::{LegitConfig, RepoIdentity},
     file_category::FileChange,
     github::limiter::NetworkStats,
@@ -39,15 +39,15 @@ pub enum Msg {
         read: EffortRead,
     },
     /// One local discovery unit streamed its last Effort.
-    LocalProbeFinished {
-        unit: LocalProbe,
+    DiscoveryFinished {
+        unit: DiscoveryUnit,
     },
     /// One local discovery unit failed outright — a missing Main Worktree, an
     /// unreadable Wayfinder Root — before it could attribute a single Effort.
     /// Recorded on the queue (the rail renders it as a card), not as a
     /// transient status: the failure persists until a re-probe.
-    LocalProbeFailed {
-        unit: LocalProbe,
+    DiscoveryFailed {
+        unit: DiscoveryUnit,
         error: String,
     },
     // ── enrichment arrivals (keyed by PrKey — numbers collide across repos) ──

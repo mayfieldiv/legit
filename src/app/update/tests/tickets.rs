@@ -164,7 +164,7 @@ fn a_resize_sizes_the_queue_viewport_by_the_ticket_chrome() {
 // ── local discovery ───────────────────────────────────────────────────────
 
 use crate::{
-    app::ticket_list::LocalProbe,
+    app::ticket_list::DiscoveryUnit,
     config::{LegitConfig, RepoConfig},
 };
 
@@ -220,14 +220,16 @@ fn local_discovery_dispatches_once_config_and_repo_detection_settle() {
         discovery,
         vec![
             &Cmd::DiscoverRepoEfforts {
-                unit: LocalProbe::Repo {
-                    name: "acme/web".to_owned()
+                unit: DiscoveryUnit::LocalRepo {
+                    name: "acme/web".to_owned(),
+                    main_worktree_path: "/src/web".to_owned()
                 },
                 repo: discovery_config().repos[0].clone(),
             },
             &Cmd::DiscoverRepoEfforts {
-                unit: LocalProbe::Repo {
-                    name: "local-only".to_owned()
+                unit: DiscoveryUnit::LocalRepo {
+                    name: "local-only".to_owned(),
+                    main_worktree_path: "/src/local-only".to_owned()
                 },
                 repo: discovery_config().repos[1].clone(),
             },
@@ -298,8 +300,8 @@ fn effort_arrivals_pool_and_probe_settlement_clears_loading() {
 
     update(
         &mut model,
-        Msg::LocalProbeFinished {
-            unit: LocalProbe::Cwd,
+        Msg::DiscoveryFinished {
+            unit: DiscoveryUnit::Cwd,
         },
     );
     assert!(!model.tickets.is_loading());
@@ -310,13 +312,14 @@ fn a_failed_probe_is_recorded_on_the_queue_not_as_a_status_error() {
     let (mut model, _) = Model::new();
     update(&mut model, Msg::ConfigLoaded(discovery_config()));
     update(&mut model, Msg::RepoDetected(None));
-    let unit = LocalProbe::Repo {
+    let unit = DiscoveryUnit::LocalRepo {
         name: "local-only".to_owned(),
+        main_worktree_path: "/src/local-only".to_owned(),
     };
 
     let cmds = update(
         &mut model,
-        Msg::LocalProbeFailed {
+        Msg::DiscoveryFailed {
             unit,
             error: "main worktree /src/local-only does not exist".to_owned(),
         },
@@ -324,7 +327,7 @@ fn a_failed_probe_is_recorded_on_the_queue_not_as_a_status_error() {
 
     assert!(cmds.is_empty(), "{cmds:?}");
     assert_eq!(
-        model.tickets.probe_failures().collect::<Vec<_>>(),
+        model.tickets.discovery_failures().collect::<Vec<_>>(),
         [("local-only", "main worktree /src/local-only does not exist")]
     );
     assert_eq!(

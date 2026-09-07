@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 
 use super::{run_discover_cwd_efforts, run_discover_repo_efforts};
 use crate::{
-    app::{msg::Msg, ticket_list::LocalProbe},
+    app::{msg::Msg, ticket_list::DiscoveryUnit},
     canonical_path::CanonicalPathBuf,
     config::{LegitConfig, RepoConfig, RepoIdentity},
     repo_slug::RepoSlug,
@@ -52,8 +52,9 @@ async fn a_repo_probe_streams_one_arrival_per_effort_then_finishes() {
         main_worktree_path: Some(dir.path().to_str().unwrap().to_owned()),
         ..Default::default()
     };
-    let unit = LocalProbe::Repo {
+    let unit = DiscoveryUnit::LocalRepo {
         name: "fixture".to_owned(),
+        main_worktree_path: "/src/fixture".to_owned(),
     };
     let (tx, rx) = mpsc::unbounded_channel();
 
@@ -71,7 +72,7 @@ async fn a_repo_probe_streams_one_arrival_per_effort_then_finishes() {
                 repo: second_repo,
                 read: second,
             },
-            Msg::LocalProbeFinished { unit: finished },
+            Msg::DiscoveryFinished { unit: finished },
         ] => {
             assert_eq!(effort_title(first), "Alpha");
             assert_eq!(effort_title(second), "Beta");
@@ -89,8 +90,9 @@ async fn a_missing_main_worktree_fails_the_unit_with_the_path() {
         main_worktree_path: Some("/nonexistent/legit-fixture".to_owned()),
         ..Default::default()
     };
-    let unit = LocalProbe::Repo {
+    let unit = DiscoveryUnit::LocalRepo {
         name: "legit-fixture".to_owned(),
+        main_worktree_path: "/src/legit-fixture".to_owned(),
     };
     let (tx, rx) = mpsc::unbounded_channel();
 
@@ -98,7 +100,7 @@ async fn a_missing_main_worktree_fails_the_unit_with_the_path() {
 
     match drain(rx).as_slice() {
         [
-            Msg::LocalProbeFailed {
+            Msg::DiscoveryFailed {
                 unit: failed,
                 error,
             },
@@ -124,8 +126,8 @@ async fn the_cwd_walk_attributes_to_the_detected_repo_or_the_toplevel() {
     match drain(rx).as_slice() {
         [
             Msg::EffortArrived { repo, read },
-            Msg::LocalProbeFinished {
-                unit: LocalProbe::Cwd,
+            Msg::DiscoveryFinished {
+                unit: DiscoveryUnit::Cwd,
             },
         ] => {
             assert_eq!(effort_title(read), "Local");
@@ -148,7 +150,7 @@ async fn the_cwd_walk_attributes_to_the_detected_repo_or_the_toplevel() {
     match drain(rx).as_slice() {
         [
             Msg::EffortArrived { repo, .. },
-            Msg::LocalProbeFinished { .. },
+            Msg::DiscoveryFinished { .. },
         ] => {
             assert_eq!(repo, &RepoIdentity::Slug(RepoSlug::new("acme/web")));
         }

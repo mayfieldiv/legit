@@ -27,8 +27,8 @@ use crate::{
 mod tests;
 
 /// Below this many columns for the queue the rail is dropped so the queue
-/// keeps a usable width. The narrow-width collapse proper (spec §6.4) lands
-/// with the list-completion slice; this is only the floor.
+/// keeps a usable width — the floor only.
+// TODO(#133): the narrow-width collapse proper (spec §6.4).
 const MIN_QUEUE_WIDTH: u16 = 40;
 
 pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
@@ -40,7 +40,7 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Palett
     .areas(area);
     render_header(model, frame, header, palette);
     let tickets = &model.tickets;
-    if tickets.efforts().is_empty() && tickets.probe_failures().next().is_none() {
+    if tickets.efforts().is_empty() && tickets.discovery_failures().next().is_none() {
         let text = if tickets.is_loading() {
             "Loading efforts…"
         } else {
@@ -112,7 +112,7 @@ fn render_rail(tickets: &TicketList, frame: &mut Frame<'_>, area: Rect, palette:
         lines.extend(effort_card(entry, width, palette));
         lines.push(Line::default());
     }
-    for (name, error) in tickets.probe_failures() {
+    for (name, error) in tickets.discovery_failures() {
         lines.extend(probe_failure_card(name, error, width, palette));
         lines.push(Line::default());
     }

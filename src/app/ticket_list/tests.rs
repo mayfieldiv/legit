@@ -2,7 +2,7 @@
 //! cursor, and the probe phases. Expected values come from spec §6.1–§6.3
 //! (issue #112's resolution comment). Pure — Efforts are built in memory.
 
-use super::{EffortEntry, LocalProbe, QueueRow, QueueTier, TicketList};
+use super::{DiscoveryUnit, EffortEntry, QueueRow, QueueTier, TicketList};
 use crate::{
     canonical_path::CanonicalPathBuf,
     config::RepoIdentity,
@@ -415,23 +415,25 @@ fn probe_phases_report_loading_until_every_unit_settles() {
     let mut list = TicketList::new();
     assert!(!list.is_loading());
 
-    list.begin_probe(LocalProbe::Cwd);
-    list.begin_probe(LocalProbe::Repo {
+    list.begin_discovery(DiscoveryUnit::Cwd);
+    list.begin_discovery(DiscoveryUnit::LocalRepo {
         name: "acme/web".to_owned(),
+        main_worktree_path: "/src/web".to_owned(),
     });
     assert!(list.is_loading());
 
-    list.finish_probe(&LocalProbe::Cwd);
+    list.finish_discovery(&DiscoveryUnit::Cwd);
     assert!(list.is_loading(), "one unit still in flight");
-    list.fail_probe(
-        &LocalProbe::Repo {
+    list.fail_discovery(
+        &DiscoveryUnit::LocalRepo {
             name: "acme/web".to_owned(),
+            main_worktree_path: "/src/web".to_owned(),
         },
         "main worktree /x does not exist".to_owned(),
     );
     assert!(!list.is_loading());
     assert_eq!(
-        list.probe_failures().collect::<Vec<_>>(),
+        list.discovery_failures().collect::<Vec<_>>(),
         [("acme/web", "main worktree /x does not exist")]
     );
 }

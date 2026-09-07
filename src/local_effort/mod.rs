@@ -65,13 +65,13 @@ pub fn discover_cwd_efforts(
     config: &crate::config::LegitConfig,
 ) -> anyhow::Result<CwdEfforts> {
     let levels = cwd_walk_levels(cwd)?;
-    let toplevel = levels.last().expect("the walk holds at least the cwd");
-    let roots = configured_roots_for_cwd(config, cwd, toplevel);
+    let toplevel = levels
+        .last()
+        .expect("the walk holds at least the cwd")
+        .clone();
+    let roots = configured_roots_for_cwd(config, cwd, &toplevel);
     Ok(CwdEfforts {
-        // `cwd_walk_levels` canonicalized every level; re-canonicalizing an
-        // existing canonical path is the cheap way to type it as one.
-        toplevel: CanonicalPathBuf::canonicalize(toplevel)
-            .with_context(|| format!("canonicalizing toplevel {}", toplevel.display()))?,
+        toplevel,
         reads: read_efforts_under(&levels, roots)?,
     })
 }
@@ -79,19 +79,19 @@ pub fn discover_cwd_efforts(
 /// The directories the cwd walk probes: the canonical cwd up to and
 /// including its git toplevel, or the cwd alone outside a repo. The
 /// toplevel is last, so callers can read the repo boundary off the walk.
-fn cwd_walk_levels(cwd: &Path) -> anyhow::Result<Vec<PathBuf>> {
-    let cwd =
-        fs::canonicalize(cwd).with_context(|| format!("canonicalizing cwd {}", cwd.display()))?;
+fn cwd_walk_levels(cwd: &Path) -> anyhow::Result<Vec<CanonicalPathBuf>> {
+    let cwd = CanonicalPathBuf::canonicalize(cwd)
+        .with_context(|| format!("canonicalizing cwd {}", cwd.display()))?;
     let toplevel = git_toplevel(&cwd)
         .and_then(|top| fs::canonicalize(top).ok())
         // A toplevel that isn't a cwd ancestor (exotic symlink layouts):
         // there is no walk between them, so probe just the cwd.
         .filter(|top| cwd.starts_with(top))
-        .unwrap_or_else(|| cwd.clone());
+        .unwrap_or_else(|| cwd.to_path_buf());
     Ok(cwd
         .ancestors()
         .take_while(|level| level.starts_with(&toplevel))
-        .map(Path::to_owned)
+        .map(CanonicalPathBuf::ancestor_of_canonical)
         .collect())
 }
 
@@ -195,7 +195,7 @@ fn is_git_worktree(dir: &Path) -> bool {
 /// several bases or roots (symlinks, an absolute root shared by worktrees)
 /// dedups on its canonical identity.
 fn read_efforts_under(
-    bases: &[PathBuf],
+    bases: &[impl AsRef<Path>],
     roots: Option<&[String]>,
 ) -> anyhow::Result<Vec<EffortRead>> {
     let roots: Vec<&str> = roots.map_or_else(
@@ -218,7 +218,7 @@ fn read_efforts_under(
             Some(absolute) => effort_dirs.extend(probe_root(&absolute)?),
             None => {
                 for base in bases {
-                    effort_dirs.extend(probe_root(&base.join(root))?);
+                    effort_dirs.extend(probe_root(&base.as_ref().join(root))?);
                 }
             }
         }

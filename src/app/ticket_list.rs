@@ -1,11 +1,11 @@
 //! Ticket Queue Module: the pooled Efforts of every Tracked Repo, each with
 //! the repo it is attributed to, plus the queue's tier-grouped display rows,
-//! the selection cursor and scroll viewport, and the per-unit phases of local
+//! the selection cursor and scroll viewport, and the per-unit phases of
 //! Effort discovery. The sibling of `pr_list` for the ticket surface.
 //!
 //! Efforts pool in rail order (repo, then Map title) whatever order their
 //! reads arrive in. The queue flattens every pooled Effort's open Tickets into
-//! takeability tiers — Frontier, Claimed, Blocked — with a header row per
+//! tiers — Frontier, Claimed, Blocked — with a header row per
 //! non-empty tier; within a tier, rail order then effort order. Closed Tickets
 //! never appear (only the rail's `N/M decided` counts them). Selection tracks a
 //! Ticket's identity, so arrivals that re-sort the queue move its row, never
@@ -112,7 +112,7 @@ impl EffortEntry {
     }
 }
 
-/// The queue's takeability tiers, in display order. Blocked also holds the
+/// The queue's tiers, in display order. Blocked also holds the
 /// Unknown-Dependency Tickets (too rare for a tier of their own); they sort
 /// last within it and carry a marker.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -152,29 +152,36 @@ pub enum QueueRow {
     Ticket(TicketKey),
 }
 
-/// One unit of local Effort discovery — a Tracked Repo's worktree fan-out, or
+/// One unit of Effort discovery — a Tracked Repo's local worktree fan-out, or
 /// the cwd walk — whose phase the queue tracks so the view can tell "still
-/// probing" from "nothing found" and surface a unit that failed outright
-/// (a missing Main Worktree has no Effort card to degrade).
+/// discovering" from "nothing found" and surface a unit that failed outright
+/// (a missing Main Worktree has no Effort card to degrade). A GitHub repo's
+/// map read is the same kind of unit and joins this enum with its slice.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum LocalProbe {
-    Repo { name: String },
+pub enum DiscoveryUnit {
+    LocalRepo {
+        /// The repo's display name — its slug or Main Worktree basename.
+        name: String,
+        /// The configured path, verbatim: two slug-less repos can share a
+        /// basename, so the name alone would merge their units.
+        main_worktree_path: String,
+    },
     Cwd,
 }
 
-impl LocalProbe {
+impl DiscoveryUnit {
     /// The name the unit is shown under when it fails.
     pub fn label(&self) -> &str {
         match self {
-            LocalProbe::Repo { name } => name,
-            LocalProbe::Cwd => "cwd",
+            DiscoveryUnit::LocalRepo { name, .. } => name,
+            DiscoveryUnit::Cwd => "cwd",
         }
     }
 }
 
-/// Lifecycle of one local probe; at most one variant holds per unit.
+/// Lifecycle of one discovery unit; at most one variant holds per unit.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ProbePhase {
+pub enum DiscoveryPhase {
     Loading,
     Loaded,
     Failed(String),
@@ -184,7 +191,7 @@ pub enum ProbePhase {
 pub struct TicketList {
     /// Pooled Efforts in rail order (see `EffortEntry::order_key`).
     efforts: Vec<EffortEntry>,
-    probes: BTreeMap<LocalProbe, ProbePhase>,
+    discoveries: BTreeMap<DiscoveryUnit, DiscoveryPhase>,
     /// Flattened display layout (tier headers + Ticket rows), rebuilt by
     /// `relayout` whenever the pool changes.
     rows: Vec<QueueRow>,
@@ -203,7 +210,7 @@ impl fmt::Debug for TicketList {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TicketList")
             .field("efforts", &self.efforts.len())
-            .field("probes", &self.probes)
+            .field("discoveries", &self.discoveries)
             .field("rows", &self.rows.len())
             .field("selected", &self.selected)
             .field("pinned", &self.pinned)
@@ -235,41 +242,45 @@ impl TicketList {
         self.relayout();
     }
 
-    pub fn begin_probe(&mut self, unit: LocalProbe) {
-        self.probes.insert(unit, ProbePhase::Loading);
+    pub fn begin_discovery(&mut self, unit: DiscoveryUnit) {
+        self.discoveries.insert(unit, DiscoveryPhase::Loading);
     }
 
-    pub fn finish_probe(&mut self, unit: &LocalProbe) {
-        self.probes.insert(unit.clone(), ProbePhase::Loaded);
+    pub fn finish_discovery(&mut self, unit: &DiscoveryUnit) {
+        self.discoveries
+            .insert(unit.clone(), DiscoveryPhase::Loaded);
     }
 
-    pub fn fail_probe(&mut self, unit: &LocalProbe, error: String) {
-        self.probes.insert(unit.clone(), ProbePhase::Failed(error));
+    pub fn fail_discovery(&mut self, unit: &DiscoveryUnit, error: String) {
+        self.discoveries
+            .insert(unit.clone(), DiscoveryPhase::Failed(error));
     }
 
-    /// Whether `unit` should have a probe dispatched: never probed, or its
-    /// last probe failed. False while in flight or loaded — re-probing then
+    /// Whether `unit` should have discovery dispatched: never run, or its
+    /// last run failed. False while in flight or loaded — re-running then
     /// would only redo work the pool already holds.
-    pub fn needs_probe(&self, unit: &LocalProbe) -> bool {
-        match self.probes.get(unit) {
-            None | Some(ProbePhase::Failed(_)) => true,
-            Some(ProbePhase::Loading | ProbePhase::Loaded) => false,
+    pub fn needs_discovery(&self, unit: &DiscoveryUnit) -> bool {
+        match self.discoveries.get(unit) {
+            None | Some(DiscoveryPhase::Failed(_)) => true,
+            Some(DiscoveryPhase::Loading | DiscoveryPhase::Loaded) => false,
         }
     }
 
     /// Whether any discovery unit is still in flight.
     pub fn is_loading(&self) -> bool {
-        self.probes
+        self.discoveries
             .values()
-            .any(|phase| *phase == ProbePhase::Loading)
+            .any(|phase| *phase == DiscoveryPhase::Loading)
     }
 
     /// Every unit that failed outright, as (unit label, error), in unit order.
-    pub fn probe_failures(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.probes.iter().filter_map(|(unit, phase)| match phase {
-            ProbePhase::Failed(error) => Some((unit.label(), error.as_str())),
-            _ => None,
-        })
+    pub fn discovery_failures(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.discoveries
+            .iter()
+            .filter_map(|(unit, phase)| match phase {
+                DiscoveryPhase::Failed(error) => Some((unit.label(), error.as_str())),
+                _ => None,
+            })
     }
 
     /// The pooled Efforts in rail order.

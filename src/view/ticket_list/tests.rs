@@ -8,7 +8,7 @@ use ratatui::{Terminal, backend::TestBackend, style::Color};
 use crate::{
     app::{
         model::{Model, ViewMode},
-        ticket_list::LocalProbe,
+        ticket_list::DiscoveryUnit,
     },
     canonical_path::CanonicalPathBuf,
     config::RepoIdentity,
@@ -227,9 +227,10 @@ fn a_degraded_effort_and_a_failed_probe_each_get_a_card_with_the_error() {
             reason: "tickets/01-a.md: missing status".to_owned(),
         },
     );
-    model.tickets.fail_probe(
-        &LocalProbe::Repo {
+    model.tickets.fail_discovery(
+        &DiscoveryUnit::LocalRepo {
             name: "immybot".to_owned(),
+            main_worktree_path: "/src/immybot".to_owned(),
         },
         "main worktree /src/immybot does not exist".to_owned(),
     );
@@ -262,7 +263,7 @@ fn a_degraded_effort_and_a_failed_probe_each_get_a_card_with_the_error() {
 fn an_empty_surface_says_loading_while_a_probe_is_in_flight_then_no_efforts() {
     let (mut model, _) = Model::new();
     model.view_mode = ViewMode::TicketList;
-    model.tickets.begin_probe(LocalProbe::Cwd);
+    model.tickets.begin_discovery(DiscoveryUnit::Cwd);
 
     let terminal = render(&model, 60, 5);
     assert_eq!(
@@ -276,7 +277,7 @@ fn an_empty_surface_says_loading_while_a_probe_is_in_flight_then_no_efforts() {
         ]
     );
 
-    model.tickets.finish_probe(&LocalProbe::Cwd);
+    model.tickets.finish_discovery(&DiscoveryUnit::Cwd);
     let terminal = render(&model, 60, 5);
     assert_eq!(
         buffer_text(&terminal)[1],

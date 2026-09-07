@@ -20,7 +20,7 @@ use super::{
     model::{DetailState, FilesState, Model, RepoDetection, StatusKind, StatusMessage, ViewMode},
     msg::Msg,
     summary_layout,
-    ticket_list::LocalProbe,
+    ticket_list::DiscoveryUnit,
 };
 
 mod refresh;
@@ -105,9 +105,9 @@ fn maybe_discover_local_efforts(model: &mut Model) -> Vec<Cmd> {
     }
     let mut cmds = Vec::new();
     for repo in &model.config.repos {
-        if repo.main_worktree_path.is_none() {
+        let Some(main_worktree_path) = repo.main_worktree_path.clone() else {
             continue;
-        }
+        };
         let name = match repo.display_name() {
             Ok(name) => name,
             Err(error) => {
@@ -115,18 +115,21 @@ fn maybe_discover_local_efforts(model: &mut Model) -> Vec<Cmd> {
                 continue;
             }
         };
-        let unit = LocalProbe::Repo { name };
-        if !model.tickets.needs_probe(&unit) {
+        let unit = DiscoveryUnit::LocalRepo {
+            name,
+            main_worktree_path,
+        };
+        if !model.tickets.needs_discovery(&unit) {
             continue;
         }
-        model.tickets.begin_probe(unit.clone());
+        model.tickets.begin_discovery(unit.clone());
         cmds.push(Cmd::DiscoverRepoEfforts {
             unit,
             repo: repo.clone(),
         });
     }
-    if model.tickets.needs_probe(&LocalProbe::Cwd) {
-        model.tickets.begin_probe(LocalProbe::Cwd);
+    if model.tickets.needs_discovery(&DiscoveryUnit::Cwd) {
+        model.tickets.begin_discovery(DiscoveryUnit::Cwd);
         cmds.push(Cmd::DiscoverCwdEfforts {
             detected: model.repo.repo().cloned(),
             config: model.config.clone(),
@@ -538,9 +541,9 @@ fn handle_list_key(model: &mut Model, code: KeyCode, now: DateTime<Utc>) -> Vec<
     Vec::new()
 }
 
-/// Handle one keypress on the ticket surface. Only the keys this slice binds:
-/// the queue cursor and the surface toggle back to the PR list (the rail
-/// filter, mode filter, copy keys, and refresh land in later slices).
+/// Handle one keypress on the ticket surface: the queue cursor and the
+/// surface toggle back to the PR list.
+// TODO(#132): `r`/`R`. TODO(#133): `h`/`l`, `J`/`K`, `m`, `p`, `y`.
 fn handle_ticket_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
     match code {
         KeyCode::Char('q') => model.should_quit = true,
@@ -1077,8 +1080,7 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
                     }
                     Vec::new()
                 }
-                // The ticket queue has no wheel routing yet (rail and queue
-                // hit-testing land with the list-completion slice).
+                // TODO(#133): route wheel ticks to the queue viewport.
                 ViewMode::TicketList => Vec::new(),
             }
         }
@@ -1130,12 +1132,12 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
             model.tickets.merge_effort(repo, read);
             Vec::new()
         }
-        Msg::LocalProbeFinished { unit } => {
-            model.tickets.finish_probe(&unit);
+        Msg::DiscoveryFinished { unit } => {
+            model.tickets.finish_discovery(&unit);
             Vec::new()
         }
-        Msg::LocalProbeFailed { unit, error } => {
-            model.tickets.fail_probe(&unit, error);
+        Msg::DiscoveryFailed { unit, error } => {
+            model.tickets.fail_discovery(&unit, error);
             Vec::new()
         }
         Msg::PrArrived(pr) => {
