@@ -449,6 +449,7 @@ fn handle_list_key(model: &mut Model, code: KeyCode, now: DateTime<Utc>) -> Vec<
         }
         KeyCode::Char('r') => return apply(model, Msg::RefreshSelected, now),
         KeyCode::Char('R') => return apply(model, Msg::RefreshAll, now),
+        KeyCode::Char('t') => model.view_mode = ViewMode::TicketList,
         KeyCode::Char('/') => {
             model.list.filter_open();
             model.sync_viewport();
@@ -486,6 +487,18 @@ fn handle_list_key(model: &mut Model, code: KeyCode, now: DateTime<Utc>) -> Vec<
                 return cmds;
             }
         }
+        _ => {}
+    }
+    Vec::new()
+}
+
+/// Handle one keypress on the ticket surface. Only the keys this slice binds:
+/// the queue cursor and the surface toggle back to the PR list (the rail
+/// filter, mode filter, copy keys, and refresh land in later slices).
+fn handle_ticket_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
+    match code {
+        KeyCode::Char('q') => model.should_quit = true,
+        KeyCode::Char('t') => model.view_mode = ViewMode::List,
         _ => {}
     }
     Vec::new()
@@ -942,6 +955,12 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
             if matches!(model.view_mode, ViewMode::Detail(_)) {
                 return handle_detail_key(model, key.code, now);
             }
+            // The ticket surface owns its keypress the same way: none of its
+            // keys move the PR selection, so the files-fetch path below must
+            // not run for them.
+            if matches!(model.view_mode, ViewMode::TicketList) {
+                return handle_ticket_list_key(model, key.code);
+            }
             // List-mode keys. The filter editor (modal precedence) sees every
             // key first and produces no command; a normal list key may (Enter
             // -> FetchPRDetail), in which case dispatch it and stop.
@@ -1008,6 +1027,9 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
                     }
                     Vec::new()
                 }
+                // The ticket queue has no wheel routing yet (rail and queue
+                // hit-testing land with the list-completion slice).
+                ViewMode::TicketList => Vec::new(),
             }
         }
         Msg::TerminalEvent(Event::Mouse(mouse))
@@ -1016,6 +1038,7 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
             match model.view_mode {
                 ViewMode::Detail(_) => handle_detail_left_click(model, mouse),
                 ViewMode::List => handle_list_left_click(model, mouse),
+                ViewMode::TicketList => Vec::new(),
             }
         }
         Msg::TerminalEvent(_) => Vec::new(),

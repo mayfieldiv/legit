@@ -35,7 +35,7 @@ fn detail_body_text(model: &crate::app::model::Model) -> String {
                 })
                 .collect()
         }
-        ViewMode::List => panic!("expected Detail mode"),
+        ViewMode::List | ViewMode::TicketList => panic!("expected Detail mode"),
     }
 }
 
@@ -44,7 +44,7 @@ fn detail_body_text(model: &crate::app::model::Model) -> String {
 fn detail_focus(model: &crate::app::model::Model) -> usize {
     match &model.view_mode {
         ViewMode::Detail(detail) => detail.focus.index(),
-        ViewMode::List => panic!("expected Detail mode"),
+        ViewMode::List | ViewMode::TicketList => panic!("expected Detail mode"),
     }
 }
 
@@ -53,7 +53,7 @@ fn detail_focus(model: &crate::app::model::Model) -> usize {
 fn detail_focus_url(model: &crate::app::model::Model) -> Option<String> {
     match &model.view_mode {
         ViewMode::Detail(detail) => detail.focus.url().map(str::to_owned),
-        ViewMode::List => panic!("expected Detail mode"),
+        ViewMode::List | ViewMode::TicketList => panic!("expected Detail mode"),
     }
 }
 
@@ -61,7 +61,7 @@ fn detail_focus_url(model: &crate::app::model::Model) -> Option<String> {
 fn detail_scroll(model: &crate::app::model::Model) -> usize {
     match &model.view_mode {
         ViewMode::Detail(detail) => detail.scroll,
-        ViewMode::List => panic!("expected Detail mode"),
+        ViewMode::List | ViewMode::TicketList => panic!("expected Detail mode"),
     }
 }
 
@@ -860,7 +860,7 @@ fn filter_toggles_persist_across_detail_views() {
 fn detail_expanded(model: &crate::app::model::Model) -> &std::collections::HashSet<String> {
     match &model.view_mode {
         ViewMode::Detail(detail) => &detail.expanded,
-        ViewMode::List => panic!("expected Detail mode"),
+        ViewMode::List | ViewMode::TicketList => panic!("expected Detail mode"),
     }
 }
 

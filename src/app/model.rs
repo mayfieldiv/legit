@@ -35,6 +35,11 @@ pub enum ViewMode {
     /// leaving it is a single assignment back to `List`, so there is no
     /// hand-synchronised side state to clear.
     Detail(DetailState),
+    /// The ticket surface: the effort rail and the tier-grouped ticket queue
+    /// over every pooled Effort. `t` toggles here from `List` and back; the
+    /// queue's cursor and viewport live on `Model::tickets`, so the variant
+    /// carries nothing.
+    TicketList,
 }
 
 /// The complete state of an open detail view. Bundled into `ViewMode::Detail`
@@ -465,12 +470,12 @@ impl Model {
 
     /// The entity the user is focused on for fetch prioritisation: the open
     /// detail PR, else the selected list PR.
-    // TODO(#121): yield the ticket surface's open or selected Ticket while it
-    // is the active surface.
+    // TODO(#130): yield the selected Ticket while the ticket surface is active.
     pub fn focused_entity(&self) -> Option<Affinity> {
         match &self.view_mode {
             ViewMode::Detail(detail) => Some(Affinity::Pr(detail.key.clone())),
             ViewMode::List => self.list.selected_pr().map(|pr| Affinity::Pr(pr.key())),
+            ViewMode::TicketList => None,
         }
     }
 

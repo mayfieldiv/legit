@@ -17,6 +17,7 @@ use crate::repo_slug::RepoSlug;
 pub mod detail;
 pub mod list;
 pub mod summary;
+pub mod ticket_list;
 
 /// Short label for the active grouping mode, shown in the status-bar `g` hint.
 fn grouping_label(model: &Model) -> &'static str {
@@ -38,6 +39,11 @@ pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
     // Detail view takes the whole frame and manages its own chrome (header + status bar).
     if let ViewMode::Detail(detail) = &model.view_mode {
         detail::render(model, detail, frame, area, now, palette);
+        return;
+    }
+    // So does the ticket surface: its own header, rail + queue, and key hints.
+    if model.view_mode == ViewMode::TicketList {
+        ticket_list::render(model, frame, area, palette);
         return;
     }
 

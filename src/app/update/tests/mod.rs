@@ -38,6 +38,7 @@ mod multi_repo;
 mod refresh;
 mod summary;
 mod tabs;
+mod tickets;
 mod worktree;
 
 /// The `PrKey` of `sample_pr(number, ..)` — every sample PR is stamped with
