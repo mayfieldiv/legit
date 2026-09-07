@@ -7,10 +7,6 @@
 //! and local dialect parser (#118) normalize their wire/file shapes into
 //! these types; the fetch and view layers consume them.
 
-// TODO(#118/#120): remove once the local parser constructs the Local variants
-// and the fetch/view layers consume the derivations.
-#![allow(dead_code)]
-
 use crate::canonical_path::CanonicalPathBuf;
 use crate::repo_slug::RepoSlug;
 
@@ -106,6 +102,17 @@ pub enum EffortKey {
     Local { dir: CanonicalPathBuf },
 }
 
+impl EffortKey {
+    /// Where the Effort's data comes from, read off its identity — one source
+    /// of truth, so the attribute can never disagree with the key.
+    pub fn source(&self) -> EffortSource {
+        match self {
+            EffortKey::GitHub { .. } => EffortSource::GitHub,
+            EffortKey::Local { .. } => EffortSource::Local,
+        }
+    }
+}
+
 /// Where an Effort's data comes from — an attribute of the Effort, not a
 /// different kind of container.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -190,7 +197,8 @@ pub enum EffortRead {
 /// (title, Destination) lives directly on the Effort — the Map is the
 /// artifact anchoring it, not a separate model type. Belongs to exactly one
 /// Tracked Repo: a GitHub Effort names it in its key; a local Effort's repo
-/// attribution is discovery-time data the fetch layer supplies (#118/#120).
+/// attribution is discovery-time data the fetch layer supplies beside the
+/// read (`app::ticket_list::EffortEntry`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Effort {
     pub key: EffortKey,
@@ -229,15 +237,6 @@ impl Effort {
             destination,
             tickets,
         })
-    }
-
-    /// Where this Effort's data comes from, read off its key — one source of
-    /// truth, so the attribute can never disagree with the identity.
-    pub fn source(&self) -> EffortSource {
-        match self.key {
-            EffortKey::GitHub { .. } => EffortSource::GitHub,
-            EffortKey::Local { .. } => EffortSource::Local,
-        }
     }
 
     /// This Effort's Tickets as member handles, in effort order.
@@ -298,12 +297,6 @@ impl std::fmt::Debug for EffortTicket<'_> {
 }
 
 impl<'a> EffortTicket<'a> {
-    /// The underlying Ticket, on the Effort's lifetime rather than the
-    /// handle's.
-    pub fn get(self) -> &'a Ticket {
-        self.ticket
-    }
-
     /// Each Dependency resolved against what this Effort can see, in
     /// declaration order. A same-effort target the lookup can't find is an
     /// Unknown Dependency (its display ref stands in for the raw ref).

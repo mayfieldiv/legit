@@ -6,9 +6,6 @@
 //! dot-ridden. Local wayfinder Tickets and Efforts key on it; the I/O lives
 //! here so `src/ticket.rs` stays a pure model module.
 
-// TODO(#118): remove once local Effort discovery constructs these.
-#![allow(dead_code)]
-
 use std::fs;
 use std::io;
 use std::ops::Deref;

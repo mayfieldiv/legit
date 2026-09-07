@@ -64,10 +64,7 @@ impl EffortEntry {
     }
 
     pub fn source(&self) -> EffortSource {
-        match self.key() {
-            EffortKey::GitHub { .. } => EffortSource::GitHub,
-            EffortKey::Local { .. } => EffortSource::Local,
-        }
+        self.key().source()
     }
 
     /// Why the Effort degraded, or `None` when it read cleanly.

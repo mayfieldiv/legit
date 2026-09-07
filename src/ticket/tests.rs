@@ -95,7 +95,7 @@ fn unknown_types_are_either() {
 #[test]
 fn effort_source_follows_the_key_variant() {
     let github = effort(Vec::new());
-    assert_eq!(github.source(), EffortSource::GitHub);
+    assert_eq!(github.key.source(), EffortSource::GitHub);
 
     let local = Effort::new(
         EffortKey::Local {
@@ -108,7 +108,7 @@ fn effort_source_follows_the_key_variant() {
         Vec::new(),
     )
     .unwrap();
-    assert_eq!(local.source(), EffortSource::Local);
+    assert_eq!(local.key.source(), EffortSource::Local);
 }
 
 // ── key identity ─────────────────────────────────────────────────────────────
@@ -258,8 +258,8 @@ fn frontier_lists_only_frontier_tickets_in_effort_order() {
         blocked,
         unblocked,
     ]);
-    let frontier: Vec<&TicketKey> = e.frontier().map(|t| &t.get().key).collect();
-    assert_eq!(frontier, vec![&key(1), &key(5)]);
+    let frontier: Vec<TicketKey> = e.frontier().map(|t| t.key.clone()).collect();
+    assert_eq!(frontier, vec![key(1), key(5)]);
 }
 
 // ── Blocks (reverse read) ────────────────────────────────────────────────────
@@ -272,13 +272,12 @@ fn blocks_lists_open_tickets_that_depend_on_the_given_one() {
     dependent_b.dependencies.push(dep_on(1));
     dependent_b.dependencies.push(dep_on(2));
     let e = effort(vec![open_ticket(1), dependent_a, dependent_b]);
-    let blocks: Vec<&TicketKey> = member(&e, 1)
+    let blocks: Vec<TicketKey> = member(&e, 1)
         .blocks()
         .iter()
-        .map(|t| t.get())
-        .map(|t| &t.key)
+        .map(|t| t.key.clone())
         .collect();
-    assert_eq!(blocks, vec![&key(2), &key(3)]);
+    assert_eq!(blocks, vec![key(2), key(3)]);
 }
 
 #[test]

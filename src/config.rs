@@ -94,8 +94,6 @@ impl RepoConfig {
     /// therefore means "no identity yet" — a not-yet-cloned local-only repo
     /// has nothing discoverable anyway. Identity answers dedup with one key,
     /// deliberately stricter than "is this the cwd repo?" matching.
-    // TODO(#120): consumed when the ticket surface dedups Tracked Repos.
-    #[allow(dead_code)]
     pub fn identity(&self) -> anyhow::Result<RepoIdentity> {
         if let Some(slug) = &self.slug {
             return Ok(RepoIdentity::Slug(slug.clone()));

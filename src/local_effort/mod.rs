@@ -6,9 +6,6 @@
 //! all implementation: this file decides *where* Efforts live (worktrees,
 //! Wayfinder Roots, the cwd walk); [`format`] decides *what* one says.
 
-// TODO(#120): remove once the fetch layer dispatches local probes.
-#![allow(dead_code)]
-
 mod format;
 #[cfg(test)]
 mod tests;

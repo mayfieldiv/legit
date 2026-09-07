@@ -8,7 +8,7 @@
 //! label, the wire shapes, normalization into [`Effort`], and the map-body
 //! dialect rules are all implementation.
 
-// TODO(#120): remove once the fetch layer dispatches map reads and ticket
+// TODO(#131): remove once the fetch layer dispatches map reads and ticket
 // refreshes.
 #![allow(dead_code)]
 
