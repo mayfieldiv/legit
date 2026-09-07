@@ -411,13 +411,10 @@ async fn fetch_review_status(
         limiter,
         Some(Affinity::Pr(key.clone())),
         "fetch review status",
-        {
-            let ctx = Arc::clone(ctx);
-            async move {
-                GraphQlClient::new(&ctx.token)?
-                    .fetch_review_status(&ctx.repo, &[number])
-                    .await
-            }
+        async {
+            GraphQlClient::new(&ctx.token)?
+                .fetch_review_status(&ctx.repo, &[number])
+                .await
         },
         move |results| review_status_msgs(repo_slug, results),
     )
@@ -456,13 +453,10 @@ async fn fetch_threads(
         limiter,
         Some(Affinity::Pr(key.clone())),
         "fetch review threads",
-        {
-            let ctx = Arc::clone(ctx);
-            async move {
-                GraphQlClient::new(&ctx.token)?
-                    .fetch_review_threads(&ctx.repo, number, &ctx.bot_logins)
-                    .await
-            }
+        async {
+            GraphQlClient::new(&ctx.token)?
+                .fetch_review_threads(&ctx.repo, number, &ctx.bot_logins)
+                .await
         },
         move |threads| vec![Msg::ThreadsArrived { pr, threads }],
     )
@@ -484,13 +478,10 @@ async fn fetch_reviews(
         limiter,
         Some(Affinity::Pr(key.clone())),
         "fetch reviews",
-        {
-            let ctx = Arc::clone(ctx);
-            async move {
-                OctocrabRest::new(&ctx.token)?
-                    .list_reviews(&ctx.repo, number)
-                    .await
-            }
+        async {
+            OctocrabRest::new(&ctx.token)?
+                .list_reviews(&ctx.repo, number)
+                .await
         },
         move |reviews| vec![Msg::ReviewsArrived { pr, reviews }],
     )
@@ -513,13 +504,10 @@ async fn fetch_files(
         limiter,
         Some(Affinity::Pr(key.clone())),
         "fetch files",
-        {
-            let ctx = Arc::clone(ctx);
-            async move {
-                OctocrabRest::new(&ctx.token)?
-                    .list_files(&ctx.repo, number)
-                    .await
-            }
+        async {
+            OctocrabRest::new(&ctx.token)?
+                .list_files(&ctx.repo, number)
+                .await
         },
         move |files| vec![Msg::FilesArrived { pr, files }],
     )
