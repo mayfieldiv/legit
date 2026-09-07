@@ -15,6 +15,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 
 use crate::app::grouping::{DisplayRow, Grouping, display_rows};
+use crate::app::list_scroll;
 use crate::blocker::Tier;
 use crate::github::rest::{PR, PrKey};
 use crate::repo_slug::RepoSlug;
@@ -560,45 +561,23 @@ impl PrList {
     }
 
     /// Re-clamp `scroll_offset` so the selected PR's display row stays on-screen
-    /// with a ~10% margin above and below. Margin = `viewport_height / 10`,
-    /// floor 1, so the selection never parks on the very top/bottom row when
-    /// more rows are available in that direction. Operates over display rows, so
+    /// (see `list_scroll::follow_selection`). Operates over display rows, so
     /// headers count toward the window like any other row.
     fn normalize_scroll(&mut self) {
-        if self.viewport_height == 0 || self.rows.is_empty() {
-            return;
-        }
         let Some(selected_row) = self.selected_display_row() else {
             return;
         };
-
-        // Cap the margin at half the rows on each side. Without this, a tiny
-        // viewport makes the top and bottom margins overlap and become jointly
-        // unsatisfiable (e.g. at height 1, a floor-1 margin demands a row above
-        // AND below the only visible line), and the selection ends up off-screen.
-        let margin = (self.viewport_height / 10)
-            .max(1)
-            .min(self.viewport_height.saturating_sub(1) / 2);
-
-        // Single-pass clamp against both constraints. The bottom constraint is
-        // a lower bound on the offset, the top constraint an upper bound; with
-        // the capped margin they can't conflict, so order doesn't matter.
-        let min_offset = (selected_row + margin + 1).saturating_sub(self.viewport_height);
-        let max_for_top = selected_row.saturating_sub(margin);
-        if self.scroll_offset < min_offset {
-            self.scroll_offset = min_offset;
-        } else if self.scroll_offset > max_for_top {
-            self.scroll_offset = max_for_top;
-        }
-
-        self.clamp_scroll_offset();
+        self.scroll_offset = list_scroll::follow_selection(
+            self.scroll_offset,
+            selected_row,
+            self.rows.len(),
+            self.viewport_height,
+        );
     }
 
     fn clamp_scroll_offset(&mut self) {
-        let max_offset = self.rows.len().saturating_sub(self.viewport_height);
-        if self.scroll_offset > max_offset {
-            self.scroll_offset = max_offset;
-        }
+        self.scroll_offset =
+            list_scroll::clamp(self.scroll_offset, self.rows.len(), self.viewport_height);
     }
 
     pub fn prs(&self) -> &[PR] {
