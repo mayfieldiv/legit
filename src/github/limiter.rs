@@ -41,7 +41,7 @@ use crate::{github::rest::PrKey, ticket::TicketKey};
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Affinity {
     Pr(PrKey),
-    // TODO(#120): remove once the fetch layer dispatches per-ticket fetches.
+    // TODO(#120): drop the dead_code allow once the fetch layer constructs ticket affinities.
     #[allow(dead_code)]
     Ticket(TicketKey),
 }
