@@ -563,7 +563,8 @@ async fn run_fetch_open_prs(
 /// shape every per-PR enrichment command shares; `context` names the operation
 /// so the failure reads e.g. "fetch reviews: ...". `affinity` is the entity the
 /// fetch serves — prioritised by the limiter while it is focused — or `None`
-/// for repo-wide work. `op` is a lazy future, so the permit is held only
+/// for unit-wide work that can never be focused (the batched review-status
+/// query, a map read). `op` is a lazy future, so the permit is held only
 /// across the actual await, not while it's constructed.
 ///
 /// Returns whether the request succeeded so a caller that recorded in-flight
