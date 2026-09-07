@@ -5,12 +5,13 @@
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
 };
 use unicode_width::UnicodeWidthStr;
 
+use super::row::{Cell, GAP, render_cells};
 use crate::{
     app::{
         model::Model,
@@ -96,7 +97,7 @@ fn render_divider(frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
 
 /// The rail: the `All efforts` entry (the only filter this slice has, so it
 /// is always the active one), then one three-line card per Effort and one
-/// two-line card per failed probe, each followed by a blank row.
+/// two-line card per failed discovery unit, each followed by a blank row.
 fn render_rail(tickets: &TicketList, frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
     let width = usize::from(area.width);
     let mut lines = vec![
@@ -113,7 +114,7 @@ fn render_rail(tickets: &TicketList, frame: &mut Frame<'_>, area: Rect, palette:
         lines.push(Line::default());
     }
     for (name, error) in tickets.discovery_failures() {
-        lines.extend(probe_failure_card(name, error, width, palette));
+        lines.extend(discovery_failure_card(name, error, width, palette));
         lines.push(Line::default());
     }
     frame.render_widget(Paragraph::new(lines), area);
@@ -126,7 +127,8 @@ fn effort_card(entry: &EffortEntry, width: usize, palette: &Palette) -> Vec<Line
         EffortSource::Local => "local",
     };
     let muted = Style::default().fg(palette.muted);
-    let mut lines = vec![card_title_line(&repo, &entry.title(), width, palette)];
+    let title = Span::styled(entry.title(), Style::default().add_modifier(Modifier::BOLD));
+    let mut lines = vec![repo_led_line(&repo, title, width, palette)];
     match entry.error() {
         None => {
             let counts = entry.counts();
@@ -165,27 +167,15 @@ fn effort_card(entry: &EffortEntry, width: usize, palette: &Palette) -> Vec<Line
 /// A discovery unit that failed before attributing any Effort: the unit's
 /// name where a card's repo goes, so the failure reads in the same place a
 /// card would have.
-fn probe_failure_card(
+fn discovery_failure_card(
     name: &str,
     error: &str,
     width: usize,
     palette: &Palette,
 ) -> Vec<Line<'static>> {
-    let short = format_repo_short(name);
+    let failure = Span::styled("couldn't probe", Style::default().fg(palette.error));
     vec![
-        Line::from(vec![
-            Span::styled(
-                short.to_owned(),
-                Style::default()
-                    .fg(repo_color(name))
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" · ", Style::default().fg(palette.separator)),
-            Span::styled(
-                truncate("couldn't probe", width.saturating_sub(short.width() + 3)),
-                Style::default().fg(palette.error),
-            ),
-        ]),
+        repo_led_line(name, failure, width, palette),
         Line::from(Span::styled(
             truncate(error, width),
             Style::default().fg(palette.warning),
@@ -193,30 +183,35 @@ fn probe_failure_card(
     ]
 }
 
-/// `repo · title`, the repo in its Repo Color and the title bold, truncated as
-/// one string so a long title never pushes the repo off the card.
-fn card_title_line(repo: &str, title: &str, width: usize, palette: &Palette) -> Line<'static> {
+/// `repo · <tail>`: the repo's short name in its Repo Color and bold, a
+/// separator, then `tail` truncated to what remains — so a long tail never
+/// pushes the repo off the card.
+fn repo_led_line(
+    repo: &str,
+    tail: Span<'static>,
+    width: usize,
+    palette: &Palette,
+) -> Line<'static> {
     let short = format_repo_short(repo);
-    let repo_span = Span::styled(
-        short.to_owned(),
-        Style::default()
-            .fg(repo_color(repo))
-            .add_modifier(Modifier::BOLD),
-    );
-    let separator = Span::styled(" · ", Style::default().fg(palette.separator));
-    let title_width = width.saturating_sub(short.width() + 3);
-    let title_span = Span::styled(
-        truncate(title, title_width),
-        Style::default().add_modifier(Modifier::BOLD),
-    );
-    Line::from(vec![repo_span, separator, title_span])
+    let tail_width = width.saturating_sub(short.width() + 3);
+    Line::from(vec![
+        Span::styled(
+            short.to_owned(),
+            Style::default()
+                .fg(repo_color(repo))
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" · ", Style::default().fg(palette.separator)),
+        Span::styled(truncate(&tail.content, tail_width), tail.style),
+    ])
 }
 
 // ── queue ────────────────────────────────────────────────────────────────────
 
-/// One column's gap, and the one-column left pad every queue row starts with.
-const GAP: usize = 1;
-const LEFT_PAD: usize = 1;
+/// The leading one-column glyph slot every queue row starts with, like the
+/// PR list's worktree/refresh column. Empty in this slice.
+// TODO(#132): the per-row refresh indicator.
+const INDICATOR_COL: usize = 1;
 const REF_COL_MIN: usize = 6;
 /// Refs cap at 14 columns with a middle ellipsis (spec §6.2).
 const REF_COL_MAX: usize = 14;
@@ -225,8 +220,9 @@ const TYPE_COL_MIN: usize = 4;
 const TYPE_COL_MAX: usize = 12;
 /// `↑NN ↓NN`.
 const BLOCK_COL: usize = 7;
-/// Empty until the refresh slice stamps Fetch Age; sized like the PR list's
-/// Updated column so the header lands where the data will.
+/// Sized like the PR list's Updated column so the header lands where the data
+/// will; the cells stay empty until Fetch Age is stamped.
+// TODO(#132): render Fetch Age.
 const AGE_COL: usize = 7;
 
 /// Per-render column sizing derived from the visible Tickets.
@@ -249,17 +245,15 @@ impl QueueLayout {
 
     /// Whatever the fixed columns and their gaps leave for the title.
     fn title_col(&self) -> usize {
-        let fixed = LEFT_PAD
-            + self.ref_col
-            + GAP
-            + REPO_COL
-            + GAP
-            + self.type_col
-            + GAP
-            + GAP
-            + BLOCK_COL
-            + GAP
-            + AGE_COL;
+        let fixed_cells = [
+            INDICATOR_COL,
+            self.ref_col,
+            REPO_COL,
+            self.type_col,
+            BLOCK_COL,
+            AGE_COL,
+        ];
+        let fixed = fixed_cells.iter().sum::<usize>() + fixed_cells.len() * GAP;
         self.width.saturating_sub(fixed).max(1)
     }
 }
@@ -301,37 +295,20 @@ fn render_queue(tickets: &TicketList, frame: &mut Frame<'_>, area: Rect, palette
 /// queue's state signal, so the rule takes the tier colour (unlike the PR
 /// list's accent-coloured Smart-status headers).
 fn tier_header_line(tier: QueueTier, width: usize, palette: &Palette) -> Line<'static> {
+    let text = format!("{}── {} ", " ".repeat(INDICATOR_COL + GAP), tier.label());
     Line::from(Span::styled(
-        pad_to_width(
-            &format!("{}── {} ", " ".repeat(LEFT_PAD), tier.label()),
-            width,
-        ),
+        pad_to_width(&text, width),
         Style::default()
             .fg(palette.queue_tier(tier))
             .add_modifier(Modifier::BOLD),
     ))
 }
 
-/// One fixed-width cell: its spans, fitted to `width` (truncated with an
-/// ellipsis when they overflow, space-padded when they don't).
-struct Cell {
-    spans: Vec<Span<'static>>,
-    width: usize,
-}
-
-impl Cell {
-    fn text(text: impl Into<String>, width: usize, style: Style) -> Self {
-        Self {
-            spans: vec![Span::styled(text.into(), style)],
-            width,
-        }
-    }
-}
-
 fn header_row(layout: &QueueLayout) -> Line<'static> {
     let bold = Style::default().add_modifier(Modifier::BOLD);
     render_cells(
         vec![
+            Cell::text("", INDICATOR_COL, Style::default()),
             Cell::text("Ticket", layout.ref_col, bold),
             Cell::text("Repo", REPO_COL, bold),
             Cell::text("Type", layout.type_col, bold),
@@ -351,12 +328,15 @@ fn ticket_line(
     palette: &Palette,
 ) -> Line<'static> {
     let repo = entry.repo.display_name();
+    // The Selected Row brightens only the title; every other cell keeps its
+    // semantic foreground over the band `render_cells` lays down (ADR 0005).
     let title_style = if selected {
         Style::default().fg(palette.selected_fg)
     } else {
         Style::default()
     };
     let cells = vec![
+        Cell::text("", INDICATOR_COL, Style::default()),
         Cell::text(
             truncate_middle(&ticket.key.display_ref(), layout.ref_col),
             layout.ref_col,
@@ -409,24 +389,24 @@ fn title_cell(
             })
             .map(|text| (text, palette.blocked)),
     };
-    let mut spans = Vec::new();
-    match marker {
-        Some((text, color)) if width > text.width() + 2 => {
-            spans.push(Span::styled(
-                truncate(&ticket.title, width - text.width() - 1),
-                title_style,
-            ));
-            spans.push(Span::raw(" "));
-            spans.push(Span::styled(text, Style::default().fg(color)));
-        }
-        Some((text, color)) => {
-            spans.push(Span::styled(ticket.title.clone(), title_style));
-            spans.push(Span::raw(" "));
-            spans.push(Span::styled(text, Style::default().fg(color)));
-        }
-        None => spans.push(Span::styled(ticket.title.clone(), title_style)),
+    let Some((marker, color)) = marker else {
+        return Cell::text(ticket.title.clone(), width, title_style);
+    };
+    // Below the room for a marker plus one title glyph, `render_cells`' own
+    // fitting decides what survives.
+    let title = if width > marker.width() + 2 {
+        truncate(&ticket.title, width - marker.width() - 1)
+    } else {
+        ticket.title.clone()
+    };
+    Cell {
+        spans: vec![
+            Span::styled(title, title_style),
+            Span::raw(" "),
+            Span::styled(marker, Style::default().fg(color)),
+        ],
+        width,
     }
-    Cell { spans, width }
 }
 
 /// `↑N` open upstream Dependencies (red) and `↓N` open downstream dependents
@@ -453,38 +433,6 @@ fn block_cell(ticket: &EffortTicket<'_>, palette: &Palette) -> Cell {
     Cell {
         spans,
         width: BLOCK_COL,
-    }
-}
-
-/// Lay cells out left to right with the left pad and one-column gaps. Each
-/// cell's spans are fitted to its width: spans past the budget are dropped
-/// and the one straddling it is truncated with an ellipsis; a short cell is
-/// space-padded. A `fill` paints the Selected Row's band under the whole
-/// line while every span keeps its own foreground (ADR 0005).
-fn render_cells(cells: Vec<Cell>, fill: Option<Color>) -> Line<'static> {
-    let mut spans = vec![Span::raw(" ".repeat(LEFT_PAD))];
-    for (i, cell) in cells.into_iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::raw(" ".repeat(GAP)));
-        }
-        let mut used = 0;
-        for span in cell.spans {
-            let remaining = cell.width.saturating_sub(used);
-            if remaining == 0 {
-                break;
-            }
-            let text = truncate(&span.content, remaining);
-            used += text.width();
-            spans.push(Span::styled(text, span.style));
-        }
-        if used < cell.width {
-            spans.push(Span::raw(" ".repeat(cell.width - used)));
-        }
-    }
-    let line = Line::from(spans);
-    match fill {
-        Some(color) => line.style(Style::default().bg(color)),
-        None => line,
     }
 }
 

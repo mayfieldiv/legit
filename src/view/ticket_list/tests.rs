@@ -149,15 +149,15 @@ fn the_ticket_surface_renders_the_rail_and_the_tiered_queue() {
     // the Unknown-Dependency ticket trails Blocked with its raw ref.
     let mut expected = vec![
         "legit — Tickets — 2 efforts · 2 frontier                                                                                                    ",
-        "All efforts                           │ Ticket     Repo           Type      Title                                            Block   Age    ",
-        "                                      │ ── Frontier                                                                                         ",
-        "web · Map: ticket surface             │ 01-free    web            grilling  Name the destination                             ↓1             ",
-        "local · 1/5 decided · 1 frontier      │ 01-read    notes          research  Read the RFC                                                    ",
-        "A queue toggled from the PR view      │ ── Claimed                                                                                          ",
-        "                                      │ 02-claimed web            prototype Prototype the rail ⟨claimed mayfield⟩                           ",
-        "notes · Map: docs                     │ ── Blocked                                                                                          ",
-        "local · 0/1 decided · 1 frontier      │ 03-blocked web            task      Wire the queue ⟨after 01-free⟩                   ↑1             ",
-        "Docs done                             │ 05-mystery web            task      Ship it ⟨dep? ../gone/tickets/09-x.md⟩                          ",
+        "All efforts                           │  Ticket     Repo           Type      Title                                           Block   Age    ",
+        "                                      │  ── Frontier                                                                                        ",
+        "web · Map: ticket surface             │  01-free    web            grilling  Name the destination                            ↓1             ",
+        "local · 1/5 decided · 1 frontier      │  01-read    notes          research  Read the RFC                                                   ",
+        "A queue toggled from the PR view      │  ── Claimed                                                                                         ",
+        "                                      │  02-claimed web            prototype Prototype the rail ⟨claimed mayfield⟩                          ",
+        "notes · Map: docs                     │  ── Blocked                                                                                         ",
+        "local · 0/1 decided · 1 frontier      │  03-blocked web            task      Wire the queue ⟨after 01-free⟩                  ↑1             ",
+        "Docs done                             │  05-mystery web            task      Ship it ⟨dep? ../gone/tickets/09-x.md⟩                         ",
     ];
     let blank = "                                      │                                                                                                     ";
     expected.extend(std::iter::repeat_n(blank, 13));
@@ -242,7 +242,7 @@ fn a_degraded_effort_and_a_failed_probe_each_get_a_card_with_the_error() {
         buffer_text(&terminal),
         vec![
             "legit — Tickets — 1 effort · 0 frontier                                                             ",
-            "All efforts                           │ Ticket Repo           Type Title             Block   Age    ",
+            "All efforts                           │  Ticket Repo           Type Title            Block   Age    ",
             "                                      │                       No open tickets                       ",
             "web · Map: broken                     │                                                             ",
             "local · couldn't read                 │                                                             ",
@@ -308,7 +308,7 @@ fn long_refs_are_middle_truncated_at_fourteen_columns() {
 
     let row = &buffer_text(&terminal)[3];
     assert!(
-        row.contains("│ 01-a-ve…indeed web"),
+        row.contains("│  01-a-ve…indeed web"),
         "capped at 14 with a middle ellipsis: {row:?}"
     );
 }
