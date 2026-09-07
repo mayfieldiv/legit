@@ -11,8 +11,10 @@
 
 use ratatui::style::Color;
 
+use crate::app::ticket_list::QueueTier;
 use crate::blocker::Tier;
 use crate::color::parse_hex;
+use crate::ticket::Mode;
 
 /// The single curated palette instance, resolved at compile time. Every colour
 /// in the app resolves through this: the view layer threads it from here, and the
@@ -96,6 +98,23 @@ pub struct Palette {
     pub draft: Color,
     /// A merged PR's lifecycle state.
     pub merged: Color,
+
+    /// Ticket queue tier: on the Frontier.
+    pub frontier: Color,
+    /// Ticket queue tier: claimed (and the `⟨claimed X⟩` marker).
+    pub claimed: Color,
+    /// Ticket queue tier: blocked — deliberately high-contrast (a muted rule
+    /// made the boundary too easy to miss in the prototype) — and the
+    /// upstream `↑N` count and `⟨after⟩`/`⟨dep?⟩` markers.
+    pub blocked: Color,
+    /// Blocks — the downstream `↓N` count of open dependents.
+    pub blocks: Color,
+    /// A Ticket's Type cell when its Mode is AFK.
+    pub mode_afk: Color,
+    /// A Ticket's Type cell when its Mode is HITL.
+    pub mode_hitl: Color,
+    /// A Ticket's Type cell when its Mode is Either (task, unknown Types).
+    pub mode_either: Color,
 }
 
 impl Palette {
@@ -131,6 +150,34 @@ impl Palette {
             commented: hex("#61afef"),
             draft: hex("#e5c07b"),
             merged: hex("#c678dd"),
+
+            frontier: hex("#98c379"),
+            claimed: hex("#e5c07b"),
+            blocked: hex("#e06c75"),
+            blocks: hex("#61afef"),
+            mode_afk: hex("#61afef"),
+            mode_hitl: hex("#c678dd"),
+            mode_either: hex("#7d8590"),
+        }
+    }
+
+    /// The colour for a ticket queue tier — the one tier-to-role mapping,
+    /// shared by the queue's headers and the markers that echo them.
+    pub fn queue_tier(&self, tier: QueueTier) -> Color {
+        match tier {
+            QueueTier::Frontier => self.frontier,
+            QueueTier::Claimed => self.claimed,
+            QueueTier::Blocked => self.blocked,
+        }
+    }
+
+    /// The colour a Ticket's Type cell takes for its Mode: there is no Mode
+    /// column, so the Type cell's colour carries it.
+    pub fn mode(&self, mode: Mode) -> Color {
+        match mode {
+            Mode::Afk => self.mode_afk,
+            Mode::Hitl => self.mode_hitl,
+            Mode::Either => self.mode_either,
         }
     }
 
@@ -200,6 +247,13 @@ mod tests {
             ("commented", p.commented),
             ("draft", p.draft),
             ("merged", p.merged),
+            ("frontier", p.frontier),
+            ("claimed", p.claimed),
+            ("blocked", p.blocked),
+            ("blocks", p.blocks),
+            ("mode_afk", p.mode_afk),
+            ("mode_hitl", p.mode_hitl),
+            ("mode_either", p.mode_either),
         ] {
             assert!(
                 matches!(color, Color::Rgb(_, _, _)),

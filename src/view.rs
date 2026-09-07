@@ -223,6 +223,19 @@ fn render_status(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Pal
         left.push(Span::raw(" refresh"));
     }
     frame.render_widget(Paragraph::new(Line::from(left)), area);
+    render_status_right(model, frame, area, palette);
+}
+
+/// The right-hand half every list-surface status bar shares (the PR list and
+/// the ticket surface): the status overlay, then the always-present network
+/// indicator at the far right, so the app's activity signal reads the same
+/// on both surfaces.
+pub(crate) fn render_status_right(
+    model: &Model,
+    frame: &mut Frame<'_>,
+    area: Rect,
+    palette: &Palette,
+) {
     let network_width = network_indicator_width(model, area.width);
     let overlay_width = area.width.saturating_sub(network_width.saturating_add(1));
     render_status_overlay(
