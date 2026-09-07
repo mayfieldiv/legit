@@ -114,6 +114,11 @@ fn process_msg(
     spawn_cmds(cmds, msg_tx, limiter);
 }
 
+/// Spawn each command as its own task. A command that panics is caught at
+/// the task boundary and surfaced as a `CommandFailed` status: tokio would
+/// otherwise swallow the panic into a `JoinError` nobody awaits, and the
+/// message the command owed the reducer would never arrive — leaving whatever
+/// it was loading stuck on its placeholder with no error shown.
 fn spawn_cmds(
     cmds: Vec<cmd::Cmd>,
     msg_tx: &mpsc::UnboundedSender<Msg>,
@@ -123,7 +128,43 @@ fn spawn_cmds(
         tracing::debug!(?cmd, "spawning command");
         let tx = msg_tx.clone();
         let limiter = Arc::clone(limiter);
-        tokio::spawn(cmd::run(cmd, tx, limiter));
+        let label = cmd_label(&cmd);
+        let task = tokio::spawn(cmd::run(cmd, tx.clone(), limiter));
+        tokio::spawn(async move {
+            if let Err(join_error) = task.await
+                && join_error.is_panic()
+            {
+                let error = format!("{label}: {}", panic_message(join_error.into_panic()));
+                tracing::error!(%error, "command panicked");
+                let _ = tx.send(Msg::CommandFailed {
+                    context: "command panicked",
+                    error,
+                });
+            }
+        });
+    }
+}
+
+/// The command's variant name — enough to say which command died without
+/// echoing its payload (a config, a token) into the status bar.
+fn cmd_label(cmd: &cmd::Cmd) -> String {
+    let debug = format!("{cmd:?}");
+    debug
+        .split([' ', '{', '('])
+        .next()
+        .unwrap_or("command")
+        .to_owned()
+}
+
+/// The text a panic carried, when it was a string (the `panic!`/`unwrap`
+/// payloads), else a placeholder.
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(text) = payload.downcast_ref::<String>() {
+        text.clone()
+    } else if let Some(text) = payload.downcast_ref::<&str>() {
+        (*text).to_owned()
+    } else {
+        "non-string panic payload".to_owned()
     }
 }
 
@@ -212,5 +253,30 @@ impl Drop for TerminalGuard {
         }
         let _ = disable_raw_mode();
         tracing::debug!("terminal restored");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cmd_label, panic_message};
+    use crate::{app::cmd::Cmd, repo_slug::RepoSlug, secret::Secret};
+
+    #[test]
+    fn cmd_label_is_the_variant_name_without_its_payload() {
+        assert_eq!(cmd_label(&Cmd::LoadConfig), "LoadConfig");
+        let label = cmd_label(&Cmd::FetchOpenPRs {
+            repo: RepoSlug::new("acme/web"),
+            token: Secret::new("secret-token".to_owned()),
+        });
+        assert_eq!(label, "FetchOpenPRs");
+    }
+
+    #[test]
+    fn panic_message_reads_string_payloads() {
+        let caught = std::panic::catch_unwind(|| panic!("boom {}", 42)).unwrap_err();
+        assert_eq!(panic_message(caught), "boom 42");
+        let caught = std::panic::catch_unwind(|| panic!("static")).unwrap_err();
+        assert_eq!(panic_message(caught), "static");
+        assert_eq!(panic_message(Box::new(7u8)), "non-string panic payload");
     }
 }
