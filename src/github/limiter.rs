@@ -507,37 +507,7 @@ mod tests {
 
     #[tokio::test]
     async fn focus_promotes_a_pending_background_request() {
-        // total 2, background sub-cap 1: one slot is reserved for interactive work.
-        let limiter = NetworkLimiter::new(2, 1);
-        // Fill the sole background slot.
-        let held = limiter.acquire(Some(pr_affinity(1))).await;
-
-        // A second background request for PR #2 can't run: the sub-cap is full,
-        // so it queues even though one total slot is free.
-        let blocked = Arc::clone(&limiter);
-        let pending = tokio::spawn(async move { blocked.acquire(Some(pr_affinity(2))).await });
-        spin_until(&limiter, |s| s.waiting == 1).await;
-        assert_eq!(
-            limiter.snapshot(),
-            NetworkStats {
-                in_flight: 1,
-                waiting: 1
-            }
-        );
-
-        // Focus PR #2: its queued request is promoted to interactive-effective,
-        // which ignores the background sub-cap and grabs the free total slot.
-        limiter.set_focus(Some(pr_affinity(2)));
-        let resumed = pending.await.expect("pending acquire task");
-        assert_eq!(
-            limiter.snapshot(),
-            NetworkStats {
-                in_flight: 2,
-                waiting: 0
-            }
-        );
-        drop(resumed);
-        drop(held);
+        focusing_promotes_a_pending_request_for(pr_affinity(2)).await;
     }
 
     #[tokio::test]
@@ -624,6 +594,13 @@ mod tests {
         };
         spin_until(&limiter, |s| s.waiting == 1).await;
 
+        assert_eq!(
+            limiter.snapshot(),
+            NetworkStats {
+                in_flight: 1,
+                waiting: 1
+            }
+        );
         limiter.set_focus(Some(target));
         let resumed = pending.await.expect("pending acquire task");
         assert_eq!(
