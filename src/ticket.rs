@@ -78,6 +78,21 @@ pub enum TicketKey {
     Local { path: CanonicalPathBuf },
 }
 
+impl TicketKey {
+    /// The ref a Ticket is shown under (spec §6.2): GitHub `#NNN`; local,
+    /// the file slug — the filename without its extension. Slugs drift after
+    /// rescopes, which is why they are the ref and never the title.
+    pub fn display_ref(&self) -> String {
+        match self {
+            TicketKey::GitHub { number, .. } => format!("#{number}"),
+            TicketKey::Local { path } => path
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string()),
+        }
+    }
+}
+
 /// Globally-unique Effort identity across Tracked Repos and sources; the
 /// same identity-safe parts as [`TicketKey`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -155,7 +170,7 @@ pub struct Ticket {
 /// boundary (spec §5.5) made structural: an Effort is either fully
 /// normalized or visibly degraded, never silently partial. Both transports
 /// (the GitHub map read and the local Effort parse) produce it.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EffortRead {
     Ready(Effort),
     /// The source couldn't be represented as a complete Effort — a
@@ -244,6 +259,19 @@ impl Effort {
     }
 }
 
+/// A Dependency as the owning Effort can see it: a target with a known state,
+/// or one that can't be found or read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DependencyStatus<'a> {
+    Known {
+        key: &'a TicketKey,
+        state: TicketState,
+    },
+    /// The ref to show — the raw ref, or a missing same-effort target's
+    /// display ref.
+    Unknown(String),
+}
+
 /// One of an Effort's Tickets, resolved against the Effort that owns it —
 /// the only thing the derivations hang off, so a Ticket can never be asked
 /// about an Effort it doesn't belong to. Handed out exclusively by
@@ -276,17 +304,54 @@ impl<'a> EffortTicket<'a> {
         self.ticket
     }
 
+    /// Each Dependency resolved against what this Effort can see, in
+    /// declaration order. A same-effort target the lookup can't find is an
+    /// Unknown Dependency (its display ref stands in for the raw ref).
+    pub fn dependency_statuses(&self) -> impl Iterator<Item = DependencyStatus<'_>> {
+        self.ticket.dependencies.iter().map(|dep| match dep {
+            Dependency::SameEffort(key) => match self.effort.ticket(key) {
+                Some(target) => DependencyStatus::Known {
+                    key,
+                    state: target.state,
+                },
+                None => DependencyStatus::Unknown(key.display_ref()),
+            },
+            Dependency::External(external) => DependencyStatus::Known {
+                key: &external.key,
+                state: external.state,
+            },
+            Dependency::Unknown { raw } => DependencyStatus::Unknown(raw.clone()),
+        })
+    }
+
+    /// The targets this Ticket still waits on — every known Dependency whose
+    /// target is open.
+    pub fn open_dependencies(&self) -> Vec<&TicketKey> {
+        self.dependency_statuses()
+            .filter_map(|status| match status {
+                DependencyStatus::Known {
+                    key,
+                    state: TicketState::Open,
+                } => Some(key),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The first Unknown Dependency's ref, for the `⟨dep? <ref>⟩` marker.
+    pub fn unknown_dependency_ref(&self) -> Option<String> {
+        self.dependency_statuses().find_map(|status| match status {
+            DependencyStatus::Unknown(raw) => Some(raw),
+            DependencyStatus::Known { .. } => None,
+        })
+    }
+
     /// Whether this Ticket waits on anything: any open or Unknown
-    /// Dependency. Always derived, never stored. A same-effort target the
-    /// lookup can't find counts as an Unknown Dependency, so it blocks.
+    /// Dependency. Always derived, never stored.
     pub fn is_blocked(&self) -> bool {
-        self.ticket.dependencies.iter().any(|dep| match dep {
-            Dependency::SameEffort(key) => self
-                .effort
-                .ticket(key)
-                .is_none_or(|t| t.state == TicketState::Open),
-            Dependency::External(external) => external.state == TicketState::Open,
-            Dependency::Unknown { .. } => true,
+        self.dependency_statuses().any(|status| match status {
+            DependencyStatus::Known { state, .. } => state == TicketState::Open,
+            DependencyStatus::Unknown(_) => true,
         })
     }
 

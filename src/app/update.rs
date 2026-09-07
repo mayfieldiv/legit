@@ -499,6 +499,10 @@ fn handle_ticket_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
     match code {
         KeyCode::Char('q') => model.should_quit = true,
         KeyCode::Char('t') => model.view_mode = ViewMode::List,
+        // Cursor movement is network-silent (spec §5.1): the map read already
+        // delivered everything the queue shows.
+        KeyCode::Char('j') | KeyCode::Down => model.tickets.move_down(),
+        KeyCode::Char('k') | KeyCode::Up => model.tickets.move_up(),
         _ => {}
     }
     Vec::new()

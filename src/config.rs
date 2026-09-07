@@ -78,18 +78,13 @@ impl RepoConfig {
 
     /// The name this repo is shown under: its slug, or for a slug-less repo
     /// the basename of its expanded Main Worktree path. Pure — usable before
-    /// the directory exists.
-    // TODO(#120): consumed when the effort rail attributes local Efforts.
-    #[allow(dead_code)]
+    /// the directory exists, which is what names a repo whose probe fails.
     pub fn display_name(&self) -> anyhow::Result<String> {
         if let Some(slug) = &self.slug {
             return Ok(slug.as_str().to_owned());
         }
         let resolved = resolve_config_path(self.main_worktree_path()?)?;
-        Ok(resolved
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| resolved.display().to_string()))
+        Ok(path_display_name(&resolved))
     }
 
     /// See [`RepoIdentity`]. A slug-less entry's identity requires its Main
@@ -127,6 +122,24 @@ impl RepoConfig {
 pub enum RepoIdentity {
     Slug(RepoSlug),
     Path(CanonicalPathBuf),
+}
+
+impl RepoIdentity {
+    /// The name the repo is shown under — the same rule as
+    /// [`RepoConfig::display_name`], read off the resolved identity.
+    pub fn display_name(&self) -> String {
+        match self {
+            RepoIdentity::Slug(slug) => slug.as_str().to_owned(),
+            RepoIdentity::Path(path) => path_display_name(path),
+        }
+    }
+}
+
+/// A slug-less repo's display name: its Main Worktree's basename.
+fn path_display_name(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 /// The one name every `repos` entry has (slug and mainWorktreePath are both
