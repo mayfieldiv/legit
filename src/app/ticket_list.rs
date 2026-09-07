@@ -250,6 +250,16 @@ impl TicketList {
         self.probes.insert(unit.clone(), ProbePhase::Failed(error));
     }
 
+    /// Whether `unit` should have a probe dispatched: never probed, or its
+    /// last probe failed. False while in flight or loaded — re-probing then
+    /// would only redo work the pool already holds.
+    pub fn needs_probe(&self, unit: &LocalProbe) -> bool {
+        match self.probes.get(unit) {
+            None | Some(ProbePhase::Failed(_)) => true,
+            Some(ProbePhase::Loading | ProbePhase::Loaded) => false,
+        }
+    }
+
     /// Whether any discovery unit is still in flight.
     pub fn is_loading(&self) -> bool {
         self.probes

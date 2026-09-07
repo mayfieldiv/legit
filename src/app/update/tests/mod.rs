@@ -271,11 +271,14 @@ pub(super) fn config_with_repos(slugs: &[&str]) -> crate::config::LegitConfig {
     }
 }
 
-/// The repo slugs of every `FetchOpenPRs` in `cmds`, in dispatch order.
+/// The repo slugs of every `FetchOpenPRs` in `cmds`, in dispatch order. Local
+/// Effort discovery rides the same startup gate, so its commands are skipped
+/// rather than treated as a stray.
 pub(super) fn fetched_slugs(cmds: &[Cmd]) -> Vec<RepoSlug> {
     cmds.iter()
-        .map(|c| match c {
-            Cmd::FetchOpenPRs { repo, .. } => repo.clone(),
+        .filter_map(|c| match c {
+            Cmd::FetchOpenPRs { repo, .. } => Some(repo.clone()),
+            Cmd::DiscoverRepoEfforts { .. } | Cmd::DiscoverCwdEfforts { .. } => None,
             other => panic!("expected only FetchOpenPRs, got {other:?}"),
         })
         .collect()
@@ -704,7 +707,7 @@ fn dispatching_fetch_marks_list_as_loading() {
         Msg::RepoDetected(Some(RepoSlug::new("mayfieldiv/legit"))),
     );
 
-    assert_eq!(cmds.len(), 1);
+    assert_eq!(fetched_slugs(&cmds), ["mayfieldiv/legit"]);
     assert!(
         model
             .list
@@ -805,13 +808,7 @@ fn repo_detected_after_token_dispatches_fetch_open_prs() {
         Msg::RepoDetected(Some(RepoSlug::new("mayfieldiv/legit"))),
     );
 
-    assert_eq!(cmds.len(), 1);
-    match &cmds[0] {
-        Cmd::FetchOpenPRs { repo, .. } => {
-            assert_eq!(*repo, "mayfieldiv/legit");
-        }
-        other => panic!("expected FetchOpenPRs cmd, got {other:?}"),
-    }
+    assert_eq!(fetched_slugs(&cmds), ["mayfieldiv/legit"]);
 }
 
 #[test]
@@ -845,9 +842,9 @@ fn config_loaded_releases_the_fetch_when_auth_and_repo_already_landed() {
     let cmds = update(&mut model, Msg::ConfigLoaded(Default::default()));
 
     assert!(model.config_loaded);
-    assert_eq!(cmds.len(), 1);
-    assert!(
-        matches!(&cmds[0], Cmd::FetchOpenPRs { .. }),
+    assert_eq!(
+        fetched_slugs(&cmds),
+        ["mayfieldiv/legit"],
         "config landing last should dispatch the fetch, got {cmds:?}"
     );
 }
@@ -919,7 +916,7 @@ fn detection_failure_without_config_repos_does_not_fetch_but_surfaces_error() {
 
     assert!(matches!(model.repo, RepoDetection::Failed));
     assert!(
-        fetch_cmds.is_empty(),
+        fetched_slugs(&fetch_cmds).is_empty(),
         "no Tracked Repos at all, so nothing fetches"
     );
     // The user can see the detection error in the status bar.

@@ -244,7 +244,9 @@ fn cwd_walk_probes_each_level_up_to_the_git_toplevel() {
     let cwd = repo.join("apps/mac-agent/src");
     fs::create_dir_all(&cwd).unwrap();
 
-    let reads = super::discover_cwd_efforts(&cwd, &crate::config::LegitConfig::default()).unwrap();
+    let reads = super::discover_cwd_efforts(&cwd, &crate::config::LegitConfig::default())
+        .unwrap()
+        .reads;
     let mut titles = effort_titles(&reads);
     titles.sort();
     assert_eq!(
@@ -264,7 +266,9 @@ fn a_non_git_cwd_is_probed_alone() {
     );
     let cwd = dir.path().join("plain");
 
-    let reads = super::discover_cwd_efforts(&cwd, &crate::config::LegitConfig::default()).unwrap();
+    let reads = super::discover_cwd_efforts(&cwd, &crate::config::LegitConfig::default())
+        .unwrap()
+        .reads;
     assert_eq!(effort_titles(&reads), vec!["Plain".to_owned()]);
 }
 
@@ -286,7 +290,7 @@ fn configured_roots_win_for_the_cwd_repo_on_a_path_match() {
         ..Default::default()
     };
 
-    let reads = super::discover_cwd_efforts(&cwd, &config).unwrap();
+    let reads = super::discover_cwd_efforts(&cwd, &config).unwrap().reads;
     assert_eq!(
         effort_titles(&reads),
         vec!["Override".to_owned()],
@@ -316,7 +320,7 @@ fn configured_roots_win_for_the_cwd_repo_on_a_slug_match() {
         ..Default::default()
     };
 
-    let reads = super::discover_cwd_efforts(&repo, &config).unwrap();
+    let reads = super::discover_cwd_efforts(&repo, &config).unwrap().reads;
     assert_eq!(effort_titles(&reads), vec!["Override".to_owned()]);
 }
 
@@ -338,7 +342,7 @@ fn a_slugged_entry_still_path_matches_when_the_cwd_has_no_remote() {
         ..Default::default()
     };
 
-    let reads = super::discover_cwd_efforts(&repo, &config).unwrap();
+    let reads = super::discover_cwd_efforts(&repo, &config).unwrap().reads;
     assert_eq!(
         effort_titles(&reads),
         vec!["Override".to_owned()],

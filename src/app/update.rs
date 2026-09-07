@@ -20,6 +20,7 @@ use super::{
     model::{DetailState, FilesState, Model, RepoDetection, StatusKind, StatusMessage, ViewMode},
     msg::Msg,
     summary_layout,
+    ticket_list::LocalProbe,
 };
 
 mod refresh;
@@ -84,6 +85,51 @@ fn maybe_fetch_open_prs(model: &mut Model) -> Vec<Cmd> {
         cmds.push(Cmd::FetchOpenPRs {
             repo,
             token: token.clone(),
+        });
+    }
+    cmds
+}
+
+/// Dispatch local Effort discovery once config and repo detection have both
+/// settled: one probe per Tracked Repo with a Main Worktree (a slug-only repo
+/// has no filesystem to probe), plus the cwd walk — attributed to the detected
+/// repo, which is why the gate waits on detection. Auth is not a prerequisite:
+/// nothing here touches the network, so `t` can land on data before GitHub
+/// answers. Units already in flight or loaded are skipped, so a `R`-driven
+/// config reload re-probes only new or failed units (the `needs_listing`
+/// idiom). Two config entries spelling one Main Worktree differently both
+/// probe; the pool's Effort-key dedup collapses what they find.
+fn maybe_discover_local_efforts(model: &mut Model) -> Vec<Cmd> {
+    if !model.config_loaded || !model.repo.is_settled() {
+        return Vec::new();
+    }
+    let mut cmds = Vec::new();
+    for repo in &model.config.repos {
+        if repo.main_worktree_path.is_none() {
+            continue;
+        }
+        let name = match repo.display_name() {
+            Ok(name) => name,
+            Err(error) => {
+                tracing::warn!(%error, "skipping a repo with no display name");
+                continue;
+            }
+        };
+        let unit = LocalProbe::Repo { name };
+        if !model.tickets.needs_probe(&unit) {
+            continue;
+        }
+        model.tickets.begin_probe(unit.clone());
+        cmds.push(Cmd::DiscoverRepoEfforts {
+            unit,
+            repo: repo.clone(),
+        });
+    }
+    if model.tickets.needs_probe(&LocalProbe::Cwd) {
+        model.tickets.begin_probe(LocalProbe::Cwd);
+        cmds.push(Cmd::DiscoverCwdEfforts {
+            detected: model.repo.repo().cloned(),
+            config: model.config.clone(),
         });
     }
     cmds
@@ -1057,6 +1103,7 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
             // fresh config is installed. This serves both startup and `R`
             // without resolving paths from stale config or dispatching duplicates.
             cmds.extend(list_worktree_cmds(model));
+            cmds.extend(maybe_discover_local_efforts(model));
             cmds
         }
         Msg::AuthTokenResolved(token) => {
@@ -1075,7 +1122,21 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
             // Worktree listing stays config-driven: only configured repos can
             // declare a mainWorktreePath, so ConfigLoaded is the event that has
             // enough information to list them.
-            maybe_fetch_open_prs(model)
+            let mut cmds = maybe_fetch_open_prs(model);
+            cmds.extend(maybe_discover_local_efforts(model));
+            cmds
+        }
+        Msg::EffortArrived { repo, read } => {
+            model.tickets.merge_effort(repo, read);
+            Vec::new()
+        }
+        Msg::LocalProbeFinished { unit } => {
+            model.tickets.finish_probe(&unit);
+            Vec::new()
+        }
+        Msg::LocalProbeFailed { unit, error } => {
+            model.tickets.fail_probe(&unit, error);
+            Vec::new()
         }
         Msg::PrArrived(pr) => {
             if model.list.merge_listed(pr) {

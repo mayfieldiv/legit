@@ -4,15 +4,19 @@ use std::{future::Future, path::PathBuf, sync::Arc};
 use tokio::sync::mpsc;
 
 use crate::{
-    app::{browser, msg::Msg},
-    auth, clipboard, config, git_remote,
+    app::{browser, msg::Msg, ticket_list::LocalProbe},
+    auth, clipboard,
+    config::{self, LegitConfig, RepoConfig, RepoIdentity},
+    git_remote,
     github::graphql::GraphQlClient,
     github::limiter::{Affinity, NetworkLimiter},
     github::rest::OctocrabRest,
     github::rest::PrKey,
     github::rest::WorkflowNameCache,
     github::types::ReviewStatus,
+    local_effort,
     secret::Secret,
+    ticket::EffortRead,
     worktree,
 };
 
@@ -135,6 +139,25 @@ pub enum Cmd {
     DelayedRetry {
         pr: PrKey,
         delay_ms: u64,
+    },
+    /// Discover one Tracked Repo's local Efforts — its Main Worktree, every
+    /// worktree linked to it, and their Wayfinder Roots — streaming one
+    /// `Msg::EffortArrived` per Effort, then `LocalProbeFinished` (or
+    /// `LocalProbeFailed`). Local filesystem work: it never touches the
+    /// network limiter (spec §5.1), the per-repo listing idiom without the
+    /// permit. `unit` names the probe for the queue's phase tracking.
+    DiscoverRepoEfforts {
+        unit: LocalProbe,
+        repo: RepoConfig,
+    },
+    /// Discover the local Efforts visible from the working directory (the
+    /// cwd → git toplevel walk), attributed to `detected` when repo detection
+    /// found a GitHub repo there and to the toplevel's path identity
+    /// otherwise. Carries the config so a configured `wayfinderRoots` for the
+    /// cwd repo replaces the built-in roots.
+    DiscoverCwdEfforts {
+        detected: Option<RepoSlug>,
+        config: LegitConfig,
     },
 }
 
@@ -362,7 +385,91 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
             let _ = tx.send(Msg::MergeableRetryDue { pr });
         }
+        Cmd::DiscoverRepoEfforts { unit, repo } => run_discover_repo_efforts(unit, repo, tx).await,
+        Cmd::DiscoverCwdEfforts { detected, config } => {
+            let cwd = match std::env::current_dir() {
+                Ok(cwd) => cwd,
+                Err(error) => {
+                    let _ = tx.send(local_probe_failed(LocalProbe::Cwd, error.into()));
+                    return;
+                }
+            };
+            run_discover_cwd_efforts(cwd, detected, config, tx).await;
+        }
     }
+}
+
+/// One Tracked Repo's local probe. The repo's identity — the queue's
+/// attribution — is resolved here, off the UI loop, because a slug-less repo's
+/// identity is its canonical Main Worktree and canonicalizing is filesystem
+/// I/O the reducer must not do. Every Effort found streams as its own
+/// arrival; the unit then settles either way.
+async fn run_discover_repo_efforts(
+    unit: LocalProbe,
+    repo: RepoConfig,
+    tx: mpsc::UnboundedSender<Msg>,
+) {
+    let result = blocking(move || {
+        // Discovery first: its missing-worktree error names the path plainly,
+        // where identity's would be a bare canonicalize failure.
+        let reads = local_effort::discover_repo_efforts(&repo)?;
+        let identity = repo.identity()?;
+        Ok((identity, reads))
+    })
+    .await;
+    settle_probe(unit, result, &tx);
+}
+
+/// The cwd walk. `cwd` is a parameter (not read here) so the probe can run
+/// against a fixture directory in tests.
+async fn run_discover_cwd_efforts(
+    cwd: PathBuf,
+    detected: Option<RepoSlug>,
+    config: LegitConfig,
+    tx: mpsc::UnboundedSender<Msg>,
+) {
+    let result = blocking(move || {
+        let found = local_effort::discover_cwd_efforts(&cwd, &config)?;
+        let identity = match detected {
+            Some(slug) => RepoIdentity::Slug(slug),
+            None => RepoIdentity::Path(found.toplevel),
+        };
+        Ok((identity, found.reads))
+    })
+    .await;
+    settle_probe(LocalProbe::Cwd, result, &tx);
+}
+
+/// Deliver one probe's outcome: an arrival per Effort then the unit's
+/// completion, or the unit's failure.
+fn settle_probe(
+    unit: LocalProbe,
+    result: anyhow::Result<(RepoIdentity, Vec<EffortRead>)>,
+    tx: &mpsc::UnboundedSender<Msg>,
+) {
+    match result {
+        Ok((repo, reads)) => {
+            tracing::info!(?unit, efforts = reads.len(), "local efforts discovered");
+            for read in reads {
+                let _ = tx.send(Msg::EffortArrived {
+                    repo: repo.clone(),
+                    read,
+                });
+            }
+            let _ = tx.send(Msg::LocalProbeFinished { unit });
+        }
+        Err(error) => {
+            let _ = tx.send(local_probe_failed(unit, error));
+        }
+    }
+}
+
+/// Log a probe failure here (the impure layer) and build the `Msg` for the
+/// queue to record — the local analogue of `pr_list_failed`.
+fn local_probe_failed(unit: LocalProbe, error: anyhow::Error) -> Msg {
+    let error = format!("{error:#}");
+    tracing::warn!(?unit, %error, "local effort discovery failed");
+    Msg::LocalProbeFailed { unit, error }
 }
 
 /// Refresh one PR end-to-end. The four sub-fetches are independent and run
@@ -630,3 +737,6 @@ where
 {
     tokio::task::spawn_blocking(f).await?
 }
+
+#[cfg(test)]
+mod tests;

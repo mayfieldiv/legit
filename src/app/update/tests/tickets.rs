@@ -160,3 +160,175 @@ fn a_resize_sizes_the_queue_viewport_by_the_ticket_chrome() {
         20 - crate::app::ticket_list_layout::chrome_rows()
     );
 }
+
+// ── local discovery ───────────────────────────────────────────────────────
+
+use crate::{
+    app::ticket_list::LocalProbe,
+    config::{LegitConfig, RepoConfig},
+};
+
+fn discovery_config() -> LegitConfig {
+    LegitConfig {
+        repos: vec![
+            RepoConfig {
+                slug: Some(RepoSlug::parse("acme/web").unwrap()),
+                main_worktree_path: Some("/src/web".to_owned()),
+                ..Default::default()
+            },
+            RepoConfig {
+                main_worktree_path: Some("/src/local-only".to_owned()),
+                ..Default::default()
+            },
+            RepoConfig {
+                slug: Some(RepoSlug::parse("acme/slug-only").unwrap()),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    }
+}
+
+fn discovery_cmds(cmds: &[Cmd]) -> Vec<&Cmd> {
+    cmds.iter()
+        .filter(|cmd| {
+            matches!(
+                cmd,
+                Cmd::DiscoverRepoEfforts { .. } | Cmd::DiscoverCwdEfforts { .. }
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn local_discovery_dispatches_once_config_and_repo_detection_settle() {
+    let (mut model, _) = Model::new();
+
+    let cmds = update(&mut model, Msg::ConfigLoaded(discovery_config()));
+    assert!(
+        discovery_cmds(&cmds).is_empty(),
+        "detection hasn't settled, so the cwd walk can't be attributed yet: {cmds:?}"
+    );
+    assert!(!model.tickets.is_loading());
+
+    let cmds = update(
+        &mut model,
+        Msg::RepoDetected(Some(RepoSlug::new("mayfieldiv/legit"))),
+    );
+    let discovery = discovery_cmds(&cmds);
+    assert_eq!(
+        discovery,
+        vec![
+            &Cmd::DiscoverRepoEfforts {
+                unit: LocalProbe::Repo {
+                    name: "acme/web".to_owned()
+                },
+                repo: discovery_config().repos[0].clone(),
+            },
+            &Cmd::DiscoverRepoEfforts {
+                unit: LocalProbe::Repo {
+                    name: "local-only".to_owned()
+                },
+                repo: discovery_config().repos[1].clone(),
+            },
+            &Cmd::DiscoverCwdEfforts {
+                detected: Some(RepoSlug::new("mayfieldiv/legit")),
+                config: discovery_config(),
+            },
+        ],
+        "one task per Tracked Repo with a Main Worktree (a slug-only repo has no \
+         filesystem to probe), plus the cwd walk; no auth token needed"
+    );
+    assert!(model.tickets.is_loading());
+
+    // A config reload (`R`) must not re-probe units already in flight or loaded.
+    let cmds = update(&mut model, Msg::ConfigLoaded(discovery_config()));
+    assert!(discovery_cmds(&cmds).is_empty(), "{cmds:?}");
+}
+
+#[test]
+fn a_failed_repo_detection_still_walks_the_cwd_unattributed() {
+    let (mut model, _) = Model::new();
+    update(&mut model, Msg::ConfigLoaded(LegitConfig::default()));
+
+    let cmds = update(&mut model, Msg::RepoDetected(None));
+
+    assert_eq!(
+        discovery_cmds(&cmds),
+        vec![&Cmd::DiscoverCwdEfforts {
+            detected: None,
+            config: LegitConfig::default(),
+        }]
+    );
+}
+
+#[test]
+fn effort_arrivals_pool_and_probe_settlement_clears_loading() {
+    let (mut model, _) = Model::new();
+    update(&mut model, Msg::ConfigLoaded(LegitConfig::default()));
+    update(&mut model, Msg::RepoDetected(None));
+    assert!(model.tickets.is_loading());
+
+    let effort = Effort::new(
+        EffortKey::Local {
+            dir: CanonicalPathBuf::assume_canonical("/w/alpha"),
+        },
+        "Alpha".to_owned(),
+        None,
+        vec![Ticket {
+            key: local_ticket_key("01-a"),
+            title: "A".to_owned(),
+            state: TicketState::Open,
+            claim: None,
+            ty: TicketType("task".to_owned()),
+            dependencies: Vec::new(),
+        }],
+    )
+    .unwrap();
+    let cmds = update(
+        &mut model,
+        Msg::EffortArrived {
+            repo: RepoIdentity::Path(CanonicalPathBuf::assume_canonical("/w")),
+            read: EffortRead::Ready(effort),
+        },
+    );
+    assert!(cmds.is_empty());
+    assert_eq!(model.tickets.efforts().len(), 1);
+    assert_eq!(selected_ref(&model), Some("01-a".to_owned()));
+
+    update(
+        &mut model,
+        Msg::LocalProbeFinished {
+            unit: LocalProbe::Cwd,
+        },
+    );
+    assert!(!model.tickets.is_loading());
+}
+
+#[test]
+fn a_failed_probe_is_recorded_on_the_queue_not_as_a_status_error() {
+    let (mut model, _) = Model::new();
+    update(&mut model, Msg::ConfigLoaded(discovery_config()));
+    update(&mut model, Msg::RepoDetected(None));
+    let unit = LocalProbe::Repo {
+        name: "local-only".to_owned(),
+    };
+
+    let cmds = update(
+        &mut model,
+        Msg::LocalProbeFailed {
+            unit,
+            error: "main worktree /src/local-only does not exist".to_owned(),
+        },
+    );
+
+    assert!(cmds.is_empty(), "{cmds:?}");
+    assert_eq!(
+        model.tickets.probe_failures().collect::<Vec<_>>(),
+        [("local-only", "main worktree /src/local-only does not exist")]
+    );
+    assert_eq!(
+        model.status, None,
+        "the rail card carries the error; the status bar is for transient failures"
+    );
+}

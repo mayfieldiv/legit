@@ -48,6 +48,14 @@ pub fn discover_repo_efforts(repo: &RepoConfig) -> anyhow::Result<Vec<EffortRead
     read_efforts_under(&bases, repo.wayfinder_roots.as_deref())
 }
 
+/// What the cwd walk found, plus the repo boundary it walked to — the
+/// identity the Efforts are attributed to when no GitHub repo was detected.
+pub struct CwdEfforts {
+    /// The canonical git toplevel, or the canonical cwd outside any repo.
+    pub toplevel: CanonicalPathBuf,
+    pub reads: Vec<EffortRead>,
+}
+
 /// Discover and parse every local Effort visible from the working directory:
 /// walk cwd → its git toplevel, probing each level (which finds nested
 /// monorepo roots like `apps/mac-agent/docs/wayfinder/`); a cwd outside any
@@ -58,11 +66,17 @@ pub fn discover_repo_efforts(repo: &RepoConfig) -> anyhow::Result<Vec<EffortRead
 pub fn discover_cwd_efforts(
     cwd: &Path,
     config: &crate::config::LegitConfig,
-) -> anyhow::Result<Vec<EffortRead>> {
+) -> anyhow::Result<CwdEfforts> {
     let levels = cwd_walk_levels(cwd)?;
     let toplevel = levels.last().expect("the walk holds at least the cwd");
     let roots = configured_roots_for_cwd(config, cwd, toplevel);
-    read_efforts_under(&levels, roots)
+    Ok(CwdEfforts {
+        // `cwd_walk_levels` canonicalized every level; re-canonicalizing an
+        // existing canonical path is the cheap way to type it as one.
+        toplevel: CanonicalPathBuf::canonicalize(toplevel)
+            .with_context(|| format!("canonicalizing toplevel {}", toplevel.display()))?,
+        reads: read_efforts_under(&levels, roots)?,
+    })
 }
 
 /// The directories the cwd walk probes: the canonical cwd up to and
