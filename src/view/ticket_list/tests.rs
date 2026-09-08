@@ -214,7 +214,7 @@ fn the_selected_ticket_row_is_filled_and_its_title_brightened() {
 }
 
 #[test]
-fn a_degraded_effort_and_a_failed_probe_each_get_a_card_with_the_error() {
+fn a_failed_probe_leads_the_rail_and_a_degraded_effort_keeps_its_card_with_the_error() {
     let (mut model, _) = Model::new();
     model.tickets.merge_effort(
         web(),
@@ -244,12 +244,12 @@ fn a_degraded_effort_and_a_failed_probe_each_get_a_card_with_the_error() {
             "legit — Tickets — 1 effort · 0 frontier                                                             ",
             "All efforts                           │  Ticket Repo Type Title                      Block   Age    ",
             "                                      │                       No open tickets                       ",
+            "immybot · couldn't probe              │                                                             ",
+            "main worktree /src/immybot does not e…│                                                             ",
+            "                                      │                                                             ",
             "web · Map: broken                     │                                                             ",
             "local · couldn't read                 │                                                             ",
             "tickets/01-a.md: missing status       │                                                             ",
-            "                                      │                                                             ",
-            "immybot · couldn't probe              │                                                             ",
-            "main worktree /src/immybot does not e…│                                                             ",
             "                                      │                                                             ",
             "                                      │                                                             ",
             "j/k nav  t PRs  q quit                                                       0 in-flight · 0 waiting",

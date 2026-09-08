@@ -97,8 +97,12 @@ fn render_divider(frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
 // ── effort rail ──────────────────────────────────────────────────────────────
 
 /// The rail: the `All efforts` entry (the only filter this slice has, so it
-/// is always the active one), then one three-line card per Effort and one
-/// two-line card per failed discovery unit, each followed by a blank row.
+/// is always the active one), then one two-line card per failed discovery
+/// unit and one three-line card per Effort, each followed by a blank row.
+/// Failures lead because the rail doesn't scroll yet: below the Efforts, a
+/// full rail would push them offscreen with no way to reach them (§5.5,
+/// never silently missing).
+// TODO(#133): rail scrolling with the effort filter.
 fn render_rail(tickets: &TicketList, frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
     let width = usize::from(area.width);
     let mut lines = vec![
@@ -110,12 +114,12 @@ fn render_rail(tickets: &TicketList, frame: &mut Frame<'_>, area: Rect, palette:
         )),
         Line::default(),
     ];
-    for entry in tickets.efforts() {
-        lines.extend(effort_card(entry, width, palette));
-        lines.push(Line::default());
-    }
     for (name, error) in tickets.discovery_failures() {
         lines.extend(discovery_failure_card(name, error, width, palette));
+        lines.push(Line::default());
+    }
+    for entry in tickets.efforts() {
+        lines.extend(effort_card(entry, width, palette));
         lines.push(Line::default());
     }
     frame.render_widget(Paragraph::new(lines), area);
