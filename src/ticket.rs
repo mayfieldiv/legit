@@ -218,11 +218,15 @@ impl Effort {
     /// winner. Neither real source can produce one (GitHub sub-issue
     /// numbers and canonical paths are unique), so a duplicate is malformed
     /// input, surfaced per-Effort like any other parse failure.
+    ///
+    /// A Ticket's repeated Dependency edges collapse to one: Dependency is a
+    /// relation, so `blocked-by: [1, 1]` names one target, and every count
+    /// over the edges (open upstream, Blocks) reads distinct targets.
     pub fn new(
         key: EffortKey,
         title: String,
         destination: Option<String>,
-        tickets: Vec<Ticket>,
+        mut tickets: Vec<Ticket>,
     ) -> anyhow::Result<Self> {
         for (i, ticket) in tickets.iter().enumerate() {
             anyhow::ensure!(
@@ -230,6 +234,15 @@ impl Effort {
                 "duplicate ticket key {:?}",
                 ticket.key
             );
+        }
+        for ticket in &mut tickets {
+            let mut distinct = Vec::with_capacity(ticket.dependencies.len());
+            for dependency in ticket.dependencies.drain(..) {
+                if !distinct.contains(&dependency) {
+                    distinct.push(dependency);
+                }
+            }
+            ticket.dependencies = distinct;
         }
         Ok(Self {
             key,

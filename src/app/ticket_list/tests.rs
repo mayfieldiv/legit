@@ -341,6 +341,27 @@ fn rows_carry_their_marker_and_pool_wide_block_counts() {
 }
 
 #[test]
+fn block_counts_read_distinct_targets_not_declared_edges() {
+    let mut list = TicketList::new();
+    let mut twice = open("02-b");
+    twice.deps = vec![
+        Dependency::SameEffort(local_key("alpha", "01-a")),
+        Dependency::SameEffort(local_key("alpha", "01-a")),
+    ];
+    list.merge_effort(
+        repo("web"),
+        ready("alpha", "Alpha", vec![open("01-a"), twice]),
+    );
+
+    assert_eq!(
+        ticket_row(&list, "01-a").downstream,
+        1,
+        "`blocked-by: [1, 1]` is one dependent ticket"
+    );
+    assert_eq!(ticket_row(&list, "02-b").upstream, 1);
+}
+
+#[test]
 fn empty_tiers_emit_no_header() {
     let mut list = TicketList::new();
     list.merge_effort(repo("web"), ready("alpha", "Alpha", vec![open("01-a")]));

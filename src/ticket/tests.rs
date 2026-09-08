@@ -141,6 +141,34 @@ fn duplicate_ticket_keys_are_rejected_at_construction() {
     assert!(err.to_string().contains("duplicate ticket key"));
 }
 
+#[test]
+fn repeated_dependency_edges_collapse_to_one_at_construction() {
+    let mut waiting = open_ticket(2);
+    waiting.dependencies = vec![
+        dep_on(1),
+        dep_on(1),
+        Dependency::Unknown {
+            raw: "gone.md".to_owned(),
+        },
+        Dependency::Unknown {
+            raw: "gone.md".to_owned(),
+        },
+    ];
+    let e = effort(vec![open_ticket(1), waiting]);
+
+    assert_eq!(
+        member(&e, 2).dependencies,
+        vec![
+            dep_on(1),
+            Dependency::Unknown {
+                raw: "gone.md".to_owned(),
+            },
+        ],
+        "one edge per target, declaration order kept"
+    );
+    assert_eq!(member(&e, 2).open_dependencies().count(), 1);
+}
+
 // ── blocked-ness ─────────────────────────────────────────────────────────────
 
 #[test]
