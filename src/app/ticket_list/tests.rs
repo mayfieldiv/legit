@@ -2,7 +2,9 @@
 //! cursor, and the probe phases. Expected values come from spec §6.1–§6.3
 //! (issue #112's resolution comment). Pure — Efforts are built in memory.
 
-use super::{DiscoveryUnit, EffortEntry, QueueRow, QueueTier, RowMarker, TicketList, TicketRow};
+use super::{
+    DiscoveryUnit, EffortEntry, QueueRow, QueueTier, RowMarker, TicketList, TicketRow, VisibleRow,
+};
 use crate::{
     canonical_path::CanonicalPathBuf,
     config::RepoIdentity,
@@ -521,15 +523,62 @@ fn the_viewport_follows_the_cursor() {
     for _ in 0..3 {
         list.move_down();
     }
-    let visible: Vec<&QueueRow> = list.visible_rows().map(|(row, _)| row).collect();
-    assert_eq!(visible.len(), 3);
+    assert_eq!(list.visible_rows().count(), 3);
     assert!(
-        list.visible_rows().any(|(row, selected)| {
-            selected
-                && matches!(row, QueueRow::Ticket(row) if row.key == local_key("alpha", "03-c"))
+        list.visible_rows().any(|row| {
+            matches!(
+                row,
+                VisibleRow::Ticket { row, selected: true, .. } if row.key == local_key("alpha", "03-c")
+            )
         }),
         "the selected ticket's row is inside the window"
     );
+}
+
+#[test]
+fn visible_rows_resolve_each_ticket_to_its_effort_entry() {
+    let list = two_efforts();
+
+    let resolved: Vec<(String, String)> = list
+        .visible_rows()
+        .filter_map(|row| match row {
+            VisibleRow::Ticket { entry, ticket, .. } => {
+                Some((entry.title(), ticket.key.display_ref()))
+            }
+            VisibleRow::Header(_) => None,
+        })
+        .collect();
+    assert_eq!(
+        resolved,
+        [
+            ("Alpha".to_owned(), "01-a".to_owned()),
+            ("Beta".to_owned(), "01-d".to_owned()),
+            ("Alpha".to_owned(), "02-b".to_owned()),
+            ("Alpha".to_owned(), "03-c".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn content_widths_measure_the_queued_tickets() {
+    let mut list = TicketList::new();
+    list.merge_effort(
+        repo("web"),
+        ready(
+            "alpha",
+            "Alpha",
+            vec![open("01-a"), closed("02-a-long-decided-slug")],
+        ),
+    );
+
+    let widths = list.content_widths();
+    assert_eq!(
+        widths.display_ref,
+        "01-a".len(),
+        "closed tickets aren't queued, so they don't size the column"
+    );
+    assert_eq!(widths.repo, "web".len(), "the repo's short name");
+    assert_eq!(widths.ty, "task".len());
 }
 
 // ── probe phases ─────────────────────────────────────────────────────────────

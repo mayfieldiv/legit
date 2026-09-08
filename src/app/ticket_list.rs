@@ -14,9 +14,12 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
+use unicode_width::UnicodeWidthStr;
+
 use crate::{
     app::list_scroll,
     config::RepoIdentity,
+    format::format_repo_short,
     ticket::{
         Claim, Effort, EffortKey, EffortRead, EffortSource, EffortTicket, TicketKey, TicketState,
     },
@@ -186,10 +189,26 @@ pub struct TicketRow {
     /// cell. Pool-wide because Blocks (CONTEXT.md) is the reverse read of
     /// Dependency, and a Dependency can cross Efforts.
     pub downstream: usize,
+    /// Where the Ticket sits in the pool — `efforts[effort_index]`'s member
+    /// `member_index` — so a redraw indexes instead of searching. Holds until
+    /// the next `relayout`, which rebuilds every row; the pool changes only
+    /// through `merge_effort`, which relayouts.
+    effort_index: usize,
+    member_index: usize,
+}
+
+/// One queued (open) Ticket with its place in the pool — what `relayout`
+/// derives rows and column widths from.
+struct QueuedTicket<'a> {
+    effort_index: usize,
+    member_index: usize,
+    entry: &'a EffortEntry,
+    ticket: EffortTicket<'a>,
 }
 
 impl TicketRow {
-    fn derive(ticket: &EffortTicket<'_>, downstream: usize) -> Self {
+    fn derive(queued: &QueuedTicket<'_>, downstream: usize) -> Self {
+        let ticket = &queued.ticket;
         let tier = QueueTier::of(ticket);
         let marker = match tier {
             QueueTier::Frontier => None,
@@ -213,6 +232,8 @@ impl TicketRow {
             marker,
             upstream: ticket.open_dependencies().count(),
             downstream,
+            effort_index: queued.effort_index,
+            member_index: queued.member_index,
         }
     }
 }
@@ -222,6 +243,28 @@ impl TicketRow {
 pub enum QueueRow {
     Header(QueueTier),
     Ticket(TicketRow),
+}
+
+/// One display row inside the scroll viewport, resolved for rendering.
+pub enum VisibleRow<'a> {
+    Header(QueueTier),
+    Ticket {
+        row: &'a TicketRow,
+        entry: &'a EffortEntry,
+        ticket: EffortTicket<'a>,
+        selected: bool,
+    },
+}
+
+/// The widest content each fixed queue column has to fit, over the queued
+/// Tickets — measured once per relayout so a redraw only sizes columns
+/// (ADR 0002: derivations live in `update`, never in the render path).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct QueueContentWidths {
+    pub display_ref: usize,
+    /// Of the repo's short name, as the cell shows it.
+    pub repo: usize,
+    pub ty: usize,
 }
 
 /// One unit of Effort discovery — a Tracked Repo's local worktree fan-out, or
@@ -267,6 +310,7 @@ pub struct TicketList {
     /// Flattened display layout (tier headers + Ticket rows), rebuilt by
     /// `relayout` whenever the pool changes.
     rows: Vec<QueueRow>,
+    content_widths: QueueContentWidths,
     /// The selected Ticket's identity; `None` only while the queue is empty.
     selected: Option<TicketKey>,
     /// Whether the user has moved the cursor. Until then the selection follows
@@ -360,12 +404,8 @@ impl TicketList {
         &self.efforts
     }
 
-    /// Resolve a queue row's Ticket to its Effort entry and member handle.
-    pub fn ticket(&self, key: &TicketKey) -> Option<(&EffortEntry, EffortTicket<'_>)> {
-        self.efforts.iter().find_map(|entry| {
-            let ticket = entry.effort()?.ticket(key)?;
-            Some((entry, ticket))
-        })
+    pub fn content_widths(&self) -> QueueContentWidths {
+        self.content_widths
     }
 
     #[cfg(test)]
@@ -395,9 +435,10 @@ impl TicketList {
         self.viewport_height
     }
 
-    /// Iterate the display rows inside the scroll viewport, each with whether
-    /// it is the selected Ticket. Headers are never selected.
-    pub fn visible_rows(&self) -> impl Iterator<Item = (&QueueRow, bool)> {
+    /// Iterate the display rows inside the scroll viewport, each Ticket row
+    /// resolved to its Effort entry and member handle and flagged when it is
+    /// the selected Ticket. Headers are never selected.
+    pub fn visible_rows(&self) -> impl Iterator<Item = VisibleRow<'_>> {
         let start = self.scroll_offset.min(self.rows.len());
         let end = if self.viewport_height == 0 {
             self.rows.len()
@@ -405,9 +446,21 @@ impl TicketList {
             (start + self.viewport_height).min(self.rows.len())
         };
         let selected = self.selected.as_ref();
-        self.rows[start..end].iter().map(move |row| {
-            let is_selected = matches!(row, QueueRow::Ticket(row) if Some(&row.key) == selected);
-            (row, is_selected)
+        self.rows[start..end].iter().map(move |row| match row {
+            QueueRow::Header(tier) => VisibleRow::Header(*tier),
+            QueueRow::Ticket(row) => {
+                let entry = &self.efforts[row.effort_index];
+                let ticket = entry
+                    .effort()
+                    .and_then(|effort| effort.ticket_at(row.member_index))
+                    .expect("queue rows are rebuilt with the pool they index");
+                VisibleRow::Ticket {
+                    row,
+                    entry,
+                    ticket,
+                    selected: Some(&row.key) == selected,
+                }
+            }
         })
     }
 
@@ -465,17 +518,11 @@ impl TicketList {
     fn relayout(&mut self) {
         self.efforts.sort_by_cached_key(EffortEntry::order_key);
 
-        let open_tickets = || {
-            self.efforts
-                .iter()
-                .filter_map(EffortEntry::effort)
-                .flat_map(Effort::tickets)
-                .filter(|t| t.state == TicketState::Open)
-        };
         // Blocks, pool-wide: how many open Tickets wait on each target.
         let mut dependents: HashMap<TicketKey, usize> = HashMap::new();
-        for ticket in open_tickets() {
-            for target in ticket
+        for queued in self.queued_tickets() {
+            for target in queued
+                .ticket
                 .dependencies
                 .iter()
                 .filter_map(|dep| dep.target_key())
@@ -488,9 +535,16 @@ impl TicketList {
         let mut claimed = Vec::new();
         let mut blocked = Vec::new();
         let mut unknown = Vec::new();
-        for ticket in open_tickets() {
+        let mut widths = QueueContentWidths::default();
+        for queued in self.queued_tickets() {
+            let ticket = &queued.ticket;
+            widths.display_ref = widths.display_ref.max(ticket.key.display_ref().width());
+            widths.repo = widths
+                .repo
+                .max(format_repo_short(&queued.entry.repo.display_name()).width());
+            widths.ty = widths.ty.max(ticket.ty.0.width());
             let downstream = dependents.get(&ticket.key).copied().unwrap_or(0);
-            let row = TicketRow::derive(&ticket, downstream);
+            let row = TicketRow::derive(&queued, downstream);
             match (row.tier, &row.marker) {
                 (QueueTier::Frontier, _) => frontier.push(row),
                 (QueueTier::Claimed, _) => claimed.push(row),
@@ -499,6 +553,7 @@ impl TicketList {
             }
         }
         blocked.append(&mut unknown);
+        self.content_widths = widths;
 
         self.rows.clear();
         for (tier, members) in [
@@ -518,6 +573,27 @@ impl TicketList {
             self.selected = self.first_ticket();
         }
         self.normalize_scroll();
+    }
+
+    /// Every open Ticket of every pooled Effort, in rail then effort order,
+    /// with its place in the pool.
+    fn queued_tickets(&self) -> impl Iterator<Item = QueuedTicket<'_>> {
+        self.efforts
+            .iter()
+            .enumerate()
+            .filter_map(|(effort_index, entry)| Some((effort_index, entry, entry.effort()?)))
+            .flat_map(|(effort_index, entry, effort)| {
+                effort
+                    .tickets()
+                    .enumerate()
+                    .filter(|(_, ticket)| ticket.state == TicketState::Open)
+                    .map(move |(member_index, ticket)| QueuedTicket {
+                        effort_index,
+                        member_index,
+                        entry,
+                        ticket,
+                    })
+            })
     }
 
     fn normalize_scroll(&mut self) {

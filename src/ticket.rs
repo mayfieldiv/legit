@@ -252,9 +252,19 @@ impl Effort {
         })
     }
 
-    /// This Effort's Tickets as member handles, in effort order.
+    /// This Effort's Tickets as member handles, in effort order — the
+    /// position each holds is what [`Effort::ticket_at`] takes.
     pub fn tickets(&self) -> impl Iterator<Item = EffortTicket<'_>> {
         self.tickets.iter().map(|ticket| EffortTicket {
+            effort: self,
+            ticket,
+        })
+    }
+
+    /// The member at `index` in effort order, as [`Effort::tickets`]
+    /// enumerates them.
+    pub fn ticket_at(&self, index: usize) -> Option<EffortTicket<'_>> {
+        self.tickets.get(index).map(|ticket| EffortTicket {
             effort: self,
             ticket,
         })

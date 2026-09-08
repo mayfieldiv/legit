@@ -15,13 +15,16 @@ use super::row::{Cell, GAP, render_cells};
 use crate::{
     app::{
         model::Model,
-        ticket_list::{EffortEntry, QueueRow, QueueTier, RowMarker, TicketList, TicketRow},
+        ticket_list::{
+            EffortEntry, QueueContentWidths, QueueTier, RowMarker, TicketList, TicketRow,
+            VisibleRow,
+        },
         ticket_list_layout::{DIVIDER_WIDTH, rail_width},
     },
     color::repo_color,
     format::{format_repo_short, pad_to_width, truncate, truncate_middle},
     palette::Palette,
-    ticket::{EffortSource, EffortTicket, TicketState},
+    ticket::{EffortSource, EffortTicket},
 };
 
 #[cfg(test)]
@@ -239,23 +242,10 @@ struct QueueLayout {
 }
 
 impl QueueLayout {
-    fn new(width: usize, tickets: &TicketList) -> Self {
-        let mut ref_width = REF_COL_MIN;
-        let mut repo_width = REPO_COL_MIN;
-        let mut type_width = TYPE_COL_MIN;
-        for entry in tickets.efforts() {
-            let Some(effort) = entry.effort() else {
-                continue;
-            };
-            for ticket in effort
-                .tickets()
-                .filter(|ticket| ticket.state == TicketState::Open)
-            {
-                ref_width = ref_width.max(ticket.key.display_ref().width());
-                repo_width = repo_width.max(format_repo_short(&entry.repo.display_name()).width());
-                type_width = type_width.max(ticket.ty.0.width());
-            }
-        }
+    fn new(width: usize, content: QueueContentWidths) -> Self {
+        let ref_width = REF_COL_MIN.max(content.display_ref);
+        let repo_width = REPO_COL_MIN.max(content.repo);
+        let type_width = TYPE_COL_MIN.max(content.ty);
         let mut layout = Self {
             width,
             ref_col: ref_width.min(14),
@@ -294,7 +284,7 @@ fn render_queue(tickets: &TicketList, frame: &mut Frame<'_>, area: Rect, palette
     let [header_area, rows_area] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
     let width = usize::from(area.width);
-    let layout = QueueLayout::new(width, tickets);
+    let layout = QueueLayout::new(width, tickets.content_widths());
     frame.render_widget(Paragraph::new(header_row(&layout)), header_area);
 
     if tickets.visible_is_empty() {
@@ -306,11 +296,14 @@ fn render_queue(tickets: &TicketList, frame: &mut Frame<'_>, area: Rect, palette
     }
     let lines: Vec<Line<'static>> = tickets
         .visible_rows()
-        .filter_map(|(row, selected)| match row {
-            QueueRow::Header(tier) => Some(tier_header_line(*tier, width, palette)),
-            QueueRow::Ticket(row) => tickets.ticket(&row.key).map(|(entry, ticket)| {
-                ticket_line(entry, &ticket, row, &layout, selected, palette)
-            }),
+        .map(|row| match row {
+            VisibleRow::Header(tier) => tier_header_line(tier, width, palette),
+            VisibleRow::Ticket {
+                row,
+                entry,
+                ticket,
+                selected,
+            } => ticket_line(entry, &ticket, row, &layout, selected, palette),
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), rows_area);
