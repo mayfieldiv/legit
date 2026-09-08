@@ -22,14 +22,15 @@ impl CanonicalPathBuf {
         fs::canonicalize(path).map(Self)
     }
 
-    /// Adopt an ancestor of a canonical path without re-canonicalizing:
-    /// canonicalization resolves each component in turn, so every prefix of a
-    /// canonical path is itself canonical and `Path::ancestors` over one
-    /// yields only canonical paths. The caller vouches that `ancestor` came
-    /// from one — the one non-I/O production constructor, kept this narrow so
-    /// the type's proof stays honest.
-    pub fn ancestor_of_canonical(ancestor: &Path) -> Self {
-        Self(ancestor.to_path_buf())
+    /// This path and each of its ancestors, nearest first, as canonical
+    /// paths without re-canonicalizing: canonicalization resolves each
+    /// component in turn, so every prefix of a canonical path is itself
+    /// canonical. Shadows `Path::ancestors` (reachable via `Deref`) so the
+    /// proof survives the walk.
+    pub fn ancestors(&self) -> impl Iterator<Item = Self> + '_ {
+        self.0
+            .ancestors()
+            .map(|ancestor| Self(ancestor.to_path_buf()))
     }
 
     /// Test-only: adopt a path verbatim, so pure model tests can build keys

@@ -91,7 +91,6 @@ fn cwd_walk_levels(cwd: &Path) -> anyhow::Result<Vec<CanonicalPathBuf>> {
     Ok(cwd
         .ancestors()
         .take_while(|level| level.starts_with(&toplevel))
-        .map(CanonicalPathBuf::ancestor_of_canonical)
         .collect())
 }
 
