@@ -77,14 +77,18 @@ impl RepoConfig {
     }
 
     /// The name this repo is shown under: its slug, or for a slug-less repo
-    /// the basename of its expanded Main Worktree path. Pure — usable before
-    /// the directory exists, which is what names a repo whose probe fails.
+    /// the basename of its Main Worktree path as configured. Pure — no cwd or
+    /// `HOME` lookup, so the reducer can call it — and usable before the
+    /// directory exists, which is what names a repo whose probe fails. Agrees
+    /// with [`RepoIdentity::display_name`] except for a path with no final
+    /// component (`~`, `.`, `..`), which shows verbatim here.
     pub fn display_name(&self) -> anyhow::Result<String> {
         if let Some(slug) = &self.slug {
             return Ok(slug.as_str().to_owned());
         }
-        let resolved = resolve_config_path(self.main_worktree_path()?)?;
-        Ok(path_display_name(&resolved))
+        Ok(path_display_name(std::path::Path::new(
+            self.main_worktree_path()?,
+        )))
     }
 
     /// See [`RepoIdentity`]. A slug-less entry's identity requires its Main
