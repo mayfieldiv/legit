@@ -15,13 +15,13 @@ use super::row::{Cell, GAP, render_cells};
 use crate::{
     app::{
         model::Model,
-        ticket_list::{EffortEntry, QueueRow, QueueTier, TicketList},
+        ticket_list::{EffortEntry, QueueRow, QueueTier, RowMarker, TicketList, TicketRow},
         ticket_list_layout::{DIVIDER_WIDTH, rail_width},
     },
     color::repo_color,
     format::{format_repo_short, pad_to_width, truncate, truncate_middle},
     palette::Palette,
-    ticket::{Claim, EffortSource, EffortTicket, TicketState},
+    ticket::{EffortSource, EffortTicket, TicketState},
 };
 
 #[cfg(test)]
@@ -308,9 +308,9 @@ fn render_queue(tickets: &TicketList, frame: &mut Frame<'_>, area: Rect, palette
         .visible_rows()
         .filter_map(|(row, selected)| match row {
             QueueRow::Header(tier) => Some(tier_header_line(*tier, width, palette)),
-            QueueRow::Ticket(key) => tickets
-                .ticket(key)
-                .map(|(entry, ticket)| ticket_line(entry, &ticket, &layout, selected, palette)),
+            QueueRow::Ticket(row) => tickets.ticket(&row.key).map(|(entry, ticket)| {
+                ticket_line(entry, &ticket, row, &layout, selected, palette)
+            }),
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), rows_area);
@@ -348,6 +348,7 @@ fn header_row(layout: &QueueLayout) -> Line<'static> {
 fn ticket_line(
     entry: &EffortEntry,
     ticket: &EffortTicket<'_>,
+    row: &TicketRow,
     layout: &QueueLayout,
     selected: bool,
     palette: &Palette,
@@ -379,8 +380,14 @@ fn ticket_line(
             layout.type_col,
             Style::default().fg(palette.mode(ticket.ty.mode())),
         ),
-        title_cell(ticket, layout.title_col(), title_style, palette),
-        block_cell(ticket, palette),
+        title_cell(
+            &ticket.title,
+            row.marker.as_ref(),
+            layout.title_col(),
+            title_style,
+            palette,
+        ),
+        block_cell(row.upstream, row.downstream, palette),
         Cell::text("", AGE_COL, Style::default()),
     ];
     render_cells(cells, selected.then_some(palette.selected_bg))
@@ -389,33 +396,20 @@ fn ticket_line(
 /// The title plus its state marker — `⟨claimed X⟩`, `⟨after Y⟩`, or
 /// `⟨dep? Z⟩` — with the title truncated first so the marker survives.
 fn title_cell(
-    ticket: &EffortTicket<'_>,
+    title: &str,
+    marker: Option<&RowMarker>,
     width: usize,
     title_style: Style,
     palette: &Palette,
 ) -> Cell {
-    let marker = match QueueTier::of(ticket) {
-        QueueTier::Frontier => None,
-        QueueTier::Claimed => Some((
-            match &ticket.claim {
-                Some(Claim::By(who)) => format!("⟨claimed {who}⟩"),
-                Some(Claim::Anonymous) | None => "⟨claimed⟩".to_owned(),
-            },
-            palette.claimed,
-        )),
-        QueueTier::Blocked => ticket
-            .unknown_dependency_ref()
-            .map(|raw| format!("⟨dep? {raw}⟩"))
-            .or_else(|| {
-                ticket
-                    .open_dependencies()
-                    .first()
-                    .map(|key| format!("⟨after {}⟩", key.display_ref()))
-            })
-            .map(|text| (text, palette.blocked)),
+    let Some(marker) = marker else {
+        return Cell::text(title.to_owned(), width, title_style);
     };
-    let Some((marker, color)) = marker else {
-        return Cell::text(ticket.title.clone(), width, title_style);
+    let (marker, color) = match marker {
+        RowMarker::Claimed(Some(who)) => (format!("⟨claimed {who}⟩"), palette.claimed),
+        RowMarker::Claimed(None) => ("⟨claimed⟩".to_owned(), palette.claimed),
+        RowMarker::After(target) => (format!("⟨after {target}⟩"), palette.blocked),
+        RowMarker::UnknownDependency(raw) => (format!("⟨dep? {raw}⟩"), palette.blocked),
     };
     // The marker is the row's state signal, so it takes the width first and
     // the title gets the rest — none at all when the marker alone fills the
@@ -426,7 +420,7 @@ fn title_cell(
         vec![marker]
     } else {
         vec![
-            Span::styled(truncate(&ticket.title, title_budget), title_style),
+            Span::styled(truncate(title, title_budget), title_style),
             Span::raw(" "),
             marker,
         ]
@@ -436,9 +430,7 @@ fn title_cell(
 
 /// `↑N` open upstream Dependencies (red) and `↓N` open downstream dependents
 /// (blue), either omitted when zero.
-fn block_cell(ticket: &EffortTicket<'_>, palette: &Palette) -> Cell {
-    let upstream = ticket.open_dependencies().len();
-    let downstream = ticket.blocks().len();
+fn block_cell(upstream: usize, downstream: usize, palette: &Palette) -> Cell {
     let mut spans = Vec::new();
     if upstream > 0 {
         spans.push(Span::styled(

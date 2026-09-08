@@ -9,7 +9,7 @@ use super::super::row::render_cells;
 use crate::{
     app::{
         model::{Model, ViewMode},
-        ticket_list::DiscoveryUnit,
+        ticket_list::{DiscoveryUnit, RowMarker},
     },
     canonical_path::CanonicalPathBuf,
     config::RepoIdentity,
@@ -317,15 +317,14 @@ fn long_refs_still_truncate_when_the_terminal_is_narrow() {
 /// `title_cell` for a Blocked ticket whose marker is `⟨dep? gone.md⟩` (14
 /// columns), rendered alone at `width` — the joined cell text.
 fn dep_marker_cell(width: usize) -> String {
-    let mut mystery = ticket("alpha", "01-mystery", "Ship it", "task");
-    mystery.dependencies = vec![Dependency::Unknown {
-        raw: "gone.md".to_owned(),
-    }];
-    let EffortRead::Ready(effort) = effort("alpha", "Map", "D", vec![mystery]) else {
-        unreachable!()
-    };
-    let handle = effort.ticket(&local_key("alpha", "01-mystery")).unwrap();
-    let cell = super::title_cell(&handle, width, ratatui::style::Style::default(), &DARK);
+    let marker = RowMarker::UnknownDependency("gone.md".to_owned());
+    let cell = super::title_cell(
+        "Ship it",
+        Some(&marker),
+        width,
+        ratatui::style::Style::default(),
+        &DARK,
+    );
     render_cells(vec![cell], None)
         .spans
         .iter()

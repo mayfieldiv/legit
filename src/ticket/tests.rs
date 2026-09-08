@@ -262,38 +262,6 @@ fn frontier_lists_only_frontier_tickets_in_effort_order() {
     assert_eq!(frontier, vec![key(1), key(5)]);
 }
 
-// ── Blocks (reverse read) ────────────────────────────────────────────────────
-
-#[test]
-fn blocks_lists_open_tickets_that_depend_on_the_given_one() {
-    let mut dependent_a = open_ticket(2);
-    dependent_a.dependencies.push(dep_on(1));
-    let mut dependent_b = open_ticket(3);
-    dependent_b.dependencies.push(dep_on(1));
-    dependent_b.dependencies.push(dep_on(2));
-    let e = effort(vec![open_ticket(1), dependent_a, dependent_b]);
-    let blocks: Vec<TicketKey> = member(&e, 1)
-        .blocks()
-        .iter()
-        .map(|t| t.key.clone())
-        .collect();
-    assert_eq!(blocks, vec![key(2), key(3)]);
-}
-
-#[test]
-fn blocks_excludes_closed_dependents() {
-    let mut resolved = closed_ticket(2);
-    resolved.dependencies.push(dep_on(1));
-    let e = effort(vec![open_ticket(1), resolved]);
-    assert!(member(&e, 1).blocks().is_empty());
-}
-
-#[test]
-fn blocks_is_empty_without_dependents() {
-    let e = effort(vec![open_ticket(1), open_ticket(2)]);
-    assert!(member(&e, 1).blocks().is_empty());
-}
-
 #[test]
 fn unknown_dependency_always_blocks() {
     let mut t = open_ticket(1);

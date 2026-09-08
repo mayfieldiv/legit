@@ -2,14 +2,14 @@
 //! cursor, and the probe phases. Expected values come from spec §6.1–§6.3
 //! (issue #112's resolution comment). Pure — Efforts are built in memory.
 
-use super::{DiscoveryUnit, EffortEntry, QueueRow, QueueTier, TicketList};
+use super::{DiscoveryUnit, EffortEntry, QueueRow, QueueTier, RowMarker, TicketList, TicketRow};
 use crate::{
     canonical_path::CanonicalPathBuf,
     config::RepoIdentity,
     repo_slug::RepoSlug,
     ticket::{
-        Claim, Dependency, Effort, EffortKey, EffortRead, Ticket, TicketKey, TicketState,
-        TicketType,
+        Claim, Dependency, Effort, EffortKey, EffortRead, ExternalDependency, Ticket, TicketKey,
+        TicketState, TicketType,
     },
 };
 
@@ -107,9 +107,20 @@ fn rows(list: &TicketList) -> Vec<String> {
         .iter()
         .map(|row| match row {
             QueueRow::Header(tier) => format!("── {}", tier.label()),
-            QueueRow::Ticket(key) => key.display_ref(),
+            QueueRow::Ticket(row) => row.key.display_ref(),
         })
         .collect()
+}
+
+/// The queue row for the Ticket shown as `display_ref`, which must be queued.
+fn ticket_row<'a>(list: &'a TicketList, display_ref: &str) -> &'a TicketRow {
+    list.rows()
+        .iter()
+        .find_map(|row| match row {
+            QueueRow::Ticket(row) if row.key.display_ref() == display_ref => Some(row),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("{display_ref} is not queued: {:?}", rows(list)))
 }
 
 fn selected(list: &TicketList) -> Option<String> {
@@ -254,6 +265,78 @@ fn unknown_dependency_tickets_fold_into_blocked_and_sort_last() {
             "01-mystery",
         ],
         "unknown-dependency tickets have no tier of their own; they trail Blocked"
+    );
+}
+
+#[test]
+fn rows_carry_their_marker_and_pool_wide_block_counts() {
+    let mut list = TicketList::new();
+    list.merge_effort(
+        repo("web"),
+        ready(
+            "alpha",
+            "Alpha",
+            vec![
+                open("01-a"),
+                after("02-b", "alpha", "01-a"),
+                claimed("03-c", "mayfield"),
+                unknown_dep("04-d", "gone.md"),
+            ],
+        ),
+    );
+    let mut external = open("01-x");
+    external.deps = vec![Dependency::External(ExternalDependency {
+        key: local_key("alpha", "01-a"),
+        state: TicketState::Open,
+        title: None,
+    })];
+    list.merge_effort(repo("web"), ready("beta", "Beta", vec![external]));
+
+    let summary = |display_ref: &str| {
+        let row = ticket_row(&list, display_ref);
+        (row.tier, row.marker.clone(), row.upstream, row.downstream)
+    };
+    assert_eq!(
+        summary("01-a"),
+        (QueueTier::Frontier, None, 0, 2),
+        "02-b in its own Effort and 01-x in Beta both wait on it"
+    );
+    assert_eq!(
+        summary("02-b"),
+        (
+            QueueTier::Blocked,
+            Some(RowMarker::After("01-a".to_owned())),
+            1,
+            0
+        )
+    );
+    assert_eq!(
+        summary("03-c"),
+        (
+            QueueTier::Claimed,
+            Some(RowMarker::Claimed(Some("mayfield".to_owned()))),
+            0,
+            0
+        )
+    );
+    assert_eq!(
+        summary("04-d"),
+        (
+            QueueTier::Blocked,
+            Some(RowMarker::UnknownDependency("gone.md".to_owned())),
+            0,
+            0
+        )
+    );
+    assert_eq!(
+        summary("01-x"),
+        (
+            QueueTier::Blocked,
+            Some(RowMarker::After("01-a".to_owned())),
+            1,
+            0
+        ),
+        "an External Dependency counts upstream like a same-effort one"
     );
 }
 
@@ -421,7 +504,8 @@ fn the_viewport_follows_the_cursor() {
     assert_eq!(visible.len(), 3);
     assert!(
         list.visible_rows().any(|(row, selected)| {
-            selected && *row == QueueRow::Ticket(local_key("alpha", "03-c"))
+            selected
+                && matches!(row, QueueRow::Ticket(row) if row.key == local_key("alpha", "03-c"))
         }),
         "the selected ticket's row is inside the window"
     );

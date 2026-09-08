@@ -296,7 +296,7 @@ impl std::fmt::Debug for EffortTicket<'_> {
     }
 }
 
-impl<'a> EffortTicket<'a> {
+impl EffortTicket<'_> {
     /// Each Dependency resolved against what this Effort can see, in
     /// declaration order. A same-effort target the lookup can't find is an
     /// Unknown Dependency (its display ref stands in for the raw ref).
@@ -318,8 +318,8 @@ impl<'a> EffortTicket<'a> {
     }
 
     /// The targets this Ticket still waits on — every known Dependency whose
-    /// target is open.
-    pub fn open_dependencies(&self) -> Vec<&TicketKey> {
+    /// target is open, in declaration order.
+    pub fn open_dependencies(&self) -> impl Iterator<Item = &TicketKey> {
         self.dependency_statuses()
             .filter_map(|status| match status {
                 DependencyStatus::Known {
@@ -328,7 +328,6 @@ impl<'a> EffortTicket<'a> {
                 } => Some(key),
                 _ => None,
             })
-            .collect()
     }
 
     /// The first Unknown Dependency's ref, for the `⟨dep? <ref>⟩` marker.
@@ -352,20 +351,6 @@ impl<'a> EffortTicket<'a> {
     /// Dependency target closed, and no Unknown Dependency.
     pub fn is_on_frontier(&self) -> bool {
         self.ticket.state == TicketState::Open && self.ticket.claim.is_none() && !self.is_blocked()
-    }
-
-    /// Blocks — the reverse read of Dependency: the open Tickets of this
-    /// Effort whose Dependencies include this one, in effort order.
-    pub fn blocks(&self) -> Vec<EffortTicket<'a>> {
-        self.effort
-            .tickets()
-            .filter(|t| t.state == TicketState::Open)
-            .filter(|t| {
-                t.dependencies
-                    .iter()
-                    .any(|dep| dep.target_key() == Some(&self.ticket.key))
-            })
-            .collect()
     }
 }
 

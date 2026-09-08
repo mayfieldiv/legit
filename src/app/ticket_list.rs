@@ -11,13 +11,15 @@
 //! Ticket's identity, so arrivals that re-sort the queue move its row, never
 //! which Ticket is selected.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 use crate::{
     app::list_scroll,
     config::RepoIdentity,
-    ticket::{Effort, EffortKey, EffortRead, EffortSource, EffortTicket, TicketKey, TicketState},
+    ticket::{
+        Claim, Effort, EffortKey, EffortRead, EffortSource, EffortTicket, TicketKey, TicketState,
+    },
 };
 
 /// One pooled Effort and the Tracked Repo it belongs to. Attribution is
@@ -28,10 +30,11 @@ use crate::{
 pub struct EffortEntry {
     pub repo: RepoIdentity,
     pub read: EffortRead,
+    counts: TicketCounts,
 }
 
 /// The rail card's ticket tallies.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TicketCounts {
     /// Closed Tickets — resolved or ruled out of scope, indistinguishably.
     pub decided: usize,
@@ -40,7 +43,28 @@ pub struct TicketCounts {
     pub frontier: usize,
 }
 
+impl TicketCounts {
+    fn of(read: &EffortRead) -> Self {
+        let EffortRead::Ready(effort) = read else {
+            return Self::default();
+        };
+        Self {
+            decided: effort
+                .tickets()
+                .filter(|t| t.state == TicketState::Closed)
+                .count(),
+            total: effort.tickets().count(),
+            frontier: effort.frontier().count(),
+        }
+    }
+}
+
 impl EffortEntry {
+    fn new(repo: RepoIdentity, read: EffortRead) -> Self {
+        let counts = TicketCounts::of(&read);
+        Self { repo, read, counts }
+    }
+
     pub fn key(&self) -> &EffortKey {
         match &self.read {
             EffortRead::Ready(effort) => &effort.key,
@@ -83,22 +107,9 @@ impl EffortEntry {
         }
     }
 
+    /// Tallied once on arrival; the rail and header read them every frame.
     pub fn counts(&self) -> TicketCounts {
-        let Some(effort) = self.effort() else {
-            return TicketCounts {
-                decided: 0,
-                total: 0,
-                frontier: 0,
-            };
-        };
-        TicketCounts {
-            decided: effort
-                .tickets()
-                .filter(|t| t.state == TicketState::Closed)
-                .count(),
-            total: effort.tickets().count(),
-            frontier: effort.frontier().count(),
-        }
+        self.counts
     }
 
     /// Rail order: repo, then Map title, then identity so the order is total
@@ -149,11 +160,68 @@ impl QueueTier {
     }
 }
 
-/// One row in the rendered queue: a tier header or a Ticket, by identity.
+/// The title's state marker (spec §6.2), one per non-Frontier row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RowMarker {
+    /// `⟨claimed X⟩`, or `⟨claimed⟩` for an anonymous claim.
+    Claimed(Option<String>),
+    /// `⟨after Y⟩`: the first open Dependency's display ref.
+    After(String),
+    /// `⟨dep? Z⟩`: the first Unknown Dependency's ref.
+    UnknownDependency(String),
+}
+
+/// One Ticket's queue row: its identity plus everything the row shows that
+/// is derived rather than stored on the Ticket, computed once per relayout so
+/// a redraw only formats (ADR 0002: derivations live in `update`, never in
+/// the render path).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TicketRow {
+    pub key: TicketKey,
+    pub tier: QueueTier,
+    pub marker: Option<RowMarker>,
+    /// Open upstream Dependencies — the `↑N` cell.
+    pub upstream: usize,
+    /// Open downstream dependents across every pooled Effort — the `↓N`
+    /// cell. Pool-wide because Blocks (CONTEXT.md) is the reverse read of
+    /// Dependency, and a Dependency can cross Efforts.
+    pub downstream: usize,
+}
+
+impl TicketRow {
+    fn derive(ticket: &EffortTicket<'_>, downstream: usize) -> Self {
+        let tier = QueueTier::of(ticket);
+        let marker = match tier {
+            QueueTier::Frontier => None,
+            QueueTier::Claimed => Some(RowMarker::Claimed(match &ticket.claim {
+                Some(Claim::By(who)) => Some(who.clone()),
+                Some(Claim::Anonymous) | None => None,
+            })),
+            QueueTier::Blocked => ticket
+                .unknown_dependency_ref()
+                .map(RowMarker::UnknownDependency)
+                .or_else(|| {
+                    ticket
+                        .open_dependencies()
+                        .next()
+                        .map(|key| RowMarker::After(key.display_ref()))
+                }),
+        };
+        Self {
+            key: ticket.key.clone(),
+            tier,
+            marker,
+            upstream: ticket.open_dependencies().count(),
+            downstream,
+        }
+    }
+}
+
+/// One row in the rendered queue: a tier header or a Ticket.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum QueueRow {
     Header(QueueTier),
-    Ticket(TicketKey),
+    Ticket(TicketRow),
 }
 
 /// One unit of Effort discovery — a Tracked Repo's local worktree fan-out, or
@@ -234,7 +302,7 @@ impl TicketList {
     /// reconciles membership and enrichment together, so there is nothing to
     /// graft back.
     pub fn merge_effort(&mut self, repo: RepoIdentity, read: EffortRead) {
-        let entry = EffortEntry { repo, read };
+        let entry = EffortEntry::new(repo, read);
         match self
             .efforts
             .iter_mut()
@@ -338,7 +406,7 @@ impl TicketList {
         };
         let selected = self.selected.as_ref();
         self.rows[start..end].iter().map(move |row| {
-            let is_selected = matches!(row, QueueRow::Ticket(key) if Some(key) == selected);
+            let is_selected = matches!(row, QueueRow::Ticket(row) if Some(&row.key) == selected);
             (row, is_selected)
         })
     }
@@ -369,8 +437,8 @@ impl TicketList {
             Box::new((0..current).rev())
         };
         for row in candidates {
-            if let QueueRow::Ticket(key) = &self.rows[row] {
-                self.selected = Some(key.clone());
+            if let QueueRow::Ticket(row) = &self.rows[row] {
+                self.selected = Some(row.key.clone());
                 break;
             }
         }
@@ -381,12 +449,12 @@ impl TicketList {
         let selected = self.selected.as_ref()?;
         self.rows
             .iter()
-            .position(|row| matches!(row, QueueRow::Ticket(key) if key == selected))
+            .position(|row| matches!(row, QueueRow::Ticket(row) if row.key == *selected))
     }
 
     fn first_ticket(&self) -> Option<TicketKey> {
         self.rows.iter().find_map(|row| match row {
-            QueueRow::Ticket(key) => Some(key.clone()),
+            QueueRow::Ticket(row) => Some(row.key.clone()),
             QueueRow::Header(_) => None,
         })
     }
@@ -397,25 +465,37 @@ impl TicketList {
     fn relayout(&mut self) {
         self.efforts.sort_by_cached_key(EffortEntry::order_key);
 
+        let open_tickets = || {
+            self.efforts
+                .iter()
+                .filter_map(EffortEntry::effort)
+                .flat_map(Effort::tickets)
+                .filter(|t| t.state == TicketState::Open)
+        };
+        // Blocks, pool-wide: how many open Tickets wait on each target.
+        let mut dependents: HashMap<TicketKey, usize> = HashMap::new();
+        for ticket in open_tickets() {
+            for target in ticket
+                .dependencies
+                .iter()
+                .filter_map(|dep| dep.target_key())
+            {
+                *dependents.entry(target.clone()).or_default() += 1;
+            }
+        }
+
         let mut frontier = Vec::new();
         let mut claimed = Vec::new();
         let mut blocked = Vec::new();
         let mut unknown = Vec::new();
-        for ticket in self
-            .efforts
-            .iter()
-            .filter_map(EffortEntry::effort)
-            .flat_map(Effort::tickets)
-            .filter(|t| t.state == TicketState::Open)
-        {
-            let key = ticket.key.clone();
-            match QueueTier::of(&ticket) {
-                QueueTier::Frontier => frontier.push(key),
-                QueueTier::Claimed => claimed.push(key),
-                QueueTier::Blocked if ticket.unknown_dependency_ref().is_some() => {
-                    unknown.push(key);
-                }
-                QueueTier::Blocked => blocked.push(key),
+        for ticket in open_tickets() {
+            let downstream = dependents.get(&ticket.key).copied().unwrap_or(0);
+            let row = TicketRow::derive(&ticket, downstream);
+            match (row.tier, &row.marker) {
+                (QueueTier::Frontier, _) => frontier.push(row),
+                (QueueTier::Claimed, _) => claimed.push(row),
+                (QueueTier::Blocked, Some(RowMarker::UnknownDependency(_))) => unknown.push(row),
+                (QueueTier::Blocked, _) => blocked.push(row),
             }
         }
         blocked.append(&mut unknown);
