@@ -296,8 +296,6 @@ impl TicketList {
         })
     }
 
-    /// The full display layout, headers included — the ordering assertion
-    /// tests make; the view reads the windowed `visible_rows`.
     #[cfg(test)]
     pub fn rows(&self) -> &[QueueRow] {
         &self.rows
@@ -320,7 +318,6 @@ impl TicketList {
         self.scroll_offset
     }
 
-    /// Rows currently allotted to the queue, set via `resize`.
     #[cfg(test)]
     pub fn viewport_height(&self) -> usize {
         self.viewport_height

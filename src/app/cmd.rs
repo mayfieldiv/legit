@@ -420,8 +420,7 @@ async fn run_discover_repo_efforts(
     settle_discovery(unit, result, &tx);
 }
 
-/// The cwd walk. `cwd` is a parameter (not read here) so the probe can run
-/// against a fixture directory in tests.
+/// The cwd walk.
 async fn run_discover_cwd_efforts(
     cwd: PathBuf,
     detected: Option<RepoSlug>,
