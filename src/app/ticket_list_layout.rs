@@ -11,8 +11,9 @@ const TABLE_HEADER_ROWS: usize = 1;
 /// The status bar pinned to the bottom.
 const STATUS_ROWS: usize = 1;
 
-/// Columns the effort rail takes, from the prototype's winning layout.
-pub const RAIL_WIDTH: u16 = 38;
+pub fn rail_width(terminal_width: u16) -> u16 {
+    (terminal_width / 4).clamp(38, 72)
+}
 /// Width of the `│` rule between the rail and the queue.
 pub const DIVIDER_WIDTH: u16 = 1;
 

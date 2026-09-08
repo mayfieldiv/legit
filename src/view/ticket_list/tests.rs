@@ -149,15 +149,15 @@ fn the_ticket_surface_renders_the_rail_and_the_tiered_queue() {
     // the Unknown-Dependency ticket trails Blocked with its raw ref.
     let mut expected = vec![
         "legit — Tickets — 2 efforts · 2 frontier                                                                                                    ",
-        "All efforts                           │  Ticket     Repo           Type      Title                                           Block   Age    ",
+        "All efforts                           │  Ticket     Repo  Type      Title                                                    Block   Age    ",
         "                                      │  ── Frontier                                                                                        ",
-        "web · Map: ticket surface             │  01-free    web            grilling  Name the destination                            ↓1             ",
-        "local · 1/5 decided · 1 frontier      │  01-read    notes          research  Read the RFC                                                   ",
+        "web · Map: ticket surface             │  01-free    web   grilling  Name the destination                                     ↓1             ",
+        "local · 1/5 decided · 1 frontier      │  01-read    notes research  Read the RFC                                                            ",
         "A queue toggled from the PR view      │  ── Claimed                                                                                         ",
-        "                                      │  02-claimed web            prototype Prototype the rail ⟨claimed mayfield⟩                          ",
+        "                                      │  02-claimed web   prototype Prototype the rail ⟨claimed mayfield⟩                                   ",
         "notes · Map: docs                     │  ── Blocked                                                                                         ",
-        "local · 0/1 decided · 1 frontier      │  03-blocked web            task      Wire the queue ⟨after 01-free⟩                  ↑1             ",
-        "Docs done                             │  05-mystery web            task      Ship it ⟨dep? ../gone/tickets/09-x.md⟩                         ",
+        "local · 0/1 decided · 1 frontier      │  03-blocked web   task      Wire the queue ⟨after 01-free⟩                           ↑1             ",
+        "Docs done                             │  05-mystery web   task      Ship it ⟨dep? ../gone/tickets/09-x.md⟩                                  ",
     ];
     let blank = "                                      │                                                                                                     ";
     expected.extend(std::iter::repeat_n(blank, 13));
@@ -242,7 +242,7 @@ fn a_degraded_effort_and_a_failed_probe_each_get_a_card_with_the_error() {
         buffer_text(&terminal),
         vec![
             "legit — Tickets — 1 effort · 0 frontier                                                             ",
-            "All efforts                           │  Ticket Repo           Type Title            Block   Age    ",
+            "All efforts                           │  Ticket Repo Type Title                      Block   Age    ",
             "                                      │                       No open tickets                       ",
             "web · Map: broken                     │                                                             ",
             "local · couldn't read                 │                                                             ",
@@ -286,7 +286,7 @@ fn an_empty_surface_says_loading_while_a_probe_is_in_flight_then_no_efforts() {
 }
 
 #[test]
-fn long_refs_are_middle_truncated_at_fourteen_columns() {
+fn long_refs_still_truncate_when_the_terminal_is_narrow() {
     let (mut model, _) = Model::new();
     model.tickets.merge_effort(
         web(),
@@ -311,4 +311,42 @@ fn long_refs_are_middle_truncated_at_fourteen_columns() {
         row.contains("│  01-a-ve…indeed web"),
         "capped at 14 with a middle ellipsis: {row:?}"
     );
+}
+
+#[test]
+fn wide_columns_fit_ticket_names_and_stay_stable_while_scrolling() {
+    let (mut model, _) = Model::new();
+    let short_ref = "019-pilot-soak-gate";
+    let long_ref = "026-funnel-chunk-identification-procs";
+    model.tickets.merge_effort(
+        RepoIdentity::Slug(RepoSlug::new("immense/immybot-manager")),
+        effort(
+            "memory-image",
+            "Memory-image system of record",
+            "Keep the owned tables in memory",
+            vec![
+                ticket("memory-image", short_ref, "Run the pilot", "task"),
+                ticket("memory-image", long_ref, "Plan the funnel", "research"),
+            ],
+        ),
+    );
+    model.view_mode = ViewMode::TicketList;
+    model.tickets.resize(2);
+
+    let before = buffer_text(&render(&model, 320, 8));
+    assert!(before[3].contains("immybot-manager · Memory-image system of record"));
+    assert!(before[3].contains(short_ref));
+    assert!(before[3].contains("Run the pilot"));
+    assert!(!before.iter().any(|row| row.contains(long_ref)));
+
+    model.tickets.move_down();
+    let after = buffer_text(&render(&model, 320, 8));
+    assert!(after.iter().any(|row| row.contains(long_ref)));
+    assert_eq!(before[1], after[1], "scrolling must not move the columns");
+
+    let narrow = buffer_text(&render(&model, 140, 8));
+    assert!(narrow[1].contains("Title"));
+    assert!(narrow[1].contains("Block"));
+    assert!(narrow[1].contains("Age"));
+    assert!(narrow.iter().any(|row| row.contains("Plan the funnel")));
 }

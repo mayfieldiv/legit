@@ -16,12 +16,12 @@ use crate::{
     app::{
         model::Model,
         ticket_list::{EffortEntry, QueueRow, QueueTier, TicketList},
-        ticket_list_layout::{DIVIDER_WIDTH, RAIL_WIDTH},
+        ticket_list_layout::{DIVIDER_WIDTH, rail_width},
     },
     color::repo_color,
     format::{format_repo_short, pad_to_width, truncate, truncate_middle},
     palette::Palette,
-    ticket::{Claim, EffortSource, EffortTicket},
+    ticket::{Claim, EffortSource, EffortTicket, TicketState},
 };
 
 #[cfg(test)]
@@ -41,6 +41,7 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Palett
     .areas(area);
     render_header(model, frame, header, palette);
     let tickets = &model.tickets;
+    let rail_width = rail_width(main.width);
     if tickets.efforts().is_empty() && tickets.discovery_failures().next().is_none() {
         let text = if tickets.is_loading() {
             "Loading efforts…"
@@ -51,9 +52,9 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Palett
             Paragraph::new(Line::from(text)).alignment(Alignment::Center),
             main,
         );
-    } else if main.width >= RAIL_WIDTH + DIVIDER_WIDTH + MIN_QUEUE_WIDTH {
+    } else if main.width >= rail_width + DIVIDER_WIDTH + MIN_QUEUE_WIDTH {
         let [rail, divider, queue] = Layout::horizontal([
-            Constraint::Length(RAIL_WIDTH),
+            Constraint::Length(rail_width),
             Constraint::Length(DIVIDER_WIDTH),
             Constraint::Min(1),
         ])
@@ -213,11 +214,12 @@ fn repo_led_line(
 // TODO(#132): the per-row refresh indicator.
 const INDICATOR_COL: usize = 1;
 const REF_COL_MIN: usize = 6;
-/// Refs cap at 14 columns with a middle ellipsis (spec §6.2).
-const REF_COL_MAX: usize = 14;
-const REPO_COL: usize = 14;
+const REF_COL_MAX: usize = 64;
+const REPO_COL_MIN: usize = 4;
+const REPO_COL_MAX: usize = 32;
 const TYPE_COL_MIN: usize = 4;
-const TYPE_COL_MAX: usize = 12;
+const TYPE_COL_MAX: usize = 24;
+const TITLE_COL_MIN: usize = 40;
 /// `↑NN ↓NN`.
 const BLOCK_COL: usize = 7;
 /// Sized like the PR list's Updated column so the header lands where the data
@@ -225,22 +227,48 @@ const BLOCK_COL: usize = 7;
 // TODO(#132): render Fetch Age.
 const AGE_COL: usize = 7;
 
-/// Per-render column sizing derived from the visible Tickets.
 struct QueueLayout {
     width: usize,
     ref_col: usize,
+    repo_col: usize,
     type_col: usize,
 }
 
 impl QueueLayout {
-    fn new(width: usize, visible: &[EffortTicket<'_>]) -> Self {
-        let widest =
-            |f: &dyn Fn(&EffortTicket<'_>) -> usize| visible.iter().map(f).max().unwrap_or(0);
-        Self {
-            width,
-            ref_col: widest(&|t| t.key.display_ref().width()).clamp(REF_COL_MIN, REF_COL_MAX),
-            type_col: widest(&|t| t.ty.0.width()).clamp(TYPE_COL_MIN, TYPE_COL_MAX),
+    fn new(width: usize, tickets: &TicketList) -> Self {
+        let mut ref_width = REF_COL_MIN;
+        let mut repo_width = REPO_COL_MIN;
+        let mut type_width = TYPE_COL_MIN;
+        for entry in tickets.efforts() {
+            let Some(effort) = entry.effort() else {
+                continue;
+            };
+            for ticket in effort
+                .tickets()
+                .filter(|ticket| ticket.state == TicketState::Open)
+            {
+                ref_width = ref_width.max(ticket.key.display_ref().width());
+                repo_width = repo_width.max(format_repo_short(&entry.repo.display_name()).width());
+                type_width = type_width.max(ticket.ty.0.width());
+            }
         }
+        let mut layout = Self {
+            width,
+            ref_col: ref_width.min(14),
+            repo_col: repo_width.min(14),
+            type_col: type_width.min(12),
+        };
+        let mut spare = layout.title_col().saturating_sub(TITLE_COL_MIN);
+        for (column, desired) in [
+            (&mut layout.ref_col, ref_width.min(REF_COL_MAX)),
+            (&mut layout.repo_col, repo_width.min(REPO_COL_MAX)),
+            (&mut layout.type_col, type_width.min(TYPE_COL_MAX)),
+        ] {
+            let extra = desired.saturating_sub(*column).min(spare);
+            *column += extra;
+            spare -= extra;
+        }
+        layout
     }
 
     /// Whatever the fixed columns and their gaps leave for the title.
@@ -248,7 +276,7 @@ impl QueueLayout {
         let fixed_cells = [
             INDICATOR_COL,
             self.ref_col,
-            REPO_COL,
+            self.repo_col,
             self.type_col,
             BLOCK_COL,
             AGE_COL,
@@ -262,14 +290,7 @@ fn render_queue(tickets: &TicketList, frame: &mut Frame<'_>, area: Rect, palette
     let [header_area, rows_area] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
     let width = usize::from(area.width);
-    let visible: Vec<EffortTicket<'_>> = tickets
-        .visible_rows()
-        .filter_map(|(row, _)| match row {
-            QueueRow::Ticket(key) => tickets.ticket(key).map(|(_, ticket)| ticket),
-            QueueRow::Header(_) => None,
-        })
-        .collect();
-    let layout = QueueLayout::new(width, &visible);
+    let layout = QueueLayout::new(width, tickets);
     frame.render_widget(Paragraph::new(header_row(&layout)), header_area);
 
     if tickets.visible_is_empty() {
@@ -310,7 +331,7 @@ fn header_row(layout: &QueueLayout) -> Line<'static> {
         vec![
             Cell::text("", INDICATOR_COL, Style::default()),
             Cell::text("Ticket", layout.ref_col, bold),
-            Cell::text("Repo", REPO_COL, bold),
+            Cell::text("Repo", layout.repo_col, bold),
             Cell::text("Type", layout.type_col, bold),
             Cell::text("Title", layout.title_col(), bold),
             Cell::text("Block", BLOCK_COL, bold),
@@ -345,8 +366,8 @@ fn ticket_line(
                 .add_modifier(Modifier::BOLD),
         ),
         Cell::text(
-            truncate_middle(format_repo_short(&repo), REPO_COL),
-            REPO_COL,
+            truncate_middle(format_repo_short(&repo), layout.repo_col),
+            layout.repo_col,
             Style::default().fg(repo_color(&repo)),
         ),
         Cell::text(
