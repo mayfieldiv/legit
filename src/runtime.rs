@@ -1,6 +1,6 @@
-use std::{io, sync::Arc, thread};
+use std::{collections::HashMap, io, sync::Arc, thread};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
@@ -13,10 +13,18 @@ use ratatui::{
         },
     },
 };
-use tokio::sync::mpsc;
+use tokio::{
+    sync::mpsc,
+    task::{Id, JoinSet},
+};
 
 use crate::{
-    app::{cmd, model::Model, msg::Msg, update::update},
+    app::{
+        cmd::{self, Cmd},
+        model::Model,
+        msg::Msg,
+        update::update,
+    },
     github::limiter::NetworkLimiter,
     view,
 };
@@ -48,10 +56,11 @@ pub async fn run() -> Result<()> {
 
     let limiter = NetworkLimiter::new(MAX_CONCURRENT_REQUESTS, MAX_BACKGROUND_REQUESTS);
     spawn_network_stats_forwarder(&limiter, &msg_tx);
+    let mut tasks = CommandTasks::new(msg_tx, limiter);
 
     let (mut model, initial_cmds) = Model::new();
     tracing::info!(commands = initial_cmds.len(), "model initialized");
-    spawn_cmds(initial_cmds, &msg_tx, &limiter);
+    tasks.spawn(initial_cmds);
 
     // Seed the viewport height before the first render so scroll math has the
     // right bounds even before the user resizes anything.
@@ -59,8 +68,7 @@ pub async fn run() -> Result<()> {
     process_msg(
         Msg::TerminalEvent(Event::Resize(size.width, size.height)),
         &mut model,
-        &msg_tx,
-        &limiter,
+        &mut tasks,
     );
 
     terminal.draw(|frame| view::view(&model, frame, chrono::Utc::now()))?;
@@ -70,17 +78,21 @@ pub async fn run() -> Result<()> {
         let first_msg = tokio::select! {
             Some(event) = event_rx.recv() => Msg::TerminalEvent(event),
             Some(msg) = msg_rx.recv() => msg,
+            Some(finished) = tasks.join_next(), if tasks.in_flight() => {
+                finished?;
+                continue;
+            }
             else => Msg::Quit,
         };
 
-        process_msg(first_msg, &mut model, &msg_tx, &limiter);
+        process_msg(first_msg, &mut model, &mut tasks);
 
         while let Ok(event) = event_rx.try_recv() {
-            process_msg(Msg::TerminalEvent(event), &mut model, &msg_tx, &limiter);
+            process_msg(Msg::TerminalEvent(event), &mut model, &mut tasks);
         }
 
         while let Ok(msg) = msg_rx.try_recv() {
-            process_msg(msg, &mut model, &msg_tx, &limiter);
+            process_msg(msg, &mut model, &mut tasks);
         }
 
         terminal.draw(|frame| view::view(&model, frame, chrono::Utc::now()))?;
@@ -90,12 +102,7 @@ pub async fn run() -> Result<()> {
     Ok(())
 }
 
-fn process_msg(
-    msg: Msg,
-    model: &mut Model,
-    msg_tx: &mpsc::UnboundedSender<Msg>,
-    limiter: &Arc<NetworkLimiter>,
-) {
+fn process_msg(msg: Msg, model: &mut Model, tasks: &mut CommandTasks) {
     tracing::debug!(?msg, "processing message");
     // The reducer's clock: the instant this message is processed. The Fetch Age
     // stamps record it. It is NOT the wall-clock the view reads — each draw
@@ -110,61 +117,69 @@ fn process_msg(
     // message produced can acquire, so a fetch for the newly-focused entity
     // ranks interactive from its first scheduling decision — and the previous
     // entity's pending fetches demote. A no-op when focus is unchanged.
-    limiter.set_focus(model.focused_entity());
-    spawn_cmds(cmds, msg_tx, limiter);
+    tasks.limiter.set_focus(model.focused_entity());
+    tasks.spawn(cmds);
 }
 
-/// Spawn each command as its own task. A command that panics is caught at
-/// the task boundary and surfaced as a `CommandFailed` status: tokio would
-/// otherwise swallow the panic into a `JoinError` nobody awaits, and the
-/// message the command owed the reducer would never arrive — leaving whatever
-/// it was loading stuck on its placeholder with no error shown.
-fn spawn_cmds(
-    cmds: Vec<cmd::Cmd>,
-    msg_tx: &mpsc::UnboundedSender<Msg>,
-    limiter: &Arc<NetworkLimiter>,
-) {
-    for cmd in cmds {
-        tracing::debug!(?cmd, "spawning command");
-        let tx = msg_tx.clone();
-        let limiter = Arc::clone(limiter);
-        let label = cmd_label(&cmd);
-        let task = tokio::spawn(cmd::run(cmd, tx.clone(), limiter));
-        tokio::spawn(async move {
-            if let Err(join_error) = task.await
-                && join_error.is_panic()
-            {
-                let error = format!("{label}: {}", panic_message(join_error.into_panic()));
-                tracing::error!(%error, "command panicked");
-                let _ = tx.send(Msg::CommandFailed {
-                    context: "command panicked",
-                    error,
-                });
-            }
-        });
+/// The in-flight command tasks, awaited by the main loop. Left to a bare
+/// `tokio::spawn`, a command's panic is swallowed into a `JoinError` nobody
+/// awaits: the message the command owed the reducer never arrives, whatever
+/// it was loading sits on its placeholder for the rest of the session, and
+/// nothing is shown (10b3cd6 hit exactly this). A panic is a bug, not a
+/// failure a command can report, so it ends the session instead — `run`
+/// returns the error, the terminal guard restores the screen on the way out,
+/// and the message names the command.
+struct CommandTasks {
+    tasks: JoinSet<()>,
+    /// Which command each task runs, for the panic report — a `JoinError`
+    /// carries only the task id.
+    names: HashMap<Id, &'static str>,
+    msg_tx: mpsc::UnboundedSender<Msg>,
+    limiter: Arc<NetworkLimiter>,
+}
+
+impl CommandTasks {
+    fn new(msg_tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkLimiter>) -> Self {
+        Self {
+            tasks: JoinSet::new(),
+            names: HashMap::new(),
+            msg_tx,
+            limiter,
+        }
     }
-}
 
-/// The command's variant name — enough to say which command died without
-/// echoing its payload (a config, a token) into the status bar.
-fn cmd_label(cmd: &cmd::Cmd) -> String {
-    let debug = format!("{cmd:?}");
-    debug
-        .split([' ', '{', '('])
-        .next()
-        .unwrap_or("command")
-        .to_owned()
-}
+    fn spawn(&mut self, cmds: Vec<Cmd>) {
+        for cmd in cmds {
+            tracing::debug!(?cmd, "spawning command");
+            let name = cmd.name();
+            let handle = self.tasks.spawn(cmd::run(
+                cmd,
+                self.msg_tx.clone(),
+                Arc::clone(&self.limiter),
+            ));
+            self.names.insert(handle.id(), name);
+        }
+    }
 
-/// The text a panic carried, when it was a string (the `panic!`/`unwrap`
-/// payloads), else a placeholder.
-fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
-    if let Some(text) = payload.downcast_ref::<String>() {
-        text.clone()
-    } else if let Some(text) = payload.downcast_ref::<&str>() {
-        (*text).to_owned()
-    } else {
-        "non-string panic payload".to_owned()
+    fn in_flight(&self) -> bool {
+        !self.tasks.is_empty()
+    }
+
+    /// Wait for the next command task to finish: `None` while nothing is in
+    /// flight, `Err` for a task that panicked.
+    async fn join_next(&mut self) -> Option<Result<()>> {
+        let finished = self.tasks.join_next_with_id().await?;
+        Some(match finished {
+            Ok((id, ())) => {
+                self.names.remove(&id);
+                Ok(())
+            }
+            Err(join_error) => {
+                let name = self.names.remove(&join_error.id()).unwrap_or("command");
+                tracing::error!(name, %join_error, "command task died");
+                Err(anyhow!("{name}: {join_error}"))
+            }
+        })
     }
 }
 
@@ -253,30 +268,5 @@ impl Drop for TerminalGuard {
         }
         let _ = disable_raw_mode();
         tracing::debug!("terminal restored");
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{cmd_label, panic_message};
-    use crate::{app::cmd::Cmd, repo_slug::RepoSlug, secret::Secret};
-
-    #[test]
-    fn cmd_label_is_the_variant_name_without_its_payload() {
-        assert_eq!(cmd_label(&Cmd::LoadConfig), "LoadConfig");
-        let label = cmd_label(&Cmd::FetchOpenPRs {
-            repo: RepoSlug::new("acme/web"),
-            token: Secret::new("secret-token".to_owned()),
-        });
-        assert_eq!(label, "FetchOpenPRs");
-    }
-
-    #[test]
-    fn panic_message_reads_string_payloads() {
-        let caught = std::panic::catch_unwind(|| panic!("boom {}", 42)).unwrap_err();
-        assert_eq!(panic_message(caught), "boom 42");
-        let caught = std::panic::catch_unwind(|| panic!("static")).unwrap_err();
-        assert_eq!(panic_message(caught), "static");
-        assert_eq!(panic_message(Box::new(7u8)), "non-string panic payload");
     }
 }

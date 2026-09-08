@@ -162,6 +162,35 @@ pub enum Cmd {
     },
 }
 
+impl Cmd {
+    /// The variant name: names the command in a report without echoing its
+    /// payload (a config, a token).
+    pub fn name(&self) -> &'static str {
+        match self {
+            Cmd::LoadConfig => "LoadConfig",
+            Cmd::ResolveAuthToken => "ResolveAuthToken",
+            Cmd::DetectRepo => "DetectRepo",
+            Cmd::FetchOpenPRs { .. } => "FetchOpenPRs",
+            Cmd::FetchReviewStatus { .. } => "FetchReviewStatus",
+            Cmd::FetchThreads { .. } => "FetchThreads",
+            Cmd::FetchReviews { .. } => "FetchReviews",
+            Cmd::FetchIssueComments { .. } => "FetchIssueComments",
+            Cmd::FetchChecks { .. } => "FetchChecks",
+            Cmd::FetchFiles { .. } => "FetchFiles",
+            Cmd::ScheduleStatusClear { .. } => "ScheduleStatusClear",
+            Cmd::FetchPRDetail { .. } => "FetchPRDetail",
+            Cmd::OpenUrl { .. } => "OpenUrl",
+            Cmd::ListWorktrees { .. } => "ListWorktrees",
+            Cmd::CreateWorktree { .. } => "CreateWorktree",
+            Cmd::CopyToClipboard { .. } => "CopyToClipboard",
+            Cmd::RefreshPr { .. } => "RefreshPr",
+            Cmd::DelayedRetry { .. } => "DelayedRetry",
+            Cmd::DiscoverRepoEfforts { .. } => "DiscoverRepoEfforts",
+            Cmd::DiscoverCwdEfforts { .. } => "DiscoverCwdEfforts",
+        }
+    }
+}
+
 #[tracing::instrument(name = "command", skip(tx, limiter))]
 pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkLimiter>) {
     tracing::info!("started");
