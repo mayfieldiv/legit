@@ -417,21 +417,21 @@ fn title_cell(
     let Some((marker, color)) = marker else {
         return Cell::text(ticket.title.clone(), width, title_style);
     };
-    // Below the room for a marker plus one title glyph, `render_cells`' own
-    // fitting decides what survives.
-    let title = if width > marker.width() + 2 {
-        truncate(&ticket.title, width - marker.width() - 1)
+    // The marker is the row's state signal, so it takes the width first and
+    // the title gets the rest — none at all when the marker alone fills the
+    // cell, where `render_cells` truncates the marker rather than lose it.
+    let title_budget = width.saturating_sub(marker.width() + 1);
+    let marker = Span::styled(marker, Style::default().fg(color));
+    let spans = if title_budget == 0 {
+        vec![marker]
     } else {
-        ticket.title.clone()
-    };
-    Cell {
-        spans: vec![
-            Span::styled(title, title_style),
+        vec![
+            Span::styled(truncate(&ticket.title, title_budget), title_style),
             Span::raw(" "),
-            Span::styled(marker, Style::default().fg(color)),
-        ],
-        width,
-    }
+            marker,
+        ]
+    };
+    Cell { spans, width }
 }
 
 /// `↑N` open upstream Dependencies (red) and `↓N` open downstream dependents

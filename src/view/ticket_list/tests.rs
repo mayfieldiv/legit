@@ -5,6 +5,7 @@
 
 use ratatui::{Terminal, backend::TestBackend, style::Color};
 
+use super::super::row::render_cells;
 use crate::{
     app::{
         model::{Model, ViewMode},
@@ -310,6 +311,45 @@ fn long_refs_still_truncate_when_the_terminal_is_narrow() {
     assert!(
         row.contains("│  01-a-ve…indeed web"),
         "capped at 14 with a middle ellipsis: {row:?}"
+    );
+}
+
+/// `title_cell` for a Blocked ticket whose marker is `⟨dep? gone.md⟩` (14
+/// columns), rendered alone at `width` — the joined cell text.
+fn dep_marker_cell(width: usize) -> String {
+    let mut mystery = ticket("alpha", "01-mystery", "Ship it", "task");
+    mystery.dependencies = vec![Dependency::Unknown {
+        raw: "gone.md".to_owned(),
+    }];
+    let EffortRead::Ready(effort) = effort("alpha", "Map", "D", vec![mystery]) else {
+        unreachable!()
+    };
+    let handle = effort.ticket(&local_key("alpha", "01-mystery")).unwrap();
+    let cell = super::title_cell(&handle, width, ratatui::style::Style::default(), &DARK);
+    render_cells(vec![cell], None)
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
+#[test]
+fn the_state_marker_outranks_the_title_when_the_cell_is_tight() {
+    assert_eq!(dep_marker_cell(30), "Ship it ⟨dep? gone.md⟩        ");
+    assert_eq!(
+        dep_marker_cell(16),
+        "… ⟨dep? gone.md⟩",
+        "one title column fits beside the marker: its ellipsis"
+    );
+    assert_eq!(
+        dep_marker_cell(15),
+        "⟨dep? gone.md⟩ ",
+        "no room for a title glyph: the marker alone"
+    );
+    assert_eq!(
+        dep_marker_cell(10),
+        "⟨dep? gon…",
+        "a marker wider than the cell truncates rather than vanishing"
     );
 }
 
