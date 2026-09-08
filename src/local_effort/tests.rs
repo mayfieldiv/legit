@@ -290,11 +290,18 @@ fn configured_roots_win_for_the_cwd_repo_on_a_path_match() {
         ..Default::default()
     };
 
-    let reads = super::discover_cwd_efforts(&cwd, &config).unwrap().reads;
+    let found = super::discover_cwd_efforts(&cwd, &config).unwrap();
     assert_eq!(
-        effort_titles(&reads),
+        effort_titles(&found.reads),
         vec!["Override".to_owned()],
         "the matched entry's wayfinderRoots replace the built-ins for the walk"
+    );
+    assert_eq!(
+        found.configured,
+        Some(crate::config::RepoIdentity::Path(
+            crate::canonical_path::CanonicalPathBuf::canonicalize(&repo).unwrap()
+        )),
+        "the matched entry's identity is reported for attribution"
     );
 }
 

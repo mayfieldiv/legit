@@ -19,7 +19,7 @@ use anyhow::Context;
 use self::format::{find_map_file, probe_file_type, read_effort_at};
 use crate::{
     canonical_path::CanonicalPathBuf,
-    config::{RepoConfig, resolve_config_path},
+    config::{RepoConfig, RepoIdentity, resolve_config_path},
     subprocess::{GitEnv, git_command, run_command},
     ticket::EffortRead,
     worktree::list_worktrees,
@@ -45,21 +45,25 @@ pub fn discover_repo_efforts(repo: &RepoConfig) -> anyhow::Result<Vec<EffortRead
     read_efforts_under(&bases, repo.wayfinder_roots.as_deref())
 }
 
-/// What the cwd walk found, plus the repo boundary it walked to — the
-/// identity the Efforts are attributed to when no GitHub repo was detected.
+/// What the cwd walk found, plus what the Efforts can be attributed to.
 pub struct CwdEfforts {
     /// The canonical git toplevel, or the canonical cwd outside any repo.
     pub toplevel: CanonicalPathBuf,
+    /// The identity of the configured Tracked Repo the cwd belongs to, when
+    /// one matches. Preferred over anything detected from the cwd alone so
+    /// the walk and that repo's own probe attribute one Effort identically —
+    /// they share the Effort key, and a disagreement would flicker.
+    pub configured: Option<RepoIdentity>,
     pub reads: Vec<EffortRead>,
 }
 
 /// Discover and parse every local Effort visible from the working directory:
 /// walk cwd → its git toplevel, probing each level (which finds nested
 /// monorepo roots like `apps/mac-agent/docs/wayfinder/`); a cwd outside any
-/// git repo is probed alone. When the cwd repo matches a configured entry
-/// carrying `wayfinderRoots` — by slug (the origin remote) or by canonical
-/// Main Worktree identity — the explicit roots win over the built-ins
-/// (spec §2.2).
+/// git repo is probed alone. When the cwd repo matches a configured entry —
+/// by slug (the origin remote) or by canonical Main Worktree identity — its
+/// `wayfinderRoots` win over the built-ins (spec §2.2) and its identity is
+/// reported for attribution.
 pub fn discover_cwd_efforts(
     cwd: &Path,
     config: &crate::config::LegitConfig,
@@ -69,9 +73,14 @@ pub fn discover_cwd_efforts(
         .last()
         .expect("the walk holds at least the cwd")
         .clone();
-    let roots = configured_roots_for_cwd(config, cwd, &toplevel);
+    let matched = configured_repos_for_cwd(config, cwd, &toplevel);
+    let roots = matched
+        .iter()
+        .find_map(|repo| repo.wayfinder_roots.as_deref());
+    let configured = matched.first().and_then(|repo| repo.identity().ok());
     Ok(CwdEfforts {
         toplevel,
+        configured,
         reads: read_efforts_under(&levels, roots)?,
     })
 }
@@ -107,36 +116,33 @@ fn git_toplevel(cwd: &Path) -> Option<PathBuf> {
         .map(|stdout| PathBuf::from(stdout.trim()))
 }
 
-/// The configured `wayfinderRoots` that replace the built-ins for the cwd
-/// walk, when the cwd repo matches a `repos` entry carrying them. Matching
-/// takes either evidence of "same repo": the entry's slug equals the cwd's
+/// The `repos` entries the cwd repo is, in config order. Matching takes
+/// either evidence of "same repo": the entry's slug equals the cwd's
 /// origin-remote slug, or the entry's Main Worktree names the toplevel
 /// (canonical identity, so spelling differences and symlinks can't defeat
-/// it). Deliberately looser than [`crate::config::RepoIdentity`], which answers dedup with
+/// it). Deliberately looser than [`RepoIdentity`], which answers dedup with
 /// one key — a slugged entry whose clone is the toplevel is still the cwd
 /// repo even with the remote missing or renamed. A match failure of any
 /// kind — no remote, an unresolvable configured path — just means "not the
-/// cwd repo", never an error: the walk falls back to the built-ins.
-fn configured_roots_for_cwd<'a>(
+/// cwd repo", never an error. Several entries can match (two spellings of
+/// one Main Worktree both probe); the caller picks per field.
+fn configured_repos_for_cwd<'a>(
     config: &'a crate::config::LegitConfig,
     cwd: &Path,
     toplevel: &Path,
-) -> Option<&'a [String]> {
-    let candidates: Vec<&RepoConfig> = config
+) -> Vec<&'a RepoConfig> {
+    // One subprocess, and only when a slugged entry needs it.
+    let cwd_slug = config
         .repos
-        .iter()
-        .filter(|repo| repo.wayfinder_roots.is_some())
-        .collect();
-    // One subprocess, and only when a slugged candidate needs it.
-    let cwd_slug = candidates
         .iter()
         .any(|repo| repo.slug.is_some())
         .then(|| crate::git_remote::detect_repo(cwd).ok())
         .flatten();
     let toplevel = CanonicalPathBuf::canonicalize(toplevel).ok();
-    candidates
-        .into_iter()
-        .find(|repo| {
+    config
+        .repos
+        .iter()
+        .filter(|repo| {
             let slug_matches = cwd_slug
                 .as_ref()
                 .is_some_and(|cwd_slug| repo.slug.as_ref() == Some(cwd_slug));
@@ -149,7 +155,7 @@ fn configured_roots_for_cwd<'a>(
             };
             slug_matches || path_matches
         })
-        .and_then(|repo| repo.wayfinder_roots.as_deref())
+        .collect()
 }
 
 /// The working trees a repo's Wayfinder Roots resolve against: every linked

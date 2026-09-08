@@ -157,3 +157,40 @@ async fn the_cwd_walk_attributes_to_the_detected_repo_or_the_toplevel() {
         other => panic!("expected one arrival then a finish, got {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn the_cwd_walk_keeps_a_configured_slug_less_repo_keyed_by_path() {
+    let dir = tempfile::tempdir().unwrap();
+    write(&dir.path().join(".wayfinder/map.md"), "# Local\n");
+    let config = LegitConfig {
+        repos: vec![RepoConfig {
+            main_worktree_path: Some(dir.path().to_str().unwrap().to_owned()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let (tx, rx) = mpsc::unbounded_channel();
+    run_discover_cwd_efforts(
+        dir.path().to_owned(),
+        Some(RepoSlug::new("acme/web")),
+        config,
+        tx,
+    )
+    .await;
+
+    match drain(rx).as_slice() {
+        [
+            Msg::EffortArrived { repo, .. },
+            Msg::DiscoveryFinished { .. },
+        ] => {
+            assert_eq!(
+                repo,
+                &RepoIdentity::Path(CanonicalPathBuf::canonicalize(dir.path()).unwrap()),
+                "the configured entry's identity wins over the detected slug, so \
+                 the repo probe and the cwd walk attribute one Effort the same way"
+            );
+        }
+        other => panic!("expected one arrival then a finish, got {other:?}"),
+    }
+}

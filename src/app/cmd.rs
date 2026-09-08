@@ -151,10 +151,11 @@ pub enum Cmd {
         repo: RepoConfig,
     },
     /// Discover the local Efforts visible from the working directory (the
-    /// cwd → git toplevel walk), attributed to `detected` when repo detection
-    /// found a GitHub repo there and to the toplevel's path identity
-    /// otherwise. Carries the config so a configured `wayfinderRoots` for the
-    /// cwd repo replaces the built-in roots.
+    /// cwd → git toplevel walk), attributed to the configured Tracked Repo
+    /// the cwd belongs to when one matches, else to `detected` when repo
+    /// detection found a GitHub repo there, else to the toplevel's path
+    /// identity. Carries the config for that match and so a configured
+    /// `wayfinderRoots` for the cwd repo replaces the built-in roots.
     DiscoverCwdEfforts {
         detected: Option<RepoSlug>,
         config: LegitConfig,
@@ -420,7 +421,11 @@ async fn run_discover_repo_efforts(
     settle_discovery(unit, result, &tx);
 }
 
-/// The cwd walk.
+/// The cwd walk. A configured repo's identity leads the attribution order so
+/// this probe and that repo's own probe (which publish the same Effort keys)
+/// can't disagree; a detected slug is only the fallback for an unconfigured
+/// cwd repo — spec §2.1 keys a slug-less repo by path even when its remote
+/// is on GitHub.
 async fn run_discover_cwd_efforts(
     cwd: PathBuf,
     detected: Option<RepoSlug>,
@@ -429,10 +434,10 @@ async fn run_discover_cwd_efforts(
 ) {
     let result = blocking(move || {
         let found = local_effort::discover_cwd_efforts(&cwd, &config)?;
-        let identity = match detected {
-            Some(slug) => RepoIdentity::Slug(slug),
-            None => RepoIdentity::Path(found.toplevel),
-        };
+        let identity = found
+            .configured
+            .or_else(|| detected.map(RepoIdentity::Slug))
+            .unwrap_or(RepoIdentity::Path(found.toplevel));
         Ok((identity, found.reads))
     })
     .await;
