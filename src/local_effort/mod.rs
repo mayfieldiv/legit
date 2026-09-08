@@ -61,9 +61,9 @@ pub struct CwdEfforts {
 /// walk cwd → its git toplevel, probing each level (which finds nested
 /// monorepo roots like `apps/mac-agent/docs/wayfinder/`); a cwd outside any
 /// git repo is probed alone. When the cwd repo matches a configured entry —
-/// by slug (the origin remote) or by canonical Main Worktree identity — its
-/// `wayfinderRoots` win over the built-ins (spec §2.2) and its identity is
-/// reported for attribution.
+/// by slug (the origin remote) or by repository membership of its Main
+/// Worktree — its `wayfinderRoots` win over the built-ins (spec §2.2) and
+/// its identity is reported for attribution.
 pub fn discover_cwd_efforts(
     cwd: &Path,
     config: &crate::config::LegitConfig,
@@ -118,27 +118,35 @@ fn git_toplevel(cwd: &Path) -> Option<PathBuf> {
 
 /// The `repos` entries the cwd repo is, in config order. Matching takes
 /// either evidence of "same repo": the entry's slug equals the cwd's
-/// origin-remote slug, or the entry's Main Worktree names the toplevel
-/// (canonical identity, so spelling differences and symlinks can't defeat
-/// it). Deliberately looser than [`RepoIdentity`], which answers dedup with
-/// one key — a slugged entry whose clone is the toplevel is still the cwd
-/// repo even with the remote missing or renamed. A match failure of any
-/// kind — no remote, an unresolvable configured path — just means "not the
-/// cwd repo", never an error. Several entries can match (two spellings of
-/// one Main Worktree both probe); the caller picks per field.
+/// origin-remote slug, or the entry's Main Worktree belongs to the same
+/// repository as the toplevel (see [`repository_identity`] — so a cwd in
+/// one of the repo's linked worktrees matches too, which the repo's own
+/// probe fans out to and attributes to the entry). Deliberately looser than
+/// [`RepoIdentity`], which answers dedup with one key — a slugged entry
+/// whose clone is the toplevel is still the cwd repo even with the remote
+/// missing or renamed. A match failure of any kind — no remote, an
+/// unresolvable configured path — just means "not the cwd repo", never an
+/// error. Several entries can match (two spellings of one Main Worktree
+/// both probe); the caller picks per field.
 fn configured_repos_for_cwd<'a>(
     config: &'a crate::config::LegitConfig,
     cwd: &Path,
     toplevel: &Path,
 ) -> Vec<&'a RepoConfig> {
-    // One subprocess, and only when a slugged entry needs it.
+    // One subprocess each, and only when an entry needs it.
     let cwd_slug = config
         .repos
         .iter()
         .any(|repo| repo.slug.is_some())
         .then(|| crate::git_remote::detect_repo(cwd).ok())
         .flatten();
-    let toplevel = CanonicalPathBuf::canonicalize(toplevel).ok();
+    // Ambient env like `git_toplevel`: this is the user's real cwd repo.
+    let cwd_repository = config
+        .repos
+        .iter()
+        .any(|repo| repo.main_worktree_path.is_some())
+        .then(|| repository_identity(toplevel, GitEnv::Ambient))
+        .flatten();
     config
         .repos
         .iter()
@@ -146,16 +154,37 @@ fn configured_repos_for_cwd<'a>(
             let slug_matches = cwd_slug
                 .as_ref()
                 .is_some_and(|cwd_slug| repo.slug.as_ref() == Some(cwd_slug));
-            let path_matches = match (&repo.main_worktree_path, &toplevel) {
-                (Some(path), Some(toplevel)) => resolve_config_path(path)
+            let repository_matches = match (&repo.main_worktree_path, &cwd_repository) {
+                (Some(path), Some(cwd_repository)) => resolve_config_path(path)
                     .ok()
-                    .and_then(|path| CanonicalPathBuf::canonicalize(path).ok())
-                    .is_some_and(|path| path == *toplevel),
+                    .and_then(|path| repository_identity(&path, GitEnv::Scrubbed))
+                    .is_some_and(|repository| repository == *cwd_repository),
                 _ => false,
             };
-            slug_matches || path_matches
+            slug_matches || repository_matches
         })
         .collect()
+}
+
+/// What identifies the repository `dir` belongs to: the canonical git common
+/// dir, which every worktree of one repository shares (the Main Worktree's
+/// `.git`, a linked worktree's `.git` file pointing back into it); outside
+/// git, the canonical directory itself. Canonical either way, so spelling
+/// differences and symlinks can't defeat the comparison. `None` when `dir`
+/// can't be resolved at all.
+fn repository_identity(dir: &Path, env: GitEnv) -> Option<CanonicalPathBuf> {
+    let mut command = git_command(env);
+    command
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "--git-common-dir"]);
+    let repository = match run_command("git rev-parse --git-common-dir", &mut command) {
+        // Relative to `dir` inside the Main Worktree (`.git`), absolute from
+        // a linked one; `join` handles both.
+        Ok(stdout) => dir.join(stdout.trim()),
+        Err(_) => dir.to_owned(),
+    };
+    CanonicalPathBuf::canonicalize(repository).ok()
 }
 
 /// The working trees a repo's Wayfinder Roots resolve against: every linked

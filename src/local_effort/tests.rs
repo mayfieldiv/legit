@@ -306,6 +306,40 @@ fn configured_roots_win_for_the_cwd_repo_on_a_path_match() {
 }
 
 #[test]
+fn a_cwd_in_a_linked_worktree_is_attributed_to_the_configured_main_worktree() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main");
+    init_repo(&main);
+    let linked = dir.path().join("linked");
+    git(
+        &main,
+        &["worktree", "add", "--quiet", linked.to_str().unwrap()],
+    );
+    write(&linked.join("docs/wayfinder/alpha/map.md"), "# Alpha\n");
+    let config = crate::config::LegitConfig {
+        repos: vec![repo_config(&main, None)],
+        ..Default::default()
+    };
+
+    let found = super::discover_cwd_efforts(&linked, &config).unwrap();
+    let repo_probe = super::discover_repo_efforts(&config.repos[0]).unwrap();
+
+    assert_eq!(
+        found.configured,
+        Some(crate::config::RepoIdentity::Path(
+            crate::canonical_path::CanonicalPathBuf::canonicalize(&main).unwrap()
+        )),
+        "the linked worktree belongs to the configured repo, so the walk \
+         attributes its Efforts where the repo's own probe does"
+    );
+    assert_eq!(
+        effort_titles(&found.reads),
+        effort_titles(&repo_probe),
+        "both probes publish the same Effort"
+    );
+}
+
+#[test]
 fn configured_roots_win_for_the_cwd_repo_on_a_slug_match() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("clone");
