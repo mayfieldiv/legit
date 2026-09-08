@@ -433,6 +433,98 @@ fn a_ticket_without_an_h1_title_degrades() {
 }
 
 #[test]
+fn research_attachments_do_not_duplicate_ticket_numbers() {
+    let dir = tempfile::tempdir().unwrap();
+    write(&dir.path().join("map.md"), "# Memory image\n");
+    write(
+        &dir.path().join("tickets/010-footprint.md"),
+        "---\ntitle: Measure the footprint\nstatus: closed\ntype: task\n---\n\n## Resolution\n\nSee the results attachment.\n",
+    );
+    write(
+        &dir.path().join("tickets/010-footprint-results.md"),
+        "# Footprint results\n\nMeasurements.\n\n## Findings\n\nStatus: resolved\n",
+    );
+    write(
+        &dir.path().join("tickets/012-load-rig.md"),
+        "---\ntitle: Build the load rig\nstatus: open\ntype: task\nblocked-by: [10]\n---\n\n## Question\n\nHow?\n",
+    );
+    write(
+        &dir.path().join("tickets/012-load-rig-survey.md"),
+        "# Load rig survey\n\nSupporting research.\n",
+    );
+
+    let effort = ready(read_effort(dir.path()));
+    assert_eq!(effort.tickets().count(), 2);
+    let frontier: Vec<_> = effort
+        .frontier()
+        .map(|ticket| ticket.title.clone())
+        .collect();
+    assert_eq!(frontier, ["Build the load rig"]);
+}
+
+#[test]
+fn attachments_cannot_supply_dependency_targets() {
+    let dir = tempfile::tempdir().unwrap();
+    write(&dir.path().join("map.md"), "# Effort\n");
+    write(
+        &dir.path().join("tickets/01-dependent.md"),
+        "---\nstatus: open\nblocked-by: [2]\nexternal-blocked-by: [02-notes.md]\n---\n\n# Dependent\n",
+    );
+    write(&dir.path().join("tickets/02-notes.md"), "# Notes\n");
+    write(
+        &dir.path().join("issues/03-independent.md"),
+        "# Independent\n\nBlocked by:\n",
+    );
+
+    let effort = ready(read_effort(dir.path()));
+    assert_eq!(effort.tickets().count(), 2);
+    let dependent = effort.tickets().next().unwrap();
+    assert_eq!(
+        dependent.dependencies,
+        vec![
+            Dependency::Unknown {
+                raw: "2".to_owned()
+            },
+            Dependency::Unknown {
+                raw: "02-notes.md".to_owned()
+            },
+        ]
+    );
+    let frontier: Vec<_> = effort
+        .frontier()
+        .map(|ticket| ticket.title.clone())
+        .collect();
+    assert_eq!(frontier, ["Independent"]);
+}
+
+#[test]
+fn external_ticket_titles_use_frontmatter_when_no_h1_exists() {
+    let dir = tempfile::tempdir().unwrap();
+    let effort_dir = dir.path().join("effort");
+    write(&effort_dir.join("map.md"), "# Effort\n");
+    write(
+        &effort_dir.join("tickets/01-dependent.md"),
+        "---\nstatus: open\nexternal-blocked-by: [../../other/tickets/01-target.md]\n---\n\n# Dependent\n",
+    );
+    let target = dir.path().join("other/tickets/01-target.md");
+    write(
+        &target,
+        "---\ntitle: Target\nstatus: closed\n---\n\n## Resolution\n\nDone.\n",
+    );
+
+    let effort = ready(read_effort(&effort_dir));
+    assert_eq!(
+        effort.tickets().next().unwrap().dependencies,
+        vec![Dependency::External(crate::ticket::ExternalDependency {
+            key: local_ticket_key(&target),
+            state: TicketState::Closed,
+            title: Some("Target".to_owned()),
+        })]
+    );
+    assert_eq!(effort.frontier().count(), 1);
+}
+
+#[test]
 fn duplicate_ticket_numbers_degrade_rather_than_binding_arbitrarily() {
     let dir = tempfile::tempdir().unwrap();
     let effort_dir = dir.path().join("effort");

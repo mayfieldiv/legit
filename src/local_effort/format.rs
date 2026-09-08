@@ -107,13 +107,12 @@ pub(super) fn find_map_file(dir: &Path) -> Result<Option<PathBuf>, String> {
     Ok(candidates.into_iter().next())
 }
 
-/// One ticket file found in the Effort's ticket directories, before parsing:
-/// its identity plus the numeric filename prefix `blocked-by` refs resolve
-/// against.
 struct MemberFile {
     path: PathBuf,
     key: TicketKey,
     number: Option<u64>,
+    fields: TicketFields,
+    title: Option<String>,
 }
 
 /// Read and normalize every ticket file in the Effort. Any per-file failure
@@ -130,8 +129,9 @@ fn read_tickets(dir: &Path) -> Result<Vec<Ticket>, String> {
         .collect()
 }
 
-/// Enumerate the Effort's ticket files: `.md` files directly inside each
-/// ticket directory, in filename order (effort order). Subdirectories —
+/// Ticket metadata distinguishes ticket files from Markdown attachments.
+/// Only files directly inside each ticket directory participate, in filename
+/// order (effort order). Subdirectories —
 /// `assets/`, ticket-scoped or not — are never tickets. Errs when two
 /// members share a numeric prefix — a `blocked-by` ref to that number would
 /// resolve to an arbitrary one of them, silently changing Frontier state.
@@ -157,6 +157,14 @@ fn list_member_files(dir: &Path) -> Result<Vec<MemberFile>, String> {
         }
         paths.sort();
         for path in paths {
+            let content = fs::read_to_string(&path)
+                .map_err(|error| format!("reading {}: {error}", path.display()))?;
+            let Some((fields, body)) = parse_ticket_dialects(&content)
+                .map_err(|reason| format!("{}: {reason}", path.display()))?
+            else {
+                continue;
+            };
+            let title = fields.title(body);
             let key = TicketKey::Local {
                 path: CanonicalPathBuf::canonicalize(&path)
                     .map_err(|error| format!("canonicalizing {}: {error}", path.display()))?,
@@ -165,6 +173,8 @@ fn list_member_files(dir: &Path) -> Result<Vec<MemberFile>, String> {
                 number: filename_number(&path),
                 path,
                 key,
+                fields,
+                title,
             });
         }
     }
@@ -194,12 +204,10 @@ fn filename_number(path: &Path) -> Option<u64> {
 }
 
 fn parse_ticket_file(member: &MemberFile, members: &[MemberFile]) -> Result<Ticket, String> {
-    let content = fs::read_to_string(&member.path).map_err(|error| format!("reading: {error}"))?;
-    let (fields, body) = parse_ticket_dialects(&content)?;
-
+    let fields = &member.fields;
     let (state, claim) = fields.lifecycle()?;
     let mut dependencies = Vec::new();
-    for reference in fields.blocked_by {
+    for reference in &fields.blocked_by {
         let number: u64 = reference
             .parse()
             .map_err(|_| format!("blocked-by ref {reference:?} is not a ticket number"))?;
@@ -208,21 +216,26 @@ fn parse_ticket_file(member: &MemberFile, members: &[MemberFile]) -> Result<Tick
             // No member file carries that number: the target can't be
             // found, and an unseen Dependency must never put the ticket
             // on the Frontier.
-            None => Dependency::Unknown { raw: reference },
+            None => Dependency::Unknown {
+                raw: reference.clone(),
+            },
         });
     }
-    for reference in fields.external_blocked_by {
-        dependencies.push(resolve_external_ref(&member.path, &reference, members));
+    for reference in &fields.external_blocked_by {
+        dependencies.push(resolve_external_ref(&member.path, reference, members));
     }
 
     Ok(Ticket {
         key: member.key.clone(),
         // Never the filename slug: that's the display ref (spec §6.2),
         // derivable from the key, not a title of last resort.
-        title: first_h1(body).ok_or_else(|| "no H1 title".to_owned())?,
+        title: member
+            .title
+            .clone()
+            .ok_or_else(|| "no H1 title or frontmatter title".to_owned())?,
         state,
         claim,
-        ty: TicketType(fields.ty.unwrap_or_default()),
+        ty: TicketType(fields.ty.clone().unwrap_or_default()),
         dependencies,
     })
 }
@@ -267,12 +280,12 @@ fn resolve_external_target(
         return Some(Dependency::SameEffort(key));
     }
     let content = fs::read_to_string(&path).ok()?;
-    let (fields, body) = parse_ticket_dialects(&content).ok()?;
+    let (fields, body) = parse_ticket_dialects(&content).ok()??;
     let (state, _) = fields.lifecycle().ok()?;
     Some(Dependency::External(ExternalDependency {
         key,
         state,
-        title: first_h1(body),
+        title: fields.title(body),
     }))
 }
 
@@ -291,6 +304,7 @@ enum Dialect {
 /// absences mean anything; unknown keys are ignored.
 struct TicketFields {
     dialect: Dialect,
+    title: Option<String>,
     status: Option<String>,
     ty: Option<String>,
     /// Older dialect only. `Some("")` when the key is present with no value —
@@ -305,12 +319,17 @@ impl TicketFields {
     fn new(dialect: Dialect) -> Self {
         Self {
             dialect,
+            title: None,
             status: None,
             ty: None,
             assignee: None,
             blocked_by: Vec::new(),
             external_blocked_by: Vec::new(),
         }
+    }
+
+    fn title(&self, body: &str) -> Option<String> {
+        first_h1(body).or_else(|| self.title.clone().filter(|title| !title.trim().is_empty()))
     }
 
     /// Normalize the two lifecycle axes out of the dialect's vocabulary. The
@@ -350,10 +369,10 @@ impl TicketFields {
     }
 }
 
-fn parse_ticket_dialects(content: &str) -> Result<(TicketFields, &str), String> {
+fn parse_ticket_dialects(content: &str) -> Result<Option<(TicketFields, &str)>, String> {
     match frontmatter_fields_after_open(content) {
-        Some(rest) => parse_older_dialect(rest),
-        None => Ok((parse_newer_dialect(content), content)),
+        Some(rest) => parse_older_dialect(rest).map(Some),
+        None => Ok(parse_newer_dialect(content).map(|fields| (fields, content))),
     }
 }
 
@@ -370,9 +389,10 @@ fn frontmatter_fields_after_open(content: &str) -> Option<&str> {
 /// `Blocked by: NN, NN` in the leading lines, before the first section
 /// heading (`##` or deeper) — past it, matching text is body prose, never
 /// lifecycle. Infallible: an unrecognized Status value is a `lifecycle`
-/// error, and everything else here is prose to skip.
-fn parse_newer_dialect(content: &str) -> TicketFields {
-    let mut fields = TicketFields::new(Dialect::Newer);
+/// error. Without any leading ticket fields, the file is an attachment;
+/// absent Status means Open only after a ticket field identifies the file.
+fn parse_newer_dialect(content: &str) -> Option<TicketFields> {
+    let mut fields = None;
     for line in content.lines() {
         let line = line.trim();
         if line.starts_with("##") {
@@ -384,11 +404,17 @@ fn parse_newer_dialect(content: &str) -> TicketFields {
                 .map(|_| line[prefix.len()..].trim().to_owned())
         };
         if let Some(value) = field("Status:") {
-            fields.status = Some(value);
+            fields
+                .get_or_insert_with(|| TicketFields::new(Dialect::Newer))
+                .status = Some(value);
         } else if let Some(value) = field("Type:") {
-            fields.ty = Some(value);
+            fields
+                .get_or_insert_with(|| TicketFields::new(Dialect::Newer))
+                .ty = Some(value);
         } else if let Some(value) = field("Blocked by:") {
-            fields.blocked_by = value
+            fields
+                .get_or_insert_with(|| TicketFields::new(Dialect::Newer))
+                .blocked_by = value
                 .split(',')
                 .map(|item| item.trim().to_owned())
                 .filter(|item| !item.is_empty())
@@ -398,8 +424,6 @@ fn parse_newer_dialect(content: &str) -> TicketFields {
     fields
 }
 
-/// Parse the older dialect from `rest`, the content past the opening
-/// frontmatter fence.
 fn parse_older_dialect(rest: &str) -> Result<(TicketFields, &str), String> {
     let Some((raw_fields, body)) = rest.split_once("\n---") else {
         return Err("unterminated frontmatter".to_owned());
@@ -407,6 +431,7 @@ fn parse_older_dialect(rest: &str) -> Result<(TicketFields, &str), String> {
     let mut fields = TicketFields::new(Dialect::Older);
     for (key, value) in parse_frontmatter_fields(raw_fields)? {
         match (key.as_str(), value) {
+            ("title", FieldValue::Scalar(value)) => fields.title = Some(value),
             ("status", FieldValue::Scalar(value)) => fields.status = Some(value),
             ("type", FieldValue::Scalar(value)) => fields.ty = Some(value),
             ("assignee", FieldValue::Scalar(value)) => fields.assignee = Some(value),
@@ -417,7 +442,7 @@ fn parse_older_dialect(rest: &str) -> Result<(TicketFields, &str), String> {
             // An empty scalar where a list belongs is an empty list.
             ("blocked-by" | "external-blocked-by", FieldValue::Scalar(value))
                 if value.is_empty() => {}
-            (key @ ("status" | "type" | "assignee"), FieldValue::List(_)) => {
+            (key @ ("title" | "status" | "type" | "assignee"), FieldValue::List(_)) => {
                 return Err(format!(
                     "frontmatter key {key:?} holds a list, expected a value"
                 ));

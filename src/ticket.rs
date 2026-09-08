@@ -164,8 +164,8 @@ pub struct ExternalDependency {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ticket {
     pub key: TicketKey,
-    /// The issue title / the file's H1 (never the filename slug — slugs
-    /// drift after rescopes).
+    /// The issue title, or the file's H1 with its frontmatter title as a
+    /// fallback. Never the filename slug, which can drift after rescopes.
     pub title: String,
     pub state: TicketState,
     pub claim: Option<Claim>,
