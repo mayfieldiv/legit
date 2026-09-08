@@ -179,6 +179,25 @@ fn a_claimed_ticket_that_is_also_blocked_sits_in_claimed() {
 }
 
 #[test]
+fn a_claimed_ticket_with_an_unknown_dependency_is_still_flagged_in_blocked() {
+    let mut list = TicketList::new();
+    let mut spec = claimed("01-taken", "mayfield");
+    spec.deps = vec![Dependency::Unknown {
+        raw: "../gone/tickets/09-x.md".to_owned(),
+    }];
+    list.merge_effort(
+        repo("web"),
+        ready("alpha", "Alpha", vec![spec, open("02-open")]),
+    );
+
+    assert_eq!(
+        rows(&list),
+        ["── Frontier", "02-open", "── Blocked", "01-taken"],
+        "an unknown dependency is a warning the claim must not hide"
+    );
+}
+
+#[test]
 fn closed_tickets_are_hidden_from_the_queue_but_counted_as_decided() {
     let mut list = TicketList::new();
     list.merge_effort(

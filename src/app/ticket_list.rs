@@ -131,11 +131,15 @@ impl QueueTier {
         }
     }
 
-    /// The tier an open Ticket lands in. A claim outranks blocked-ness:
-    /// someone already working on it is the more useful signal than what it
-    /// still waits on.
+    /// The tier an open Ticket lands in. An Unknown Dependency outranks
+    /// everything: it is a data-integrity warning the queue must never hide
+    /// (spec §6.1), so the `⟨dep? …⟩` row shows even for a claimed Ticket.
+    /// Otherwise a claim outranks blocked-ness: someone already working on it
+    /// is the more useful signal than what it still waits on.
     pub fn of(ticket: &EffortTicket<'_>) -> Self {
-        if ticket.claim.is_some() {
+        if ticket.unknown_dependency_ref().is_some() {
+            QueueTier::Blocked
+        } else if ticket.claim.is_some() {
             QueueTier::Claimed
         } else if ticket.is_blocked() {
             QueueTier::Blocked
