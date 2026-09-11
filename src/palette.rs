@@ -11,7 +11,6 @@
 
 use ratatui::style::Color;
 
-use crate::app::ticket_list::QueueTier;
 use crate::blocker::Tier;
 use crate::color::parse_hex;
 use crate::ticket::Mode;
@@ -158,16 +157,6 @@ impl Palette {
             mode_afk: hex("#61afef"),
             mode_hitl: hex("#c678dd"),
             mode_either: hex("#7d8590"),
-        }
-    }
-
-    /// The colour for a ticket queue tier — the one tier-to-role mapping,
-    /// shared by the queue's headers and the markers that echo them.
-    pub fn queue_tier(&self, tier: QueueTier) -> Color {
-        match tier {
-            QueueTier::Frontier => self.frontier,
-            QueueTier::Claimed => self.claimed,
-            QueueTier::Blocked => self.blocked,
         }
     }
 

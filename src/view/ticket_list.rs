@@ -5,7 +5,7 @@
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
 };
@@ -319,9 +319,18 @@ fn tier_header_line(tier: QueueTier, width: usize, palette: &Palette) -> Line<'s
     Line::from(Span::styled(
         pad_to_width(&text, width),
         Style::default()
-            .fg(palette.queue_tier(tier))
+            .fg(tier_color(tier, palette))
             .add_modifier(Modifier::BOLD),
     ))
+}
+
+/// The tier's role colour, echoed by the markers `title_cell` paints.
+fn tier_color(tier: QueueTier, palette: &Palette) -> Color {
+    match tier {
+        QueueTier::Frontier => palette.frontier,
+        QueueTier::Claimed => palette.claimed,
+        QueueTier::Blocked => palette.blocked,
+    }
 }
 
 fn header_row(layout: &QueueLayout) -> Line<'static> {
