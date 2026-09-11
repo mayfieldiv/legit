@@ -1,7 +1,7 @@
 use crate::repo_slug::RepoSlug;
 use chrono::TimeZone;
 
-use super::{DisplayRow, Grouping, PrList};
+use super::{Grouping, PrList};
 use crate::blocker::Tier;
 use crate::github::rest::PR;
 use crate::github::types::PRState;
@@ -44,14 +44,9 @@ fn flat_list(n: u64) -> PrList {
     list
 }
 
-/// PR indices among the currently visible display rows.
-fn visible_pr_indices(list: &PrList) -> Vec<usize> {
-    list.visible_rows()
-        .filter_map(|(row, _)| match row {
-            DisplayRow::Pr(i) => Some(*i),
-            DisplayRow::Header(_) => None,
-        })
-        .collect()
+/// The selected PR's number.
+fn selected_number(list: &PrList) -> Option<u64> {
+    list.selected_pr().map(|pr| pr.number)
 }
 
 #[test]
@@ -112,7 +107,7 @@ fn untouched_selection_follows_the_top_row_as_arrivals_resort() {
     let mut list = PrList::new();
     list.push(sample_pr(1));
     list.relayout(None, |_| Some(Tier::NeedsReview));
-    assert_eq!(list.prs()[list.selected()].number, 1);
+    assert_eq!(selected_number(&list), Some(1));
 
     // A more recently active PR arrives and sorts above the first-streamed
     // one; the never-touched cursor follows the top row.
@@ -121,21 +116,21 @@ fn untouched_selection_follows_the_top_row_as_arrivals_resort() {
     list.push(newer);
     list.relayout(None, |_| Some(Tier::NeedsReview));
     assert_eq!(
-        list.prs()[list.selected()].number,
-        2,
+        selected_number(&list),
+        Some(2),
         "the default selection follows the top row"
     );
 
     // Once the user navigates, the selection sticks to its PR instead.
     list.move_down();
-    assert_eq!(list.prs()[list.selected()].number, 1);
+    assert_eq!(selected_number(&list), Some(1));
     let mut newest = sample_pr(3);
     newest.updated_at = chrono::Utc.with_ymd_and_hms(2026, 5, 3, 0, 0, 0).unwrap();
     list.push(newest);
     list.relayout(None, |_| Some(Tier::NeedsReview));
     assert_eq!(
-        list.prs()[list.selected()].number,
-        1,
+        selected_number(&list),
+        Some(1),
         "a user-chosen selection sticks through re-sorts"
     );
 }
@@ -159,8 +154,8 @@ fn wheel_up_on_empty_list_does_not_detach_default_selection() {
     list.relayout(None, |_| Some(Tier::NeedsReview));
 
     assert_eq!(
-        list.prs()[list.selected()].number,
-        2,
+        selected_number(&list),
+        Some(2),
         "the default selection still follows the top row"
     );
 }
@@ -218,32 +213,6 @@ fn complete_fetch_clears_loading_for_that_repo_only() {
 }
 
 #[test]
-fn move_down_advances_selection_within_bounds() {
-    let mut list = flat_list(3);
-
-    list.move_down();
-    assert_eq!(list.selected(), 1);
-    list.move_down();
-    list.move_down();
-    list.move_down();
-    // Last PR is index 2; further moves clamp.
-    assert_eq!(list.selected(), 2);
-}
-
-#[test]
-fn move_up_retreats_selection_and_clamps_at_zero() {
-    let mut list = flat_list(3);
-    list.move_down();
-    list.move_down();
-    assert_eq!(list.selected(), 2);
-
-    list.move_up();
-    list.move_up();
-    list.move_up();
-    assert_eq!(list.selected(), 0);
-}
-
-#[test]
 fn navigation_skips_group_headers() {
     // Two tiers: me-blocking (PR #1) and waiting-on-author (PR #2).
     // Layout: [Header, Pr(0), Header, Pr(1)]. j must step Pr(0) -> Pr(1).
@@ -258,11 +227,19 @@ fn navigation_skips_group_headers() {
         })
     });
 
-    assert_eq!(list.selected(), 0);
+    assert_eq!(selected_number(&list), Some(1));
     list.move_down();
-    assert_eq!(list.selected(), 1, "j steps over the second group's header");
+    assert_eq!(
+        selected_number(&list),
+        Some(2),
+        "j steps over the second group's header"
+    );
     list.move_up();
-    assert_eq!(list.selected(), 0, "k steps back over the header");
+    assert_eq!(
+        selected_number(&list),
+        Some(1),
+        "k steps back over the header"
+    );
 }
 
 #[test]
@@ -270,99 +247,15 @@ fn cycle_grouping_advances_mode_and_resets_selection() {
     let mut list = flat_list(3);
     list.move_down();
     list.move_down();
-    assert_eq!(list.selected(), 2);
+    assert_eq!(selected_number(&list), Some(3));
 
     // flat_list set grouping to None; cycling wraps None -> SmartStatus.
     list.cycle_grouping();
     assert_eq!(list.grouping(), Grouping::SmartStatus);
-    assert_eq!(list.selected(), 0, "selection resets on regroup");
-}
-
-#[test]
-fn visible_rows_yields_window_starting_at_scroll_offset() {
-    let mut list = flat_list(20);
-    list.resize(5);
-    for _ in 0..10 {
-        list.move_down();
-    }
-    let offset = list.scroll_offset();
-
-    let indices = visible_pr_indices(&list);
-
-    assert_eq!(indices.len(), 5);
-    // Flat layout: display row N is PR index N, so the first visible PR
-    // index equals the scroll offset.
-    assert_eq!(indices[0], offset);
-    assert_eq!(indices[4], offset + 4);
-}
-
-#[test]
-fn visible_rows_caps_at_list_length_when_window_extends_past_end() {
-    let mut list = flat_list(3);
-    list.resize(10);
-
-    let count = list.visible_rows().count();
-
     assert_eq!(
-        count, 3,
-        "viewport is larger than list; should yield all rows"
-    );
-}
-
-#[test]
-fn moving_below_bottom_margin_advances_scroll() {
-    let mut list = flat_list(20);
-    list.resize(10);
-
-    for _ in 0..9 {
-        list.move_down();
-    }
-
-    assert!(
-        list.scroll_offset() >= 1,
-        "scroll should advance into the bottom margin, got {}",
-        list.scroll_offset(),
-    );
-}
-
-#[test]
-fn shrinking_viewport_re_clamps_scroll_to_keep_selection_visible() {
-    let mut list = flat_list(30);
-    list.resize(20);
-    for _ in 0..25 {
-        list.move_down();
-    }
-    let selected_row = list.selected(); // flat: row == index
-    assert!(selected_row < list.scroll_offset() + 20);
-
-    list.resize(5);
-
-    assert!(
-        list.selected() >= list.scroll_offset() && list.selected() < list.scroll_offset() + 5,
-        "selection {} must stay within window {}..{} after shrink",
-        list.selected(),
-        list.scroll_offset(),
-        list.scroll_offset() + 5,
-    );
-}
-
-#[test]
-fn single_row_viewport_keeps_selection_visible() {
-    let mut list = flat_list(10);
-    list.resize(1);
-
-    // At viewport_height = 1 the margin must collapse to 0, otherwise the
-    // top and bottom margins are jointly unsatisfiable and the selected row
-    // scrolls out of the single visible line.
-    for _ in 0..5 {
-        list.move_down();
-    }
-
-    // Flat layout: selected PR index == its display row.
-    assert_eq!(
-        list.scroll_offset(),
-        list.selected(),
-        "the only visible row must be the selected one",
+        selected_number(&list),
+        Some(1),
+        "selection resets on regroup"
     );
 }
 

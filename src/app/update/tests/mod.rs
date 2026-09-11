@@ -30,6 +30,11 @@ pub(super) fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
     update_at(model, msg, fixed_now())
 }
 
+/// The selected PR's number.
+pub(super) fn selected_number(model: &Model) -> Option<u64> {
+    model.list.selected_pr().map(|pr| pr.number)
+}
+
 mod detail;
 mod enrichment;
 mod files;
@@ -940,10 +945,10 @@ fn j_advances_selection_within_list_bounds() {
     }
 
     update(&mut model, key_event(KeyCode::Char('j')));
-    assert_eq!(model.list.selected(), 1);
+    assert_eq!(selected_number(&model), Some(2));
 
     update(&mut model, key_event(KeyCode::Char('j')));
-    assert_eq!(model.list.selected(), 2);
+    assert_eq!(selected_number(&model), Some(3));
 }
 
 #[test]
@@ -954,7 +959,7 @@ fn j_at_last_pr_does_not_advance_past_end() {
     update(&mut model, key_event(KeyCode::Char('j')));
     update(&mut model, key_event(KeyCode::Char('j')));
 
-    assert_eq!(model.list.selected(), 0);
+    assert_eq!(selected_number(&model), Some(1));
 }
 
 #[test]
@@ -965,14 +970,14 @@ fn k_retreats_selection_and_clamps_at_zero() {
     }
     update(&mut model, key_event(KeyCode::Char('j')));
     update(&mut model, key_event(KeyCode::Char('j')));
-    assert_eq!(model.list.selected(), 2);
+    assert_eq!(selected_number(&model), Some(3));
 
     update(&mut model, key_event(KeyCode::Char('k')));
-    assert_eq!(model.list.selected(), 1);
+    assert_eq!(selected_number(&model), Some(2));
 
     update(&mut model, key_event(KeyCode::Char('k')));
     update(&mut model, key_event(KeyCode::Char('k')));
-    assert_eq!(model.list.selected(), 0);
+    assert_eq!(selected_number(&model), Some(1));
 }
 
 #[test]
@@ -1027,9 +1032,7 @@ fn terminal_resize_updates_viewport_and_keeps_selection_visible() {
 }
 
 /// Whether the selected PR's row is among the currently visible display
-/// rows. `selected()` is a PR index while `scroll_offset()` counts display
-/// rows (headers included), so the two aren't directly comparable — ask the
-/// rendered window instead.
+/// rows, asked of the rendered window itself.
 fn selection_is_visible(model: &Model) -> bool {
     model.list.visible_rows().any(|(_, selected)| selected)
 }
@@ -1040,14 +1043,14 @@ fn streaming_prs_keep_selection_pinned() {
     update(&mut model, Msg::PrArrived(sample_pr(1, "a")));
     update(&mut model, Msg::PrArrived(sample_pr(2, "b")));
     update(&mut model, key_event(KeyCode::Char('j')));
-    assert_eq!(model.list.selected(), 1);
+    assert_eq!(selected_number(&model), Some(2));
 
     update(&mut model, Msg::PrArrived(sample_pr(3, "c")));
     update(&mut model, Msg::PrArrived(sample_pr(4, "d")));
 
     assert_eq!(
-        model.list.selected(),
-        1,
+        selected_number(&model),
+        Some(2),
         "selection should not shift when new PRs arrive"
     );
 }
@@ -1064,11 +1067,15 @@ fn g_cycles_grouping_smart_status_repo_none_and_resets_selection() {
     }
     update(&mut model, key_event(KeyCode::Char('j')));
     update(&mut model, key_event(KeyCode::Char('j')));
-    assert_eq!(model.list.selected(), 2);
+    assert_eq!(selected_number(&model), Some(3));
 
     update(&mut model, key_event(KeyCode::Char('g')));
     assert_eq!(model.list.grouping(), Grouping::Repo);
-    assert_eq!(model.list.selected(), 0, "selection resets on cycle");
+    assert_eq!(
+        selected_number(&model),
+        Some(1),
+        "selection resets on cycle"
+    );
 
     update(&mut model, key_event(KeyCode::Char('g')));
     assert_eq!(model.list.grouping(), Grouping::None);
@@ -1106,12 +1113,12 @@ fn j_skips_group_headers_when_smart_status_grouping_has_tiers() {
         },
     );
     model.relayout();
-    assert_eq!(model.list.selected(), 0);
+    assert_eq!(selected_number(&model), Some(1));
 
     update(&mut model, key_event(KeyCode::Char('j')));
     assert_eq!(
-        model.list.selected(),
-        1,
+        selected_number(&model),
+        Some(2),
         "j steps PR-to-PR, skipping the intervening header"
     );
 }

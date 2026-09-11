@@ -22,7 +22,7 @@ use std::fmt;
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
-    app::list_cursor::{self, Direction, SelectionMode, Viewport},
+    app::list_cursor::{Direction, ListCursor, SelectableRow},
     config::RepoIdentity,
     format::format_repo_short,
     ticket::{
@@ -256,6 +256,16 @@ pub enum QueueRow {
     Ticket(TicketRow),
 }
 
+impl SelectableRow for QueueRow {
+    type Id = TicketKey;
+    fn id(&self) -> Option<&TicketKey> {
+        match self {
+            QueueRow::Ticket(row) => Some(&row.key),
+            QueueRow::Header(_) => None,
+        }
+    }
+}
+
 /// The widest content each fixed queue column has to fit, over the queued
 /// Tickets — measured once per relayout so a redraw only sizes columns.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -318,14 +328,8 @@ pub struct TicketList {
     /// `relayout` whenever the pool changes.
     rows: Vec<QueueRow>,
     content_widths: QueueContentWidths,
-    /// The selected Ticket's identity; `None` only while the queue is empty.
-    selected: Option<TicketKey>,
-    /// Until the user moves the cursor the selection follows the top row as
-    /// Efforts stream in and re-sort the queue; after, it sticks to its
-    /// Ticket.
-    // TODO(#133): `Detached` once wheel ticks reach the queue viewport.
-    selection_mode: SelectionMode,
-    viewport: Viewport,
+    /// The selection (a Ticket's identity) and scroll viewport over `rows`.
+    cursor: ListCursor<TicketKey>,
 }
 
 impl fmt::Debug for TicketList {
@@ -334,9 +338,7 @@ impl fmt::Debug for TicketList {
             .field("efforts", &self.efforts.len())
             .field("discoveries", &self.discoveries)
             .field("rows", &self.rows.len())
-            .field("selected", &self.selected)
-            .field("selection_mode", &self.selection_mode)
-            .field("viewport", &self.viewport)
+            .field("cursor", &self.cursor)
             .finish()
     }
 }
@@ -427,80 +429,41 @@ impl TicketList {
             .any(|row| matches!(row, QueueRow::Ticket(_)))
     }
 
+    /// The selected Ticket; `None` only while the queue is empty.
     pub fn selected_ticket(&self) -> Option<&TicketKey> {
-        self.selected.as_ref()
+        self.cursor.selected()
     }
 
     #[cfg(test)]
     pub fn scroll_offset(&self) -> usize {
-        self.viewport.offset()
+        self.cursor.offset()
     }
 
     #[cfg(test)]
     pub fn viewport_height(&self) -> usize {
-        self.viewport.height()
+        self.cursor.height()
     }
 
     /// The display rows inside the scroll viewport, each flagged when it is
-    /// the selected Ticket. Headers are never selected.
+    /// the selected Ticket.
     pub fn visible_rows(&self) -> impl Iterator<Item = (&QueueRow, bool)> {
-        let selected = self.selected.as_ref();
-        self.rows[self.viewport.window(self.rows.len())]
-            .iter()
-            .map(move |row| {
-                let is_selected =
-                    matches!(row, QueueRow::Ticket(row) if Some(&row.key) == selected);
-                (row, is_selected)
-            })
+        self.cursor.visible_rows(&self.rows)
     }
 
     pub fn move_down(&mut self) {
-        self.step(Direction::Down);
+        self.cursor.step(&self.rows, Direction::Down);
     }
 
     pub fn move_up(&mut self) {
-        self.step(Direction::Up);
+        self.cursor.step(&self.rows, Direction::Up);
     }
 
     pub fn resize(&mut self, viewport_height: usize) {
-        self.viewport.resize(viewport_height);
-        self.normalize_scroll();
+        self.cursor.resize(&self.rows, viewport_height);
     }
 
-    /// Step the selection to the adjacent Ticket row in `direction`, skipping
-    /// headers and clamping at the ends. Pins the cursor.
-    fn step(&mut self, direction: Direction) {
-        self.selection_mode = SelectionMode::Pinned;
-        if let Some(current) = self.selected_display_row() {
-            let adjacent =
-                list_cursor::adjacent_item(&self.rows, current, direction, |row| match row {
-                    QueueRow::Ticket(row) => Some(row.key.clone()),
-                    QueueRow::Header(_) => None,
-                });
-            if adjacent.is_some() {
-                self.selected = adjacent;
-            }
-        }
-        self.normalize_scroll();
-    }
-
-    fn selected_display_row(&self) -> Option<usize> {
-        let selected = self.selected.as_ref()?;
-        self.rows
-            .iter()
-            .position(|row| matches!(row, QueueRow::Ticket(row) if row.key == *selected))
-    }
-
-    fn first_ticket(&self) -> Option<TicketKey> {
-        self.rows.iter().find_map(|row| match row {
-            QueueRow::Ticket(row) => Some(row.key.clone()),
-            QueueRow::Header(_) => None,
-        })
-    }
-
-    /// Rebuild rail order and the tiered queue, then re-anchor the cursor: an
-    /// unpinned cursor follows the top row; a pinned one keeps its Ticket
-    /// while that Ticket is still in the queue and snaps to the top otherwise.
+    /// Rebuild rail order and the tiered queue, then re-anchor the cursor
+    /// (see `ListCursor::re_anchor`).
     fn relayout(&mut self) {
         self.efforts.sort_by_cached_key(EffortEntry::order_key);
 
@@ -538,13 +501,7 @@ impl TicketList {
         }
         self.rows = rows;
         self.content_widths = widths;
-
-        let keep = self.selection_mode != SelectionMode::FollowTop
-            && self.selected_display_row().is_some();
-        if !keep {
-            self.selected = self.first_ticket();
-        }
-        self.normalize_scroll();
+        self.cursor.re_anchor(&self.rows);
     }
 
     /// Every open Ticket of every pooled Effort with its repo's display name,
@@ -559,13 +516,6 @@ impl TicketList {
                     .filter(|ticket| ticket.state == TicketState::Open)
                     .map(move |ticket| (repo, ticket))
             })
-    }
-
-    fn normalize_scroll(&mut self) {
-        match self.selected_display_row() {
-            Some(selected_row) => self.viewport.follow(selected_row, self.rows.len()),
-            None => self.viewport.clamp(self.rows.len()),
-        }
     }
 }
 

@@ -115,12 +115,12 @@ fn ticket_surface_keys_never_move_the_pr_selection_or_fetch_files() {
     model.list.push(sample_pr(1, "One"));
     model.list.push(sample_pr(2, "Two"));
     model.relayout();
-    let before = model.list.selected();
+    let before = selected_number(&model);
 
     let cmds = update(&mut model, key_event(KeyCode::Char('j')));
 
     assert!(cmds.is_empty(), "{cmds:?}");
-    assert_eq!(model.list.selected(), before);
+    assert_eq!(selected_number(&model), before);
     assert!(model.enrichment.files.is_empty());
 }
 

@@ -51,15 +51,15 @@ fn tab_switch_scopes_the_list_and_resets_selection_to_top() {
     let mut model = tabbed_model();
     // All tab shows both PRs; move the selection off the top.
     update(&mut model, key_event(KeyCode::Char('j')));
-    assert_eq!(model.list.selected(), 1);
+    assert_eq!(selected_number(&model), Some(1));
 
     // Tab 2 = mayfieldiv/legit — only its PR (absolute index 1) is visible.
     update(&mut model, key_event(KeyCode::Char('2')));
     let visible: Vec<usize> = model.list.visible_pr_indices().collect();
     assert_eq!(visible, vec![1], "only the scoped repo's PR remains");
     assert_eq!(
-        model.list.selected(),
-        1,
+        selected_number(&model),
+        Some(1),
         "selection sits on the tab's top PR"
     );
 
@@ -68,8 +68,8 @@ fn tab_switch_scopes_the_list_and_resets_selection_to_top() {
     let visible: Vec<usize> = model.list.visible_pr_indices().collect();
     assert_eq!(visible, vec![0]);
     assert_eq!(
-        model.list.selected(),
-        0,
+        selected_number(&model),
+        Some(10),
         "selection resets to top on tab change"
     );
 }

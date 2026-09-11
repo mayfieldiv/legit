@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 
 use crate::app::grouping::{DisplayRow, Grouping, display_rows};
-use crate::app::list_cursor::{self, Direction, SelectionMode, Viewport};
+use crate::app::list_cursor::{Direction, ListCursor, SelectableRow};
 use crate::blocker::Tier;
 use crate::github::rest::{PR, PrKey};
 use crate::repo_slug::RepoSlug;
@@ -150,6 +150,16 @@ fn compare_recent_activity(a: &PR, b: &PR) -> Ordering {
         .then_with(|| a.number.cmp(&b.number))
 }
 
+impl SelectableRow for DisplayRow {
+    type Id = usize;
+    fn id(&self) -> Option<&usize> {
+        match self {
+            DisplayRow::Pr(index) => Some(index),
+            DisplayRow::Header(_) => None,
+        }
+    }
+}
+
 /// Lifecycle of one Tracked Repo's open-PR fetch. A repo with no entry in
 /// `PrList::phases` hasn't had a fetch dispatched yet. At most one variant
 /// holds per repo, so the view never has to ask "are we loading AND failed?".
@@ -183,12 +193,8 @@ pub struct PrList {
     /// Flattened display layout (headers + PR rows). Rebuilt by `relayout`
     /// whenever the PRs, their tiers, or the grouping change.
     rows: Vec<DisplayRow>,
-    /// Selection cursor as an index into `prs`. Headers are never selectable.
-    selected: usize,
-    viewport: Viewport,
-    /// Whether the selection follows the top row, sticks to a user-chosen PR,
-    /// or has a wheel-detached viewport (see `SelectionMode`).
-    selection_mode: SelectionMode,
+    /// The selection (a PR index) and scroll viewport over `rows`.
+    cursor: ListCursor<usize>,
 }
 
 impl fmt::Debug for PrList {
@@ -199,9 +205,7 @@ impl fmt::Debug for PrList {
             .field("phases", &self.phases)
             .field("prs", &self.prs.len())
             .field("grouping", &self.grouping)
-            .field("selected", &self.selected)
-            .field("viewport", &self.viewport)
-            .field("selection_mode", &self.selection_mode)
+            .field("cursor", &self.cursor)
             .finish()
     }
 }
@@ -281,13 +285,8 @@ impl PrList {
     /// for the All tab) and ordering each group by most recent GitHub activity.
     /// `tier_of(pr)` returns the Smart-status tier for a PR, or `None` when its
     /// enrichment hasn't been derived yet; the repo-grouping key is read
-    /// straight off each PR's `repo_slug`. Once the user has navigated,
-    /// selection sticks to the same PR while it remains visible and snaps to
-    /// the top display row otherwise; until then it follows the top row as
-    /// arrivals re-sort the list (see `SelectionMode`). If the selected
-    /// PR is unchanged, preserve the current viewport offset so enrichment
-    /// refreshes do not undo wheel scrolling; if the selection changes, scroll
-    /// follows the new selection. Called by `update` after PRs arrive,
+    /// straight off each PR's `repo_slug`. The cursor then re-anchors (see
+    /// `ListCursor::re_anchor`). Called by `update` after PRs arrive,
     /// enrichment lands, or the grouping/scope changes.
     pub fn relayout(&mut self, scope: Option<&RepoSlug>, tier_of: impl Fn(&PR) -> Option<Tier>) {
         let query = FilterQuery::parse(self.filter.text());
@@ -307,28 +306,7 @@ impl PrList {
             |i| prs[i].repo_slug.clone(),
         );
         self.rows = rows;
-        let target = if self.selection_mode != SelectionMode::FollowTop
-            && visible.contains(&self.selected)
-        {
-            self.selected
-        } else {
-            self.visible_pr_indices().next().unwrap_or(0)
-        };
-        if target == self.selected {
-            if self.selection_mode == SelectionMode::Detached {
-                self.clamp_scroll_offset();
-            } else {
-                self.normalize_scroll();
-            }
-        } else {
-            self.selected = target;
-            if self.selection_mode == SelectionMode::Detached {
-                // The pinned PR vanished; re-pin to the snapped-to row rather
-                // than keep a detached viewport aimed at nothing.
-                self.selection_mode = SelectionMode::Pinned;
-            }
-            self.normalize_scroll();
-        }
+        self.cursor.re_anchor(&self.rows);
     }
 
     /// Whether the current layout shows no PR rows at all — the placeholder
@@ -418,148 +396,67 @@ impl PrList {
         self.grouping
     }
 
-    /// Advance to the next grouping mode and reset the selection to the first
-    /// PR (its display row may have moved). The caller must `relayout` after to
-    /// rebuild the rows; the new grouping is in effect immediately.
+    /// Advance to the next grouping mode and reset the selection to the top.
+    /// The caller must `relayout` after to rebuild the rows; the new grouping
+    /// is in effect immediately.
     pub fn cycle_grouping(&mut self) {
         self.grouping = self.grouping.next();
-        self.selected = 0;
-        self.viewport.scroll_to_top();
-        self.selection_mode = SelectionMode::FollowTop;
+        self.cursor.reset_to_top(&self.rows);
     }
 
     /// Reset the selection to the first visible PR and scroll to the top. Used
     /// on tab switches, where the spec resets to the top of the new tab rather
     /// than chasing the previously selected PR.
     pub fn select_first_visible(&mut self) {
-        let first = self.visible_pr_indices().next().unwrap_or(0);
-        self.selected = first;
-        self.viewport.scroll_to_top();
-        self.selection_mode = SelectionMode::FollowTop;
-        self.normalize_scroll();
+        self.cursor.reset_to_top(&self.rows);
     }
 
-    /// Move the selection to the next PR row in display order, skipping headers.
     pub fn move_down(&mut self) {
-        if let Some(next) = self.adjacent_pr(self.selected, Direction::Down) {
-            self.selected = next;
-        }
-        self.selection_mode = SelectionMode::Pinned;
-        self.normalize_scroll();
+        self.cursor.step(&self.rows, Direction::Down);
     }
 
-    /// Move the selection to the previous PR row in display order.
     pub fn move_up(&mut self) {
-        if let Some(prev) = self.adjacent_pr(self.selected, Direction::Up) {
-            self.selected = prev;
-        }
-        self.selection_mode = SelectionMode::Pinned;
-        self.normalize_scroll();
+        self.cursor.step(&self.rows, Direction::Up);
     }
 
     pub fn resize(&mut self, viewport_height: usize) {
-        self.viewport.resize(viewport_height);
-        if self.selection_mode == SelectionMode::Detached {
-            self.clamp_scroll_offset();
-        } else {
-            self.normalize_scroll();
-        }
+        self.cursor.resize(&self.rows, viewport_height);
     }
 
-    /// Scroll the visible display window down without changing the selected
-    /// PR. Mouse wheel input is a viewport operation, unlike keyboard
-    /// navigation (`j`/`k`), so the selection may temporarily sit off-screen.
     pub fn scroll_down(&mut self, rows: usize) {
-        if self.viewport.height() == 0 || self.rows.is_empty() {
-            return;
-        }
-        self.viewport.scroll_down(rows, self.rows.len());
-        // Wheel input is engagement too: leaving `FollowTop` would let a
-        // background relayout yank the still-default selection (and the
-        // viewport with it) back to a re-sorted top row mid-browse.
-        self.selection_mode = SelectionMode::Detached;
+        self.cursor.scroll_down(&self.rows, rows);
     }
 
-    /// Scroll the visible display window up without changing the selected PR.
     pub fn scroll_up(&mut self, rows: usize) {
-        // Mirror `scroll_down`'s guard: a wheel event over an empty list is a
-        // no-op, not engagement — leaving `FollowTop` here would pin the
-        // still-default selection to whichever PR happens to arrive first.
-        if self.viewport.height() == 0 || self.rows.is_empty() {
-            return;
-        }
-        self.viewport.scroll_up(rows);
-        self.selection_mode = SelectionMode::Detached;
+        self.cursor.scroll_up(&self.rows, rows);
     }
 
-    /// Select the PR row at `visible_row` within the current viewport. Headers
-    /// are ignored. Unlike keyboard movement, this does not normalize scroll:
-    /// the clicked row is already visible, so the viewport should stay put.
     pub fn select_visible_row(&mut self, visible_row: usize) -> bool {
-        let display_row = self.viewport.offset().saturating_add(visible_row);
-        let Some(DisplayRow::Pr(index)) = self.rows.get(display_row) else {
-            return false;
-        };
-        self.selected = *index;
-        self.selection_mode = SelectionMode::Pinned;
-        true
-    }
-
-    /// PR index of the selection cursor. Read by tests and future features
-    /// (e.g. opening the selected PR); the view itself reads the selected flag
-    /// straight off `visible_rows`.
-    #[allow(dead_code)]
-    pub fn selected(&self) -> usize {
-        self.selected
+        self.cursor.select_visible_row(&self.rows, visible_row)
     }
 
     /// Index of the first display row inside the scroll window. Exposed for
     /// tests and future debug overlays; the view itself prefers `visible_rows`.
     #[allow(dead_code)]
     pub fn scroll_offset(&self) -> usize {
-        self.viewport.offset()
+        self.cursor.offset()
     }
 
     /// Number of rows currently allotted to the list (terminal height minus
     /// the status bar). Set via `resize`. Exposed for tests/inspection.
     #[allow(dead_code)]
     pub fn viewport_height(&self) -> usize {
-        self.viewport.height()
-    }
-
-    /// The display row index of the currently selected PR, or `None` when the
-    /// list is empty. Used by `normalize_scroll` to keep the selection visible.
-    fn selected_display_row(&self) -> Option<usize> {
-        self.rows
-            .iter()
-            .position(|row| row == &DisplayRow::Pr(self.selected))
-    }
-
-    /// Keep the selected PR's display row on-screen (see `Viewport::follow`).
-    fn normalize_scroll(&mut self) {
-        let Some(selected_row) = self.selected_display_row() else {
-            return;
-        };
-        self.viewport.follow(selected_row, self.rows.len());
-    }
-
-    fn clamp_scroll_offset(&mut self) {
-        self.viewport.clamp(self.rows.len());
+        self.cursor.height()
     }
 
     pub fn prs(&self) -> &[PR] {
         &self.prs
     }
 
-    /// The currently selected PR, or `None` when the visible list is empty.
-    /// Returns the PR only when its index is among the visible display rows, so
-    /// a stale `selected` (from an empty list, or one a tab/filter just hid)
-    /// never points the summary panel at an off-screen PR. The summary panel
-    /// reads this to know which PR to render.
+    /// The selected PR, or `None` while the visible list is empty. The summary
+    /// panel reads this to know which PR to render.
     pub fn selected_pr(&self) -> Option<&PR> {
-        self.visible_pr_indices()
-            .any(|i| i == self.selected)
-            .then(|| &self.prs[self.selected])
+        self.cursor.selected().map(|&index| &self.prs[index])
     }
 
     /// Immutable access to a PR by key. Used by the detail view to look up the
@@ -583,10 +480,7 @@ impl PrList {
     /// is the row plus whether it is the selected PR (so the view can highlight
     /// it). Headers are never marked selected.
     pub fn visible_rows(&self) -> impl Iterator<Item = (&DisplayRow, bool)> {
-        let selected = self.selected;
-        self.rows[self.viewport.window(self.rows.len())]
-            .iter()
-            .map(move |row| (row, row == &DisplayRow::Pr(selected)))
+        self.cursor.visible_rows(&self.rows)
     }
 
     /// Fetch phase for one Tracked Repo, or `None` when no fetch has been
@@ -625,17 +519,6 @@ impl PrList {
         self.phases.values().find_map(|phase| match phase {
             Phase::Failed(message) => Some(message.as_str()),
             _ => None,
-        })
-    }
-
-    /// The PR index of the nearest selectable row in `direction` from `from`,
-    /// scanning display rows so headers are skipped. `None` if there is no PR
-    /// row in that direction (already at the first/last PR).
-    fn adjacent_pr(&self, from: usize, direction: Direction) -> Option<usize> {
-        let current_row = self.rows.iter().position(|r| r == &DisplayRow::Pr(from))?;
-        list_cursor::adjacent_item(&self.rows, current_row, direction, |row| match row {
-            DisplayRow::Pr(i) => Some(*i),
-            DisplayRow::Header(_) => None,
         })
     }
 }
