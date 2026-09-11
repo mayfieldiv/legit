@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 
 use crate::app::grouping::{DisplayRow, Grouping, display_rows};
-use crate::app::list_scroll;
+use crate::app::list_cursor::{self, Direction, SelectionMode, Viewport};
 use crate::blocker::Tier;
 use crate::github::rest::{PR, PrKey};
 use crate::repo_slug::RepoSlug;
@@ -150,27 +150,6 @@ fn compare_recent_activity(a: &PR, b: &PR) -> Ordering {
         .then_with(|| a.number.cmp(&b.number))
 }
 
-/// How the selection cursor relates to user intent — one value instead of
-/// parallel booleans, so "viewport detached from a selection the user never
-/// made" is unrepresentable.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-enum SelectionMode {
-    /// The user hasn't navigated yet (or a tab switch/regroup reset to the
-    /// top): `relayout` keeps the selection on the top display row. PRs
-    /// stream in and sort by recent activity, so the first-arrived PR is
-    /// rarely the top one — without this the startup cursor would park on an
-    /// arbitrary mid-list row.
-    #[default]
-    FollowTop,
-    /// The user picked a PR (j/k, click): the selection sticks to that PR
-    /// through re-sorts, and the viewport follows it.
-    Pinned,
-    /// Wheel scrolling moved the viewport away from the pinned selection;
-    /// background relayouts preserve the viewport instead of snapping back,
-    /// until the user explicitly moves/selects again.
-    Detached,
-}
-
 /// Lifecycle of one Tracked Repo's open-PR fetch. A repo with no entry in
 /// `PrList::phases` hasn't had a fetch dispatched yet. At most one variant
 /// holds per repo, so the view never has to ask "are we loading AND failed?".
@@ -206,9 +185,7 @@ pub struct PrList {
     rows: Vec<DisplayRow>,
     /// Selection cursor as an index into `prs`. Headers are never selectable.
     selected: usize,
-    /// First visible display row (headers count toward the offset).
-    scroll_offset: usize,
-    viewport_height: usize,
+    viewport: Viewport,
     /// Whether the selection follows the top row, sticks to a user-chosen PR,
     /// or has a wheel-detached viewport (see `SelectionMode`).
     selection_mode: SelectionMode,
@@ -223,8 +200,7 @@ impl fmt::Debug for PrList {
             .field("prs", &self.prs.len())
             .field("grouping", &self.grouping)
             .field("selected", &self.selected)
-            .field("scroll_offset", &self.scroll_offset)
-            .field("viewport_height", &self.viewport_height)
+            .field("viewport", &self.viewport)
             .field("selection_mode", &self.selection_mode)
             .finish()
     }
@@ -448,7 +424,7 @@ impl PrList {
     pub fn cycle_grouping(&mut self) {
         self.grouping = self.grouping.next();
         self.selected = 0;
-        self.scroll_offset = 0;
+        self.viewport.scroll_to_top();
         self.selection_mode = SelectionMode::FollowTop;
     }
 
@@ -458,7 +434,7 @@ impl PrList {
     pub fn select_first_visible(&mut self) {
         let first = self.visible_pr_indices().next().unwrap_or(0);
         self.selected = first;
-        self.scroll_offset = 0;
+        self.viewport.scroll_to_top();
         self.selection_mode = SelectionMode::FollowTop;
         self.normalize_scroll();
     }
@@ -482,7 +458,7 @@ impl PrList {
     }
 
     pub fn resize(&mut self, viewport_height: usize) {
-        self.viewport_height = viewport_height;
+        self.viewport.resize(viewport_height);
         if self.selection_mode == SelectionMode::Detached {
             self.clamp_scroll_offset();
         } else {
@@ -494,11 +470,10 @@ impl PrList {
     /// PR. Mouse wheel input is a viewport operation, unlike keyboard
     /// navigation (`j`/`k`), so the selection may temporarily sit off-screen.
     pub fn scroll_down(&mut self, rows: usize) {
-        if self.viewport_height == 0 || self.rows.is_empty() {
+        if self.viewport.height() == 0 || self.rows.is_empty() {
             return;
         }
-        let max_offset = self.rows.len().saturating_sub(self.viewport_height);
-        self.scroll_offset = self.scroll_offset.saturating_add(rows).min(max_offset);
+        self.viewport.scroll_down(rows, self.rows.len());
         // Wheel input is engagement too: leaving `FollowTop` would let a
         // background relayout yank the still-default selection (and the
         // viewport with it) back to a re-sorted top row mid-browse.
@@ -510,10 +485,10 @@ impl PrList {
         // Mirror `scroll_down`'s guard: a wheel event over an empty list is a
         // no-op, not engagement — leaving `FollowTop` here would pin the
         // still-default selection to whichever PR happens to arrive first.
-        if self.viewport_height == 0 || self.rows.is_empty() {
+        if self.viewport.height() == 0 || self.rows.is_empty() {
             return;
         }
-        self.scroll_offset = self.scroll_offset.saturating_sub(rows);
+        self.viewport.scroll_up(rows);
         self.selection_mode = SelectionMode::Detached;
     }
 
@@ -521,7 +496,7 @@ impl PrList {
     /// are ignored. Unlike keyboard movement, this does not normalize scroll:
     /// the clicked row is already visible, so the viewport should stay put.
     pub fn select_visible_row(&mut self, visible_row: usize) -> bool {
-        let display_row = self.scroll_offset.saturating_add(visible_row);
+        let display_row = self.viewport.offset().saturating_add(visible_row);
         let Some(DisplayRow::Pr(index)) = self.rows.get(display_row) else {
             return false;
         };
@@ -542,14 +517,14 @@ impl PrList {
     /// tests and future debug overlays; the view itself prefers `visible_rows`.
     #[allow(dead_code)]
     pub fn scroll_offset(&self) -> usize {
-        self.scroll_offset
+        self.viewport.offset()
     }
 
     /// Number of rows currently allotted to the list (terminal height minus
     /// the status bar). Set via `resize`. Exposed for tests/inspection.
     #[allow(dead_code)]
     pub fn viewport_height(&self) -> usize {
-        self.viewport_height
+        self.viewport.height()
     }
 
     /// The display row index of the currently selected PR, or `None` when the
@@ -560,24 +535,16 @@ impl PrList {
             .position(|row| row == &DisplayRow::Pr(self.selected))
     }
 
-    /// Re-clamp `scroll_offset` so the selected PR's display row stays on-screen
-    /// (see `list_scroll::follow_selection`). Operates over display rows, so
-    /// headers count toward the window like any other row.
+    /// Keep the selected PR's display row on-screen (see `Viewport::follow`).
     fn normalize_scroll(&mut self) {
         let Some(selected_row) = self.selected_display_row() else {
             return;
         };
-        self.scroll_offset = list_scroll::follow_selection(
-            self.scroll_offset,
-            selected_row,
-            self.rows.len(),
-            self.viewport_height,
-        );
+        self.viewport.follow(selected_row, self.rows.len());
     }
 
     fn clamp_scroll_offset(&mut self) {
-        self.scroll_offset =
-            list_scroll::clamp(self.scroll_offset, self.rows.len(), self.viewport_height);
+        self.viewport.clamp(self.rows.len());
     }
 
     pub fn prs(&self) -> &[PR] {
@@ -616,14 +583,8 @@ impl PrList {
     /// is the row plus whether it is the selected PR (so the view can highlight
     /// it). Headers are never marked selected.
     pub fn visible_rows(&self) -> impl Iterator<Item = (&DisplayRow, bool)> {
-        let start = self.scroll_offset.min(self.rows.len());
-        let end = if self.viewport_height == 0 {
-            self.rows.len()
-        } else {
-            (start + self.viewport_height).min(self.rows.len())
-        };
         let selected = self.selected;
-        self.rows[start..end]
+        self.rows[self.viewport.window(self.rows.len())]
             .iter()
             .map(move |row| (row, row == &DisplayRow::Pr(selected)))
     }
@@ -672,23 +633,11 @@ impl PrList {
     /// row in that direction (already at the first/last PR).
     fn adjacent_pr(&self, from: usize, direction: Direction) -> Option<usize> {
         let current_row = self.rows.iter().position(|r| r == &DisplayRow::Pr(from))?;
-        let candidates: &mut dyn Iterator<Item = usize> = match direction {
-            Direction::Down => &mut ((current_row + 1)..self.rows.len()),
-            Direction::Up => &mut (0..current_row).rev(),
-        };
-        for row in candidates {
-            if let DisplayRow::Pr(i) = self.rows[row] {
-                return Some(i);
-            }
-        }
-        None
+        list_cursor::adjacent_item(&self.rows, current_row, direction, |row| match row {
+            DisplayRow::Pr(i) => Some(*i),
+            DisplayRow::Header(_) => None,
+        })
     }
-}
-
-#[derive(Clone, Copy)]
-enum Direction {
-    Up,
-    Down,
 }
 
 #[cfg(test)]

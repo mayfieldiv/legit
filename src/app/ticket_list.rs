@@ -17,7 +17,7 @@ use std::fmt;
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
-    app::list_scroll,
+    app::list_cursor::{self, Direction, SelectionMode, Viewport},
     config::RepoIdentity,
     format::format_repo_short,
     ticket::{
@@ -313,13 +313,12 @@ pub struct TicketList {
     content_widths: QueueContentWidths,
     /// The selected Ticket's identity; `None` only while the queue is empty.
     selected: Option<TicketKey>,
-    /// Whether the user has moved the cursor. Until then the selection follows
-    /// the top row as Efforts stream in and re-sort the queue; after, it
-    /// sticks to its Ticket.
-    pinned: bool,
-    /// First visible display row (headers count toward the offset).
-    scroll_offset: usize,
-    viewport_height: usize,
+    /// Until the user moves the cursor the selection follows the top row as
+    /// Efforts stream in and re-sort the queue; after, it sticks to its
+    /// Ticket.
+    // TODO(#133): `Detached` once wheel ticks reach the queue viewport.
+    selection_mode: SelectionMode,
+    viewport: Viewport,
 }
 
 impl fmt::Debug for TicketList {
@@ -329,9 +328,8 @@ impl fmt::Debug for TicketList {
             .field("discoveries", &self.discoveries)
             .field("rows", &self.rows.len())
             .field("selected", &self.selected)
-            .field("pinned", &self.pinned)
-            .field("scroll_offset", &self.scroll_offset)
-            .field("viewport_height", &self.viewport_height)
+            .field("selection_mode", &self.selection_mode)
+            .field("viewport", &self.viewport)
             .finish()
     }
 }
@@ -427,26 +425,21 @@ impl TicketList {
 
     #[cfg(test)]
     pub fn scroll_offset(&self) -> usize {
-        self.scroll_offset
+        self.viewport.offset()
     }
 
     #[cfg(test)]
     pub fn viewport_height(&self) -> usize {
-        self.viewport_height
+        self.viewport.height()
     }
 
     /// Iterate the display rows inside the scroll viewport, each Ticket row
     /// resolved to its Effort entry and member handle and flagged when it is
     /// the selected Ticket. Headers are never selected.
     pub fn visible_rows(&self) -> impl Iterator<Item = VisibleRow<'_>> {
-        let start = self.scroll_offset.min(self.rows.len());
-        let end = if self.viewport_height == 0 {
-            self.rows.len()
-        } else {
-            (start + self.viewport_height).min(self.rows.len())
-        };
         let selected = self.selected.as_ref();
-        self.rows[start..end].iter().map(move |row| match row {
+        let window = self.viewport.window(self.rows.len());
+        self.rows[window].iter().map(move |row| match row {
             QueueRow::Header(tier) => VisibleRow::Header(*tier),
             QueueRow::Ticket(row) => {
                 let entry = &self.efforts[row.effort_index];
@@ -465,34 +458,30 @@ impl TicketList {
     }
 
     pub fn move_down(&mut self) {
-        self.step(1);
+        self.step(Direction::Down);
     }
 
     pub fn move_up(&mut self) {
-        self.step(-1);
+        self.step(Direction::Up);
     }
 
     pub fn resize(&mut self, viewport_height: usize) {
-        self.viewport_height = viewport_height;
+        self.viewport.resize(viewport_height);
         self.normalize_scroll();
     }
 
-    /// Step the selection to the adjacent Ticket row in `delta`'s direction,
-    /// skipping headers and clamping at the ends. Pins the cursor.
-    fn step(&mut self, delta: isize) {
-        self.pinned = true;
-        let Some(current) = self.selected_display_row() else {
-            return;
-        };
-        let candidates: Box<dyn Iterator<Item = usize>> = if delta > 0 {
-            Box::new((current + 1)..self.rows.len())
-        } else {
-            Box::new((0..current).rev())
-        };
-        for row in candidates {
-            if let QueueRow::Ticket(row) = &self.rows[row] {
-                self.selected = Some(row.key.clone());
-                break;
+    /// Step the selection to the adjacent Ticket row in `direction`, skipping
+    /// headers and clamping at the ends. Pins the cursor.
+    fn step(&mut self, direction: Direction) {
+        self.selection_mode = SelectionMode::Pinned;
+        if let Some(current) = self.selected_display_row() {
+            let adjacent =
+                list_cursor::adjacent_item(&self.rows, current, direction, |row| match row {
+                    QueueRow::Ticket(row) => Some(row.key.clone()),
+                    QueueRow::Header(_) => None,
+                });
+            if adjacent.is_some() {
+                self.selected = adjacent;
             }
         }
         self.normalize_scroll();
@@ -568,7 +557,8 @@ impl TicketList {
             self.rows.extend(members.into_iter().map(QueueRow::Ticket));
         }
 
-        let keep = self.pinned && self.selected_display_row().is_some();
+        let keep = self.selection_mode != SelectionMode::FollowTop
+            && self.selected_display_row().is_some();
         if !keep {
             self.selected = self.first_ticket();
         }
@@ -597,17 +587,10 @@ impl TicketList {
     }
 
     fn normalize_scroll(&mut self) {
-        let Some(selected_row) = self.selected_display_row() else {
-            self.scroll_offset =
-                list_scroll::clamp(self.scroll_offset, self.rows.len(), self.viewport_height);
-            return;
-        };
-        self.scroll_offset = list_scroll::follow_selection(
-            self.scroll_offset,
-            selected_row,
-            self.rows.len(),
-            self.viewport_height,
-        );
+        match self.selected_display_row() {
+            Some(selected_row) => self.viewport.follow(selected_row, self.rows.len()),
+            None => self.viewport.clamp(self.rows.len()),
+        }
     }
 }
 
