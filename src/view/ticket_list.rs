@@ -16,15 +16,15 @@ use crate::{
     app::{
         model::Model,
         ticket_list::{
-            EffortEntry, QueueContentWidths, QueueTier, RowMarker, TicketList, TicketRow,
-            VisibleRow,
+            EffortCard, QueueContentWidths, QueueRow, QueueTier, RailCard, RowMarker, TicketList,
+            TicketRow,
         },
         ticket_list_layout::{DIVIDER_WIDTH, rail_width},
     },
     color::repo_color,
     format::{format_repo_short, pad_to_width, truncate, truncate_middle},
     palette::Palette,
-    ticket::{EffortSource, EffortTicket},
+    ticket::EffortSource,
 };
 
 #[cfg(test)]
@@ -45,7 +45,7 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Palett
     render_header(model, frame, header, palette);
     let tickets = &model.tickets;
     let rail_width = rail_width(main.width);
-    if tickets.efforts().is_empty() && tickets.discovery_failures().next().is_none() {
+    if tickets.rail().next().is_none() {
         let text = if tickets.is_loading() {
             "Loading efforts…"
         } else {
@@ -72,19 +72,27 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Palett
 }
 
 fn render_header(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
-    let efforts = model.tickets.efforts();
-    let frontier: usize = efforts.iter().map(|entry| entry.counts().frontier).sum();
-    let noun = if efforts.len() == 1 {
-        "effort"
-    } else {
-        "efforts"
-    };
+    let (efforts, frontier) = model
+        .tickets
+        .rail()
+        .filter_map(|card| match card {
+            RailCard::Effort(card) => Some(card),
+            RailCard::Failure { .. } => None,
+        })
+        .fold((0, 0), |(efforts, frontier), card| {
+            let on_frontier = card
+                .outcome
+                .as_ref()
+                .map_or(0, |summary| summary.counts.frontier);
+            (efforts + 1, frontier + on_frontier)
+        });
+    let noun = if efforts == 1 { "effort" } else { "efforts" };
     let bold = |color| Style::default().fg(color).add_modifier(Modifier::BOLD);
     let line = Line::from(vec![
         Span::styled("legit", bold(palette.accent)),
         Span::raw(" — "),
         Span::styled("Tickets", bold(palette.accent)),
-        Span::raw(format!(" — {} {noun} · {frontier} frontier", efforts.len())),
+        Span::raw(format!(" — {efforts} {noun} · {frontier} frontier")),
     ]);
     frame.render_widget(Paragraph::new(line), area);
 }
@@ -102,10 +110,6 @@ fn render_divider(frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
 /// The rail: the `All efforts` entry (the only filter this slice has, so it
 /// is always the active one), then one two-line card per failed discovery
 /// unit and one three-line card per Effort, each followed by a blank row.
-/// Failures lead because the rail doesn't scroll yet: below the Efforts, a
-/// full rail would push them offscreen with no way to reach them (§5.5,
-/// never silently missing).
-// TODO(#133): rail scrolling with the effort filter.
 fn render_rail(tickets: &TicketList, frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
     let width = usize::from(area.width);
     let mut lines = vec![
@@ -117,29 +121,32 @@ fn render_rail(tickets: &TicketList, frame: &mut Frame<'_>, area: Rect, palette:
         )),
         Line::default(),
     ];
-    for (name, error) in tickets.discovery_failures() {
-        lines.extend(discovery_failure_card(name, error, width, palette));
-        lines.push(Line::default());
-    }
-    for entry in tickets.efforts() {
-        lines.extend(effort_card(entry, width, palette));
+    for card in tickets.rail() {
+        lines.extend(match card {
+            RailCard::Failure { unit, error } => {
+                discovery_failure_card(unit, error, width, palette)
+            }
+            RailCard::Effort(card) => effort_card(card, width, palette),
+        });
         lines.push(Line::default());
     }
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-fn effort_card(entry: &EffortEntry, width: usize, palette: &Palette) -> Vec<Line<'static>> {
-    let repo = entry.repo.display_name();
-    let source = match entry.source() {
+fn effort_card(card: &EffortCard, width: usize, palette: &Palette) -> Vec<Line<'static>> {
+    let source = match card.source {
         EffortSource::GitHub => "github",
         EffortSource::Local => "local",
     };
     let muted = Style::default().fg(palette.muted);
-    let title = Span::styled(entry.title(), Style::default().add_modifier(Modifier::BOLD));
-    let mut lines = vec![repo_led_line(&repo, title, width, palette)];
-    match entry.error() {
-        None => {
-            let counts = entry.counts();
+    let title = Span::styled(
+        card.title.clone(),
+        Style::default().add_modifier(Modifier::BOLD),
+    );
+    let mut lines = vec![repo_led_line(&card.repo, title, width, palette)];
+    match &card.outcome {
+        Ok(summary) => {
+            let counts = summary.counts;
             lines.push(Line::from(Span::styled(
                 truncate(
                     &format!(
@@ -151,11 +158,11 @@ fn effort_card(entry: &EffortEntry, width: usize, palette: &Palette) -> Vec<Line
                 muted,
             )));
             lines.push(Line::from(Span::styled(
-                truncate(entry.destination().unwrap_or(""), width),
+                truncate(summary.destination.as_deref().unwrap_or(""), width),
                 muted,
             )));
         }
-        Some(reason) => {
+        Err(reason) => {
             lines.push(Line::from(vec![
                 Span::styled(format!("{source} · "), muted),
                 Span::styled(
@@ -296,14 +303,9 @@ fn render_queue(tickets: &TicketList, frame: &mut Frame<'_>, area: Rect, palette
     }
     let lines: Vec<Line<'static>> = tickets
         .visible_rows()
-        .map(|row| match row {
-            VisibleRow::Header(tier) => tier_header_line(tier, width, palette),
-            VisibleRow::Ticket {
-                row,
-                entry,
-                ticket,
-                selected,
-            } => ticket_line(entry, &ticket, row, &layout, selected, palette),
+        .map(|(row, selected)| match row {
+            QueueRow::Header(tier) => tier_header_line(*tier, width, palette),
+            QueueRow::Ticket(row) => ticket_line(row, &layout, selected, palette),
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), rows_area);
@@ -339,14 +341,11 @@ fn header_row(layout: &QueueLayout) -> Line<'static> {
 }
 
 fn ticket_line(
-    entry: &EffortEntry,
-    ticket: &EffortTicket<'_>,
     row: &TicketRow,
     layout: &QueueLayout,
     selected: bool,
     palette: &Palette,
 ) -> Line<'static> {
-    let repo = entry.repo.display_name();
     // The Selected Row brightens only the title; every other cell keeps its
     // semantic foreground over the band `render_cells` lays down (ADR 0005).
     let title_style = if selected {
@@ -357,24 +356,24 @@ fn ticket_line(
     let cells = vec![
         Cell::text("", INDICATOR_COL, Style::default()),
         Cell::text(
-            truncate_middle(&ticket.key.display_ref(), layout.ref_col),
+            truncate_middle(&row.display_ref, layout.ref_col),
             layout.ref_col,
             Style::default()
                 .fg(palette.count)
                 .add_modifier(Modifier::BOLD),
         ),
         Cell::text(
-            truncate_middle(format_repo_short(&repo), layout.repo_col),
+            truncate_middle(format_repo_short(&row.repo), layout.repo_col),
             layout.repo_col,
-            Style::default().fg(repo_color(&repo)),
+            Style::default().fg(repo_color(&row.repo)),
         ),
         Cell::text(
-            ticket.ty.0.clone(),
+            row.ty.0.clone(),
             layout.type_col,
-            Style::default().fg(palette.mode(ticket.ty.mode())),
+            Style::default().fg(palette.mode(row.ty.mode())),
         ),
         title_cell(
-            &ticket.title,
+            &row.title,
             row.marker.as_ref(),
             layout.title_col(),
             title_style,

@@ -164,7 +164,7 @@ fn a_resize_sizes_the_queue_viewport_by_the_ticket_chrome() {
 // ── local discovery ───────────────────────────────────────────────────────
 
 use crate::{
-    app::ticket_list::DiscoveryUnit,
+    app::ticket_list::{DiscoveryUnit, RailCard},
     config::{LegitConfig, RepoConfig},
 };
 
@@ -295,7 +295,7 @@ fn effort_arrivals_pool_and_probe_settlement_clears_loading() {
         },
     );
     assert!(cmds.is_empty());
-    assert_eq!(model.tickets.efforts().len(), 1);
+    assert_eq!(model.tickets.rail().count(), 1);
     assert_eq!(selected_ref(&model), Some("01-a".to_owned()));
 
     update(
@@ -327,8 +327,11 @@ fn a_failed_probe_is_recorded_on_the_queue_not_as_a_status_error() {
 
     assert!(cmds.is_empty(), "{cmds:?}");
     assert_eq!(
-        model.tickets.discovery_failures().collect::<Vec<_>>(),
-        [("local-only", "main worktree /src/local-only does not exist")]
+        model.tickets.rail().collect::<Vec<_>>(),
+        [RailCard::Failure {
+            unit: "local-only",
+            error: "main worktree /src/local-only does not exist",
+        }]
     );
     assert_eq!(
         model.status, None,

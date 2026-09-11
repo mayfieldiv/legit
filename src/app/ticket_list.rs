@@ -10,6 +10,11 @@
 //! never appear (only the rail's `N/M decided` counts them). Selection tracks a
 //! Ticket's identity, so arrivals that re-sort the queue move its row, never
 //! which Ticket is selected.
+//!
+//! Everything the surface shows is derived here, once per relayout, into
+//! self-contained rail cards and queue rows (ADR 0002: derivations live in
+//! `update`, never in the render path). The view formats them; it never
+//! reaches back into the pool.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -22,18 +27,30 @@ use crate::{
     format::format_repo_short,
     ticket::{
         Claim, Effort, EffortKey, EffortRead, EffortSource, EffortTicket, TicketKey, TicketState,
+        TicketType,
     },
 };
 
-/// One pooled Effort and the Tracked Repo it belongs to. Attribution is
-/// discovery-time data — where the Effort was found decides the repo today
-/// (CONTEXT.md: a default, not a definition) — so it rides beside the read
-/// rather than inside the domain type.
+/// One Effort's rail card: what the rail shows for it, whether the read
+/// succeeded or degraded. Attribution is discovery-time data — where the
+/// Effort was found decides the repo today (CONTEXT.md: a default, not a
+/// definition) — so the repo rides here beside the read.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EffortEntry {
-    pub repo: RepoIdentity,
-    pub read: EffortRead,
-    counts: TicketCounts,
+pub struct EffortCard {
+    /// The attributed Tracked Repo's display name.
+    pub repo: String,
+    /// The Map's title.
+    pub title: String,
+    pub source: EffortSource,
+    /// The read's tallies and Destination, or why the Effort degraded (a
+    /// degraded Effort has no Tickets).
+    pub outcome: Result<EffortSummary, String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EffortSummary {
+    pub counts: TicketCounts,
+    pub destination: Option<String>,
 }
 
 /// The rail card's ticket tallies.
@@ -47,10 +64,7 @@ pub struct TicketCounts {
 }
 
 impl TicketCounts {
-    fn of(read: &EffortRead) -> Self {
-        let EffortRead::Ready(effort) = read else {
-            return Self::default();
-        };
+    fn of(effort: &Effort) -> Self {
         Self {
             decided: effort
                 .tickets()
@@ -62,74 +76,73 @@ impl TicketCounts {
     }
 }
 
+/// One rail entry in display order: a discovery unit that failed before it
+/// could attribute any Effort, or an Effort's card.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RailCard<'a> {
+    Failure { unit: &'a str, error: &'a str },
+    Effort(&'a EffortCard),
+}
+
+/// One pooled Effort: its card, plus the normalized Effort the queue rows are
+/// derived from (`None` once the read degraded).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct EffortEntry {
+    key: EffortKey,
+    card: EffortCard,
+    effort: Option<Effort>,
+}
+
 impl EffortEntry {
     fn new(repo: RepoIdentity, read: EffortRead) -> Self {
-        let counts = TicketCounts::of(&read);
-        Self { repo, read, counts }
-    }
-
-    pub fn key(&self) -> &EffortKey {
-        match &self.read {
-            EffortRead::Ready(effort) => &effort.key,
-            EffortRead::Degraded { key, .. } => key,
+        let repo = repo.display_name();
+        match read {
+            EffortRead::Ready(effort) => Self {
+                key: effort.key.clone(),
+                card: EffortCard {
+                    repo,
+                    title: effort.title.clone(),
+                    source: effort.key.source(),
+                    outcome: Ok(EffortSummary {
+                        counts: TicketCounts::of(&effort),
+                        destination: effort.destination.clone(),
+                    }),
+                },
+                effort: Some(effort),
+            },
+            EffortRead::Degraded {
+                key,
+                title,
+                destination: _,
+                reason,
+            } => Self {
+                card: EffortCard {
+                    repo,
+                    title,
+                    source: key.source(),
+                    outcome: Err(reason),
+                },
+                key,
+                effort: None,
+            },
         }
-    }
-
-    /// The Map's title.
-    pub fn title(&self) -> String {
-        match &self.read {
-            EffortRead::Ready(effort) => effort.title.clone(),
-            EffortRead::Degraded { title, .. } => title.clone(),
-        }
-    }
-
-    pub fn destination(&self) -> Option<&str> {
-        match &self.read {
-            EffortRead::Ready(effort) => effort.destination.as_deref(),
-            EffortRead::Degraded { destination, .. } => destination.as_deref(),
-        }
-    }
-
-    pub fn source(&self) -> EffortSource {
-        self.key().source()
-    }
-
-    /// Why the Effort degraded, or `None` when it read cleanly.
-    pub fn error(&self) -> Option<&str> {
-        match &self.read {
-            EffortRead::Ready(_) => None,
-            EffortRead::Degraded { reason, .. } => Some(reason),
-        }
-    }
-
-    /// The normalized Effort; a degraded read has none (and no Tickets).
-    pub fn effort(&self) -> Option<&Effort> {
-        match &self.read {
-            EffortRead::Ready(effort) => Some(effort),
-            EffortRead::Degraded { .. } => None,
-        }
-    }
-
-    /// Tallied once on arrival; the rail and header read them every frame.
-    pub fn counts(&self) -> TicketCounts {
-        self.counts
     }
 
     /// Rail order: repo, then Map title, then identity so the order is total
     /// (two Maps with one title in one repo can't swap between arrivals).
     fn order_key(&self) -> (String, String, String) {
-        let identity = match self.key() {
+        let identity = match &self.key {
             EffortKey::GitHub { map_number, .. } => map_number.to_string(),
             EffortKey::Local { dir } => dir.display().to_string(),
         };
-        (self.repo.display_name(), self.title(), identity)
+        (self.card.repo.clone(), self.card.title.clone(), identity)
     }
 }
 
 /// The queue's tiers, in display order. Blocked also holds the
 /// Unknown-Dependency Tickets (too rare for a tier of their own); they sort
 /// last within it and carry a marker.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum QueueTier {
     Frontier,
     Claimed,
@@ -144,26 +157,11 @@ impl QueueTier {
             QueueTier::Blocked => "Blocked",
         }
     }
-
-    /// The tier an open Ticket lands in. An Unknown Dependency outranks
-    /// everything: it is a data-integrity warning the queue must never hide
-    /// (spec §6.1), so the `⟨dep? …⟩` row shows even for a claimed Ticket.
-    /// Otherwise a claim outranks blocked-ness: someone already working on it
-    /// is the more useful signal than what it still waits on.
-    pub fn of(ticket: &EffortTicket<'_>) -> Self {
-        if ticket.unknown_dependency_ref().is_some() {
-            QueueTier::Blocked
-        } else if ticket.claim.is_some() {
-            QueueTier::Claimed
-        } else if ticket.is_blocked() {
-            QueueTier::Blocked
-        } else {
-            QueueTier::Frontier
-        }
-    }
 }
 
-/// The title's state marker (spec §6.2), one per non-Frontier row.
+/// The title's state marker (spec §6.2), one per non-Frontier row. The
+/// marker decides the tier: a row's tier is a function of its marker, so
+/// the two can't disagree.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RowMarker {
     /// `⟨claimed X⟩`, or `⟨claimed⟩` for an anonymous claim.
@@ -174,67 +172,80 @@ pub enum RowMarker {
     UnknownDependency(String),
 }
 
-/// One Ticket's queue row: its identity plus everything the row shows that
-/// is derived rather than stored on the Ticket, computed once per relayout so
-/// a redraw only formats (ADR 0002: derivations live in `update`, never in
-/// the render path).
+impl RowMarker {
+    /// An Unknown Dependency outranks everything: it is a data-integrity
+    /// warning the queue must never hide (spec §6.1), so the `⟨dep? …⟩` row
+    /// shows even for a claimed Ticket. Otherwise a claim outranks
+    /// blocked-ness: someone already working on it is the more useful signal
+    /// than what it still waits on.
+    fn of(ticket: &EffortTicket<'_>, first_open_dependency: Option<&TicketKey>) -> Option<Self> {
+        ticket
+            .unknown_dependency_ref()
+            .map(RowMarker::UnknownDependency)
+            .or_else(|| {
+                ticket.claim.as_ref().map(|claim| {
+                    RowMarker::Claimed(match claim {
+                        Claim::By(who) => Some(who.clone()),
+                        Claim::Anonymous => None,
+                    })
+                })
+            })
+            .or_else(|| first_open_dependency.map(|key| RowMarker::After(key.display_ref())))
+    }
+
+    fn tier(marker: Option<&Self>) -> QueueTier {
+        match marker {
+            None => QueueTier::Frontier,
+            Some(RowMarker::Claimed(_)) => QueueTier::Claimed,
+            Some(RowMarker::After(_) | RowMarker::UnknownDependency(_)) => QueueTier::Blocked,
+        }
+    }
+}
+
+/// One Ticket's queue row, self-contained: its identity plus everything the
+/// row shows, resolved once per relayout so a redraw only formats.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TicketRow {
     pub key: TicketKey,
     pub tier: QueueTier,
     pub marker: Option<RowMarker>,
+    pub display_ref: String,
+    /// The attributed repo's display name.
+    pub repo: String,
+    pub ty: TicketType,
+    pub title: String,
     /// Open upstream Dependencies — the `↑N` cell.
     pub upstream: usize,
     /// Open downstream dependents across every pooled Effort — the `↓N`
     /// cell. Pool-wide because Blocks (CONTEXT.md) is the reverse read of
     /// Dependency, and a Dependency can cross Efforts.
     pub downstream: usize,
-    /// Where the Ticket sits in the pool — `efforts[effort_index]`'s member
-    /// `member_index` — so a redraw indexes instead of searching. Holds until
-    /// the next `relayout`, which rebuilds every row; the pool changes only
-    /// through `merge_effort`, which relayouts.
-    effort_index: usize,
-    member_index: usize,
-}
-
-/// One queued (open) Ticket with its place in the pool — what `relayout`
-/// derives rows and column widths from.
-struct QueuedTicket<'a> {
-    effort_index: usize,
-    member_index: usize,
-    entry: &'a EffortEntry,
-    ticket: EffortTicket<'a>,
 }
 
 impl TicketRow {
-    fn derive(queued: &QueuedTicket<'_>, downstream: usize) -> Self {
-        let ticket = &queued.ticket;
-        let tier = QueueTier::of(ticket);
-        let marker = match tier {
-            QueueTier::Frontier => None,
-            QueueTier::Claimed => Some(RowMarker::Claimed(match &ticket.claim {
-                Some(Claim::By(who)) => Some(who.clone()),
-                Some(Claim::Anonymous) | None => None,
-            })),
-            QueueTier::Blocked => ticket
-                .unknown_dependency_ref()
-                .map(RowMarker::UnknownDependency)
-                .or_else(|| {
-                    ticket
-                        .open_dependencies()
-                        .next()
-                        .map(|key| RowMarker::After(key.display_ref()))
-                }),
-        };
+    fn derive(repo: &str, ticket: &EffortTicket<'_>, downstream: usize) -> Self {
+        let open: Vec<&TicketKey> = ticket.open_dependencies().collect();
+        let marker = RowMarker::of(ticket, open.first().copied());
         Self {
             key: ticket.key.clone(),
-            tier,
+            tier: RowMarker::tier(marker.as_ref()),
             marker,
-            upstream: ticket.open_dependencies().count(),
+            display_ref: ticket.key.display_ref(),
+            repo: repo.to_owned(),
+            ty: ticket.ty.clone(),
+            title: ticket.title.clone(),
+            upstream: open.len(),
             downstream,
-            effort_index: queued.effort_index,
-            member_index: queued.member_index,
         }
+    }
+
+    /// Queue order within the pool's rail-then-effort order: tier, with the
+    /// Unknown-Dependency rows trailing Blocked.
+    fn order(&self) -> (QueueTier, bool) {
+        (
+            self.tier,
+            matches!(self.marker, Some(RowMarker::UnknownDependency(_))),
+        )
     }
 }
 
@@ -245,26 +256,22 @@ pub enum QueueRow {
     Ticket(TicketRow),
 }
 
-/// One display row inside the scroll viewport, resolved for rendering.
-pub enum VisibleRow<'a> {
-    Header(QueueTier),
-    Ticket {
-        row: &'a TicketRow,
-        entry: &'a EffortEntry,
-        ticket: EffortTicket<'a>,
-        selected: bool,
-    },
-}
-
 /// The widest content each fixed queue column has to fit, over the queued
-/// Tickets — measured once per relayout so a redraw only sizes columns
-/// (ADR 0002: derivations live in `update`, never in the render path).
+/// Tickets — measured once per relayout so a redraw only sizes columns.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct QueueContentWidths {
     pub display_ref: usize,
     /// Of the repo's short name, as the cell shows it.
     pub repo: usize,
     pub ty: usize,
+}
+
+impl QueueContentWidths {
+    fn fit(&mut self, row: &TicketRow) {
+        self.display_ref = self.display_ref.max(row.display_ref.width());
+        self.repo = self.repo.max(format_repo_short(&row.repo).width());
+        self.ty = self.ty.max(row.ty.0.width());
+    }
 }
 
 /// One unit of Effort discovery — a Tracked Repo's local worktree fan-out, or
@@ -348,7 +355,7 @@ impl TicketList {
         match self
             .efforts
             .iter_mut()
-            .find(|existing| existing.key() == entry.key())
+            .find(|existing| existing.key == entry.key)
         {
             Some(existing) => *existing = entry,
             None => self.efforts.push(entry),
@@ -387,28 +394,31 @@ impl TicketList {
             .any(|phase| *phase == DiscoveryPhase::Loading)
     }
 
-    /// Every unit that failed outright, as (unit label, error), in unit order.
-    pub fn discovery_failures(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.discoveries
+    /// The rail in display order: every unit that failed outright, then the
+    /// Effort cards in rail order. Failures lead because the rail doesn't
+    /// scroll yet — below the Efforts, a full rail would push them offscreen
+    /// with no way to reach them (spec §5.5, never silently missing).
+    // TODO(#133): rail scrolling with the effort filter.
+    pub fn rail(&self) -> impl Iterator<Item = RailCard<'_>> {
+        let failures = self
+            .discoveries
             .iter()
             .filter_map(|(unit, phase)| match phase {
-                DiscoveryPhase::Failed(error) => Some((unit.label(), error.as_str())),
-                _ => None,
-            })
-    }
-
-    /// The pooled Efforts in rail order.
-    pub fn efforts(&self) -> &[EffortEntry] {
-        &self.efforts
+                DiscoveryPhase::Failed(error) => Some(RailCard::Failure {
+                    unit: unit.label(),
+                    error,
+                }),
+                DiscoveryPhase::Loading | DiscoveryPhase::Loaded => None,
+            });
+        failures.chain(
+            self.efforts
+                .iter()
+                .map(|entry| RailCard::Effort(&entry.card)),
+        )
     }
 
     pub fn content_widths(&self) -> QueueContentWidths {
         self.content_widths
-    }
-
-    #[cfg(test)]
-    pub fn rows(&self) -> &[QueueRow] {
-        &self.rows
     }
 
     /// Whether the queue shows no Ticket rows — the placeholder state.
@@ -433,28 +443,17 @@ impl TicketList {
         self.viewport.height()
     }
 
-    /// Iterate the display rows inside the scroll viewport, each Ticket row
-    /// resolved to its Effort entry and member handle and flagged when it is
+    /// The display rows inside the scroll viewport, each flagged when it is
     /// the selected Ticket. Headers are never selected.
-    pub fn visible_rows(&self) -> impl Iterator<Item = VisibleRow<'_>> {
+    pub fn visible_rows(&self) -> impl Iterator<Item = (&QueueRow, bool)> {
         let selected = self.selected.as_ref();
-        let window = self.viewport.window(self.rows.len());
-        self.rows[window].iter().map(move |row| match row {
-            QueueRow::Header(tier) => VisibleRow::Header(*tier),
-            QueueRow::Ticket(row) => {
-                let entry = &self.efforts[row.effort_index];
-                let ticket = entry
-                    .effort()
-                    .and_then(|effort| effort.ticket_at(row.member_index))
-                    .expect("queue rows are rebuilt with the pool they index");
-                VisibleRow::Ticket {
-                    row,
-                    entry,
-                    ticket,
-                    selected: Some(&row.key) == selected,
-                }
-            }
-        })
+        self.rows[self.viewport.window(self.rows.len())]
+            .iter()
+            .map(move |row| {
+                let is_selected =
+                    matches!(row, QueueRow::Ticket(row) if Some(&row.key) == selected);
+                (row, is_selected)
+            })
     }
 
     pub fn move_down(&mut self) {
@@ -509,9 +508,8 @@ impl TicketList {
 
         // Blocks, pool-wide: how many open Tickets wait on each target.
         let mut dependents: HashMap<TicketKey, usize> = HashMap::new();
-        for queued in self.queued_tickets() {
-            for target in queued
-                .ticket
+        for (_, ticket) in self.queued_tickets() {
+            for target in ticket
                 .dependencies
                 .iter()
                 .filter_map(|dep| dep.target_key())
@@ -519,43 +517,29 @@ impl TicketList {
                 *dependents.entry(target.clone()).or_default() += 1;
             }
         }
+        let mut tickets: Vec<TicketRow> = self
+            .queued_tickets()
+            .map(|(repo, ticket)| {
+                let downstream = dependents.get(&ticket.key).copied().unwrap_or(0);
+                TicketRow::derive(repo, &ticket, downstream)
+            })
+            .collect();
+        // Stable, so within a tier the pool's rail-then-effort order holds.
+        tickets.sort_by_key(TicketRow::order);
 
-        let mut frontier = Vec::new();
-        let mut claimed = Vec::new();
-        let mut blocked = Vec::new();
-        let mut unknown = Vec::new();
         let mut widths = QueueContentWidths::default();
-        for queued in self.queued_tickets() {
-            let ticket = &queued.ticket;
-            widths.display_ref = widths.display_ref.max(ticket.key.display_ref().width());
-            widths.repo = widths
-                .repo
-                .max(format_repo_short(&queued.entry.repo.display_name()).width());
-            widths.ty = widths.ty.max(ticket.ty.0.width());
-            let downstream = dependents.get(&ticket.key).copied().unwrap_or(0);
-            let row = TicketRow::derive(&queued, downstream);
-            match (row.tier, &row.marker) {
-                (QueueTier::Frontier, _) => frontier.push(row),
-                (QueueTier::Claimed, _) => claimed.push(row),
-                (QueueTier::Blocked, Some(RowMarker::UnknownDependency(_))) => unknown.push(row),
-                (QueueTier::Blocked, _) => blocked.push(row),
+        let mut rows = Vec::with_capacity(tickets.len() + 3);
+        let mut open_tier = None;
+        for row in tickets {
+            widths.fit(&row);
+            if open_tier != Some(row.tier) {
+                open_tier = Some(row.tier);
+                rows.push(QueueRow::Header(row.tier));
             }
+            rows.push(QueueRow::Ticket(row));
         }
-        blocked.append(&mut unknown);
+        self.rows = rows;
         self.content_widths = widths;
-
-        self.rows.clear();
-        for (tier, members) in [
-            (QueueTier::Frontier, frontier),
-            (QueueTier::Claimed, claimed),
-            (QueueTier::Blocked, blocked),
-        ] {
-            if members.is_empty() {
-                continue;
-            }
-            self.rows.push(QueueRow::Header(tier));
-            self.rows.extend(members.into_iter().map(QueueRow::Ticket));
-        }
 
         let keep = self.selection_mode != SelectionMode::FollowTop
             && self.selected_display_row().is_some();
@@ -565,24 +549,17 @@ impl TicketList {
         self.normalize_scroll();
     }
 
-    /// Every open Ticket of every pooled Effort, in rail then effort order,
-    /// with its place in the pool.
-    fn queued_tickets(&self) -> impl Iterator<Item = QueuedTicket<'_>> {
+    /// Every open Ticket of every pooled Effort with its repo's display name,
+    /// in rail then effort order.
+    fn queued_tickets(&self) -> impl Iterator<Item = (&str, EffortTicket<'_>)> {
         self.efforts
             .iter()
-            .enumerate()
-            .filter_map(|(effort_index, entry)| Some((effort_index, entry, entry.effort()?)))
-            .flat_map(|(effort_index, entry, effort)| {
+            .filter_map(|entry| Some((entry.card.repo.as_str(), entry.effort.as_ref()?)))
+            .flat_map(|(repo, effort)| {
                 effort
                     .tickets()
-                    .enumerate()
-                    .filter(|(_, ticket)| ticket.state == TicketState::Open)
-                    .map(move |(member_index, ticket)| QueuedTicket {
-                        effort_index,
-                        member_index,
-                        entry,
-                        ticket,
-                    })
+                    .filter(|ticket| ticket.state == TicketState::Open)
+                    .map(move |ticket| (repo, ticket))
             })
     }
 

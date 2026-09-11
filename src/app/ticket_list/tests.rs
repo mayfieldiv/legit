@@ -2,9 +2,7 @@
 //! cursor, and the probe phases. Expected values come from spec §6.1–§6.3
 //! (issue #112's resolution comment). Pure — Efforts are built in memory.
 
-use super::{
-    DiscoveryUnit, EffortEntry, QueueRow, QueueTier, RowMarker, TicketList, TicketRow, VisibleRow,
-};
+use super::{DiscoveryUnit, QueueRow, QueueTier, RailCard, RowMarker, TicketList, TicketRow};
 use crate::{
     canonical_path::CanonicalPathBuf,
     config::RepoIdentity,
@@ -103,23 +101,22 @@ fn ready(name: &str, title: &str, tickets: Vec<TicketSpec>) -> EffortRead {
     EffortRead::Ready(effort(name, title, tickets))
 }
 
-/// The queue as `── <tier>` headers and ticket display refs, in display order.
+/// The queue as `── <tier>` headers and ticket display refs, in display
+/// order. An unsized viewport shows every row.
 fn rows(list: &TicketList) -> Vec<String> {
-    list.rows()
-        .iter()
-        .map(|row| match row {
+    list.visible_rows()
+        .map(|(row, _)| match row {
             QueueRow::Header(tier) => format!("── {}", tier.label()),
-            QueueRow::Ticket(row) => row.key.display_ref(),
+            QueueRow::Ticket(row) => row.display_ref.clone(),
         })
         .collect()
 }
 
 /// The queue row for the Ticket shown as `display_ref`, which must be queued.
 fn ticket_row<'a>(list: &'a TicketList, display_ref: &str) -> &'a TicketRow {
-    list.rows()
-        .iter()
-        .find_map(|row| match row {
-            QueueRow::Ticket(row) if row.key.display_ref() == display_ref => Some(row),
+    list.visible_rows()
+        .find_map(|(row, _)| match row {
+            QueueRow::Ticket(row) if row.display_ref == display_ref => Some(row),
             _ => None,
         })
         .unwrap_or_else(|| panic!("{display_ref} is not queued: {:?}", rows(list)))
@@ -129,8 +126,35 @@ fn selected(list: &TicketList) -> Option<String> {
     list.selected_ticket().map(|key| key.display_ref())
 }
 
+/// The rail as `repo · title` for Effort cards and `unit ✗ error` for failed
+/// units, in display order.
+fn rail(list: &TicketList) -> Vec<String> {
+    list.rail()
+        .map(|card| match card {
+            RailCard::Effort(card) => format!("{} · {}", card.repo, card.title),
+            RailCard::Failure { unit, error } => format!("{unit} ✗ {error}"),
+        })
+        .collect()
+}
+
 fn rail_titles(list: &TicketList) -> Vec<String> {
-    list.efforts().iter().map(EffortEntry::title).collect()
+    list.rail()
+        .filter_map(|card| match card {
+            RailCard::Effort(card) => Some(card.title.clone()),
+            RailCard::Failure { .. } => None,
+        })
+        .collect()
+}
+
+/// The one Effort card in the rail.
+fn only_card(list: &TicketList) -> &super::EffortCard {
+    let mut cards = list.rail().filter_map(|card| match card {
+        RailCard::Effort(card) => Some(card),
+        RailCard::Failure { .. } => None,
+    });
+    let card = cards.next().expect("one effort card");
+    assert!(cards.next().is_none(), "one effort card: {:?}", rail(list));
+    card
 }
 
 // ── tiers ────────────────────────────────────────────────────────────────────
@@ -227,8 +251,10 @@ fn closed_tickets_are_hidden_from_the_queue_but_counted_as_decided() {
     );
 
     assert_eq!(rows(&list), ["── Frontier", "02-next"]);
-    let counts = list.efforts()[0].counts();
+    let summary = only_card(&list).outcome.as_ref().unwrap();
+    let counts = summary.counts;
     assert_eq!((counts.decided, counts.total, counts.frontier), (2, 3, 1));
+    assert_eq!(summary.destination.as_deref(), Some("Alpha destination"));
 }
 
 #[test]
@@ -404,10 +430,14 @@ fn a_degraded_effort_keeps_its_card_with_the_error_and_contributes_no_tickets() 
         },
     );
 
-    assert_eq!(rail_titles(&list), ["Broken"]);
+    let card = only_card(&list);
     assert_eq!(
-        list.efforts()[0].error(),
-        Some("tickets/01-a.md: missing status")
+        (card.repo.as_str(), card.title.as_str()),
+        ("acme/web", "Broken")
+    );
+    assert_eq!(
+        card.outcome,
+        Err("tickets/01-a.md: missing status".to_owned())
     );
     assert!(rows(&list).is_empty());
     assert!(list.visible_is_empty());
@@ -525,38 +555,27 @@ fn the_viewport_follows_the_cursor() {
     }
     assert_eq!(list.visible_rows().count(), 3);
     assert!(
-        list.visible_rows().any(|row| {
-            matches!(
-                row,
-                VisibleRow::Ticket { row, selected: true, .. } if row.key == local_key("alpha", "03-c")
-            )
+        list.visible_rows().any(|(row, selected)| {
+            selected
+                && matches!(row, QueueRow::Ticket(row) if row.key == local_key("alpha", "03-c"))
         }),
         "the selected ticket's row is inside the window"
     );
 }
 
 #[test]
-fn visible_rows_resolve_each_ticket_to_its_effort_entry() {
-    let list = two_efforts();
-
-    let resolved: Vec<(String, String)> = list
-        .visible_rows()
-        .filter_map(|row| match row {
-            VisibleRow::Ticket { entry, ticket, .. } => {
-                Some((entry.title(), ticket.key.display_ref()))
-            }
-            VisibleRow::Header(_) => None,
-        })
-        .collect();
-    assert_eq!(
-        resolved,
-        [
-            ("Alpha".to_owned(), "01-a".to_owned()),
-            ("Beta".to_owned(), "01-d".to_owned()),
-            ("Alpha".to_owned(), "02-b".to_owned()),
-            ("Alpha".to_owned(), "03-c".to_owned()),
-        ]
+fn rows_carry_what_they_show_resolved() {
+    let mut list = TicketList::new();
+    list.merge_effort(
+        repo("web"),
+        ready("alpha", "Alpha", vec![claimed("01-a", "mayfield")]),
     );
+
+    let row = ticket_row(&list, "01-a");
+    assert_eq!(row.key, local_key("alpha", "01-a"));
+    assert_eq!(row.repo, "acme/web");
+    assert_eq!(row.title, "Ticket 01-a");
+    assert_eq!(row.ty.0, "task");
 }
 
 #[test]
@@ -605,8 +624,22 @@ fn probe_phases_report_loading_until_every_unit_settles() {
         "main worktree /x does not exist".to_owned(),
     );
     assert!(!list.is_loading());
+    assert_eq!(rail(&list), ["acme/web ✗ main worktree /x does not exist"]);
+}
+
+#[test]
+fn failed_units_lead_the_rail_ahead_of_every_effort() {
+    let mut list = TicketList::new();
+    list.merge_effort(repo("api"), ready("alpha", "Alpha", vec![open("01-a")]));
+    list.fail_discovery(&DiscoveryUnit::Cwd, "not a directory".to_owned());
+    list.begin_discovery(DiscoveryUnit::LocalRepo {
+        name: "acme/web".to_owned(),
+        main_worktree_path: "/src/web".to_owned(),
+    });
+
     assert_eq!(
-        list.discovery_failures().collect::<Vec<_>>(),
-        [("acme/web", "main worktree /x does not exist")]
+        rail(&list),
+        ["cwd ✗ not a directory", "acme/api · Alpha"],
+        "a unit still in flight has no card"
     );
 }

@@ -198,7 +198,7 @@ pub enum EffortRead {
 /// artifact anchoring it, not a separate model type. Belongs to exactly one
 /// Tracked Repo: a GitHub Effort names it in its key; a local Effort's repo
 /// attribution is discovery-time data the fetch layer supplies beside the
-/// read (`app::ticket_list::EffortEntry`).
+/// read (`app::ticket_list`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Effort {
     pub key: EffortKey,
@@ -252,19 +252,9 @@ impl Effort {
         })
     }
 
-    /// This Effort's Tickets as member handles, in effort order — the
-    /// position each holds is what [`Effort::ticket_at`] takes.
+    /// This Effort's Tickets as member handles, in effort order.
     pub fn tickets(&self) -> impl Iterator<Item = EffortTicket<'_>> {
         self.tickets.iter().map(|ticket| EffortTicket {
-            effort: self,
-            ticket,
-        })
-    }
-
-    /// The member at `index` in effort order, as [`Effort::tickets`]
-    /// enumerates them.
-    pub fn ticket_at(&self, index: usize) -> Option<EffortTicket<'_>> {
-        self.tickets.get(index).map(|ticket| EffortTicket {
             effort: self,
             ticket,
         })
