@@ -108,13 +108,11 @@ fn maybe_discover_local_efforts(model: &mut Model) -> Vec<Cmd> {
         let Some(main_worktree_path) = repo.main_worktree_path.clone() else {
             continue;
         };
-        let name = match repo.display_name() {
-            Ok(name) => name,
-            Err(error) => {
-                tracing::warn!(%error, "skipping a repo with no display name");
-                continue;
-            }
-        };
+        // TODO: make `RepoConfig` an enum (slugged / local-only) so
+        // `display_name` is total and this expect goes away.
+        let name = repo
+            .display_name()
+            .expect("a repo with a mainWorktreePath has a display name");
         let unit = DiscoveryUnit::LocalRepo {
             name,
             main_worktree_path,
