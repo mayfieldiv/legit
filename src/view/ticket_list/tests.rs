@@ -229,7 +229,7 @@ fn a_failed_probe_leads_the_rail_and_a_degraded_effort_keeps_its_card_with_the_e
         },
     );
     model.tickets.fail_discovery(
-        &DiscoveryUnit::LocalRepo {
+        DiscoveryUnit::LocalRepo {
             name: "immybot".to_owned(),
             main_worktree_path: "/src/immybot".to_owned(),
         },
@@ -278,7 +278,7 @@ fn an_empty_surface_says_loading_while_a_probe_is_in_flight_then_no_efforts() {
         ]
     );
 
-    model.tickets.finish_discovery(&DiscoveryUnit::Cwd);
+    model.tickets.finish_discovery(DiscoveryUnit::Cwd);
     let terminal = render(&model, 60, 5);
     assert_eq!(
         buffer_text(&terminal)[1],

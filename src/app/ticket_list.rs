@@ -367,14 +367,12 @@ impl TicketList {
         self.discoveries.insert(unit, DiscoveryPhase::Loading);
     }
 
-    pub fn finish_discovery(&mut self, unit: &DiscoveryUnit) {
-        self.discoveries
-            .insert(unit.clone(), DiscoveryPhase::Loaded);
+    pub fn finish_discovery(&mut self, unit: DiscoveryUnit) {
+        self.discoveries.insert(unit, DiscoveryPhase::Loaded);
     }
 
-    pub fn fail_discovery(&mut self, unit: &DiscoveryUnit, error: String) {
-        self.discoveries
-            .insert(unit.clone(), DiscoveryPhase::Failed(error));
+    pub fn fail_discovery(&mut self, unit: DiscoveryUnit, error: String) {
+        self.discoveries.insert(unit, DiscoveryPhase::Failed(error));
     }
 
     /// Whether `unit` should have discovery dispatched: never run, or its

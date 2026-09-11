@@ -614,10 +614,10 @@ fn probe_phases_report_loading_until_every_unit_settles() {
     });
     assert!(list.is_loading());
 
-    list.finish_discovery(&DiscoveryUnit::Cwd);
+    list.finish_discovery(DiscoveryUnit::Cwd);
     assert!(list.is_loading(), "one unit still in flight");
     list.fail_discovery(
-        &DiscoveryUnit::LocalRepo {
+        DiscoveryUnit::LocalRepo {
             name: "acme/web".to_owned(),
             main_worktree_path: "/src/web".to_owned(),
         },
@@ -631,7 +631,7 @@ fn probe_phases_report_loading_until_every_unit_settles() {
 fn failed_units_lead_the_rail_ahead_of_every_effort() {
     let mut list = TicketList::new();
     list.merge_effort(repo("api"), ready("alpha", "Alpha", vec![open("01-a")]));
-    list.fail_discovery(&DiscoveryUnit::Cwd, "not a directory".to_owned());
+    list.fail_discovery(DiscoveryUnit::Cwd, "not a directory".to_owned());
     list.begin_discovery(DiscoveryUnit::LocalRepo {
         name: "acme/web".to_owned(),
         main_worktree_path: "/src/web".to_owned(),

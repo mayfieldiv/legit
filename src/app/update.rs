@@ -1133,11 +1133,11 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
             Vec::new()
         }
         Msg::DiscoveryFinished { unit } => {
-            model.tickets.finish_discovery(&unit);
+            model.tickets.finish_discovery(unit);
             Vec::new()
         }
         Msg::DiscoveryFailed { unit, error } => {
-            model.tickets.fail_discovery(&unit, error);
+            model.tickets.fail_discovery(unit, error);
             Vec::new()
         }
         Msg::PrArrived(pr) => {
