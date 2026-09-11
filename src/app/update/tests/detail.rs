@@ -4,9 +4,9 @@ use ratatui::crossterm::event::KeyCode;
 use super::update;
 use crate::{
     app::{cmd::Cmd, model::ViewMode, msg::Msg},
+    auth::AuthToken,
     github::rest::PrKey,
     github::types::{IssueComment, PRState, ReviewComment, ReviewStatus},
-    secret::Secret,
     test_fixtures::{self, issue_comment, thread},
 };
 
@@ -89,7 +89,7 @@ use super::{enriched_model, key_event, mouse_down_event, wheel_event};
 fn model_with_one_pr() -> crate::app::model::Model {
     let mut model = enriched_model(&[42]);
     model.config_loaded = true;
-    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.auth_token = Some(AuthToken::parse("ghp_test").unwrap());
     model.repo = crate::app::model::RepoDetection::Detected(RepoSlug::new("mayfieldiv/legit"));
     model
         .list

@@ -294,17 +294,3 @@ fn issue_comments_detect_bots_and_default_ghost() {
     assert_eq!(comments[3].author, "ghost");
     assert!(!comments[3].is_bot);
 }
-
-#[tokio::test]
-async fn a_token_that_cannot_be_a_header_value_is_an_error_not_a_panic() {
-    let bad = crate::secret::Secret::new("gho_ab\x1b[0mcd".to_owned());
-    let error = match super::OctocrabRest::new(&bad) {
-        Ok(_) => panic!("a malformed token must be rejected"),
-        Err(error) => error.to_string(),
-    };
-    assert!(error.contains("can't be sent in an HTTP header"), "{error}");
-    assert!(!error.contains("gho_"), "must not echo the token: {error}");
-
-    let good = crate::secret::Secret::new("gho_abcdef".to_owned());
-    assert!(super::OctocrabRest::new(&good).is_ok());
-}

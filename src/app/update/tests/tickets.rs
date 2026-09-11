@@ -111,7 +111,7 @@ fn j_and_k_move_the_queue_cursor_on_the_ticket_surface() {
 #[test]
 fn ticket_surface_keys_never_move_the_pr_selection_or_fetch_files() {
     let mut model = ticket_model(&["01-a", "02-b"]);
-    model.auth_token = Some(Secret::new("token".to_owned()));
+    model.auth_token = Some(AuthToken::parse("token").unwrap());
     model.list.push(sample_pr(1, "One"));
     model.list.push(sample_pr(2, "Two"));
     model.relayout();

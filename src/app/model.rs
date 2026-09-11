@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use ratatui::text::Line;
 
 use crate::{
+    auth::AuthToken,
     blocker::{BlockerOptions, BlockerResult, compute_blocker},
     config::LegitConfig,
     file_category::FileCategorization,
@@ -11,7 +12,6 @@ use crate::{
     github::types::{CheckRun, FullReviewThread, IssueComment, Review},
     markdown::Block,
     repo_slug::RepoSlug,
-    secret::Secret,
     worktree::{self, WorktreeEntry},
 };
 
@@ -306,7 +306,7 @@ pub struct Model {
     /// failure: it is the whole app's prerequisite that failed, not one repo's
     /// listing. The status bar surfaces it ahead of any list failure.
     pub fatal: Option<String>,
-    pub auth_token: Option<Secret<String>>,
+    pub auth_token: Option<AuthToken>,
     /// CWD repo detection state. The PR-fetch gate waits for this to settle
     /// (`Detected` or `Failed`), not for `Detected` specifically, so a failed
     /// detection doesn't permanently block configured Tracked Repos.

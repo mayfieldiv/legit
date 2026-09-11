@@ -10,9 +10,9 @@ use crate::{
         pr_list::Phase,
         update::update as update_at,
     },
+    auth::AuthToken,
     github::rest::{PR, PrKey},
     github::types::PRState,
-    secret::Secret,
 };
 
 /// The fixed processing clock these tests drive the reducer with. A constant
@@ -302,7 +302,7 @@ pub(super) fn tabbed_model() -> Model {
 /// A model with auth + repo resolved and `numbers` streamed into the list.
 pub(super) fn enriched_model(numbers: &[u64]) -> Model {
     let (mut model, _) = Model::new();
-    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.auth_token = Some(AuthToken::parse("ghp_test").unwrap());
     model.repo = RepoDetection::Detected(RepoSlug::new("mayfieldiv/legit"));
     model.list.begin_fetch(&RepoSlug::new("mayfieldiv/legit"));
     for n in numbers {
@@ -699,7 +699,7 @@ fn initial_cmds_include_repo_detection() {
 #[test]
 fn dispatching_fetch_marks_list_as_loading() {
     let (mut model, _) = Model::new();
-    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.auth_token = Some(AuthToken::parse("ghp_test").unwrap());
     model.config_loaded = true;
 
     let cmds = update(
@@ -800,7 +800,7 @@ fn repo_detected_without_token_stores_repo_but_does_not_fetch() {
 #[test]
 fn repo_detected_after_token_dispatches_fetch_open_prs() {
     let (mut model, _) = Model::new();
-    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.auth_token = Some(AuthToken::parse("ghp_test").unwrap());
     model.config_loaded = true;
 
     let cmds = update(
@@ -814,7 +814,7 @@ fn repo_detected_after_token_dispatches_fetch_open_prs() {
 #[test]
 fn fetch_waits_for_config_even_with_auth_and_repo() {
     let (mut model, _) = Model::new();
-    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.auth_token = Some(AuthToken::parse("ghp_test").unwrap());
     // config has NOT settled yet — the gate must hold.
 
     let cmds = update(
@@ -835,7 +835,7 @@ fn fetch_waits_for_config_even_with_auth_and_repo() {
 #[test]
 fn config_loaded_releases_the_fetch_when_auth_and_repo_already_landed() {
     let (mut model, _) = Model::new();
-    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.auth_token = Some(AuthToken::parse("ghp_test").unwrap());
     model.repo = RepoDetection::Detected(RepoSlug::new("mayfieldiv/legit"));
 
     // Config arrives last; it must kick off the gated fetch.
@@ -852,7 +852,7 @@ fn config_loaded_releases_the_fetch_when_auth_and_repo_already_landed() {
 #[test]
 fn config_load_failed_records_a_fatal_and_does_not_fetch() {
     let (mut model, _) = Model::new();
-    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.auth_token = Some(AuthToken::parse("ghp_test").unwrap());
     model.repo = RepoDetection::Detected(RepoSlug::new("mayfieldiv/legit"));
 
     let cmds = update(
@@ -884,7 +884,7 @@ fn detection_failure_with_config_repos_still_fetches_them() {
     // `update` sees `Msg::RepoDetected(None)`. That must settle the gate so the
     // configured Tracked Repos still fetch — not wedge the app at an empty list.
     let (mut model, _) = Model::new();
-    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.auth_token = Some(AuthToken::parse("ghp_test").unwrap());
     model.config = config_with_repos(&["acme/web", "acme/api"]);
     model.config_loaded = true;
 
@@ -902,7 +902,7 @@ fn detection_failure_without_config_repos_does_not_fetch_but_surfaces_error() {
     // `CommandFailed` (a transient error status) alongside `RepoDetected(None)`;
     // assert that status surface and that the settled gate yields no fetch.
     let (mut model, _) = Model::new();
-    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.auth_token = Some(AuthToken::parse("ghp_test").unwrap());
     model.config_loaded = true;
 
     let status_cmds = update(

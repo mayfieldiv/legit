@@ -7,9 +7,9 @@ use ratatui::crossterm::event::{
 };
 
 use crate::{
+    auth::AuthToken,
     format::abbreviate_home,
     github::rest::{PrKey, WorkflowNameCache},
-    secret::Secret,
     worktree,
 };
 
@@ -176,7 +176,7 @@ fn pr_enrichment_cmds(ctx: &Arc<RequestContext>, number: u64) -> [Cmd; 3] {
 /// the tracked repo, auth token, and configured bot logins.
 fn request_context(
     repo: &RepoSlug,
-    token: &Secret<String>,
+    token: &AuthToken,
     bot_logins: &[String],
 ) -> Arc<RequestContext> {
     Arc::new(RequestContext {

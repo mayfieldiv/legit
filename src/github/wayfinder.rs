@@ -19,6 +19,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::{
+    auth::AuthToken,
     github::{
         graphql::{GraphQlClient, GraphQlError, GraphQlErrors, GraphQlRequest, RawPageInfo},
         rest::OctocrabRest,
@@ -29,7 +30,6 @@ use crate::{
     },
     map_body::scan_map_body,
     repo_slug::RepoSlug,
-    secret::Secret,
     ticket::{Dependency, Effort, EffortKey, EffortRead, ExternalDependency, Ticket, TicketKey},
 };
 
@@ -38,11 +38,11 @@ const MAP_LABEL: &str = "wayfinder:map";
 /// Each operation constructs its transport per call and issues exactly one
 /// HTTP request.
 pub struct Wayfinder {
-    token: Secret<String>,
+    token: AuthToken,
 }
 
 impl Wayfinder {
-    pub fn new(token: &Secret<String>) -> Self {
+    pub fn new(token: &AuthToken) -> Self {
         Self {
             token: token.clone(),
         }

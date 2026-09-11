@@ -7,10 +7,10 @@ use serde::{Deserialize, de::DeserializeOwned};
 use tokio::sync::{OnceCell, mpsc};
 
 use crate::{
+    auth::AuthToken,
     file_category::FileChange,
     github::types::{CheckRun, IssueComment, PRState, Review, ReviewStatus, is_bot},
     repo_slug::RepoSlug,
-    secret::Secret,
 };
 
 /// Domain type for a pull request. Field set mirrors the TS `PR` interface so
@@ -386,15 +386,7 @@ pub struct OctocrabRest {
 }
 
 impl OctocrabRest {
-    /// Errs, rather than panics, on a token that can't be sent: octocrab's
-    /// builder parses `Bearer <token>` into a header value with an `unwrap`,
-    /// so the check has to happen here, before the builder sees it.
-    pub fn new(token: &Secret<String>) -> Result<Self> {
-        anyhow::ensure!(
-            reqwest::header::HeaderValue::from_str(&format!("Bearer {}", token.expose_secret()))
-                .is_ok(),
-            "auth token contains characters that can't be sent in an HTTP header"
-        );
+    pub fn new(token: &AuthToken) -> Result<Self> {
         let client = Octocrab::builder()
             .personal_token(token.expose_secret().to_owned())
             .build()

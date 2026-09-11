@@ -9,11 +9,11 @@ use crate::{
         cmd::Cmd,
         model::{Model, StatusKind},
     },
+    auth::AuthToken,
     blocker::Tier,
     github::rest::{PR, PrKey},
     github::types::PRState,
     repo_slug::RepoSlug,
-    secret::Secret,
 };
 
 use super::{list_worktree_cmd, request_context, set_status};
@@ -84,7 +84,7 @@ pub(super) fn refresh_all_cmds(model: &mut Model) -> Vec<Cmd> {
 /// re-stream and duplicate the pooled PRs. The pooled PRs are left in place:
 /// `merge_listed` dedupes the re-stream (preserving each PR's enrichment) and
 /// `finish_listing` prunes the ones that didn't reappear.
-fn dispatch_relist(model: &mut Model, repo: RepoSlug, token: &Secret<String>) -> Option<Cmd> {
+fn dispatch_relist(model: &mut Model, repo: RepoSlug, token: &AuthToken) -> Option<Cmd> {
     if model.list.is_loading(Some(&repo)) {
         return None;
     }

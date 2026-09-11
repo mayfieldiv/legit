@@ -200,7 +200,7 @@ fn a_command_name_is_its_variant_without_the_payload() {
     assert_eq!(super::Cmd::LoadConfig.name(), "LoadConfig");
     let cmd = super::Cmd::FetchOpenPRs {
         repo: RepoSlug::new("acme/web"),
-        token: crate::secret::Secret::new("secret-token".to_owned()),
+        token: crate::auth::AuthToken::parse("secret-token").unwrap(),
     };
     assert_eq!(cmd.name(), "FetchOpenPRs");
 }

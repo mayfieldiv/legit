@@ -5,7 +5,8 @@ use tokio::sync::mpsc;
 
 use crate::{
     app::{browser, msg::Msg, ticket_list::DiscoveryUnit},
-    auth, clipboard,
+    auth::{self, AuthToken},
+    clipboard,
     config::{self, LegitConfig, RepoConfig, RepoIdentity},
     git_remote,
     github::graphql::GraphQlClient,
@@ -15,7 +16,6 @@ use crate::{
     github::rest::WorkflowNameCache,
     github::types::ReviewStatus,
     local_effort,
-    secret::Secret,
     ticket::EffortRead,
     worktree,
 };
@@ -28,7 +28,7 @@ use crate::{
 #[derive(Debug, PartialEq, Eq)]
 pub struct RequestContext {
     pub repo: RepoSlug,
-    pub token: Secret<String>,
+    pub token: AuthToken,
     pub bot_logins: Vec<String>,
     /// Memo of the repo's Actions `workflow_id → name` map, shared across the
     /// fan-out so the repo-global workflow list is fetched once per list-load
@@ -46,7 +46,7 @@ pub enum Cmd {
     /// shared `RequestContext` (it has no use for `bot_logins`).
     FetchOpenPRs {
         repo: RepoSlug,
-        token: Secret<String>,
+        token: AuthToken,
     },
     FetchReviewStatus {
         ctx: Arc<RequestContext>,
@@ -656,7 +656,7 @@ async fn fetch_files(
 
 async fn run_fetch_open_prs(
     repo: RepoSlug,
-    token: Secret<String>,
+    token: AuthToken,
     tx: mpsc::UnboundedSender<Msg>,
     limiter: Arc<NetworkLimiter>,
 ) {

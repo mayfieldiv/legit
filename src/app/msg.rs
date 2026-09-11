@@ -3,12 +3,12 @@ use ratatui::crossterm::event::Event;
 
 use crate::{
     app::ticket_list::DiscoveryUnit,
+    auth::AuthToken,
     config::{LegitConfig, RepoIdentity},
     file_category::FileChange,
     github::limiter::NetworkStats,
     github::rest::{PR, PrKey},
     github::types::{CheckRun, FullReviewThread, IssueComment, Review, ReviewStatus},
-    secret::Secret,
     ticket::EffortRead,
     worktree::WorktreeEntry,
 };
@@ -17,7 +17,7 @@ use crate::{
 pub enum Msg {
     TerminalEvent(Event),
     ConfigLoaded(LegitConfig),
-    AuthTokenResolved(Secret<String>),
+    AuthTokenResolved(AuthToken),
     /// CWD repo detection settled. `Some` carries the detected GitHub repo;
     /// `None` means detection ran but found none (not a git repo / no GitHub
     /// remote). Either outcome settles the PR-fetch gate so configured Tracked
@@ -194,11 +194,11 @@ pub enum Msg {
 
 #[cfg(test)]
 mod tests {
-    use crate::{app::msg::Msg, secret::Secret};
+    use crate::{app::msg::Msg, auth::AuthToken};
 
     #[test]
     fn debug_redacts_auth_token() {
-        let msg = Msg::AuthTokenResolved(Secret::new("secret-token".to_owned()));
+        let msg = Msg::AuthTokenResolved(AuthToken::parse("secret-token").unwrap());
 
         let debug = format!("{msg:?}");
 
