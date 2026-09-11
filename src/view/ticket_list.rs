@@ -11,7 +11,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use super::row::{Cell, GAP, render_cells};
+use super::row::{Cell, GAP, fill_width, render_cells};
 use crate::{
     app::{
         model::Model,
@@ -227,12 +227,6 @@ fn repo_led_line(
 /// PR list's worktree/refresh column. Empty in this slice.
 // TODO(#132): the per-row refresh indicator.
 const INDICATOR_COL: usize = 1;
-const REF_COL_MIN: usize = 6;
-const REF_COL_MAX: usize = 64;
-const REPO_COL_MIN: usize = 4;
-const REPO_COL_MAX: usize = 32;
-const TYPE_COL_MIN: usize = 4;
-const TYPE_COL_MAX: usize = 24;
 const TITLE_COL_MIN: usize = 40;
 /// `↑NN ↓NN`.
 const BLOCK_COL: usize = 7;
@@ -240,6 +234,42 @@ const BLOCK_COL: usize = 7;
 /// will; the cells stay empty until Fetch Age is stamped.
 // TODO(#132): render Fetch Age.
 const AGE_COL: usize = 7;
+
+/// How a content-sized queue column may grow. It opens at its content width
+/// within `min..=opening_max`; once the title has more than `TITLE_COL_MIN`,
+/// the surplus widens the fitted columns in order, each up to `max` — so a
+/// long ref or type takes room only when the title can spare it.
+struct ColumnBounds {
+    min: usize,
+    opening_max: usize,
+    max: usize,
+}
+
+impl ColumnBounds {
+    fn opening(&self, content: usize) -> usize {
+        content.clamp(self.min, self.opening_max)
+    }
+
+    fn grown(&self, content: usize) -> usize {
+        content.clamp(self.min, self.max)
+    }
+}
+
+const REF_COL: ColumnBounds = ColumnBounds {
+    min: 6,
+    opening_max: 14,
+    max: 64,
+};
+const REPO_COL: ColumnBounds = ColumnBounds {
+    min: 4,
+    opening_max: 14,
+    max: 32,
+};
+const TYPE_COL: ColumnBounds = ColumnBounds {
+    min: 4,
+    opening_max: 12,
+    max: 24,
+};
 
 struct QueueLayout {
     width: usize,
@@ -250,22 +280,19 @@ struct QueueLayout {
 
 impl QueueLayout {
     fn new(width: usize, content: QueueContentWidths) -> Self {
-        let ref_width = REF_COL_MIN.max(content.display_ref);
-        let repo_width = REPO_COL_MIN.max(content.repo);
-        let type_width = TYPE_COL_MIN.max(content.ty);
         let mut layout = Self {
             width,
-            ref_col: ref_width.min(14),
-            repo_col: repo_width.min(14),
-            type_col: type_width.min(12),
+            ref_col: REF_COL.opening(content.display_ref),
+            repo_col: REPO_COL.opening(content.repo),
+            type_col: TYPE_COL.opening(content.ty),
         };
         let mut spare = layout.title_col().saturating_sub(TITLE_COL_MIN);
-        for (column, desired) in [
-            (&mut layout.ref_col, ref_width.min(REF_COL_MAX)),
-            (&mut layout.repo_col, repo_width.min(REPO_COL_MAX)),
-            (&mut layout.type_col, type_width.min(TYPE_COL_MAX)),
+        for (column, grown) in [
+            (&mut layout.ref_col, REF_COL.grown(content.display_ref)),
+            (&mut layout.repo_col, REPO_COL.grown(content.repo)),
+            (&mut layout.type_col, TYPE_COL.grown(content.ty)),
         ] {
-            let extra = desired.saturating_sub(*column).min(spare);
+            let extra = grown.saturating_sub(*column).min(spare);
             *column += extra;
             spare -= extra;
         }
@@ -274,16 +301,17 @@ impl QueueLayout {
 
     /// Whatever the fixed columns and their gaps leave for the title.
     fn title_col(&self) -> usize {
-        let fixed_cells = [
-            INDICATOR_COL,
-            self.ref_col,
-            self.repo_col,
-            self.type_col,
-            BLOCK_COL,
-            AGE_COL,
-        ];
-        let fixed = fixed_cells.iter().sum::<usize>() + fixed_cells.len() * GAP;
-        self.width.saturating_sub(fixed).max(1)
+        fill_width(
+            self.width,
+            [
+                INDICATOR_COL,
+                self.ref_col,
+                self.repo_col,
+                self.type_col,
+                BLOCK_COL,
+                AGE_COL,
+            ],
+        )
     }
 }
 

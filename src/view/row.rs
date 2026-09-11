@@ -13,6 +13,17 @@ use crate::format::truncate;
 /// Columns between adjacent cells.
 pub const GAP: usize = 1;
 
+/// The width left for a row's one flexible cell once the `fixed` cells and
+/// the gaps around them are laid out — never less than one column, so the
+/// flexible cell still shows something in a terminal narrower than the fixed
+/// columns.
+pub fn fill_width(row_width: usize, fixed: impl IntoIterator<Item = usize>) -> usize {
+    let (count, sum) = fixed
+        .into_iter()
+        .fold((0, 0), |(count, sum), width| (count + 1, sum + width));
+    row_width.saturating_sub(sum + count * GAP).max(1)
+}
+
 /// One cell: its spans, fitted to `width` at render time — truncated with an
 /// ellipsis when they overflow, space-padded when they don't.
 pub struct Cell {

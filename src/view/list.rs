@@ -7,7 +7,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use super::row::{Cell, GAP, render_cells};
+use super::row::{Cell, GAP, fill_width, render_cells};
 use crate::{
     app::grouping::{DisplayRow, Grouping},
     app::model::Model,
@@ -403,8 +403,7 @@ fn insert_title_cell(
     text: String,
     style: Style,
 ) {
-    let fixed: usize = cells.iter().map(|cell| cell.width).sum::<usize>() + cells.len() * GAP;
-    let title_col = layout.width.saturating_sub(fixed).max(1);
+    let title_col = fill_width(layout.width, cells.iter().map(|cell| cell.width));
     cells.insert(title_slot, Cell::text(text, title_col, style));
 }
 
