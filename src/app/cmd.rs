@@ -164,7 +164,7 @@ pub enum Cmd {
 
 impl Cmd {
     /// The variant name: names the command in a report without echoing its
-    /// payload (a config, a token).
+    /// payload — `Debug` would dump a whole `LegitConfig` into an error line.
     pub fn name(&self) -> &'static str {
         match self {
             Cmd::LoadConfig => "LoadConfig",
