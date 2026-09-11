@@ -20,10 +20,10 @@ use super::{
     model::{DetailState, FilesState, Model, RepoDetection, StatusKind, StatusMessage, ViewMode},
     msg::Msg,
     summary_layout,
-    ticket_list::DiscoveryUnit,
 };
 
 mod refresh;
+mod tickets;
 
 /// How long a transient status message lingers before its scheduled clear.
 const STATUS_SUCCESS_CLEAR_MS: u64 = 4_000;
@@ -85,52 +85,6 @@ fn maybe_fetch_open_prs(model: &mut Model) -> Vec<Cmd> {
         cmds.push(Cmd::FetchOpenPRs {
             repo,
             token: token.clone(),
-        });
-    }
-    cmds
-}
-
-/// Dispatch local Effort discovery once config and repo detection have both
-/// settled: one probe per Tracked Repo with a Main Worktree (a slug-only repo
-/// has no filesystem to probe), plus the cwd walk — attributed to the detected
-/// repo, which is why the gate waits on detection. Auth is not a prerequisite:
-/// nothing here touches the network, so `t` can land on data before GitHub
-/// answers. Units already in flight or loaded are skipped, so a `R`-driven
-/// config reload re-probes only new or failed units (the `needs_listing`
-/// idiom). Two config entries spelling one Main Worktree differently both
-/// probe; the pool's Effort-key dedup collapses what they find.
-fn maybe_discover_local_efforts(model: &mut Model) -> Vec<Cmd> {
-    if !model.config_loaded || !model.repo.is_settled() {
-        return Vec::new();
-    }
-    let mut cmds = Vec::new();
-    for repo in &model.config.repos {
-        let Some(main_worktree_path) = repo.main_worktree_path.clone() else {
-            continue;
-        };
-        // TODO: make `RepoConfig` an enum (slugged / local-only) so
-        // `display_name` is total and this expect goes away.
-        let name = repo
-            .display_name()
-            .expect("a repo with a mainWorktreePath has a display name");
-        let unit = DiscoveryUnit::LocalRepo {
-            name,
-            main_worktree_path,
-        };
-        if !model.tickets.needs_discovery(&unit) {
-            continue;
-        }
-        model.tickets.begin_discovery(unit.clone());
-        cmds.push(Cmd::DiscoverRepoEfforts {
-            unit,
-            repo: repo.clone(),
-        });
-    }
-    if model.tickets.needs_discovery(&DiscoveryUnit::Cwd) {
-        model.tickets.begin_discovery(DiscoveryUnit::Cwd);
-        cmds.push(Cmd::DiscoverCwdEfforts {
-            detected: model.repo.repo().cloned(),
-            config: model.config.clone(),
         });
     }
     cmds
@@ -539,18 +493,30 @@ fn handle_list_key(model: &mut Model, code: KeyCode, now: DateTime<Utc>) -> Vec<
     Vec::new()
 }
 
-/// Handle one keypress on the ticket surface: the queue cursor and the
-/// surface toggle back to the PR list.
-// TODO(#132): `r`/`R`. TODO(#133): `h`/`l`, `J`/`K`, `m`, `p`, `y`.
-fn handle_ticket_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
-    match code {
-        KeyCode::Char('q') => model.should_quit = true,
-        KeyCode::Char('t') => model.view_mode = ViewMode::List,
-        // Cursor movement is network-silent (spec §5.1): the map read already
-        // delivered everything the queue shows.
-        KeyCode::Char('j') | KeyCode::Down => model.tickets.move_down(),
-        KeyCode::Char('k') | KeyCode::Up => model.tickets.move_up(),
-        _ => {}
+/// Handle one keypress on the list surface. The filter editor (modal
+/// precedence) sees every key first and produces no command; a normal list
+/// key may (Enter -> FetchPRDetail), in which case it is dispatched and
+/// nothing else runs. Any key that leaves the list in place can have moved
+/// the selection, so the now-selected PR's files are fetched just-in-time.
+fn handle_list_surface_key(model: &mut Model, code: KeyCode, now: DateTime<Utc>) -> Vec<Cmd> {
+    if model.list.filter().is_editing() {
+        handle_filter_editing_key(model, code);
+    } else {
+        let cmds = handle_list_key(model, code, now);
+        // Refresh owns the whole keypress even when deduplication makes it
+        // commandless; falling through would dispatch FetchFiles and turn the
+        // documented no-op into a partial refresh.
+        let refresh_key = matches!(code, KeyCode::Char('r' | 'R'));
+        if !cmds.is_empty() || refresh_key {
+            return cmds;
+        }
+    }
+    // The guard skips a keypress that left the list surface (Enter into
+    // detail, `t` onto the tickets): Enter normally returns a FetchPRDetail
+    // above, but when that fetch is suppressed (auth not ready / repo
+    // untracked) it would otherwise fall through to here.
+    if matches!(model.view_mode, ViewMode::List) {
+        return maybe_fetch_selected_files(model);
     }
     Vec::new()
 }
@@ -999,43 +965,14 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
                 model.should_quit = true;
                 return Vec::new();
             }
-            // Detail mode owns the keypress entirely: its keys never touch the
-            // list selection, so the list-mode files-fetch path below must not
-            // run for them (e.g. Esc-to-list must not act as if the key was a
-            // list keypress). Returning here keeps that out of the list path.
-            if matches!(model.view_mode, ViewMode::Detail(_)) {
-                return handle_detail_key(model, key.code, now);
+            // Each surface owns its keypress entirely — a detail or ticket key
+            // never touches the PR selection, so only the list surface runs
+            // the files-fetch path.
+            match model.view_mode {
+                ViewMode::Detail(_) => handle_detail_key(model, key.code, now),
+                ViewMode::TicketList => tickets::handle_ticket_list_key(model, key.code),
+                ViewMode::List => handle_list_surface_key(model, key.code, now),
             }
-            // The ticket surface owns its keypress the same way: none of its
-            // keys move the PR selection, so the files-fetch path below must
-            // not run for them.
-            if matches!(model.view_mode, ViewMode::TicketList) {
-                return handle_ticket_list_key(model, key.code);
-            }
-            // List-mode keys. The filter editor (modal precedence) sees every
-            // key first and produces no command; a normal list key may (Enter
-            // -> FetchPRDetail), in which case dispatch it and stop.
-            if model.list.filter().is_editing() {
-                handle_filter_editing_key(model, key.code);
-            } else {
-                let cmds = handle_list_key(model, key.code, now);
-                // Refresh owns the whole keypress even when deduplication makes
-                // it commandless; falling through would dispatch FetchFiles
-                // and turn the documented no-op into a partial refresh.
-                let refresh_key = matches!(key.code, KeyCode::Char('r' | 'R'));
-                if !cmds.is_empty() || refresh_key {
-                    return cmds;
-                }
-            }
-            // Any key that left us in list mode can have moved the selection;
-            // fetch the now-selected PR's files just-in-time. The guard skips a
-            // keypress that *entered* detail (Enter): it normally returns a
-            // FetchPRDetail above, but when that fetch is suppressed (auth not
-            // ready / repo untracked) it would otherwise fall through to here.
-            if matches!(model.view_mode, ViewMode::List) {
-                return maybe_fetch_selected_files(model);
-            }
-            Vec::new()
         }
         Msg::TerminalEvent(Event::Resize(width, height)) => {
             model.terminal_width = width;
@@ -1103,7 +1040,7 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
             // fresh config is installed. This serves both startup and `R`
             // without resolving paths from stale config or dispatching duplicates.
             cmds.extend(list_worktree_cmds(model));
-            cmds.extend(maybe_discover_local_efforts(model));
+            cmds.extend(tickets::maybe_discover_local_efforts(model));
             cmds
         }
         Msg::AuthTokenResolved(token) => {
@@ -1123,7 +1060,7 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
             // declare a mainWorktreePath, so ConfigLoaded is the event that has
             // enough information to list them.
             let mut cmds = maybe_fetch_open_prs(model);
-            cmds.extend(maybe_discover_local_efforts(model));
+            cmds.extend(tickets::maybe_discover_local_efforts(model));
             cmds
         }
         Msg::EffortArrived { repo, read } => {

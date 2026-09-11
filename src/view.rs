@@ -36,20 +36,25 @@ pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
     // seam — swap `DARK` and the whole app follows.
     let palette = &DARK;
     let area = frame.area();
-
-    // Detail view takes the whole frame and manages its own chrome (header + status bar).
-    if let ViewMode::Detail(detail) = &model.view_mode {
-        detail::render(model, detail, frame, area, now, palette);
-        return;
+    // Each surface takes the whole frame and manages its own chrome (header,
+    // status bar, key hints).
+    match &model.view_mode {
+        ViewMode::Detail(detail) => detail::render(model, detail, frame, area, now, palette),
+        ViewMode::TicketList => ticket_list::render(model, frame, area, palette),
+        ViewMode::List => render_list_surface(model, frame, area, now, palette),
     }
-    // So does the ticket surface: its own header, rail + queue, and key hints.
-    if model.view_mode == ViewMode::TicketList {
-        ticket_list::render(model, frame, area, palette);
-        return;
-    }
+}
 
-    // ── List view ────────────────────────────────────────────────────────────
-    // Fixed layout: app header, tab bar, filter chip, list, status bar. The
+/// The PR list surface. Fixed layout: app header, tab bar, filter chip, list,
+/// status bar.
+fn render_list_surface(
+    model: &Model,
+    frame: &mut Frame<'_>,
+    area: Rect,
+    now: DateTime<Utc>,
+    palette: &Palette,
+) {
+    // The
     // chip collapses to zero height while the filter is inactive, giving its
     // row back to the list — which keeps the row count in step with
     // `Model::chrome_rows`, the shared definition `sync_viewport` derives the
