@@ -19,7 +19,8 @@ use anyhow::Context;
 use self::format::{find_map_file, probe_file_type, read_effort_at};
 use crate::{
     canonical_path::CanonicalPathBuf,
-    config::{RepoConfig, RepoIdentity, resolve_config_path},
+    config::{LegitConfig, RepoConfig, RepoIdentity, resolve_config_path},
+    repo_slug::RepoSlug,
     subprocess::{GitEnv, git_command, run_command},
     ticket::EffortRead,
     worktree::list_worktrees,
@@ -45,44 +46,39 @@ pub fn discover_repo_efforts(repo: &RepoConfig) -> anyhow::Result<Vec<EffortRead
     read_efforts_under(&bases, repo.wayfinder_roots.as_deref())
 }
 
-/// What the cwd walk found, plus what the Efforts can be attributed to.
-pub struct CwdEfforts {
-    /// The canonical git toplevel, or the canonical cwd outside any repo.
-    pub toplevel: CanonicalPathBuf,
-    /// The identity of the configured Tracked Repo the cwd belongs to, when
-    /// one matches. Preferred over anything detected from the cwd alone so
-    /// the walk and that repo's own probe attribute one Effort identically —
-    /// they share the Effort key, and a disagreement would flicker.
-    pub configured: Option<RepoIdentity>,
-    pub reads: Vec<EffortRead>,
-}
-
-/// Discover and parse every local Effort visible from the working directory:
-/// walk cwd → its git toplevel, probing each level (which finds nested
-/// monorepo roots like `apps/mac-agent/docs/wayfinder/`); a cwd outside any
-/// git repo is probed alone. When the cwd repo matches a configured entry —
-/// by slug (the origin remote) or by repository membership of its Main
-/// Worktree — its `wayfinderRoots` win over the built-ins (spec §2.2) and
-/// its identity is reported for attribution.
+/// Discover and parse every local Effort visible from the working directory,
+/// with the Tracked Repo they are attributed to: walk cwd → its git toplevel,
+/// probing each level (which finds nested monorepo roots like
+/// `apps/mac-agent/docs/wayfinder/`); a cwd outside any git repo is probed
+/// alone. `detected` is the cwd's GitHub repo as repo detection found it —
+/// passed in rather than re-detected, so the walk and `Cmd::DetectRepo`
+/// can't answer differently for one cwd.
+///
+/// Attribution: a configured entry the cwd repo matches — by slug or by
+/// repository membership of its Main Worktree — leads, so this probe and
+/// that repo's own probe (which publish the same Effort keys) can't
+/// disagree; the detected slug is only the fallback for an unconfigured
+/// cwd repo — spec §2.1 keys a slug-less repo by path even when its remote
+/// is on GitHub; and a cwd nobody configured or detected is its toplevel.
+/// A matched entry's `wayfinderRoots` win over the built-ins (spec §2.2).
 pub fn discover_cwd_efforts(
     cwd: &Path,
-    config: &crate::config::LegitConfig,
-) -> anyhow::Result<CwdEfforts> {
+    config: &LegitConfig,
+    detected: Option<&RepoSlug>,
+) -> anyhow::Result<(RepoIdentity, Vec<EffortRead>)> {
     let levels = cwd_walk_levels(cwd)?;
-    let toplevel = levels
-        .last()
-        .expect("the walk holds at least the cwd")
-        .clone();
-    let matched = configured_repos_for_cwd(config, cwd, &toplevel);
+    let toplevel = levels.last().expect("the walk holds at least the cwd");
+    let matched = configured_repos_for_cwd(config, detected, toplevel);
     let roots = matched
         .iter()
         .find_map(|repo| repo.wayfinder_roots.as_deref());
-    let configured = matched.first().and_then(|repo| repo.identity().ok());
-    Ok(CwdEfforts {
-        toplevel,
-        configured,
-        reads: read_efforts_under(&levels, roots)?,
-    })
+    let identity = matched
+        .first()
+        .and_then(|repo| repo.identity().ok())
+        .or_else(|| detected.cloned().map(RepoIdentity::Slug))
+        .unwrap_or_else(|| RepoIdentity::Path(toplevel.clone()));
+    let reads = read_efforts_under(&levels, roots)?;
+    Ok((identity, reads))
 }
 
 /// The directories the cwd walk probes: the canonical cwd up to and
@@ -118,29 +114,23 @@ fn git_toplevel(cwd: &Path) -> Option<PathBuf> {
 
 /// The `repos` entries the cwd repo is, in config order. Matching takes
 /// either evidence of "same repo": the entry's slug equals the cwd's
-/// origin-remote slug, or the entry's Main Worktree belongs to the same
-/// repository as the toplevel (see [`repository_identity`] — so a cwd in
-/// one of the repo's linked worktrees matches too, which the repo's own
-/// probe fans out to and attributes to the entry). Deliberately looser than
-/// [`RepoIdentity`], which answers dedup with one key — a slugged entry
+/// `detected` origin-remote slug, or the entry's Main Worktree belongs to
+/// the same repository as the toplevel (see [`repository_identity`] — so a
+/// cwd in one of the repo's linked worktrees matches too, which the repo's
+/// own probe fans out to and attributes to the entry). Deliberately looser
+/// than [`RepoIdentity`], which answers dedup with one key — a slugged entry
 /// whose clone is the toplevel is still the cwd repo even with the remote
 /// missing or renamed. A match failure of any kind — no remote, an
 /// unresolvable configured path — just means "not the cwd repo", never an
 /// error. Several entries can match (two spellings of one Main Worktree
 /// both probe); the caller picks per field.
 fn configured_repos_for_cwd<'a>(
-    config: &'a crate::config::LegitConfig,
-    cwd: &Path,
+    config: &'a LegitConfig,
+    detected: Option<&RepoSlug>,
     toplevel: &Path,
 ) -> Vec<&'a RepoConfig> {
-    // One subprocess each, and only when an entry needs it.
-    let cwd_slug = config
-        .repos
-        .iter()
-        .any(|repo| repo.slug.is_some())
-        .then(|| crate::git_remote::detect_repo(cwd).ok())
-        .flatten();
-    // Ambient env like `git_toplevel`: this is the user's real cwd repo.
+    // One subprocess, and only when an entry needs it. Ambient env like
+    // `git_toplevel`: this is the user's real cwd repo.
     let cwd_repository = config
         .repos
         .iter()
@@ -151,9 +141,8 @@ fn configured_repos_for_cwd<'a>(
         .repos
         .iter()
         .filter(|repo| {
-            let slug_matches = cwd_slug
-                .as_ref()
-                .is_some_and(|cwd_slug| repo.slug.as_ref() == Some(cwd_slug));
+            let slug_matches =
+                detected.is_some_and(|detected| repo.slug.as_ref() == Some(detected));
             let repository_matches = match (&repo.main_worktree_path, &cwd_repository) {
                 (Some(path), Some(cwd_repository)) => resolve_config_path(path)
                     .ok()
