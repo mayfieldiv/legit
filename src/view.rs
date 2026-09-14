@@ -54,9 +54,8 @@ fn render_list_surface(
     now: DateTime<Utc>,
     palette: &Palette,
 ) {
-    // The
-    // chip collapses to zero height while the filter is inactive, giving its
-    // row back to the list — which keeps the row count in step with
+    // The chip collapses to zero height while the filter is inactive, giving
+    // its row back to the list — which keeps the row count in step with
     // `Model::chrome_rows`, the shared definition `sync_viewport` derives the
     // viewport height from.
     let filter_visible = model.list.filter().is_visible();
