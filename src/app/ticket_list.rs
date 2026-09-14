@@ -159,9 +159,8 @@ impl QueueTier {
     }
 }
 
-/// The title's state marker (spec §6.2), one per non-Frontier row. The
-/// marker decides the tier: a row's tier is a function of its marker, so
-/// the two can't disagree.
+/// The title's state marker (spec §6.2), one per non-Frontier row. A row's
+/// tier and queue rank are read off it (`tier`, `rank`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RowMarker {
     /// `⟨claimed X⟩`, or `⟨claimed⟩` for an anonymous claim.
@@ -200,6 +199,15 @@ impl RowMarker {
             Some(RowMarker::After(_) | RowMarker::UnknownDependency(_)) => QueueTier::Blocked,
         }
     }
+
+    /// Queue order within the pool's rail-then-effort order: tier, with the
+    /// Unknown-Dependency rows trailing Blocked.
+    fn rank(marker: Option<&Self>) -> (QueueTier, bool) {
+        (
+            Self::tier(marker),
+            matches!(marker, Some(RowMarker::UnknownDependency(_))),
+        )
+    }
 }
 
 /// One Ticket's queue row, self-contained: its identity plus everything the
@@ -207,7 +215,6 @@ impl RowMarker {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TicketRow {
     pub key: TicketKey,
-    pub tier: QueueTier,
     pub marker: Option<RowMarker>,
     pub display_ref: String,
     /// The attributed repo's display name.
@@ -225,11 +232,9 @@ pub struct TicketRow {
 impl TicketRow {
     fn derive(repo: &str, ticket: &EffortTicket<'_>, downstream: usize) -> Self {
         let open: Vec<&TicketKey> = ticket.open_dependencies().collect();
-        let marker = RowMarker::of(ticket, open.first().copied());
         Self {
             key: ticket.key.clone(),
-            tier: RowMarker::tier(marker.as_ref()),
-            marker,
+            marker: RowMarker::of(ticket, open.first().copied()),
             display_ref: ticket.key.display_ref(),
             repo: repo.to_owned(),
             ty: ticket.ty.clone(),
@@ -239,13 +244,12 @@ impl TicketRow {
         }
     }
 
-    /// Queue order within the pool's rail-then-effort order: tier, with the
-    /// Unknown-Dependency rows trailing Blocked.
-    fn order(&self) -> (QueueTier, bool) {
-        (
-            self.tier,
-            matches!(self.marker, Some(RowMarker::UnknownDependency(_))),
-        )
+    pub fn tier(&self) -> QueueTier {
+        RowMarker::tier(self.marker.as_ref())
+    }
+
+    fn rank(&self) -> (QueueTier, bool) {
+        RowMarker::rank(self.marker.as_ref())
     }
 }
 
@@ -486,16 +490,17 @@ impl TicketList {
             })
             .collect();
         // Stable, so within a tier the pool's rail-then-effort order holds.
-        tickets.sort_by_key(TicketRow::order);
+        tickets.sort_by_key(TicketRow::rank);
 
         let mut widths = QueueContentWidths::default();
         let mut rows = Vec::with_capacity(tickets.len() + 3);
         let mut open_tier = None;
         for row in tickets {
             widths.fit(&row);
-            if open_tier != Some(row.tier) {
-                open_tier = Some(row.tier);
-                rows.push(QueueRow::Header(row.tier));
+            let tier = row.tier();
+            if open_tier != Some(tier) {
+                open_tier = Some(tier);
+                rows.push(QueueRow::Header(tier));
             }
             rows.push(QueueRow::Ticket(row));
         }

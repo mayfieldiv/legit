@@ -322,7 +322,7 @@ fn rows_carry_their_marker_and_pool_wide_block_counts() {
 
     let summary = |display_ref: &str| {
         let row = ticket_row(&list, display_ref);
-        (row.tier, row.marker.clone(), row.upstream, row.downstream)
+        (row.tier(), row.marker.clone(), row.upstream, row.downstream)
     };
     assert_eq!(
         summary("01-a"),
