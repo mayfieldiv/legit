@@ -30,11 +30,6 @@ use crate::{
 #[cfg(test)]
 mod tests;
 
-/// Below this many columns for the queue the rail is dropped so the queue
-/// keeps a usable width — the floor only.
-// TODO(#133): the narrow-width collapse proper (spec §6.4).
-const MIN_QUEUE_WIDTH: u16 = 40;
-
 pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
     let [header, main, status] = Layout::vertical([
         Constraint::Length(1),
@@ -44,7 +39,6 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Palett
     .areas(area);
     render_header(model, frame, header, palette);
     let tickets = &model.tickets;
-    let rail_width = rail_width(main.width);
     if tickets.rail().next().is_none() {
         let text = if tickets.is_loading() {
             "Loading efforts…"
@@ -55,18 +49,21 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Palett
             Paragraph::new(Line::from(text)).alignment(Alignment::Center),
             main,
         );
-    } else if main.width >= rail_width + DIVIDER_WIDTH + MIN_QUEUE_WIDTH {
-        let [rail, divider, queue] = Layout::horizontal([
-            Constraint::Length(rail_width),
-            Constraint::Length(DIVIDER_WIDTH),
-            Constraint::Min(1),
-        ])
-        .areas(main);
-        render_rail(tickets, frame, rail, palette);
-        render_divider(frame, divider, palette);
-        render_queue(tickets, frame, queue, palette);
     } else {
-        render_queue(tickets, frame, main, palette);
+        match rail_width(main.width) {
+            Some(rail_width) => {
+                let [rail, divider, queue] = Layout::horizontal([
+                    Constraint::Length(rail_width),
+                    Constraint::Length(DIVIDER_WIDTH),
+                    Constraint::Min(1),
+                ])
+                .areas(main);
+                render_rail(tickets, frame, rail, palette);
+                render_divider(frame, divider, palette);
+                render_queue(tickets, frame, queue, palette);
+            }
+            None => render_queue(tickets, frame, main, palette),
+        }
     }
     render_status(model, frame, status, palette);
 }
