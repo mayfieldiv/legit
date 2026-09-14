@@ -37,7 +37,7 @@ use crate::{
 /// definition) — so the repo rides here beside the read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EffortCard {
-    /// The attributed Tracked Repo's display name.
+    /// The attributed Tracked Repo's short name (see `format_repo_short`).
     pub repo: String,
     /// The Map's title.
     pub title: String,
@@ -95,7 +95,7 @@ struct EffortEntry {
 
 impl EffortEntry {
     fn new(repo: RepoIdentity, read: EffortRead) -> Self {
-        let repo = repo.display_name();
+        let repo = format_repo_short(&repo.display_name()).to_owned();
         match read {
             EffortRead::Ready(effort) => Self {
                 key: effort.key.clone(),
@@ -217,7 +217,7 @@ pub struct TicketRow {
     pub key: TicketKey,
     pub marker: Option<RowMarker>,
     pub display_ref: String,
-    /// The attributed repo's display name.
+    /// The attributed repo's short name.
     pub repo: String,
     pub ty: TicketType,
     pub title: String,
@@ -275,7 +275,6 @@ impl SelectableRow for QueueRow {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct QueueContentWidths {
     pub display_ref: usize,
-    /// Of the repo's short name, as the cell shows it.
     pub repo: usize,
     pub ty: usize,
 }
@@ -283,7 +282,7 @@ pub struct QueueContentWidths {
 impl QueueContentWidths {
     fn fit(&mut self, row: &TicketRow) {
         self.display_ref = self.display_ref.max(row.display_ref.width());
-        self.repo = self.repo.max(format_repo_short(&row.repo).width());
+        self.repo = self.repo.max(row.repo.width());
         self.ty = self.ty.max(row.ty.0.width());
     }
 }
@@ -296,7 +295,8 @@ impl QueueContentWidths {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DiscoveryUnit {
     LocalRepo {
-        /// The repo's display name — its slug or Main Worktree basename.
+        /// The repo's short name — its slug's repo half, or its Main
+        /// Worktree basename.
         name: String,
         /// The configured path, verbatim: two slug-less repos can share a
         /// basename, so the name alone would merge their units.
@@ -313,7 +313,7 @@ impl DiscoveryUnit {
     /// `None` rather than a panic in the reducer.
     pub fn for_repo(repo: &RepoConfig) -> Option<Self> {
         let main_worktree_path = repo.main_worktree_path.clone()?;
-        let name = repo.display_name().ok()?;
+        let name = format_repo_short(&repo.display_name().ok()?).to_owned();
         Some(DiscoveryUnit::LocalRepo {
             name,
             main_worktree_path,

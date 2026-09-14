@@ -431,10 +431,7 @@ fn a_degraded_effort_keeps_its_card_with_the_error_and_contributes_no_tickets() 
     );
 
     let card = only_card(&list);
-    assert_eq!(
-        (card.repo.as_str(), card.title.as_str()),
-        ("acme/web", "Broken")
-    );
+    assert_eq!((card.repo.as_str(), card.title.as_str()), ("web", "Broken"));
     assert_eq!(
         card.outcome,
         Err("tickets/01-a.md: missing status".to_owned())
@@ -573,7 +570,7 @@ fn rows_carry_what_they_show_resolved() {
 
     let row = ticket_row(&list, "01-a");
     assert_eq!(row.key, local_key("alpha", "01-a"));
-    assert_eq!(row.repo, "acme/web");
+    assert_eq!(row.repo, "web", "the repo's short name");
     assert_eq!(row.title, "Ticket 01-a");
     assert_eq!(row.ty.0, "task");
 }
@@ -596,7 +593,7 @@ fn content_widths_measure_the_queued_tickets() {
         "01-a".len(),
         "closed tickets aren't queued, so they don't size the column"
     );
-    assert_eq!(widths.repo, "web".len(), "the repo's short name");
+    assert_eq!(widths.repo, "web".len());
     assert_eq!(widths.ty, "task".len());
 }
 
@@ -639,7 +636,7 @@ fn failed_units_lead_the_rail_ahead_of_every_effort() {
 
     assert_eq!(
         rail(&list),
-        ["cwd ✗ not a directory", "acme/api · Alpha"],
+        ["cwd ✗ not a directory", "api · Alpha"],
         "a unit still in flight has no card"
     );
 }

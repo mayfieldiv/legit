@@ -22,7 +22,7 @@ use crate::{
         ticket_list_layout::{DIVIDER_WIDTH, rail_width},
     },
     color::repo_color,
-    format::{format_repo_short, pad_to_width, truncate, truncate_middle},
+    format::{pad_to_width, truncate, truncate_middle},
     palette::Palette,
     ticket::EffortSource,
 };
@@ -195,20 +195,19 @@ fn discovery_failure_card(
     ]
 }
 
-/// `repo · <tail>`: the repo's short name in its Repo Color and bold, a
-/// separator, then `tail` truncated to what remains — so a long tail never
-/// pushes the repo off the card.
+/// `repo · <tail>`: the repo in its Repo Color and bold, a separator, then
+/// `tail` truncated to what remains — so a long tail never pushes the repo
+/// off the card.
 fn repo_led_line(
     repo: &str,
     tail: Span<'static>,
     width: usize,
     palette: &Palette,
 ) -> Line<'static> {
-    let short = format_repo_short(repo);
-    let tail_width = width.saturating_sub(short.width() + 3);
+    let tail_width = width.saturating_sub(repo.width() + 3);
     Line::from(vec![
         Span::styled(
-            short.to_owned(),
+            repo.to_owned(),
             Style::default()
                 .fg(repo_color(repo))
                 .add_modifier(Modifier::BOLD),
@@ -397,7 +396,7 @@ fn ticket_line(
                 .add_modifier(Modifier::BOLD),
         ),
         Cell::text(
-            truncate_middle(format_repo_short(&row.repo), layout.repo_col),
+            truncate_middle(&row.repo, layout.repo_col),
             layout.repo_col,
             Style::default().fg(repo_color(&row.repo)),
         ),

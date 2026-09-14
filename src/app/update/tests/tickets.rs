@@ -221,7 +221,7 @@ fn local_discovery_dispatches_once_config_and_repo_detection_settle() {
         vec![
             &Cmd::DiscoverRepoEfforts {
                 unit: DiscoveryUnit::LocalRepo {
-                    name: "acme/web".to_owned(),
+                    name: "web".to_owned(),
                     main_worktree_path: "/src/web".to_owned()
                 },
                 repo: discovery_config().repos[0].clone(),

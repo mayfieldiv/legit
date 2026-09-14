@@ -143,22 +143,23 @@ fn the_ticket_surface_renders_the_rail_and_the_tiered_queue() {
 
     let terminal = render(&model, 140, 24);
 
-    // Rail order is repo (`acme/web` before `notes`) then Map title; the queue
-    // groups by tier, then rail order, then each Effort's own order. Closed
-    // `04-done` is hidden but counted (`1/5 decided`). `01-free` blocks
-    // `03-blocked`, hence `↓1` on one and `↑1 ⟨after 01-free⟩` on the other;
-    // the Unknown-Dependency ticket trails Blocked with its raw ref.
+    // Rail order is the repo as shown (`notes` before `web` — the short name,
+    // not `acme/web`) then Map title; the queue groups by tier, then rail
+    // order, then each Effort's own order. Closed `04-done` is hidden but
+    // counted (`1/5 decided`). `01-free` blocks `03-blocked`, hence `↓1` on
+    // one and `↑1 ⟨after 01-free⟩` on the other; the Unknown-Dependency
+    // ticket trails Blocked with its raw ref.
     let mut expected = vec![
         "legit — Tickets — 2 efforts · 2 frontier                                                                                                    ",
         "All efforts                           │  Ticket     Repo  Type      Title                                                    Block   Age    ",
         "                                      │  ── Frontier                                                                                        ",
-        "web · Map: ticket surface             │  01-free    web   grilling  Name the destination                                     ↓1             ",
-        "local · 1/5 decided · 1 frontier      │  01-read    notes research  Read the RFC                                                            ",
-        "A queue toggled from the PR view      │  ── Claimed                                                                                         ",
+        "notes · Map: docs                     │  01-read    notes research  Read the RFC                                                            ",
+        "local · 0/1 decided · 1 frontier      │  01-free    web   grilling  Name the destination                                     ↓1             ",
+        "Docs done                             │  ── Claimed                                                                                         ",
         "                                      │  02-claimed web   prototype Prototype the rail ⟨claimed mayfield⟩                                   ",
-        "notes · Map: docs                     │  ── Blocked                                                                                         ",
-        "local · 0/1 decided · 1 frontier      │  03-blocked web   task      Wire the queue ⟨after 01-free⟩                           ↑1             ",
-        "Docs done                             │  05-mystery web   task      Ship it ⟨dep? ../gone/tickets/09-x.md⟩                                  ",
+        "web · Map: ticket surface             │  ── Blocked                                                                                         ",
+        "local · 1/5 decided · 1 frontier      │  03-blocked web   task      Wire the queue ⟨after 01-free⟩                           ↑1             ",
+        "A queue toggled from the PR view      │  05-mystery web   task      Ship it ⟨dep? ../gone/tickets/09-x.md⟩                                  ",
     ];
     let blank = "                                      │                                                                                                     ";
     expected.extend(std::iter::repeat_n(blank, 13));
@@ -192,7 +193,7 @@ fn the_selected_ticket_row_is_filled_and_its_title_brightened() {
     model.tickets.move_down();
     assert_eq!(
         model.tickets.selected_ticket().map(TicketKey::display_ref),
-        Some("01-read".to_owned())
+        Some("01-free".to_owned())
     );
 
     let terminal = render(&model, 140, 24);
@@ -200,7 +201,7 @@ fn the_selected_ticket_row_is_filled_and_its_title_brightened() {
     let rows = buffer_text(&terminal);
     let buf = terminal.backend().buffer();
     let row_of = |needle: &str| rows.iter().position(|row| row.contains(needle)).unwrap() as u16;
-    let selected_y = row_of("01-read");
+    let selected_y = row_of("01-free");
     // Column 40 is the queue's left pad — plain filler, so a fill there is
     // the row band, not a cell's own style.
     assert_eq!(
@@ -208,9 +209,11 @@ fn the_selected_ticket_row_is_filled_and_its_title_brightened() {
         DARK.selected_bg,
         "the row is filled"
     );
-    let title_x = rows[selected_y as usize].find("Read the RFC").unwrap() as u16;
+    let title_x = rows[selected_y as usize]
+        .find("Name the destination")
+        .unwrap() as u16;
     assert_eq!(buf[(title_x, selected_y)].fg, DARK.selected_fg);
-    let other_y = row_of("01-free");
+    let other_y = row_of("01-read");
     assert_ne!(buf[(40, other_y)].bg, DARK.selected_bg);
 }
 
