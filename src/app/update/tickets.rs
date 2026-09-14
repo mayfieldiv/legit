@@ -28,17 +28,8 @@ pub(super) fn maybe_discover_local_efforts(model: &mut Model) -> Vec<Cmd> {
     }
     let mut cmds = Vec::new();
     for repo in &model.config.repos {
-        let Some(main_worktree_path) = repo.main_worktree_path.clone() else {
+        let Some(unit) = DiscoveryUnit::for_repo(repo) else {
             continue;
-        };
-        // TODO: make `RepoConfig` an enum (slugged / local-only) so
-        // `display_name` is total and this expect goes away.
-        let name = repo
-            .display_name()
-            .expect("a repo with a mainWorktreePath has a display name");
-        let unit = DiscoveryUnit::LocalRepo {
-            name,
-            main_worktree_path,
         };
         if !model.tickets.needs_discovery(&unit) {
             continue;

@@ -23,7 +23,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::{
     app::list_cursor::{Direction, ListCursor, SelectableRow},
-    config::RepoIdentity,
+    config::{RepoConfig, RepoIdentity},
     format::format_repo_short,
     ticket::{
         Claim, Effort, EffortKey, EffortRead, EffortSource, EffortTicket, TicketKey, TicketState,
@@ -306,6 +306,20 @@ pub enum DiscoveryUnit {
 }
 
 impl DiscoveryUnit {
+    /// The probe unit for one configured Tracked Repo, or `None` when it has
+    /// no filesystem to probe: a slug-only repo has no Main Worktree. The
+    /// display name can only be missing on a `RepoConfig` that `validate`
+    /// would have rejected (neither slug nor path), so that reads as the same
+    /// `None` rather than a panic in the reducer.
+    pub fn for_repo(repo: &RepoConfig) -> Option<Self> {
+        let main_worktree_path = repo.main_worktree_path.clone()?;
+        let name = repo.display_name().ok()?;
+        Some(DiscoveryUnit::LocalRepo {
+            name,
+            main_worktree_path,
+        })
+    }
+
     /// The name the unit is shown under when it fails.
     pub fn label(&self) -> &str {
         match self {
