@@ -6,9 +6,6 @@
 //! all implementation: this file decides *where* Efforts live (worktrees,
 //! Wayfinder Roots, the cwd walk); [`format`] decides *what* one says.
 
-// TODO(#120): remove once the fetch layer dispatches local probes.
-#![allow(dead_code)]
-
 mod format;
 #[cfg(test)]
 mod tests;
@@ -22,7 +19,8 @@ use anyhow::Context;
 use self::format::{find_map_file, probe_file_type, read_effort_at};
 use crate::{
     canonical_path::CanonicalPathBuf,
-    config::{RepoConfig, resolve_config_path},
+    config::{LegitConfig, RepoConfig, RepoIdentity, resolve_config_path},
+    repo_slug::RepoSlug,
     subprocess::{GitEnv, git_command, run_command},
     ticket::EffortRead,
     worktree::list_worktrees,
@@ -48,39 +46,56 @@ pub fn discover_repo_efforts(repo: &RepoConfig) -> anyhow::Result<Vec<EffortRead
     read_efforts_under(&bases, repo.wayfinder_roots.as_deref())
 }
 
-/// Discover and parse every local Effort visible from the working directory:
-/// walk cwd → its git toplevel, probing each level (which finds nested
-/// monorepo roots like `apps/mac-agent/docs/wayfinder/`); a cwd outside any
-/// git repo is probed alone. When the cwd repo matches a configured entry
-/// carrying `wayfinderRoots` — by slug (the origin remote) or by canonical
-/// Main Worktree identity — the explicit roots win over the built-ins
-/// (spec §2.2).
+/// Discover and parse every local Effort visible from the working directory,
+/// with the Tracked Repo they are attributed to: walk cwd → its git toplevel,
+/// probing each level (which finds nested monorepo roots like
+/// `apps/mac-agent/docs/wayfinder/`); a cwd outside any git repo is probed
+/// alone. `detected` is the cwd's GitHub repo as repo detection found it —
+/// passed in rather than re-detected, so the walk and `Cmd::DetectRepo`
+/// can't answer differently for one cwd.
+///
+/// Attribution: a configured entry the cwd repo matches — by slug or by
+/// repository membership of its Main Worktree — leads, so this probe and
+/// that repo's own probe (which publish the same Effort keys) can't
+/// disagree; the detected slug is only the fallback for an unconfigured
+/// cwd repo — spec §2.1 keys a slug-less repo by path even when its remote
+/// is on GitHub; and a cwd nobody configured or detected is its toplevel.
+/// A matched entry's `wayfinderRoots` win over the built-ins (spec §2.2).
 pub fn discover_cwd_efforts(
     cwd: &Path,
-    config: &crate::config::LegitConfig,
-) -> anyhow::Result<Vec<EffortRead>> {
+    config: &LegitConfig,
+    detected: Option<&RepoSlug>,
+) -> anyhow::Result<(RepoIdentity, Vec<EffortRead>)> {
     let levels = cwd_walk_levels(cwd)?;
     let toplevel = levels.last().expect("the walk holds at least the cwd");
-    let roots = configured_roots_for_cwd(config, cwd, toplevel);
-    read_efforts_under(&levels, roots)
+    let matched = configured_repos_for_cwd(config, detected, toplevel);
+    let roots = matched
+        .iter()
+        .find_map(|repo| repo.wayfinder_roots.as_deref());
+    let identity = matched
+        .first()
+        .and_then(|repo| repo.identity().ok())
+        .or_else(|| detected.cloned().map(RepoIdentity::Slug))
+        .unwrap_or_else(|| RepoIdentity::Path(toplevel.clone()));
+    let reads = read_efforts_under(&levels, roots)?;
+    Ok((identity, reads))
 }
 
 /// The directories the cwd walk probes: the canonical cwd up to and
 /// including its git toplevel, or the cwd alone outside a repo. The
 /// toplevel is last, so callers can read the repo boundary off the walk.
-fn cwd_walk_levels(cwd: &Path) -> anyhow::Result<Vec<PathBuf>> {
-    let cwd =
-        fs::canonicalize(cwd).with_context(|| format!("canonicalizing cwd {}", cwd.display()))?;
+fn cwd_walk_levels(cwd: &Path) -> anyhow::Result<Vec<CanonicalPathBuf>> {
+    let cwd = CanonicalPathBuf::canonicalize(cwd)
+        .with_context(|| format!("canonicalizing cwd {}", cwd.display()))?;
     let toplevel = git_toplevel(&cwd)
         .and_then(|top| fs::canonicalize(top).ok())
         // A toplevel that isn't a cwd ancestor (exotic symlink layouts):
         // there is no walk between them, so probe just the cwd.
         .filter(|top| cwd.starts_with(top))
-        .unwrap_or_else(|| cwd.clone());
+        .unwrap_or_else(|| cwd.to_path_buf());
     Ok(cwd
         .ancestors()
         .take_while(|level| level.starts_with(&toplevel))
-        .map(Path::to_owned)
         .collect())
 }
 
@@ -97,49 +112,68 @@ fn git_toplevel(cwd: &Path) -> Option<PathBuf> {
         .map(|stdout| PathBuf::from(stdout.trim()))
 }
 
-/// The configured `wayfinderRoots` that replace the built-ins for the cwd
-/// walk, when the cwd repo matches a `repos` entry carrying them. Matching
-/// takes either evidence of "same repo": the entry's slug equals the cwd's
-/// origin-remote slug, or the entry's Main Worktree names the toplevel
-/// (canonical identity, so spelling differences and symlinks can't defeat
-/// it). Deliberately looser than [`crate::config::RepoIdentity`], which answers dedup with
-/// one key — a slugged entry whose clone is the toplevel is still the cwd
-/// repo even with the remote missing or renamed. A match failure of any
-/// kind — no remote, an unresolvable configured path — just means "not the
-/// cwd repo", never an error: the walk falls back to the built-ins.
-fn configured_roots_for_cwd<'a>(
-    config: &'a crate::config::LegitConfig,
-    cwd: &Path,
+/// The `repos` entries the cwd repo is, in config order. Matching takes
+/// either evidence of "same repo": the entry's slug equals the cwd's
+/// `detected` origin-remote slug, or the entry's Main Worktree belongs to
+/// the same repository as the toplevel (see [`repository_identity`] — so a
+/// cwd in one of the repo's linked worktrees matches too, which the repo's
+/// own probe fans out to and attributes to the entry). Deliberately looser
+/// than [`RepoIdentity`], which answers dedup with one key — a slugged entry
+/// whose clone is the toplevel is still the cwd repo even with the remote
+/// missing or renamed. A match failure of any kind — no remote, an
+/// unresolvable configured path — just means "not the cwd repo", never an
+/// error. Several entries can match (two spellings of one Main Worktree
+/// both probe); the caller picks per field.
+fn configured_repos_for_cwd<'a>(
+    config: &'a LegitConfig,
+    detected: Option<&RepoSlug>,
     toplevel: &Path,
-) -> Option<&'a [String]> {
-    let candidates: Vec<&RepoConfig> = config
+) -> Vec<&'a RepoConfig> {
+    // One subprocess, and only when an entry needs it. Ambient env like
+    // `git_toplevel`: this is the user's real cwd repo.
+    let cwd_repository = config
         .repos
         .iter()
-        .filter(|repo| repo.wayfinder_roots.is_some())
-        .collect();
-    // One subprocess, and only when a slugged candidate needs it.
-    let cwd_slug = candidates
-        .iter()
-        .any(|repo| repo.slug.is_some())
-        .then(|| crate::git_remote::detect_repo(cwd).ok())
+        .any(|repo| repo.main_worktree_path.is_some())
+        .then(|| repository_identity(toplevel, GitEnv::Ambient))
         .flatten();
-    let toplevel = CanonicalPathBuf::canonicalize(toplevel).ok();
-    candidates
-        .into_iter()
-        .find(|repo| {
-            let slug_matches = cwd_slug
-                .as_ref()
-                .is_some_and(|cwd_slug| repo.slug.as_ref() == Some(cwd_slug));
-            let path_matches = match (&repo.main_worktree_path, &toplevel) {
-                (Some(path), Some(toplevel)) => resolve_config_path(path)
+    config
+        .repos
+        .iter()
+        .filter(|repo| {
+            let slug_matches =
+                detected.is_some_and(|detected| repo.slug.as_ref() == Some(detected));
+            let repository_matches = match (&repo.main_worktree_path, &cwd_repository) {
+                (Some(path), Some(cwd_repository)) => resolve_config_path(path)
                     .ok()
-                    .and_then(|path| CanonicalPathBuf::canonicalize(path).ok())
-                    .is_some_and(|path| path == *toplevel),
+                    .and_then(|path| repository_identity(&path, GitEnv::Scrubbed))
+                    .is_some_and(|repository| repository == *cwd_repository),
                 _ => false,
             };
-            slug_matches || path_matches
+            slug_matches || repository_matches
         })
-        .and_then(|repo| repo.wayfinder_roots.as_deref())
+        .collect()
+}
+
+/// What identifies the repository `dir` belongs to: the canonical git common
+/// dir, which every worktree of one repository shares (the Main Worktree's
+/// `.git`, a linked worktree's `.git` file pointing back into it); outside
+/// git, the canonical directory itself. Canonical either way, so spelling
+/// differences and symlinks can't defeat the comparison. `None` when `dir`
+/// can't be resolved at all.
+fn repository_identity(dir: &Path, env: GitEnv) -> Option<CanonicalPathBuf> {
+    let mut command = git_command(env);
+    command
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "--git-common-dir"]);
+    let repository = match run_command("git rev-parse --git-common-dir", &mut command) {
+        // Relative to `dir` inside the Main Worktree (`.git`), absolute from
+        // a linked one; `join` handles both.
+        Ok(stdout) => dir.join(stdout.trim()),
+        Err(_) => dir.to_owned(),
+    };
+    CanonicalPathBuf::canonicalize(repository).ok()
 }
 
 /// The working trees a repo's Wayfinder Roots resolve against: every linked
@@ -184,7 +218,7 @@ fn is_git_worktree(dir: &Path) -> bool {
 /// several bases or roots (symlinks, an absolute root shared by worktrees)
 /// dedups on its canonical identity.
 fn read_efforts_under(
-    bases: &[PathBuf],
+    bases: &[impl AsRef<Path>],
     roots: Option<&[String]>,
 ) -> anyhow::Result<Vec<EffortRead>> {
     let roots: Vec<&str> = roots.map_or_else(
@@ -207,7 +241,7 @@ fn read_efforts_under(
             Some(absolute) => effort_dirs.extend(probe_root(&absolute)?),
             None => {
                 for base in bases {
-                    effort_dirs.extend(probe_root(&base.join(root))?);
+                    effort_dirs.extend(probe_root(&base.as_ref().join(root))?);
                 }
             }
         }

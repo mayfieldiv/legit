@@ -6,7 +6,7 @@ use crate::repo_slug::RepoSlug;
 #[test]
 fn fetch_fans_out_to_every_tracked_repo() {
     let (mut model, _) = Model::new();
-    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.auth_token = Some(AuthToken::parse("ghp_test").unwrap());
     model.repo = RepoDetection::Detected(RepoSlug::new("mayfieldiv/legit"));
 
     let cmds = update(
@@ -31,7 +31,7 @@ fn fetch_fans_out_to_every_tracked_repo() {
 #[test]
 fn detected_repo_already_in_config_is_fetched_once_with_config_casing() {
     let (mut model, _) = Model::new();
-    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.auth_token = Some(AuthToken::parse("ghp_test").unwrap());
     model.repo = RepoDetection::Detected(RepoSlug::new("mayfieldiv/legit"));
 
     // GitHub slugs are case-insensitive; the configured casing wins.
@@ -46,7 +46,7 @@ fn detected_repo_already_in_config_is_fetched_once_with_config_casing() {
 #[test]
 fn pr_list_loaded_fans_out_enrichment_only_for_that_repo() {
     let (mut model, _) = Model::new();
-    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.auth_token = Some(AuthToken::parse("ghp_test").unwrap());
     // `acme/web` is a tracked (configured) repo; `mayfieldiv/legit` is the
     // CWD-detected repo.
     model.config = config_with_repos(&["acme/web"]);

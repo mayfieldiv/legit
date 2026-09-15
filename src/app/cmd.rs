@@ -4,15 +4,19 @@ use std::{future::Future, path::PathBuf, sync::Arc};
 use tokio::sync::mpsc;
 
 use crate::{
-    app::{browser, msg::Msg},
-    auth, clipboard, config, git_remote,
+    app::{browser, msg::Msg, ticket_list::DiscoveryUnit},
+    auth::{self, AuthToken},
+    clipboard,
+    config::{self, LegitConfig, RepoConfig, RepoIdentity},
+    git_remote,
     github::graphql::GraphQlClient,
     github::limiter::{Affinity, NetworkLimiter},
     github::rest::OctocrabRest,
     github::rest::PrKey,
     github::rest::WorkflowNameCache,
     github::types::ReviewStatus,
-    secret::Secret,
+    local_effort,
+    ticket::EffortRead,
     worktree,
 };
 
@@ -24,7 +28,7 @@ use crate::{
 #[derive(Debug, PartialEq, Eq)]
 pub struct RequestContext {
     pub repo: RepoSlug,
-    pub token: Secret<String>,
+    pub token: AuthToken,
     pub bot_logins: Vec<String>,
     /// Memo of the repo's Actions `workflow_id → name` map, shared across the
     /// fan-out so the repo-global workflow list is fetched once per list-load
@@ -42,7 +46,7 @@ pub enum Cmd {
     /// shared `RequestContext` (it has no use for `bot_logins`).
     FetchOpenPRs {
         repo: RepoSlug,
-        token: Secret<String>,
+        token: AuthToken,
     },
     FetchReviewStatus {
         ctx: Arc<RequestContext>,
@@ -136,6 +140,54 @@ pub enum Cmd {
         pr: PrKey,
         delay_ms: u64,
     },
+    /// Discover one Tracked Repo's local Efforts — its Main Worktree, every
+    /// worktree linked to it, and their Wayfinder Roots — streaming one
+    /// `Msg::EffortArrived` per Effort, then `DiscoveryFinished` (or
+    /// `DiscoveryFailed`). Local filesystem work: it never touches the
+    /// network limiter (spec §5.1), the per-repo listing idiom without the
+    /// permit. `unit` names the probe for the queue's phase tracking.
+    DiscoverRepoEfforts {
+        unit: DiscoveryUnit,
+        repo: RepoConfig,
+    },
+    /// Discover the local Efforts visible from the working directory (the
+    /// cwd → git toplevel walk). Carries the config and the detected cwd
+    /// repo because the walk attributes what it finds to one of them (see
+    /// `local_effort::discover_cwd_efforts`) and a configured
+    /// `wayfinderRoots` for the cwd repo replaces the built-in roots.
+    DiscoverCwdEfforts {
+        detected: Option<RepoSlug>,
+        config: LegitConfig,
+    },
+}
+
+impl Cmd {
+    /// The variant name: names the command in a report without echoing its
+    /// payload — `Debug` would dump a whole `LegitConfig` into an error line.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Cmd::LoadConfig => "LoadConfig",
+            Cmd::ResolveAuthToken => "ResolveAuthToken",
+            Cmd::DetectRepo => "DetectRepo",
+            Cmd::FetchOpenPRs { .. } => "FetchOpenPRs",
+            Cmd::FetchReviewStatus { .. } => "FetchReviewStatus",
+            Cmd::FetchThreads { .. } => "FetchThreads",
+            Cmd::FetchReviews { .. } => "FetchReviews",
+            Cmd::FetchIssueComments { .. } => "FetchIssueComments",
+            Cmd::FetchChecks { .. } => "FetchChecks",
+            Cmd::FetchFiles { .. } => "FetchFiles",
+            Cmd::ScheduleStatusClear { .. } => "ScheduleStatusClear",
+            Cmd::FetchPRDetail { .. } => "FetchPRDetail",
+            Cmd::OpenUrl { .. } => "OpenUrl",
+            Cmd::ListWorktrees { .. } => "ListWorktrees",
+            Cmd::CreateWorktree { .. } => "CreateWorktree",
+            Cmd::CopyToClipboard { .. } => "CopyToClipboard",
+            Cmd::RefreshPr { .. } => "RefreshPr",
+            Cmd::DelayedRetry { .. } => "DelayedRetry",
+            Cmd::DiscoverRepoEfforts { .. } => "DiscoverRepoEfforts",
+            Cmd::DiscoverCwdEfforts { .. } => "DiscoverCwdEfforts",
+        }
+    }
 }
 
 #[tracing::instrument(name = "command", skip(tx, limiter))]
@@ -362,7 +414,84 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
             let _ = tx.send(Msg::MergeableRetryDue { pr });
         }
+        Cmd::DiscoverRepoEfforts { unit, repo } => run_discover_repo_efforts(unit, repo, tx).await,
+        Cmd::DiscoverCwdEfforts { detected, config } => {
+            let cwd = match std::env::current_dir() {
+                Ok(cwd) => cwd,
+                Err(error) => {
+                    let _ = tx.send(discovery_failed(DiscoveryUnit::Cwd, error.into()));
+                    return;
+                }
+            };
+            run_discover_cwd_efforts(cwd, detected, config, tx).await;
+        }
     }
+}
+
+/// One Tracked Repo's local probe. The repo's identity — the queue's
+/// attribution — is resolved here, off the UI loop, because a slug-less repo's
+/// identity is its canonical Main Worktree and canonicalizing is filesystem
+/// I/O the reducer must not do. Every Effort found streams as its own
+/// arrival; the unit then settles either way.
+async fn run_discover_repo_efforts(
+    unit: DiscoveryUnit,
+    repo: RepoConfig,
+    tx: mpsc::UnboundedSender<Msg>,
+) {
+    let result = blocking(move || {
+        // Discovery first: its missing-worktree error names the path plainly,
+        // where identity's would be a bare canonicalize failure.
+        let reads = local_effort::discover_repo_efforts(&repo)?;
+        let identity = repo.identity()?;
+        Ok((identity, reads))
+    })
+    .await;
+    settle_discovery(unit, result, &tx);
+}
+
+/// The cwd walk; the walk owns attribution (see `discover_cwd_efforts`).
+async fn run_discover_cwd_efforts(
+    cwd: PathBuf,
+    detected: Option<RepoSlug>,
+    config: LegitConfig,
+    tx: mpsc::UnboundedSender<Msg>,
+) {
+    let result =
+        blocking(move || local_effort::discover_cwd_efforts(&cwd, &config, detected.as_ref()))
+            .await;
+    settle_discovery(DiscoveryUnit::Cwd, result, &tx);
+}
+
+/// Deliver one probe's outcome: an arrival per Effort then the unit's
+/// completion, or the unit's failure.
+fn settle_discovery(
+    unit: DiscoveryUnit,
+    result: anyhow::Result<(RepoIdentity, Vec<EffortRead>)>,
+    tx: &mpsc::UnboundedSender<Msg>,
+) {
+    match result {
+        Ok((repo, reads)) => {
+            tracing::info!(?unit, efforts = reads.len(), "local efforts discovered");
+            for read in reads {
+                let _ = tx.send(Msg::EffortArrived {
+                    repo: repo.clone(),
+                    read,
+                });
+            }
+            let _ = tx.send(Msg::DiscoveryFinished { unit });
+        }
+        Err(error) => {
+            let _ = tx.send(discovery_failed(unit, error));
+        }
+    }
+}
+
+/// Log a probe failure here (the impure layer) and build the `Msg` for the
+/// queue to record — the local analogue of `pr_list_failed`.
+fn discovery_failed(unit: DiscoveryUnit, error: anyhow::Error) -> Msg {
+    let error = format!("{error:#}");
+    tracing::warn!(?unit, %error, "local effort discovery failed");
+    Msg::DiscoveryFailed { unit, error }
 }
 
 /// Refresh one PR end-to-end. The four sub-fetches are independent and run
@@ -516,7 +645,7 @@ async fn fetch_files(
 
 async fn run_fetch_open_prs(
     repo: RepoSlug,
-    token: Secret<String>,
+    token: AuthToken,
     tx: mpsc::UnboundedSender<Msg>,
     limiter: Arc<NetworkLimiter>,
 ) {
@@ -630,3 +759,6 @@ where
 {
     tokio::task::spawn_blocking(f).await?
 }
+
+#[cfg(test)]
+mod tests;

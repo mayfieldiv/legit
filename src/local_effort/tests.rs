@@ -244,7 +244,8 @@ fn cwd_walk_probes_each_level_up_to_the_git_toplevel() {
     let cwd = repo.join("apps/mac-agent/src");
     fs::create_dir_all(&cwd).unwrap();
 
-    let reads = super::discover_cwd_efforts(&cwd, &crate::config::LegitConfig::default()).unwrap();
+    let (_, reads) =
+        super::discover_cwd_efforts(&cwd, &crate::config::LegitConfig::default(), None).unwrap();
     let mut titles = effort_titles(&reads);
     titles.sort();
     assert_eq!(
@@ -264,8 +265,16 @@ fn a_non_git_cwd_is_probed_alone() {
     );
     let cwd = dir.path().join("plain");
 
-    let reads = super::discover_cwd_efforts(&cwd, &crate::config::LegitConfig::default()).unwrap();
+    let (identity, reads) =
+        super::discover_cwd_efforts(&cwd, &crate::config::LegitConfig::default(), None).unwrap();
     assert_eq!(effort_titles(&reads), vec!["Plain".to_owned()]);
+    assert_eq!(
+        identity,
+        crate::config::RepoIdentity::Path(
+            crate::canonical_path::CanonicalPathBuf::canonicalize(&cwd).unwrap()
+        ),
+        "nothing configured or detected: the toplevel (here the cwd) is the identity"
+    );
 }
 
 #[test]
@@ -286,11 +295,52 @@ fn configured_roots_win_for_the_cwd_repo_on_a_path_match() {
         ..Default::default()
     };
 
-    let reads = super::discover_cwd_efforts(&cwd, &config).unwrap();
+    let (identity, reads) = super::discover_cwd_efforts(&cwd, &config, None).unwrap();
     assert_eq!(
         effort_titles(&reads),
         vec!["Override".to_owned()],
         "the matched entry's wayfinderRoots replace the built-ins for the walk"
+    );
+    assert_eq!(
+        identity,
+        crate::config::RepoIdentity::Path(
+            crate::canonical_path::CanonicalPathBuf::canonicalize(&repo).unwrap()
+        ),
+        "the Efforts are attributed to the matched entry"
+    );
+}
+
+#[test]
+fn a_cwd_in_a_linked_worktree_is_attributed_to_the_configured_main_worktree() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main");
+    init_repo(&main);
+    let linked = dir.path().join("linked");
+    git(
+        &main,
+        &["worktree", "add", "--quiet", linked.to_str().unwrap()],
+    );
+    write(&linked.join("docs/wayfinder/alpha/map.md"), "# Alpha\n");
+    let config = crate::config::LegitConfig {
+        repos: vec![repo_config(&main, None)],
+        ..Default::default()
+    };
+
+    let (identity, reads) = super::discover_cwd_efforts(&linked, &config, None).unwrap();
+    let repo_probe = super::discover_repo_efforts(&config.repos[0]).unwrap();
+
+    assert_eq!(
+        identity,
+        crate::config::RepoIdentity::Path(
+            crate::canonical_path::CanonicalPathBuf::canonicalize(&main).unwrap()
+        ),
+        "the linked worktree belongs to the configured repo, so the walk \
+         attributes its Efforts where the repo's own probe does"
+    );
+    assert_eq!(
+        effort_titles(&reads),
+        effort_titles(&repo_probe),
+        "both probes publish the same Effort"
     );
 }
 
@@ -299,10 +349,6 @@ fn configured_roots_win_for_the_cwd_repo_on_a_slug_match() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("clone");
     init_repo(&repo);
-    git(
-        &repo,
-        &["remote", "add", "origin", "git@github.com:acme/widgets.git"],
-    );
     write(&repo.join("docs/wayfinder/builtin/map.md"), "# Built-in\n");
     write(&repo.join("maps/override/map.md"), "# Override\n");
 
@@ -316,8 +362,60 @@ fn configured_roots_win_for_the_cwd_repo_on_a_slug_match() {
         ..Default::default()
     };
 
-    let reads = super::discover_cwd_efforts(&repo, &config).unwrap();
+    let detected = crate::repo_slug::RepoSlug::new("acme/widgets");
+    let (identity, reads) = super::discover_cwd_efforts(&repo, &config, Some(&detected)).unwrap();
     assert_eq!(effort_titles(&reads), vec!["Override".to_owned()]);
+    assert_eq!(
+        identity,
+        crate::config::RepoIdentity::Slug(detected),
+        "the matched entry's identity is its slug"
+    );
+}
+
+#[test]
+fn a_detected_slug_nobody_configured_is_the_fallback_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("clone");
+    init_repo(&repo);
+    write(&repo.join(".wayfinder/map.md"), "# Local\n");
+    let detected = crate::repo_slug::RepoSlug::new("acme/widgets");
+
+    let (identity, _) = super::discover_cwd_efforts(
+        &repo,
+        &crate::config::LegitConfig::default(),
+        Some(&detected),
+    )
+    .unwrap();
+
+    assert_eq!(identity, crate::config::RepoIdentity::Slug(detected));
+}
+
+#[test]
+fn a_configured_slug_less_entry_outranks_the_detected_slug() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("clone");
+    init_repo(&repo);
+    write(&repo.join(".wayfinder/map.md"), "# Local\n");
+    let config = crate::config::LegitConfig {
+        repos: vec![repo_config(&repo, None)],
+        ..Default::default()
+    };
+
+    let (identity, _) = super::discover_cwd_efforts(
+        &repo,
+        &config,
+        Some(&crate::repo_slug::RepoSlug::new("acme/widgets")),
+    )
+    .unwrap();
+
+    assert_eq!(
+        identity,
+        crate::config::RepoIdentity::Path(
+            crate::canonical_path::CanonicalPathBuf::canonicalize(&repo).unwrap()
+        ),
+        "spec §2.1 keys a slug-less repo by path even when its remote is on \
+         GitHub, so the repo probe and the cwd walk attribute one Effort alike"
+    );
 }
 
 #[test]
@@ -338,11 +436,11 @@ fn a_slugged_entry_still_path_matches_when_the_cwd_has_no_remote() {
         ..Default::default()
     };
 
-    let reads = super::discover_cwd_efforts(&repo, &config).unwrap();
+    let (_, reads) = super::discover_cwd_efforts(&repo, &config, None).unwrap();
     assert_eq!(
         effort_titles(&reads),
         vec!["Override".to_owned()],
-        "matching takes either evidence: no origin remote, but the entry's \
+        "matching takes either evidence: no detected remote, but the entry's \
          Main Worktree names the toplevel"
     );
 }

@@ -10,9 +10,9 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::{
+    auth::AuthToken,
     github::types::{FullReviewThread, PRState, ReviewComment, ReviewStatus, is_bot},
     repo_slug::RepoSlug,
-    secret::Secret,
 };
 
 const GITHUB_GRAPHQL_URL: &str = "https://api.github.com/graphql";
@@ -334,11 +334,11 @@ pub(crate) struct GraphQlRequest {
 /// concurrency permit is acquired by the caller (command layer).
 pub struct GraphQlClient {
     http: reqwest::Client,
-    token: Secret<String>,
+    token: AuthToken,
 }
 
 impl GraphQlClient {
-    pub fn new(token: &Secret<String>) -> Result<Self> {
+    pub fn new(token: &AuthToken) -> Result<Self> {
         let http = reqwest::Client::builder()
             .user_agent("legit")
             .build()

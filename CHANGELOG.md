@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Ticket surface, first slice: `t` toggles the PR list into a queue of this machine's local wayfinder Efforts — an effort rail (`repo · map`, `local · N/M decided · N frontier`, Destination) beside the tickets grouped into Frontier / Claimed / Blocked tiers with `j`/`k` navigation. Efforts are discovered at startup from every configured `mainWorktreePath` (and its linked worktrees) plus the working directory; an Effort or repo that can't be read keeps a card with the error rather than vanishing (#130)
+
 ### Changed
 
 - Config: `repos[].sourceClone` is renamed to `mainWorktreePath` (hard rename — an old config fails to load with a one-line error naming the rename). A `repos` object may now omit `slug` when it sets `mainWorktreePath` (a local-only repo for the upcoming ticket surface: no Repo Tab, no PRs; `worktreeRoot` is rejected on it), and may set `wayfinderRoots` to replace the built-in local Effort probe roots for that repo (#115)

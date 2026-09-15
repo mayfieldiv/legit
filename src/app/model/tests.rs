@@ -1,12 +1,12 @@
 use crate::repo_slug::RepoSlug;
 use chrono::TimeZone;
 
-use crate::{app::model::Model, github::rest::PrKey, secret::Secret};
+use crate::{app::model::Model, auth::AuthToken, github::rest::PrKey};
 
 #[test]
 fn debug_redacts_auth_token() {
     let (mut model, _) = Model::new();
-    model.auth_token = Some(Secret::new("secret-token".to_owned()));
+    model.auth_token = Some(AuthToken::parse("secret-token").unwrap());
 
     let debug = format!("{model:?}");
 

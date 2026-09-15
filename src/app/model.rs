@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use ratatui::text::Line;
 
 use crate::{
+    auth::AuthToken,
     blocker::{BlockerOptions, BlockerResult, compute_blocker},
     config::LegitConfig,
     file_category::FileCategorization,
@@ -11,7 +12,6 @@ use crate::{
     github::types::{CheckRun, FullReviewThread, IssueComment, Review},
     markdown::Block,
     repo_slug::RepoSlug,
-    secret::Secret,
     worktree::{self, WorktreeEntry},
 };
 
@@ -20,6 +20,8 @@ use super::{
     detail_items::{DetailFilters, DetailFocus},
     pr_list::PrList,
     summary_layout::SummaryState,
+    ticket_list::TicketList,
+    ticket_list_layout,
 };
 
 /// Which top-level view is active. `List` is the default PR list; `Detail`
@@ -35,6 +37,11 @@ pub enum ViewMode {
     /// leaving it is a single assignment back to `List`, so there is no
     /// hand-synchronised side state to clear.
     Detail(DetailState),
+    /// The ticket surface: the effort rail and the tier-grouped ticket queue
+    /// over every pooled Effort. `t` toggles here from `List` and back; the
+    /// queue's cursor and viewport live on `Model::tickets`, so the variant
+    /// carries nothing.
+    TicketList,
 }
 
 /// The complete state of an open detail view. Bundled into `ViewMode::Detail`
@@ -299,12 +306,17 @@ pub struct Model {
     /// failure: it is the whole app's prerequisite that failed, not one repo's
     /// listing. The status bar surfaces it ahead of any list failure.
     pub fatal: Option<String>,
-    pub auth_token: Option<Secret<String>>,
+    pub auth_token: Option<AuthToken>,
     /// CWD repo detection state. The PR-fetch gate waits for this to settle
     /// (`Detected` or `Failed`), not for `Detected` specifically, so a failed
     /// detection doesn't permanently block configured Tracked Repos.
     pub repo: RepoDetection,
     pub list: PrList,
+    /// The ticket surface's pooled Efforts, queue cursor, and local probe
+    /// phases. Lives on the Model rather than in `ViewMode::TicketList` so the
+    /// pool and cursor survive toggling back to the PR list, the way `list`
+    /// survives a detail view.
+    pub tickets: TicketList,
     /// Active Repo Tab index: 0 is the All tab, `i >= 1` is `tracked_repos()[i-1]`.
     /// Clamped at read time by `active_scope` (the tracked set only ever grows,
     /// and only until config + repo detection settle).
@@ -392,6 +404,7 @@ impl Model {
                 auth_token: None,
                 repo: RepoDetection::Pending,
                 list: PrList::new(),
+                tickets: TicketList::new(),
                 active_tab: 0,
                 terminal_height: 0,
                 terminal_width: 0,
@@ -464,13 +477,17 @@ impl Model {
     }
 
     /// The entity the user is focused on for fetch prioritisation: the open
-    /// detail PR, else the selected list PR.
-    // TODO(#121): yield the ticket surface's open or selected Ticket while it
-    // is the active surface.
+    /// detail PR, the selected list PR, or — on the ticket surface — the
+    /// selected Ticket. One focused entity globally, so toggling surfaces
+    /// demotes the other surface's pending fetches.
     pub fn focused_entity(&self) -> Option<Affinity> {
         match &self.view_mode {
             ViewMode::Detail(detail) => Some(Affinity::Pr(detail.key.clone())),
             ViewMode::List => self.list.selected_pr().map(|pr| Affinity::Pr(pr.key())),
+            ViewMode::TicketList => self
+                .tickets
+                .selected_ticket()
+                .map(|key| Affinity::Ticket(key.clone())),
         }
     }
 
@@ -530,13 +547,17 @@ impl Model {
         super::list_layout::chrome_rows(self.list.filter().is_visible())
     }
 
-    /// Re-derive the list viewport from the terminal height minus the chrome
-    /// rows (tab bar + status bar, plus the filter chip while visible). Called
+    /// Re-derive both list viewports from the terminal height minus each
+    /// surface's chrome rows (the PR list's tab bar + status bar, plus the
+    /// filter chip while visible; the ticket surface's fixed chrome). Called
     /// on terminal resize — and whenever a chrome row appears or vanishes
-    /// without one (opening/closing the filter).
+    /// without one (opening/closing the filter). Both resize every time so a
+    /// resize on one surface can't leave the other's viewport stale.
     pub fn sync_viewport(&mut self) {
-        self.list
-            .resize((self.terminal_height as usize).saturating_sub(self.chrome_rows()));
+        let height = self.terminal_height as usize;
+        self.list.resize(height.saturating_sub(self.chrome_rows()));
+        self.tickets
+            .resize(height.saturating_sub(ticket_list_layout::chrome_rows()));
     }
 
     /// Recompute the cached blocker result for one PR from whatever enrichment

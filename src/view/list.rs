@@ -2,11 +2,12 @@ use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
 };
 
+use super::row::{Cell, GAP, fill_width, render_cells};
 use crate::{
     app::grouping::{DisplayRow, Grouping},
     app::model::Model,
@@ -14,7 +15,7 @@ use crate::{
     color::repo_color,
     format::{
         CheckOutcome, REFRESH_GLYPH, WORKTREE_GLYPH, comment_counts, format_age, format_repo_short,
-        format_review_state, outcome, pad_to_width, truncate, truncate_middle,
+        format_review_state, outcome, pad_to_width, truncate_middle,
     },
     github::rest::PR,
     github::types::Review,
@@ -95,7 +96,6 @@ const SIZE_COL_MIN: usize = SIZE_SIDE_COL_MIN * 2 + 1;
 const UPDATED_COL: usize = 7;
 const REVIEW_COL: usize = 18;
 const ACTION_COL: usize = 26;
-const GAP: usize = 1;
 
 /// Whether the All tab shows the repo column. Keys off the tracked-repo count
 /// (mirroring the TS `showRepo`) rather than the repo spread of the visible
@@ -262,60 +262,29 @@ fn reserve_visible_column(budget: &mut usize, column_width: usize) -> bool {
     true
 }
 
-#[derive(Clone)]
-struct Cell {
-    text: String,
-    width: usize,
-    style: Style,
-}
-
 /// Column header row. Built from the same layout as PR rows so labels and data
 /// cannot drift apart. Never selected, so it carries no `selected_bg` fill.
 fn header_row_line(layout: &RowLayout) -> Line<'static> {
     let bold = Style::default().add_modifier(Modifier::BOLD);
     let mut cells = base_cells("", Style::default(), "PR", layout, bold);
     if layout.show_repo {
-        cells.push(Cell {
-            text: "Repo".to_owned(),
-            width: REPO_COL,
-            style: bold,
-        });
+        cells.push(Cell::text("Repo".to_owned(), REPO_COL, bold));
     }
     let title_slot = cells.len();
     if layout.visible.author {
-        cells.push(Cell {
-            text: "Author".to_owned(),
-            width: AUTHOR_COL,
-            style: bold,
-        });
+        cells.push(Cell::text("Author".to_owned(), AUTHOR_COL, bold));
     }
     if layout.visible.size {
-        cells.push(Cell {
-            text: "Size".to_owned(),
-            width: layout.size_col,
-            style: bold,
-        });
+        cells.push(Cell::text("Size".to_owned(), layout.size_col, bold));
     }
     if layout.visible.updated {
-        cells.push(Cell {
-            text: "Updated".to_owned(),
-            width: UPDATED_COL,
-            style: bold,
-        });
+        cells.push(Cell::text("Updated".to_owned(), UPDATED_COL, bold));
     }
     if layout.visible.review {
-        cells.push(Cell {
-            text: "Review".to_owned(),
-            width: REVIEW_COL,
-            style: bold,
-        });
+        cells.push(Cell::text("Review".to_owned(), REVIEW_COL, bold));
     }
     if layout.visible.action {
-        cells.push(Cell {
-            text: "Action".to_owned(),
-            width: ACTION_COL,
-            style: bold,
-        });
+        cells.push(Cell::text("Action".to_owned(), ACTION_COL, bold));
     }
     insert_title_cell(&mut cells, title_slot, layout, "Title".to_owned(), bold);
     render_cells(cells, None)
@@ -345,49 +314,41 @@ fn row_line(
         // The repo cell takes the repo's stable Repo Color, so a mixed All-tab
         // list groups visually by repo while scanning.
         let repo = truncate_middle(format_repo_short(pr.repo_slug.as_str()), REPO_COL);
-        cells.push(Cell {
-            text: repo,
-            width: REPO_COL,
-            style: Style::default().fg(repo_color(pr.repo_slug.as_str())),
-        });
+        cells.push(Cell::text(
+            repo,
+            REPO_COL,
+            Style::default().fg(repo_color(pr.repo_slug.as_str())),
+        ));
     }
     let title_slot = cells.len();
     if layout.visible.author {
-        cells.push(Cell {
-            text: truncate_middle(&pr.author, AUTHOR_COL),
-            width: AUTHOR_COL,
-            style: Style::default().fg(palette.author),
-        });
+        cells.push(Cell::text(
+            truncate_middle(&pr.author, AUTHOR_COL),
+            AUTHOR_COL,
+            Style::default().fg(palette.author),
+        ));
     }
     if layout.visible.size {
-        cells.push(Cell {
-            text: format_list_size(pr, layout.size_col),
-            width: layout.size_col,
-            style: Style::default(),
-        });
+        cells.push(Cell::text(
+            format_list_size(pr, layout.size_col),
+            layout.size_col,
+            Style::default(),
+        ));
     }
     if layout.visible.updated {
-        cells.push(Cell {
-            text: format_age(pr.updated_at, now),
-            width: UPDATED_COL,
-            style: Style::default(),
-        });
+        cells.push(Cell::text(
+            format_age(pr.updated_at, now),
+            UPDATED_COL,
+            Style::default(),
+        ));
     }
     if layout.visible.review {
         let (text, style) = review_cell(pr, model, palette);
-        cells.push(Cell {
-            text,
-            width: REVIEW_COL,
-            style,
-        });
+        cells.push(Cell::text(text, REVIEW_COL, style));
     }
     if layout.visible.action {
         let (text, style) = action_cell(model.blockers.get(&pr.key()), palette);
-        cells.push(Cell {
-            text,
-            width: ACTION_COL,
-            style,
-        });
+        cells.push(Cell::text(text, ACTION_COL, style));
     }
 
     // The Selected Row brightens only the title to `selected_fg`; every other
@@ -430,16 +391,8 @@ fn base_cells(
     style: Style,
 ) -> Vec<Cell> {
     vec![
-        Cell {
-            text: glyph.to_owned(),
-            width: WORKTREE_COL,
-            style: glyph_style,
-        },
-        Cell {
-            text: pr_number.to_owned(),
-            width: layout.pr_num_col,
-            style,
-        },
+        Cell::text(glyph.to_owned(), WORKTREE_COL, glyph_style),
+        Cell::text(pr_number.to_owned(), layout.pr_num_col, style),
     ]
 }
 
@@ -450,36 +403,8 @@ fn insert_title_cell(
     text: String,
     style: Style,
 ) {
-    let fixed: usize = cells.iter().map(|cell| cell.width).sum::<usize>() + cells.len() * GAP;
-    let title_col = layout.width.saturating_sub(fixed).max(1);
-    cells.insert(
-        title_slot,
-        Cell {
-            text,
-            width: title_col,
-            style,
-        },
-    );
-}
-
-fn render_cells(cells: Vec<Cell>, fill: Option<Color>) -> Line<'static> {
-    let mut spans = Vec::with_capacity(cells.len() * 2 - 1);
-    for (i, cell) in cells.into_iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::raw(" ".repeat(GAP)));
-        }
-        let text = truncate(&cell.text, cell.width);
-        spans.push(Span::styled(pad_to_width(&text, cell.width), cell.style));
-    }
-
-    let line = Line::from(spans);
-    match fill {
-        // The line's base style fills the full row width — including inter-cell
-        // gaps and trailing padding — with the fill colour, while each span keeps
-        // its own foreground. A continuous band, not inverted video (ADR 0005).
-        Some(c) => line.style(Style::default().bg(c)),
-        None => line,
-    }
+    let title_col = fill_width(layout.width, cells.iter().map(|cell| cell.width));
+    cells.insert(title_slot, Cell::text(text, title_col, style));
 }
 
 fn review_cell(pr: &PR, model: &Model, palette: &Palette) -> (String, Style) {

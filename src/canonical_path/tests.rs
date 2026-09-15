@@ -34,3 +34,19 @@ fn a_missing_path_is_an_error() {
     let dir = tempfile::tempdir().unwrap();
     assert!(CanonicalPathBuf::canonicalize(dir.path().join("nope")).is_err());
 }
+
+#[test]
+fn ancestors_walk_from_the_path_to_the_root_as_canonical_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let sub = dir.path().join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    let canonical = CanonicalPathBuf::canonicalize(&sub).unwrap();
+
+    let ancestors: Vec<CanonicalPathBuf> = canonical.ancestors().collect();
+    assert_eq!(ancestors[0], canonical);
+    assert_eq!(
+        ancestors[1],
+        CanonicalPathBuf::canonicalize(dir.path()).unwrap()
+    );
+    assert!(ancestors.last().unwrap().parent().is_none());
+}

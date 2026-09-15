@@ -14,7 +14,7 @@ fn files_state(model: &Model, number: u64) -> Option<&FilesState> {
 /// `Msg::PrArrived` (so the list is laid out and a PR is selected).
 fn model_with_prs(numbers: &[u64]) -> Model {
     let (mut model, _) = Model::new();
-    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.auth_token = Some(AuthToken::parse("ghp_test").unwrap());
     model.repo = RepoDetection::Detected(RepoSlug::new("mayfieldiv/legit"));
     model.list.begin_fetch(&RepoSlug::new("mayfieldiv/legit"));
     for n in numbers {
@@ -38,7 +38,7 @@ fn first_pr_arriving_requests_its_files() {
     // The very first PR becomes selected the moment it arrives, so its files
     // should be fetched without any keypress.
     let (mut model, _) = Model::new();
-    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.auth_token = Some(AuthToken::parse("ghp_test").unwrap());
     model.repo = RepoDetection::Detected(RepoSlug::new("mayfieldiv/legit"));
     model.list.begin_fetch(&RepoSlug::new("mayfieldiv/legit"));
 

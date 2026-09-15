@@ -95,7 +95,7 @@ fn unknown_types_are_either() {
 #[test]
 fn effort_source_follows_the_key_variant() {
     let github = effort(Vec::new());
-    assert_eq!(github.source(), EffortSource::GitHub);
+    assert_eq!(github.key.source(), EffortSource::GitHub);
 
     let local = Effort::new(
         EffortKey::Local {
@@ -108,7 +108,7 @@ fn effort_source_follows_the_key_variant() {
         Vec::new(),
     )
     .unwrap();
-    assert_eq!(local.source(), EffortSource::Local);
+    assert_eq!(local.key.source(), EffortSource::Local);
 }
 
 // ── key identity ─────────────────────────────────────────────────────────────
@@ -139,6 +139,34 @@ fn duplicate_ticket_keys_are_rejected_at_construction() {
     )
     .unwrap_err();
     assert!(err.to_string().contains("duplicate ticket key"));
+}
+
+#[test]
+fn repeated_dependency_edges_collapse_to_one_at_construction() {
+    let mut waiting = open_ticket(2);
+    waiting.dependencies = vec![
+        dep_on(1),
+        dep_on(1),
+        Dependency::Unknown {
+            raw: "gone.md".to_owned(),
+        },
+        Dependency::Unknown {
+            raw: "gone.md".to_owned(),
+        },
+    ];
+    let e = effort(vec![open_ticket(1), waiting]);
+
+    assert_eq!(
+        member(&e, 2).dependencies,
+        vec![
+            dep_on(1),
+            Dependency::Unknown {
+                raw: "gone.md".to_owned(),
+            },
+        ],
+        "one edge per target, declaration order kept"
+    );
+    assert_eq!(member(&e, 2).open_dependencies().count(), 1);
 }
 
 // ── blocked-ness ─────────────────────────────────────────────────────────────
@@ -258,41 +286,8 @@ fn frontier_lists_only_frontier_tickets_in_effort_order() {
         blocked,
         unblocked,
     ]);
-    let frontier: Vec<&TicketKey> = e.frontier().map(|t| &t.get().key).collect();
-    assert_eq!(frontier, vec![&key(1), &key(5)]);
-}
-
-// ── Blocks (reverse read) ────────────────────────────────────────────────────
-
-#[test]
-fn blocks_lists_open_tickets_that_depend_on_the_given_one() {
-    let mut dependent_a = open_ticket(2);
-    dependent_a.dependencies.push(dep_on(1));
-    let mut dependent_b = open_ticket(3);
-    dependent_b.dependencies.push(dep_on(1));
-    dependent_b.dependencies.push(dep_on(2));
-    let e = effort(vec![open_ticket(1), dependent_a, dependent_b]);
-    let blocks: Vec<&TicketKey> = member(&e, 1)
-        .blocks()
-        .iter()
-        .map(|t| t.get())
-        .map(|t| &t.key)
-        .collect();
-    assert_eq!(blocks, vec![&key(2), &key(3)]);
-}
-
-#[test]
-fn blocks_excludes_closed_dependents() {
-    let mut resolved = closed_ticket(2);
-    resolved.dependencies.push(dep_on(1));
-    let e = effort(vec![open_ticket(1), resolved]);
-    assert!(member(&e, 1).blocks().is_empty());
-}
-
-#[test]
-fn blocks_is_empty_without_dependents() {
-    let e = effort(vec![open_ticket(1), open_ticket(2)]);
-    assert!(member(&e, 1).blocks().is_empty());
+    let frontier: Vec<TicketKey> = e.frontier().map(|t| t.key.clone()).collect();
+    assert_eq!(frontier, vec![key(1), key(5)]);
 }
 
 #[test]

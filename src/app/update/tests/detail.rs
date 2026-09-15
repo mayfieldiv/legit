@@ -4,9 +4,9 @@ use ratatui::crossterm::event::KeyCode;
 use super::update;
 use crate::{
     app::{cmd::Cmd, model::ViewMode, msg::Msg},
+    auth::AuthToken,
     github::rest::PrKey,
     github::types::{IssueComment, PRState, ReviewComment, ReviewStatus},
-    secret::Secret,
     test_fixtures::{self, issue_comment, thread},
 };
 
@@ -35,7 +35,7 @@ fn detail_body_text(model: &crate::app::model::Model) -> String {
                 })
                 .collect()
         }
-        ViewMode::List => panic!("expected Detail mode"),
+        ViewMode::List | ViewMode::TicketList => panic!("expected Detail mode"),
     }
 }
 
@@ -44,7 +44,7 @@ fn detail_body_text(model: &crate::app::model::Model) -> String {
 fn detail_focus(model: &crate::app::model::Model) -> usize {
     match &model.view_mode {
         ViewMode::Detail(detail) => detail.focus.index(),
-        ViewMode::List => panic!("expected Detail mode"),
+        ViewMode::List | ViewMode::TicketList => panic!("expected Detail mode"),
     }
 }
 
@@ -53,7 +53,7 @@ fn detail_focus(model: &crate::app::model::Model) -> usize {
 fn detail_focus_url(model: &crate::app::model::Model) -> Option<String> {
     match &model.view_mode {
         ViewMode::Detail(detail) => detail.focus.url().map(str::to_owned),
-        ViewMode::List => panic!("expected Detail mode"),
+        ViewMode::List | ViewMode::TicketList => panic!("expected Detail mode"),
     }
 }
 
@@ -61,7 +61,7 @@ fn detail_focus_url(model: &crate::app::model::Model) -> Option<String> {
 fn detail_scroll(model: &crate::app::model::Model) -> usize {
     match &model.view_mode {
         ViewMode::Detail(detail) => detail.scroll,
-        ViewMode::List => panic!("expected Detail mode"),
+        ViewMode::List | ViewMode::TicketList => panic!("expected Detail mode"),
     }
 }
 
@@ -89,7 +89,7 @@ use super::{enriched_model, key_event, mouse_down_event, wheel_event};
 fn model_with_one_pr() -> crate::app::model::Model {
     let mut model = enriched_model(&[42]);
     model.config_loaded = true;
-    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.auth_token = Some(AuthToken::parse("ghp_test").unwrap());
     model.repo = crate::app::model::RepoDetection::Detected(RepoSlug::new("mayfieldiv/legit"));
     model
         .list
@@ -860,7 +860,7 @@ fn filter_toggles_persist_across_detail_views() {
 fn detail_expanded(model: &crate::app::model::Model) -> &std::collections::HashSet<String> {
     match &model.view_mode {
         ViewMode::Detail(detail) => &detail.expanded,
-        ViewMode::List => panic!("expected Detail mode"),
+        ViewMode::List | ViewMode::TicketList => panic!("expected Detail mode"),
     }
 }
 

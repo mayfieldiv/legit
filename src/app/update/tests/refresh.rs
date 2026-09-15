@@ -161,7 +161,7 @@ fn shift_r_refreshes_visible_prs_in_tier_order_and_reloads_config() {
 /// 2 mayfieldiv/legit.
 fn two_repo_model() -> Model {
     let (mut model, _) = Model::new();
-    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.auth_token = Some(AuthToken::parse("ghp_test").unwrap());
     model.config = config_with_repos(&["acme/web"]);
     model.repo = RepoDetection::Detected(RepoSlug::new("mayfieldiv/legit"));
     for (slug, number) in [("acme/web", 10u64), ("mayfieldiv/legit", 1)] {

@@ -7,9 +7,9 @@ use ratatui::crossterm::event::{
 };
 
 use crate::{
+    auth::AuthToken,
     format::abbreviate_home,
     github::rest::{PrKey, WorkflowNameCache},
-    secret::Secret,
     worktree,
 };
 
@@ -23,6 +23,7 @@ use super::{
 };
 
 mod refresh;
+mod tickets;
 
 /// How long a transient status message lingers before its scheduled clear.
 const STATUS_SUCCESS_CLEAR_MS: u64 = 4_000;
@@ -175,7 +176,7 @@ fn pr_enrichment_cmds(ctx: &Arc<RequestContext>, number: u64) -> [Cmd; 3] {
 /// the tracked repo, auth token, and configured bot logins.
 fn request_context(
     repo: &RepoSlug,
-    token: &Secret<String>,
+    token: &AuthToken,
     bot_logins: &[String],
 ) -> Arc<RequestContext> {
     Arc::new(RequestContext {
@@ -449,6 +450,7 @@ fn handle_list_key(model: &mut Model, code: KeyCode, now: DateTime<Utc>) -> Vec<
         }
         KeyCode::Char('r') => return apply(model, Msg::RefreshSelected, now),
         KeyCode::Char('R') => return apply(model, Msg::RefreshAll, now),
+        KeyCode::Char('t') => model.view_mode = ViewMode::TicketList,
         KeyCode::Char('/') => {
             model.list.filter_open();
             model.sync_viewport();
@@ -487,6 +489,34 @@ fn handle_list_key(model: &mut Model, code: KeyCode, now: DateTime<Utc>) -> Vec<
             }
         }
         _ => {}
+    }
+    Vec::new()
+}
+
+/// Handle one keypress on the list surface. The filter editor (modal
+/// precedence) sees every key first and produces no command; a normal list
+/// key may (Enter -> FetchPRDetail), in which case it is dispatched and
+/// nothing else runs. Any key that leaves the list in place can have moved
+/// the selection, so the now-selected PR's files are fetched just-in-time.
+fn handle_list_surface_key(model: &mut Model, code: KeyCode, now: DateTime<Utc>) -> Vec<Cmd> {
+    if model.list.filter().is_editing() {
+        handle_filter_editing_key(model, code);
+    } else {
+        let cmds = handle_list_key(model, code, now);
+        // Refresh owns the whole keypress even when deduplication makes it
+        // commandless; falling through would dispatch FetchFiles and turn the
+        // documented no-op into a partial refresh.
+        let refresh_key = matches!(code, KeyCode::Char('r' | 'R'));
+        if !cmds.is_empty() || refresh_key {
+            return cmds;
+        }
+    }
+    // The guard skips a keypress that left the list surface (Enter into
+    // detail, `t` onto the tickets): Enter normally returns a FetchPRDetail
+    // above, but when that fetch is suppressed (auth not ready / repo
+    // untracked) it would otherwise fall through to here.
+    if matches!(model.view_mode, ViewMode::List) {
+        return maybe_fetch_selected_files(model);
     }
     Vec::new()
 }
@@ -935,37 +965,14 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
                 model.should_quit = true;
                 return Vec::new();
             }
-            // Detail mode owns the keypress entirely: its keys never touch the
-            // list selection, so the list-mode files-fetch path below must not
-            // run for them (e.g. Esc-to-list must not act as if the key was a
-            // list keypress). Returning here keeps that out of the list path.
-            if matches!(model.view_mode, ViewMode::Detail(_)) {
-                return handle_detail_key(model, key.code, now);
+            // Each surface owns its keypress entirely — a detail or ticket key
+            // never touches the PR selection, so only the list surface runs
+            // the files-fetch path.
+            match model.view_mode {
+                ViewMode::Detail(_) => handle_detail_key(model, key.code, now),
+                ViewMode::TicketList => tickets::handle_ticket_list_key(model, key.code),
+                ViewMode::List => handle_list_surface_key(model, key.code, now),
             }
-            // List-mode keys. The filter editor (modal precedence) sees every
-            // key first and produces no command; a normal list key may (Enter
-            // -> FetchPRDetail), in which case dispatch it and stop.
-            if model.list.filter().is_editing() {
-                handle_filter_editing_key(model, key.code);
-            } else {
-                let cmds = handle_list_key(model, key.code, now);
-                // Refresh owns the whole keypress even when deduplication makes
-                // it commandless; falling through would dispatch FetchFiles
-                // and turn the documented no-op into a partial refresh.
-                let refresh_key = matches!(key.code, KeyCode::Char('r' | 'R'));
-                if !cmds.is_empty() || refresh_key {
-                    return cmds;
-                }
-            }
-            // Any key that left us in list mode can have moved the selection;
-            // fetch the now-selected PR's files just-in-time. The guard skips a
-            // keypress that *entered* detail (Enter): it normally returns a
-            // FetchPRDetail above, but when that fetch is suppressed (auth not
-            // ready / repo untracked) it would otherwise fall through to here.
-            if matches!(model.view_mode, ViewMode::List) {
-                return maybe_fetch_selected_files(model);
-            }
-            Vec::new()
         }
         Msg::TerminalEvent(Event::Resize(width, height)) => {
             model.terminal_width = width;
@@ -1008,6 +1015,8 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
                     }
                     Vec::new()
                 }
+                // TODO(#133): route wheel ticks to the queue viewport.
+                ViewMode::TicketList => Vec::new(),
             }
         }
         Msg::TerminalEvent(Event::Mouse(mouse))
@@ -1016,6 +1025,7 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
             match model.view_mode {
                 ViewMode::Detail(_) => handle_detail_left_click(model, mouse),
                 ViewMode::List => handle_list_left_click(model, mouse),
+                ViewMode::TicketList => Vec::new(),
             }
         }
         Msg::TerminalEvent(_) => Vec::new(),
@@ -1030,6 +1040,7 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
             // fresh config is installed. This serves both startup and `R`
             // without resolving paths from stale config or dispatching duplicates.
             cmds.extend(list_worktree_cmds(model));
+            cmds.extend(tickets::maybe_discover_local_efforts(model));
             cmds
         }
         Msg::AuthTokenResolved(token) => {
@@ -1048,7 +1059,21 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
             // Worktree listing stays config-driven: only configured repos can
             // declare a mainWorktreePath, so ConfigLoaded is the event that has
             // enough information to list them.
-            maybe_fetch_open_prs(model)
+            let mut cmds = maybe_fetch_open_prs(model);
+            cmds.extend(tickets::maybe_discover_local_efforts(model));
+            cmds
+        }
+        Msg::EffortArrived { repo, read } => {
+            model.tickets.merge_effort(repo, read);
+            Vec::new()
+        }
+        Msg::DiscoveryFinished { unit } => {
+            model.tickets.finish_discovery(unit);
+            Vec::new()
+        }
+        Msg::DiscoveryFailed { unit, error } => {
+            model.tickets.fail_discovery(unit, error);
+            Vec::new()
         }
         Msg::PrArrived(pr) => {
             if model.list.merge_listed(pr) {

@@ -2,12 +2,14 @@ use crate::repo_slug::RepoSlug;
 use ratatui::crossterm::event::Event;
 
 use crate::{
-    config::LegitConfig,
+    app::ticket_list::DiscoveryUnit,
+    auth::AuthToken,
+    config::{LegitConfig, RepoIdentity},
     file_category::FileChange,
     github::limiter::NetworkStats,
     github::rest::{PR, PrKey},
     github::types::{CheckRun, FullReviewThread, IssueComment, Review, ReviewStatus},
-    secret::Secret,
+    ticket::EffortRead,
     worktree::WorktreeEntry,
 };
 
@@ -15,7 +17,7 @@ use crate::{
 pub enum Msg {
     TerminalEvent(Event),
     ConfigLoaded(LegitConfig),
-    AuthTokenResolved(Secret<String>),
+    AuthTokenResolved(AuthToken),
     /// CWD repo detection settled. `Some` carries the detected GitHub repo;
     /// `None` means detection ran but found none (not a git repo / no GitHub
     /// remote). Either outcome settles the PR-fetch gate so configured Tracked
@@ -27,6 +29,27 @@ pub enum Msg {
         repo_slug: RepoSlug,
     },
     NetworkStatsChanged(NetworkStats),
+    // ── ticket surface ──
+    /// One Effort's read landed from a local probe (later, a GitHub map read),
+    /// attributed to the Tracked Repo it was found in. Ready or degraded —
+    /// either way it gets a rail card, so a failed Effort is never silently
+    /// missing (spec §5.5).
+    EffortArrived {
+        repo: RepoIdentity,
+        read: EffortRead,
+    },
+    /// One local discovery unit streamed its last Effort.
+    DiscoveryFinished {
+        unit: DiscoveryUnit,
+    },
+    /// One local discovery unit failed outright — a missing Main Worktree, an
+    /// unreadable Wayfinder Root — before it could attribute a single Effort.
+    /// Recorded on the queue (the rail renders it as a card), not as a
+    /// transient status: the failure persists until a re-probe.
+    DiscoveryFailed {
+        unit: DiscoveryUnit,
+        error: String,
+    },
     // ── enrichment arrivals (keyed by PrKey — numbers collide across repos) ──
     ReviewStatusArrived {
         pr: PrKey,
@@ -171,11 +194,11 @@ pub enum Msg {
 
 #[cfg(test)]
 mod tests {
-    use crate::{app::msg::Msg, secret::Secret};
+    use crate::{app::msg::Msg, auth::AuthToken};
 
     #[test]
     fn debug_redacts_auth_token() {
-        let msg = Msg::AuthTokenResolved(Secret::new("secret-token".to_owned()));
+        let msg = Msg::AuthTokenResolved(AuthToken::parse("secret-token").unwrap());
 
         let debug = format!("{msg:?}");
 

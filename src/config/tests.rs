@@ -418,7 +418,7 @@ fn load_error(name: &str, raw: &str) -> String {
 }
 
 #[test]
-fn display_name_prefers_slug_then_expanded_basename() {
+fn display_name_prefers_slug_then_configured_basename() {
     let with_slug = RepoConfig {
         slug: Some(RepoSlug::new("acme/widgets")),
         main_worktree_path: Some("~/src/widgets".to_owned()),

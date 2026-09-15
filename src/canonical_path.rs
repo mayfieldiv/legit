@@ -6,9 +6,6 @@
 //! dot-ridden. Local wayfinder Tickets and Efforts key on it; the I/O lives
 //! here so `src/ticket.rs` stays a pure model module.
 
-// TODO(#118): remove once local Effort discovery constructs these.
-#![allow(dead_code)]
-
 use std::fs;
 use std::io;
 use std::ops::Deref;
@@ -23,6 +20,17 @@ impl CanonicalPathBuf {
     /// does not exist, exactly like `std::fs::canonicalize`.
     pub fn canonicalize(path: impl AsRef<Path>) -> io::Result<Self> {
         fs::canonicalize(path).map(Self)
+    }
+
+    /// This path and each of its ancestors, nearest first, as canonical
+    /// paths without re-canonicalizing: canonicalization resolves each
+    /// component in turn, so every prefix of a canonical path is itself
+    /// canonical. Shadows `Path::ancestors` (reachable via `Deref`) so the
+    /// proof survives the walk.
+    pub fn ancestors(&self) -> impl Iterator<Item = Self> + '_ {
+        self.0
+            .ancestors()
+            .map(|ancestor| Self(ancestor.to_path_buf()))
     }
 
     /// Test-only: adopt a path verbatim, so pure model tests can build keys

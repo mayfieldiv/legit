@@ -10,9 +10,9 @@ use crate::{
         pr_list::Phase,
         update::update as update_at,
     },
+    auth::AuthToken,
     github::rest::{PR, PrKey},
     github::types::PRState,
-    secret::Secret,
 };
 
 /// The fixed processing clock these tests drive the reducer with. A constant
@@ -30,6 +30,11 @@ pub(super) fn update(model: &mut Model, msg: Msg) -> Vec<Cmd> {
     update_at(model, msg, fixed_now())
 }
 
+/// The selected PR's number.
+pub(super) fn selected_number(model: &Model) -> Option<u64> {
+    model.list.selected_pr().map(|pr| pr.number)
+}
+
 mod detail;
 mod enrichment;
 mod files;
@@ -38,6 +43,7 @@ mod multi_repo;
 mod refresh;
 mod summary;
 mod tabs;
+mod tickets;
 mod worktree;
 
 /// The `PrKey` of `sample_pr(number, ..)` — every sample PR is stamped with
@@ -270,11 +276,14 @@ pub(super) fn config_with_repos(slugs: &[&str]) -> crate::config::LegitConfig {
     }
 }
 
-/// The repo slugs of every `FetchOpenPRs` in `cmds`, in dispatch order.
+/// The repo slugs of every `FetchOpenPRs` in `cmds`, in dispatch order. Local
+/// Effort discovery rides the same startup gate, so its commands are skipped
+/// rather than treated as a stray.
 pub(super) fn fetched_slugs(cmds: &[Cmd]) -> Vec<RepoSlug> {
     cmds.iter()
-        .map(|c| match c {
-            Cmd::FetchOpenPRs { repo, .. } => repo.clone(),
+        .filter_map(|c| match c {
+            Cmd::FetchOpenPRs { repo, .. } => Some(repo.clone()),
+            Cmd::DiscoverRepoEfforts { .. } | Cmd::DiscoverCwdEfforts { .. } => None,
             other => panic!("expected only FetchOpenPRs, got {other:?}"),
         })
         .collect()
@@ -298,7 +307,7 @@ pub(super) fn tabbed_model() -> Model {
 /// A model with auth + repo resolved and `numbers` streamed into the list.
 pub(super) fn enriched_model(numbers: &[u64]) -> Model {
     let (mut model, _) = Model::new();
-    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.auth_token = Some(AuthToken::parse("ghp_test").unwrap());
     model.repo = RepoDetection::Detected(RepoSlug::new("mayfieldiv/legit"));
     model.list.begin_fetch(&RepoSlug::new("mayfieldiv/legit"));
     for n in numbers {
@@ -695,7 +704,7 @@ fn initial_cmds_include_repo_detection() {
 #[test]
 fn dispatching_fetch_marks_list_as_loading() {
     let (mut model, _) = Model::new();
-    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.auth_token = Some(AuthToken::parse("ghp_test").unwrap());
     model.config_loaded = true;
 
     let cmds = update(
@@ -703,7 +712,7 @@ fn dispatching_fetch_marks_list_as_loading() {
         Msg::RepoDetected(Some(RepoSlug::new("mayfieldiv/legit"))),
     );
 
-    assert_eq!(cmds.len(), 1);
+    assert_eq!(fetched_slugs(&cmds), ["mayfieldiv/legit"]);
     assert!(
         model
             .list
@@ -796,7 +805,7 @@ fn repo_detected_without_token_stores_repo_but_does_not_fetch() {
 #[test]
 fn repo_detected_after_token_dispatches_fetch_open_prs() {
     let (mut model, _) = Model::new();
-    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.auth_token = Some(AuthToken::parse("ghp_test").unwrap());
     model.config_loaded = true;
 
     let cmds = update(
@@ -804,19 +813,13 @@ fn repo_detected_after_token_dispatches_fetch_open_prs() {
         Msg::RepoDetected(Some(RepoSlug::new("mayfieldiv/legit"))),
     );
 
-    assert_eq!(cmds.len(), 1);
-    match &cmds[0] {
-        Cmd::FetchOpenPRs { repo, .. } => {
-            assert_eq!(*repo, "mayfieldiv/legit");
-        }
-        other => panic!("expected FetchOpenPRs cmd, got {other:?}"),
-    }
+    assert_eq!(fetched_slugs(&cmds), ["mayfieldiv/legit"]);
 }
 
 #[test]
 fn fetch_waits_for_config_even_with_auth_and_repo() {
     let (mut model, _) = Model::new();
-    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.auth_token = Some(AuthToken::parse("ghp_test").unwrap());
     // config has NOT settled yet — the gate must hold.
 
     let cmds = update(
@@ -837,16 +840,16 @@ fn fetch_waits_for_config_even_with_auth_and_repo() {
 #[test]
 fn config_loaded_releases_the_fetch_when_auth_and_repo_already_landed() {
     let (mut model, _) = Model::new();
-    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.auth_token = Some(AuthToken::parse("ghp_test").unwrap());
     model.repo = RepoDetection::Detected(RepoSlug::new("mayfieldiv/legit"));
 
     // Config arrives last; it must kick off the gated fetch.
     let cmds = update(&mut model, Msg::ConfigLoaded(Default::default()));
 
     assert!(model.config_loaded);
-    assert_eq!(cmds.len(), 1);
-    assert!(
-        matches!(&cmds[0], Cmd::FetchOpenPRs { .. }),
+    assert_eq!(
+        fetched_slugs(&cmds),
+        ["mayfieldiv/legit"],
         "config landing last should dispatch the fetch, got {cmds:?}"
     );
 }
@@ -854,7 +857,7 @@ fn config_loaded_releases_the_fetch_when_auth_and_repo_already_landed() {
 #[test]
 fn config_load_failed_records_a_fatal_and_does_not_fetch() {
     let (mut model, _) = Model::new();
-    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.auth_token = Some(AuthToken::parse("ghp_test").unwrap());
     model.repo = RepoDetection::Detected(RepoSlug::new("mayfieldiv/legit"));
 
     let cmds = update(
@@ -886,7 +889,7 @@ fn detection_failure_with_config_repos_still_fetches_them() {
     // `update` sees `Msg::RepoDetected(None)`. That must settle the gate so the
     // configured Tracked Repos still fetch — not wedge the app at an empty list.
     let (mut model, _) = Model::new();
-    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.auth_token = Some(AuthToken::parse("ghp_test").unwrap());
     model.config = config_with_repos(&["acme/web", "acme/api"]);
     model.config_loaded = true;
 
@@ -904,7 +907,7 @@ fn detection_failure_without_config_repos_does_not_fetch_but_surfaces_error() {
     // `CommandFailed` (a transient error status) alongside `RepoDetected(None)`;
     // assert that status surface and that the settled gate yields no fetch.
     let (mut model, _) = Model::new();
-    model.auth_token = Some(Secret::new("ghp_test".to_owned()));
+    model.auth_token = Some(AuthToken::parse("ghp_test").unwrap());
     model.config_loaded = true;
 
     let status_cmds = update(
@@ -918,7 +921,7 @@ fn detection_failure_without_config_repos_does_not_fetch_but_surfaces_error() {
 
     assert!(matches!(model.repo, RepoDetection::Failed));
     assert!(
-        fetch_cmds.is_empty(),
+        fetched_slugs(&fetch_cmds).is_empty(),
         "no Tracked Repos at all, so nothing fetches"
     );
     // The user can see the detection error in the status bar.
@@ -942,10 +945,10 @@ fn j_advances_selection_within_list_bounds() {
     }
 
     update(&mut model, key_event(KeyCode::Char('j')));
-    assert_eq!(model.list.selected(), 1);
+    assert_eq!(selected_number(&model), Some(2));
 
     update(&mut model, key_event(KeyCode::Char('j')));
-    assert_eq!(model.list.selected(), 2);
+    assert_eq!(selected_number(&model), Some(3));
 }
 
 #[test]
@@ -956,7 +959,7 @@ fn j_at_last_pr_does_not_advance_past_end() {
     update(&mut model, key_event(KeyCode::Char('j')));
     update(&mut model, key_event(KeyCode::Char('j')));
 
-    assert_eq!(model.list.selected(), 0);
+    assert_eq!(selected_number(&model), Some(1));
 }
 
 #[test]
@@ -967,14 +970,14 @@ fn k_retreats_selection_and_clamps_at_zero() {
     }
     update(&mut model, key_event(KeyCode::Char('j')));
     update(&mut model, key_event(KeyCode::Char('j')));
-    assert_eq!(model.list.selected(), 2);
+    assert_eq!(selected_number(&model), Some(3));
 
     update(&mut model, key_event(KeyCode::Char('k')));
-    assert_eq!(model.list.selected(), 1);
+    assert_eq!(selected_number(&model), Some(2));
 
     update(&mut model, key_event(KeyCode::Char('k')));
     update(&mut model, key_event(KeyCode::Char('k')));
-    assert_eq!(model.list.selected(), 0);
+    assert_eq!(selected_number(&model), Some(1));
 }
 
 #[test]
@@ -1029,9 +1032,7 @@ fn terminal_resize_updates_viewport_and_keeps_selection_visible() {
 }
 
 /// Whether the selected PR's row is among the currently visible display
-/// rows. `selected()` is a PR index while `scroll_offset()` counts display
-/// rows (headers included), so the two aren't directly comparable — ask the
-/// rendered window instead.
+/// rows, asked of the rendered window itself.
 fn selection_is_visible(model: &Model) -> bool {
     model.list.visible_rows().any(|(_, selected)| selected)
 }
@@ -1042,14 +1043,14 @@ fn streaming_prs_keep_selection_pinned() {
     update(&mut model, Msg::PrArrived(sample_pr(1, "a")));
     update(&mut model, Msg::PrArrived(sample_pr(2, "b")));
     update(&mut model, key_event(KeyCode::Char('j')));
-    assert_eq!(model.list.selected(), 1);
+    assert_eq!(selected_number(&model), Some(2));
 
     update(&mut model, Msg::PrArrived(sample_pr(3, "c")));
     update(&mut model, Msg::PrArrived(sample_pr(4, "d")));
 
     assert_eq!(
-        model.list.selected(),
-        1,
+        selected_number(&model),
+        Some(2),
         "selection should not shift when new PRs arrive"
     );
 }
@@ -1066,11 +1067,15 @@ fn g_cycles_grouping_smart_status_repo_none_and_resets_selection() {
     }
     update(&mut model, key_event(KeyCode::Char('j')));
     update(&mut model, key_event(KeyCode::Char('j')));
-    assert_eq!(model.list.selected(), 2);
+    assert_eq!(selected_number(&model), Some(3));
 
     update(&mut model, key_event(KeyCode::Char('g')));
     assert_eq!(model.list.grouping(), Grouping::Repo);
-    assert_eq!(model.list.selected(), 0, "selection resets on cycle");
+    assert_eq!(
+        selected_number(&model),
+        Some(1),
+        "selection resets on cycle"
+    );
 
     update(&mut model, key_event(KeyCode::Char('g')));
     assert_eq!(model.list.grouping(), Grouping::None);
@@ -1108,12 +1113,12 @@ fn j_skips_group_headers_when_smart_status_grouping_has_tiers() {
         },
     );
     model.relayout();
-    assert_eq!(model.list.selected(), 0);
+    assert_eq!(selected_number(&model), Some(1));
 
     update(&mut model, key_event(KeyCode::Char('j')));
     assert_eq!(
-        model.list.selected(),
-        1,
+        selected_number(&model),
+        Some(2),
         "j steps PR-to-PR, skipping the intervening header"
     );
 }

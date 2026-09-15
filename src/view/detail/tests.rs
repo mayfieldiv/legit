@@ -906,7 +906,7 @@ fn set_focus(model: &mut Model, index: usize) {
     .focus_at(index);
     match &mut model.view_mode {
         ViewMode::Detail(detail) => detail.focus = focus,
-        ViewMode::List => panic!("expected Detail mode"),
+        ViewMode::List | ViewMode::TicketList => panic!("expected Detail mode"),
     }
 }
 
