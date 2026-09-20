@@ -686,15 +686,28 @@ async fn run_fetch_open_prs(
     }
 }
 
-/// Hold one concurrency permit, run a single GitHub request, and forward the
-/// messages it produces — or, on error, one `CommandFailed` (covering the
-/// client build inside the request too). Captures the build-permit-dispatch
-/// shape every per-PR enrichment command shares; `context` names the operation
-/// so the failure reads e.g. "fetch reviews: ...". `affinity` is the entity the
-/// fetch serves — prioritised by the limiter while it is focused — or `None`
-/// for unit-wide work that can never be focused (the batched review-status
-/// query, a map read). `op` is a lazy future, so the permit is held only
-/// across the actual await, not while it's constructed.
+/// Hold one concurrency permit across a single GitHub request — the one place
+/// the transport's limiting is opted into, so every HTTP call the app makes
+/// counts in `NetworkStats` and none of the clients hold permits themselves.
+/// `affinity` is the entity the request serves — prioritised by the limiter
+/// while it is focused — or `None` for unit-wide work that can never be
+/// focused (the batched review-status query, a map read). `op` is a lazy
+/// future, so the permit is held only across the actual await, not while it's
+/// constructed.
+async fn limited<T>(
+    limiter: &Arc<NetworkLimiter>,
+    affinity: Option<Affinity>,
+    op: impl Future<Output = anyhow::Result<T>>,
+) -> anyhow::Result<T> {
+    let _permit = limiter.acquire(affinity).await;
+    op.await
+}
+
+/// Run one `limited` GitHub request and forward the messages it produces —
+/// or, on error, one `CommandFailed` (covering the client build inside the
+/// request too). Captures the build-permit-dispatch shape every per-PR
+/// enrichment command shares; `context` names the operation so the failure
+/// reads e.g. "fetch reviews: ...".
 ///
 /// Returns whether the request succeeded so a caller that recorded in-flight
 /// state in the model can send its own rollback message after the
@@ -708,8 +721,7 @@ async fn request<T>(
     op: impl Future<Output = anyhow::Result<T>>,
     to_msgs: impl FnOnce(T) -> Vec<Msg>,
 ) -> bool {
-    let _permit = limiter.acquire(affinity).await;
-    match op.await {
+    match limited(limiter, affinity, op).await {
         Ok(value) => {
             for msg in to_msgs(value) {
                 let _ = tx.send(msg);
