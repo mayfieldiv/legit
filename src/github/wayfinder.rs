@@ -8,10 +8,6 @@
 //! label, the wire shapes, normalization into [`Effort`], and the map-body
 //! dialect rules are all implementation.
 
-// TODO(#131): remove once the fetch layer dispatches map reads and ticket
-// refreshes.
-#![allow(dead_code)]
-
 use std::collections::HashSet;
 
 use anyhow::{Context, Result};
@@ -109,6 +105,8 @@ impl Wayfinder {
     /// issue, while `parent_issue_url` already answers parentage — so every
     /// 404 here stays a genuine error (including a token without Issues read
     /// scope, which surfaces as 404, not 403).
+    // TODO(#134): consumed by the ticket detail page's drill-in.
+    #[allow(dead_code)]
     #[tracing::instrument(name = "refresh_ticket", skip(self))]
     pub async fn refresh_ticket(&self, slug: &RepoSlug, number: u64) -> Result<TicketRefresh> {
         let route = format!("/repos/{slug}/issues/{number}");
@@ -526,6 +524,8 @@ fn line_has_issue_ref(line: &str) -> bool {
 
 /// One ticket's refresh outcome: the issue plus the §4.4 fallback-dialect
 /// verdict.
+// TODO(#134): read by the ticket detail page's drill-in.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct TicketRefresh {
     pub issue: Issue,

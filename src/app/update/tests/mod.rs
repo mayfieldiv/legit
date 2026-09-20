@@ -276,14 +276,16 @@ pub(super) fn config_with_repos(slugs: &[&str]) -> crate::config::LegitConfig {
     }
 }
 
-/// The repo slugs of every `FetchOpenPRs` in `cmds`, in dispatch order. Local
-/// Effort discovery rides the same startup gate, so its commands are skipped
-/// rather than treated as a stray.
+/// The repo slugs of every `FetchOpenPRs` in `cmds`, in dispatch order. Effort
+/// discovery — the local probes and the GitHub map reads — rides the same
+/// startup gate, so its commands are skipped rather than treated as a stray.
 pub(super) fn fetched_slugs(cmds: &[Cmd]) -> Vec<RepoSlug> {
     cmds.iter()
         .filter_map(|c| match c {
             Cmd::FetchOpenPRs { repo, .. } => Some(repo.clone()),
-            Cmd::DiscoverRepoEfforts { .. } | Cmd::DiscoverCwdEfforts { .. } => None,
+            Cmd::DiscoverRepoEfforts { .. }
+            | Cmd::DiscoverCwdEfforts { .. }
+            | Cmd::ReadGitHubEfforts { .. } => None,
             other => panic!("expected only FetchOpenPRs, got {other:?}"),
         })
         .collect()

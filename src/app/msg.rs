@@ -30,7 +30,7 @@ pub enum Msg {
     },
     NetworkStatsChanged(NetworkStats),
     // ── ticket surface ──
-    /// One Effort's read landed from a local probe (later, a GitHub map read),
+    /// One Effort's read landed — from a local probe or a GitHub map read —
     /// attributed to the Tracked Repo it was found in. Ready or degraded —
     /// either way it gets a rail card, so a failed Effort is never silently
     /// missing (spec §5.5).
@@ -38,14 +38,15 @@ pub enum Msg {
         repo: RepoIdentity,
         read: EffortRead,
     },
-    /// One local discovery unit streamed its last Effort.
+    /// One discovery unit streamed its last Effort.
     DiscoveryFinished {
         unit: DiscoveryUnit,
     },
-    /// One local discovery unit failed outright — a missing Main Worktree, an
-    /// unreadable Wayfinder Root — before it could attribute a single Effort.
-    /// Recorded on the queue (the rail renders it as a card), not as a
-    /// transient status: the failure persists until a re-probe.
+    /// One discovery unit failed outright — a missing Main Worktree, an
+    /// unreadable Wayfinder Root, a map read GitHub refused — before it could
+    /// attribute a single Effort. Recorded on the queue (the rail renders it
+    /// as a card), not as a transient status: the failure persists until a
+    /// re-read.
     DiscoveryFailed {
         unit: DiscoveryUnit,
         error: String,

@@ -15,6 +15,7 @@ use crate::{
     github::rest::PrKey,
     github::rest::WorkflowNameCache,
     github::types::ReviewStatus,
+    github::wayfinder::Wayfinder,
     local_effort,
     ticket::EffortRead,
     worktree,
@@ -159,6 +160,16 @@ pub enum Cmd {
         detected: Option<RepoSlug>,
         config: LegitConfig,
     },
+    /// Read one PR-capable Tracked Repo's GitHub Efforts: every open
+    /// wayfinder map with its sub-issues, in one GraphQL request behind one
+    /// background permit — unit-wide work with no affinity, never promoted
+    /// (spec §5.1). Settles like a local probe: one `Msg::EffortArrived` per
+    /// map then `DiscoveryFinished`, or `DiscoveryFailed` when the read
+    /// itself fails (§5.5). Carries only repo + token, like `FetchOpenPRs`.
+    ReadGitHubEfforts {
+        repo: RepoSlug,
+        token: AuthToken,
+    },
 }
 
 impl Cmd {
@@ -186,6 +197,7 @@ impl Cmd {
             Cmd::DelayedRetry { .. } => "DelayedRetry",
             Cmd::DiscoverRepoEfforts { .. } => "DiscoverRepoEfforts",
             Cmd::DiscoverCwdEfforts { .. } => "DiscoverCwdEfforts",
+            Cmd::ReadGitHubEfforts { .. } => "ReadGitHubEfforts",
         }
     }
 }
@@ -425,6 +437,9 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             };
             run_discover_cwd_efforts(cwd, detected, config, tx).await;
         }
+        Cmd::ReadGitHubEfforts { repo, token } => {
+            run_read_github_efforts(repo, token, tx, limiter).await;
+        }
     }
 }
 
@@ -462,7 +477,26 @@ async fn run_discover_cwd_efforts(
     settle_discovery(DiscoveryUnit::Cwd, result, &tx);
 }
 
-/// Deliver one probe's outcome: an arrival per Effort then the unit's
+/// One PR-capable Tracked Repo's map read. The slug is the attribution
+/// outright — a GitHub Effort belongs to the repo whose tracker holds it —
+/// so nothing here touches the filesystem the local probes resolve identity
+/// through.
+async fn run_read_github_efforts(
+    repo: RepoSlug,
+    token: AuthToken,
+    tx: mpsc::UnboundedSender<Msg>,
+    limiter: Arc<NetworkLimiter>,
+) {
+    let unit = DiscoveryUnit::GitHubRepo { slug: repo.clone() };
+    let result = limited(&limiter, None, async {
+        Wayfinder::new(&token).read_efforts(&repo).await
+    })
+    .await
+    .map(|batch| (RepoIdentity::Slug(repo), batch.efforts));
+    settle_discovery(unit, result, &tx);
+}
+
+/// Deliver one unit's outcome: an arrival per Effort then the unit's
 /// completion, or the unit's failure.
 fn settle_discovery(
     unit: DiscoveryUnit,
@@ -471,7 +505,7 @@ fn settle_discovery(
 ) {
     match result {
         Ok((repo, reads)) => {
-            tracing::info!(?unit, efforts = reads.len(), "local efforts discovered");
+            tracing::info!(?unit, efforts = reads.len(), "efforts discovered");
             for read in reads {
                 let _ = tx.send(Msg::EffortArrived {
                     repo: repo.clone(),
@@ -486,11 +520,11 @@ fn settle_discovery(
     }
 }
 
-/// Log a probe failure here (the impure layer) and build the `Msg` for the
-/// queue to record — the local analogue of `pr_list_failed`.
+/// Log a unit's failure here (the impure layer) and build the `Msg` for the
+/// queue to record — the Effort analogue of `pr_list_failed`.
 fn discovery_failed(unit: DiscoveryUnit, error: anyhow::Error) -> Msg {
     let error = format!("{error:#}");
-    tracing::warn!(?unit, %error, "local effort discovery failed");
+    tracing::warn!(?unit, %error, "effort discovery failed");
     Msg::DiscoveryFailed { unit, error }
 }
 

@@ -25,6 +25,7 @@ use crate::{
     app::list_cursor::{Direction, ListCursor, SelectableRow},
     config::{RepoConfig, RepoIdentity},
     format::format_repo_short,
+    repo_slug::RepoSlug,
     ticket::{
         Claim, Effort, EffortKey, EffortRead, EffortSource, EffortTicket, TicketKey, TicketState,
         TicketType,
@@ -290,11 +291,11 @@ impl QueueContentWidths {
     }
 }
 
-/// One unit of Effort discovery — a Tracked Repo's local worktree fan-out, or
-/// the cwd walk — whose phase the queue tracks so the view can tell "still
-/// discovering" from "nothing found" and surface a unit that failed outright
-/// (a missing Main Worktree has no Effort card to degrade). A GitHub repo's
-/// map read is the same kind of unit and joins this enum with its slice.
+/// One unit of Effort discovery — a Tracked Repo's local worktree fan-out,
+/// the cwd walk, or a PR-capable Tracked Repo's GitHub map read — whose phase
+/// the queue tracks so the view can tell "still discovering" from "nothing
+/// found" and surface a unit that failed outright (a missing Main Worktree, a
+/// map read GitHub refused: neither has an Effort card to degrade).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DiscoveryUnit {
     LocalRepo {
@@ -306,6 +307,10 @@ pub enum DiscoveryUnit {
         main_worktree_path: String,
     },
     Cwd,
+    /// One repo's whole-map read: every open `wayfinder:map` issue it holds.
+    GitHubRepo {
+        slug: RepoSlug,
+    },
 }
 
 impl DiscoveryUnit {
@@ -328,6 +333,16 @@ impl DiscoveryUnit {
         match self {
             DiscoveryUnit::LocalRepo { name, .. } => name,
             DiscoveryUnit::Cwd => "cwd",
+            DiscoveryUnit::GitHubRepo { slug } => format_repo_short(slug.as_str()),
+        }
+    }
+
+    /// Where the unit's Efforts come from, so a failed unit can be worded by
+    /// source the way an Effort card is.
+    pub fn source(&self) -> EffortSource {
+        match self {
+            DiscoveryUnit::LocalRepo { .. } | DiscoveryUnit::Cwd => EffortSource::Local,
+            DiscoveryUnit::GitHubRepo { .. } => EffortSource::GitHub,
         }
     }
 }

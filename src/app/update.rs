@@ -1041,11 +1041,14 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
             // without resolving paths from stale config or dispatching duplicates.
             cmds.extend(list_worktree_cmds(model));
             cmds.extend(tickets::maybe_discover_local_efforts(model));
+            cmds.extend(tickets::maybe_read_github_efforts(model));
             cmds
         }
         Msg::AuthTokenResolved(token) => {
             model.auth_token = Some(token);
-            maybe_fetch_open_prs(model)
+            let mut cmds = maybe_fetch_open_prs(model);
+            cmds.extend(tickets::maybe_read_github_efforts(model));
+            cmds
         }
         Msg::RepoDetected(repo) => {
             // Settle the detection gate either way: `Some` adds the CWD repo to
@@ -1061,6 +1064,7 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
             // enough information to list them.
             let mut cmds = maybe_fetch_open_prs(model);
             cmds.extend(tickets::maybe_discover_local_efforts(model));
+            cmds.extend(tickets::maybe_read_github_efforts(model));
             cmds
         }
         Msg::EffortArrived { repo, read } => {

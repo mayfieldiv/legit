@@ -178,14 +178,19 @@ fn effort_card(card: &EffortCard, width: usize, palette: &Palette) -> Vec<Line<'
 
 /// A discovery unit that failed before attributing any Effort: the unit's
 /// name where a card's repo goes, so the failure reads in the same place a
-/// card would have.
+/// card would have, and what it couldn't do worded by source — a local unit
+/// probes the filesystem, a GitHub unit reads the map.
 fn discovery_failure_card(
     unit: &DiscoveryUnit,
     error: &str,
     width: usize,
     palette: &Palette,
 ) -> Vec<Line<'static>> {
-    let failure = Span::styled("couldn't probe", Style::default().fg(palette.error));
+    let failure = match unit.source() {
+        EffortSource::Local => "couldn't probe",
+        EffortSource::GitHub => "couldn't read",
+    };
+    let failure = Span::styled(failure, Style::default().fg(palette.error));
     vec![
         repo_led_line(unit.label(), failure, width, palette),
         Line::from(Span::styled(

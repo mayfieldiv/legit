@@ -1,7 +1,8 @@
-//! The ticket surface's reducer arms: dispatching local Effort discovery and
-//! handling the surface's keys. Split out of `update` the way `refresh` is,
-//! so the reducer stays a dispatcher and the ticket story reads in one place
-//! — `super::apply` delegates here.
+//! The ticket surface's reducer arms: dispatching Effort discovery — the
+//! local probes and the GitHub map reads — and handling the surface's keys.
+//! Split out of `update` the way `refresh` is, so the reducer stays a
+//! dispatcher and the ticket story reads in one place — `super::apply`
+//! delegates here.
 // TODO(#132): `r`/`R`. TODO(#133): `h`/`l`, `J`/`K`, `m`, `p`, `y`, wheel
 // ticks to the queue viewport.
 
@@ -45,6 +46,34 @@ pub(super) fn maybe_discover_local_efforts(model: &mut Model) -> Vec<Cmd> {
         cmds.push(Cmd::DiscoverCwdEfforts {
             detected: model.repo.repo().cloned(),
             config: model.config.clone(),
+        });
+    }
+    cmds
+}
+
+/// Dispatch one map read per PR-capable Tracked Repo once auth, config, and
+/// repo detection have all settled — the open-PR listing's gate
+/// (`maybe_fetch_open_prs`): the read is an HTTP request that needs the
+/// token, and its unit is a slug, which the detected cwd repo supplies even
+/// when it isn't configured. Units in flight or loaded are skipped, so a
+/// `R`-driven config reload reads only new or failed repos.
+pub(super) fn maybe_read_github_efforts(model: &mut Model) -> Vec<Cmd> {
+    let Some(token) = model.auth_token.clone() else {
+        return Vec::new();
+    };
+    if !model.repo.is_settled() || !model.config_loaded {
+        return Vec::new();
+    }
+    let mut cmds = Vec::new();
+    for repo in model.tracked_repos() {
+        let unit = DiscoveryUnit::GitHubRepo { slug: repo.clone() };
+        if !model.tickets.needs_discovery(&unit) {
+            continue;
+        }
+        model.tickets.begin_discovery(unit);
+        cmds.push(Cmd::ReadGitHubEfforts {
+            repo,
+            token: token.clone(),
         });
     }
     cmds
