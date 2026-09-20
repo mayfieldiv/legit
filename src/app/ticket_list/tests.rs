@@ -132,7 +132,7 @@ fn rail(list: &TicketList) -> Vec<String> {
     list.rail()
         .map(|card| match card {
             RailCard::Effort(card) => format!("{} · {}", card.repo, card.title),
-            RailCard::Failure { unit, error } => format!("{unit} ✗ {error}"),
+            RailCard::Failure { unit, error } => format!("{} ✗ {error}", unit.label()),
         })
         .collect()
 }

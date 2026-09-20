@@ -80,7 +80,10 @@ impl TicketCounts {
 /// could attribute any Effort, or an Effort's card.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RailCard<'a> {
-    Failure { unit: &'a str, error: &'a str },
+    Failure {
+        unit: &'a DiscoveryUnit,
+        error: &'a str,
+    },
     Effort(&'a EffortCard),
 }
 
@@ -422,10 +425,7 @@ impl TicketList {
             .discoveries
             .iter()
             .filter_map(|(unit, phase)| match phase {
-                DiscoveryPhase::Failed(error) => Some(RailCard::Failure {
-                    unit: unit.label(),
-                    error,
-                }),
+                DiscoveryPhase::Failed(error) => Some(RailCard::Failure { unit, error }),
                 DiscoveryPhase::Loading | DiscoveryPhase::Loaded => None,
             });
         failures.chain(

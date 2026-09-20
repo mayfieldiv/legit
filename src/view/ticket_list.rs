@@ -16,8 +16,8 @@ use crate::{
     app::{
         model::Model,
         ticket_list::{
-            EffortCard, QueueContentWidths, QueueRow, QueueTier, RailCard, RowMarker, TicketList,
-            TicketRow,
+            DiscoveryUnit, EffortCard, QueueContentWidths, QueueRow, QueueTier, RailCard,
+            RowMarker, TicketList, TicketRow,
         },
         ticket_list_layout::{DIVIDER_WIDTH, rail_width},
     },
@@ -180,14 +180,14 @@ fn effort_card(card: &EffortCard, width: usize, palette: &Palette) -> Vec<Line<'
 /// name where a card's repo goes, so the failure reads in the same place a
 /// card would have.
 fn discovery_failure_card(
-    name: &str,
+    unit: &DiscoveryUnit,
     error: &str,
     width: usize,
     palette: &Palette,
 ) -> Vec<Line<'static>> {
     let failure = Span::styled("couldn't probe", Style::default().fg(palette.error));
     vec![
-        repo_led_line(name, failure, width, palette),
+        repo_led_line(unit.label(), failure, width, palette),
         Line::from(Span::styled(
             truncate(error, width),
             Style::default().fg(palette.warning),

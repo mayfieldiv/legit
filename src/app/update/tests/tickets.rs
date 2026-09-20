@@ -320,7 +320,7 @@ fn a_failed_probe_is_recorded_on_the_queue_not_as_a_status_error() {
     let cmds = update(
         &mut model,
         Msg::DiscoveryFailed {
-            unit,
+            unit: unit.clone(),
             error: "main worktree /src/local-only does not exist".to_owned(),
         },
     );
@@ -329,7 +329,7 @@ fn a_failed_probe_is_recorded_on_the_queue_not_as_a_status_error() {
     assert_eq!(
         model.tickets.rail().collect::<Vec<_>>(),
         [RailCard::Failure {
-            unit: "local-only",
+            unit: &unit,
             error: "main worktree /src/local-only does not exist",
         }]
     );
