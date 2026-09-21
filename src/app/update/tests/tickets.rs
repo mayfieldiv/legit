@@ -898,6 +898,27 @@ fn refresh_all_rechecks_a_github_unit_that_previously_had_no_maps() {
 }
 
 #[test]
+fn r_with_no_selected_ticket_re_reads_nothing_while_shift_r_still_rechecks_the_view() {
+    let (mut model, _) = Model::new();
+    model.auth_token = Some(AuthToken::parse("test").unwrap());
+    model.view_mode = ViewMode::TicketList;
+    update(
+        &mut model,
+        Msg::DiscoveryFinished {
+            unit: github_unit("acme/web"),
+            incomplete: None,
+        },
+    );
+    assert_eq!(selected_ref(&model), None);
+
+    assert!(update(&mut model, key_event(KeyCode::Char('r'))).is_empty());
+    assert_eq!(
+        map_read_slugs(&update(&mut model, key_event(KeyCode::Char('R')))),
+        ["acme/web"]
+    );
+}
+
+#[test]
 fn an_incomplete_refresh_counts_only_the_efforts_it_read() {
     let (mut model, _) = Model::new();
     model.auth_token = Some(AuthToken::parse("test").unwrap());

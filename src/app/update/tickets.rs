@@ -13,7 +13,7 @@ use crate::{
     app::{
         cmd::Cmd,
         model::{Model, StatusKind, ViewMode},
-        ticket_list::{DiscoveryUnit, FetchUnit, RefreshTarget},
+        ticket_list::{DiscoveryUnit, FetchUnit, RefreshScope, RefreshTarget},
     },
     auth::AuthToken,
     canonical_path::CanonicalPathBuf,
@@ -81,8 +81,8 @@ pub(super) fn map_read_cmd(model: &mut Model, repo: &RepoSlug, token: &AuthToken
 /// selection, so the list surface's files-fetch path never runs for them.
 pub(super) fn handle_ticket_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
     match code {
-        KeyCode::Char('R') => return refresh_cmds(model, true),
-        KeyCode::Char('r') => return refresh_cmds(model, false),
+        KeyCode::Char('R') => return refresh_cmds(model, RefreshScope::View),
+        KeyCode::Char('r') => return refresh_cmds(model, RefreshScope::Selected),
         KeyCode::Char('q') => model.should_quit = true,
         KeyCode::Char('t') => model.view_mode = ViewMode::List,
         // Cursor movement is network-silent (spec §5.1): the map read already
@@ -94,12 +94,10 @@ pub(super) fn handle_ticket_list_key(model: &mut Model, code: KeyCode) -> Vec<Cm
     Vec::new()
 }
 
-fn refresh_cmds(model: &mut Model, all: bool) -> Vec<Cmd> {
-    let selected = model.tickets.selected_fetch();
-    let mut targets = if all || selected.is_none() {
-        model.tickets.all_fetches()
-    } else {
-        selected.into_iter().collect()
+fn refresh_cmds(model: &mut Model, scope: RefreshScope) -> Vec<Cmd> {
+    let mut targets = match scope {
+        RefreshScope::View => model.tickets.all_fetches(),
+        RefreshScope::Selected => model.tickets.selected_fetch().into_iter().collect(),
     };
     // Failed cards have no selectable tickets until the rail filter lands.
     // Both refresh keys must therefore retry them from the current queue.

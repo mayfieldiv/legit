@@ -408,6 +408,17 @@ impl FetchUnit {
     }
 }
 
+/// Which Fetch Units a refresh key covers (CONTEXT.md, Refresh).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefreshScope {
+    /// `r`: the unit backing the selected Ticket. With nothing selected there
+    /// is nothing to re-read — the queue has no Re-list.
+    Selected,
+    /// `R`: every unit backing the view.
+    // TODO(#133): the rail filter narrows this to the selected Effort.
+    View,
+}
+
 #[derive(Clone, Debug)]
 pub enum RefreshTarget {
     Discovery(DiscoveryUnit),
