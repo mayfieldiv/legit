@@ -1076,18 +1076,36 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
             cmds.extend(tickets::maybe_discover_local_efforts(model));
             cmds
         }
-        Msg::EffortArrived { repo, read } => {
-            model.tickets.merge_effort(repo, read);
-            Vec::new()
+        Msg::EffortArrived { repo, read } => tickets::effort_arrived(model, repo, read, now),
+        Msg::LocalEffortRead { dir, repo, result } => {
+            let unit = super::ticket_list::FetchUnit::Local { dir };
+            match result {
+                Ok(read) => {
+                    let succeeded = matches!(read, crate::ticket::EffortRead::Ready(_));
+                    let mut cmds = tickets::effort_arrived(model, repo, read, now);
+                    cmds.extend(tickets::finish_refresh(model, &unit, succeeded));
+                    cmds
+                }
+                Err(error) => {
+                    tickets::finish_refresh(model, &unit, false);
+                    set_status(model, StatusKind::Error, error)
+                }
+            }
         }
         Msg::DiscoveryFinished { unit, incomplete } => {
-            model.tickets.finish_discovery(unit, incomplete);
-            Vec::new()
+            model
+                .tickets
+                .finish_discovery(unit.clone(), incomplete, now);
+            match unit {
+                super::ticket_list::DiscoveryUnit::GitHubRepo { slug } => tickets::finish_refresh(
+                    model,
+                    &super::ticket_list::FetchUnit::GitHub { repo: slug },
+                    true,
+                ),
+                _ => Vec::new(),
+            }
         }
-        Msg::DiscoveryFailed { unit, error } => {
-            model.tickets.fail_discovery(unit, error);
-            Vec::new()
-        }
+        Msg::DiscoveryFailed { unit, error } => tickets::discovery_failed(model, unit, error),
         Msg::PrArrived(pr) => {
             if model.list.merge_listed(pr) {
                 // A new PR joins "Loading details…"; a re-streamed one took

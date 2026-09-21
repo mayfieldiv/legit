@@ -3,19 +3,22 @@
 //! Split out of `update` the way `refresh` is, so the reducer stays a
 //! dispatcher and the ticket story reads in one place — `super::apply`
 //! delegates here.
-// TODO(#132): `r`/`R`. TODO(#133): `h`/`l`, `J`/`K`, `m`, `p`, `y`, wheel
+// TODO(#133): `h`/`l`, `J`/`K`, `m`, `p`, `y`, wheel
 // ticks to the queue viewport.
 
+use chrono::{DateTime, Utc};
 use ratatui::crossterm::event::KeyCode;
 
 use crate::{
     app::{
         cmd::Cmd,
-        model::{Model, ViewMode},
-        ticket_list::DiscoveryUnit,
+        model::{Model, StatusKind, ViewMode},
+        ticket_list::{DiscoveryUnit, FetchUnit},
     },
     auth::AuthToken,
+    config::RepoIdentity,
     repo_slug::RepoSlug,
+    ticket::EffortRead,
 };
 
 /// Dispatch local Effort discovery once config and repo detection have both
@@ -77,6 +80,8 @@ pub(super) fn map_read_cmd(model: &mut Model, repo: &RepoSlug, token: &AuthToken
 /// selection, so the list surface's files-fetch path never runs for them.
 pub(super) fn handle_ticket_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
     match code {
+        KeyCode::Char('R') => return refresh_cmds(model, true),
+        KeyCode::Char('r') => return refresh_cmds(model, false),
         KeyCode::Char('q') => model.should_quit = true,
         KeyCode::Char('t') => model.view_mode = ViewMode::List,
         // Cursor movement is network-silent (spec §5.1): the map read already
@@ -86,4 +91,137 @@ pub(super) fn handle_ticket_list_key(model: &mut Model, code: KeyCode) -> Vec<Cm
         _ => {}
     }
     Vec::new()
+}
+
+fn refresh_cmds(model: &mut Model, all: bool) -> Vec<Cmd> {
+    let selected = model.tickets.selected_fetch();
+    let mut targets = if all || selected.is_none() {
+        model.tickets.all_fetches()
+    } else {
+        selected.into_iter().collect()
+    };
+    // Failed cards have no selectable tickets until the rail filter lands.
+    // Both refresh keys must therefore retry them from the current queue.
+    targets.extend(model.tickets.failed_fetches());
+    let mut cmds: Vec<Cmd> = targets
+        .into_iter()
+        .filter_map(|(unit, repo)| refresh_cmd(model, unit, repo))
+        .collect();
+    for unit in model.tickets.failed_discoveries() {
+        let cmd = match &unit {
+            DiscoveryUnit::GitHubRepo { slug } => {
+                cmds.extend(refresh_cmd(
+                    model,
+                    FetchUnit::GitHub { repo: slug.clone() },
+                    RepoIdentity::Slug(slug.clone()),
+                ));
+                continue;
+            }
+            DiscoveryUnit::LocalRepo { .. } => {
+                let Some(repo) = model
+                    .config
+                    .repos
+                    .iter()
+                    .find(|repo| DiscoveryUnit::for_repo(repo).as_ref() == Some(&unit))
+                else {
+                    continue;
+                };
+                Cmd::DiscoverRepoEfforts {
+                    unit: unit.clone(),
+                    repo: repo.clone(),
+                }
+            }
+            DiscoveryUnit::Cwd => Cmd::DiscoverCwdEfforts {
+                detected: model.repo.repo().cloned(),
+                config: model.config.clone(),
+            },
+        };
+        model.tickets.begin_discovery(unit);
+        cmds.push(cmd);
+    }
+    cmds
+}
+
+fn refresh_cmd(model: &mut Model, unit: FetchUnit, repo: RepoIdentity) -> Option<Cmd> {
+    if let FetchUnit::GitHub { repo } = &unit
+        && model
+            .tickets
+            .discovery_is_loading(&DiscoveryUnit::GitHubRepo { slug: repo.clone() })
+    {
+        return None;
+    }
+    let cmd = match &unit {
+        FetchUnit::GitHub { repo } => Cmd::ReadGitHubEfforts {
+            repo: repo.clone(),
+            token: model.auth_token.clone()?,
+        },
+        FetchUnit::Local { dir } => Cmd::ReadLocalEffort {
+            dir: dir.clone(),
+            repo,
+        },
+    };
+    if !model.tickets.begin_refresh(unit.clone()) {
+        return None;
+    }
+    if let FetchUnit::GitHub { repo } = unit {
+        model
+            .tickets
+            .begin_discovery(DiscoveryUnit::GitHubRepo { slug: repo });
+    }
+    Some(cmd)
+}
+
+pub(super) fn finish_refresh(model: &mut Model, unit: &FetchUnit, succeeded: bool) -> Vec<Cmd> {
+    match model.tickets.finish_refresh(unit, succeeded) {
+        Some(count) => super::set_status(
+            model,
+            StatusKind::Success,
+            format!(
+                "Refreshed {count} effort{}",
+                if count == 1 { "" } else { "s" }
+            ),
+        ),
+        None => Vec::new(),
+    }
+}
+
+pub(super) fn effort_arrived(
+    model: &mut Model,
+    repo: RepoIdentity,
+    read: EffortRead,
+    now: DateTime<Utc>,
+) -> Vec<Cmd> {
+    let error = match &read {
+        EffortRead::Degraded {
+            key, title, reason, ..
+        } if model.tickets.has_data(key)
+            || model.tickets.is_refreshing(&FetchUnit::for_effort(key)) =>
+        {
+            Some(format!("{title}: {reason}"))
+        }
+        _ => None,
+    };
+    model.tickets.merge_effort(repo, read, now);
+    error.map_or_else(Vec::new, |error| {
+        super::set_status(model, StatusKind::Error, error)
+    })
+}
+
+pub(super) fn discovery_failed(model: &mut Model, unit: DiscoveryUnit, error: String) -> Vec<Cmd> {
+    let refreshing = match &unit {
+        DiscoveryUnit::GitHubRepo { slug } => {
+            let fetch = FetchUnit::GitHub { repo: slug.clone() };
+            let refreshing = model.tickets.is_refreshing(&fetch);
+            finish_refresh(model, &fetch, false);
+            refreshing
+        }
+        _ => false,
+    };
+    let message = format!("{}: {error}", unit.label());
+    model.tickets.fail_discovery(unit, error);
+    if refreshing {
+        super::set_status(model, StatusKind::Error, message)
+    } else {
+        Vec::new()
+    }
 }

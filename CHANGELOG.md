@@ -4,6 +4,8 @@
 
 ### Added
 
+- Effort refresh: `r` re-reads the selected ticket’s Fetch Unit; `R` refreshes all Efforts. Cards and queue rows show Fetch Age and an in-flight indicator. Failed refreshes retain stale tickets and allow retry (#132)
+
 - Ticket surface, first slice: `t` toggles the PR list into a queue of this machine's local wayfinder Efforts — an effort rail (`repo · map`, `local · N/M decided · N frontier`, Destination) beside the tickets grouped into Frontier / Claimed / Blocked tiers with `j`/`k` navigation. Efforts are discovered at startup from every configured `mainWorktreePath` (and its linked worktrees) plus the working directory; an Effort or repo that can't be read keeps a card with the error rather than vanishing (#130)
 - Ticket surface, second slice: GitHub Efforts join the queue. Every Tracked Repo with a slug gets one map read at startup — each open `wayfinder:map` issue with its sub-issues and dependencies, a single GraphQL request through the network limiter — so `github · N/M decided · N frontier` cards sit beside the local ones and GitHub Tickets render as `#NNN`. A repo whose map read GitHub refuses keeps a `couldn't read` card with the error; a map that reads but can't be normalized keeps its card with the reason; a repo with more open maps than one read's window (ten) keeps the maps it read and leads the rail with an `incomplete` card saying so (#131)
 

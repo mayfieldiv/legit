@@ -16,7 +16,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 
-use self::format::{find_map_file, probe_file_type, read_effort_at};
+pub use self::format::read_effort_at;
+use self::format::{find_map_file, probe_file_type};
 use crate::{
     canonical_path::CanonicalPathBuf,
     config::{LegitConfig, RepoConfig, RepoIdentity, resolve_config_path},
