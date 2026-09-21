@@ -8,10 +8,14 @@
 
 use ratatui::crossterm::event::KeyCode;
 
-use crate::app::{
-    cmd::Cmd,
-    model::{Model, ViewMode},
-    ticket_list::DiscoveryUnit,
+use crate::{
+    app::{
+        cmd::Cmd,
+        model::{Model, ViewMode},
+        ticket_list::DiscoveryUnit,
+    },
+    auth::AuthToken,
+    repo_slug::RepoSlug,
 };
 
 /// Dispatch local Effort discovery once config and repo detection have both
@@ -51,32 +55,21 @@ pub(super) fn maybe_discover_local_efforts(model: &mut Model) -> Vec<Cmd> {
     cmds
 }
 
-/// Dispatch one map read per PR-capable Tracked Repo once auth, config, and
-/// repo detection have all settled — the open-PR listing's gate
-/// (`maybe_fetch_open_prs`): the read is an HTTP request that needs the
-/// token, and its unit is a slug, which the detected cwd repo supplies even
-/// when it isn't configured. Units in flight or loaded are skipped, so a
-/// `R`-driven config reload reads only new or failed repos.
-pub(super) fn maybe_read_github_efforts(model: &mut Model) -> Vec<Cmd> {
-    let Some(token) = model.auth_token.clone() else {
-        return Vec::new();
-    };
-    if !model.repo.is_settled() || !model.config_loaded {
-        return Vec::new();
+/// One PR-capable Tracked Repo's map read, unless its unit is in flight or
+/// loaded — so a `R`-driven config reload reads only new or failed repos. The
+/// gate is the caller's (`super::maybe_fetch_github`): a map read is an HTTP
+/// request, so unlike the local probes it waits on the token, and its unit is
+/// a slug, which the detected cwd repo supplies even when it isn't configured.
+pub(super) fn map_read_cmd(model: &mut Model, repo: &RepoSlug, token: &AuthToken) -> Option<Cmd> {
+    let unit = DiscoveryUnit::GitHubRepo { slug: repo.clone() };
+    if !model.tickets.needs_discovery(&unit) {
+        return None;
     }
-    let mut cmds = Vec::new();
-    for repo in model.tracked_repos() {
-        let unit = DiscoveryUnit::GitHubRepo { slug: repo.clone() };
-        if !model.tickets.needs_discovery(&unit) {
-            continue;
-        }
-        model.tickets.begin_discovery(unit);
-        cmds.push(Cmd::ReadGitHubEfforts {
-            repo,
-            token: token.clone(),
-        });
-    }
-    cmds
+    model.tickets.begin_discovery(unit);
+    Some(Cmd::ReadGitHubEfforts {
+        repo: repo.clone(),
+        token: token.clone(),
+    })
 }
 
 /// Handle one keypress on the ticket surface: the queue cursor and the
