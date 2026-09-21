@@ -1,6 +1,86 @@
 use super::*;
 
 #[test]
+fn a_local_map_with_no_blockers_keeps_its_tickets_visible() {
+    for no_blockers in ["none", " None ", "NONE"] {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("map.md"), "# Signing map\n").unwrap();
+        std::fs::create_dir(dir.path().join("issues")).unwrap();
+        std::fs::write(
+            dir.path().join("issues/01-signing.md"),
+            format!("# Investigate signing\n\nType: research\nBlocked by: {no_blockers}\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("issues/02-publish.md"),
+            "# Publish artifact\n\nType: task\nStatus: open\nBlocked by: 01\n",
+        )
+        .unwrap();
+        let (mut model, _) = Model::new();
+        model.tickets.merge_effort(
+            web(),
+            crate::local_effort::read_effort_at(
+                CanonicalPathBuf::canonicalize(dir.path()).unwrap(),
+            ),
+            chrono::DateTime::UNIX_EPOCH,
+        );
+        model.view_mode = ViewMode::TicketList;
+
+        let text = buffer_text(&render(&model, 140, 24)).join("\n");
+        assert!(!text.contains("couldn't read"), "{no_blockers}:\n{text}");
+        for expected in [
+            "0/2 decided · 1 frontier",
+            "Investigate signing",
+            "Publish artifact",
+            "after 01-signing",
+        ] {
+            assert!(text.contains(expected), "missing {expected}:\n{text}");
+        }
+    }
+}
+
+#[test]
+fn an_unrecognized_local_dependency_blocks_only_its_ticket() {
+    for dependent in [
+        "# Dependent work\n\nType: task\nBlocked by: 01, mystery\n",
+        "---\nstatus: open\ntype: task\nblocked-by: [1, mystery]\n---\n# Dependent work\n",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("map.md"), "# Signing map\n").unwrap();
+        std::fs::create_dir(dir.path().join("issues")).unwrap();
+        std::fs::write(
+            dir.path().join("issues/01-signing.md"),
+            "# Investigate signing\n\nType: research\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("issues/02-publish.md"), dependent).unwrap();
+        let (mut model, _) = Model::new();
+        model.tickets.merge_effort(
+            web(),
+            crate::local_effort::read_effort_at(
+                CanonicalPathBuf::canonicalize(dir.path()).unwrap(),
+            ),
+            chrono::DateTime::UNIX_EPOCH,
+        );
+        model.view_mode = ViewMode::TicketList;
+        model.tickets.move_down();
+
+        let text = buffer_text(&render(&model, 200, 30)).join("\n");
+        assert!(!text.contains("couldn't read"), "{text}");
+        for expected in [
+            "0/2 decided · 1 frontier",
+            "Investigate signing",
+            "Dependent work",
+            "dep? mystery",
+            "↑1",
+            "mystery — can't find or read",
+        ] {
+            assert!(text.contains(expected), "missing {expected}:\n{text}");
+        }
+    }
+}
+
+#[test]
 fn an_overflowing_summary_can_be_scrolled_to_the_prompt_without_moving_the_ticket() {
     use ratatui::crossterm::event::{
         Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind,

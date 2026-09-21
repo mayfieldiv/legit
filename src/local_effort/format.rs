@@ -212,14 +212,13 @@ fn resolve_ticket(member: &MemberFile, members: &[MemberFile]) -> Result<Ticket,
     let (state, claim) = fields.lifecycle()?;
     let mut dependencies = Vec::new();
     for reference in &fields.blocked_by {
-        let number: u64 = reference
-            .parse()
-            .map_err(|_| format!("blocked-by ref {reference:?} is not a ticket number"))?;
-        dependencies.push(match members.iter().find(|m| m.number == Some(number)) {
+        let target = reference
+            .parse::<u64>()
+            .ok()
+            .and_then(|number| members.iter().find(|m| m.number == Some(number)));
+        dependencies.push(match target {
             Some(target) => Dependency::SameEffort(target.key.clone()),
-            // No member file carries that number: the target can't be
-            // found, and an unseen Dependency must never put the ticket
-            // on the Frontier.
+            // An unresolvable reference must never put the Ticket on the Frontier.
             None => Dependency::Unknown {
                 raw: reference.clone(),
             },
@@ -293,10 +292,8 @@ fn resolve_external_target(
     }))
 }
 
-/// Which local ticket dialect a file spelled its fields in — kept on the
-/// parsed fields because the lifecycle vocabularies never cross: `open`/
-/// `closed` belongs to the older dialect, `claimed`/`resolved` to the newer,
-/// and a value from the wrong one degrades rather than guesses.
+/// Older tickets require an `open`/`closed` status; newer tickets may omit
+/// the Open status and encode claims as `claimed` and closure as `resolved`.
 #[derive(Clone, Copy)]
 enum Dialect {
     Older,
@@ -356,7 +353,7 @@ impl TicketFields {
                 }
             }
             Dialect::Newer => match status.as_deref() {
-                None => Ok((TicketState::Open, None)),
+                None | Some("open") => Ok((TicketState::Open, None)),
                 // Claimed-ness without a claimant name — the dialect has no
                 // assignee field.
                 Some("claimed") => Ok((TicketState::Open, Some(Claim::Anonymous))),
@@ -424,6 +421,7 @@ fn parse_newer_dialect(content: &str) -> ParsedFile {
         match prefix {
             "Status:" => fields.status = Some(value),
             "Type:" => fields.ty = Some(value),
+            "Blocked by:" if value.eq_ignore_ascii_case("none") => fields.blocked_by.clear(),
             _ => {
                 fields.blocked_by = value
                     .split(',')
