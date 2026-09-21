@@ -2,7 +2,10 @@
 //! cursor, and the probe phases. Expected values come from spec §6.1–§6.3
 //! (issue #112's resolution comment). Pure — Efforts are built in memory.
 
-use super::{DiscoveryUnit, QueueRow, QueueTier, RailCard, RowMarker, TicketList, TicketRow};
+use super::{
+    DiscoveryUnit, QueueRow, QueueTier, RailCard, RefreshNotice, RefreshScope, RefreshTarget,
+    RowMarker, TicketList, TicketRow,
+};
 use crate::{
     canonical_path::CanonicalPathBuf,
     config::RepoIdentity,
@@ -174,6 +177,7 @@ fn tickets_group_into_frontier_claimed_blocked_in_effort_then_ticket_order() {
                 claimed("03-taken", "mayfield"),
             ],
         ),
+        chrono::DateTime::UNIX_EPOCH,
     );
     list.merge_effort(
         repo("web"),
@@ -182,6 +186,7 @@ fn tickets_group_into_frontier_claimed_blocked_in_effort_then_ticket_order() {
             "Beta",
             vec![open("01-first"), after("02-later", "beta", "01-first")],
         ),
+        chrono::DateTime::UNIX_EPOCH,
     );
 
     assert_eq!(
@@ -207,6 +212,7 @@ fn a_claimed_ticket_that_is_also_blocked_sits_in_claimed() {
     list.merge_effort(
         repo("web"),
         ready("alpha", "Alpha", vec![spec, open("02-open")]),
+        chrono::DateTime::UNIX_EPOCH,
     );
 
     assert_eq!(
@@ -226,6 +232,7 @@ fn a_claimed_ticket_with_an_unknown_dependency_is_still_flagged_in_blocked() {
     list.merge_effort(
         repo("web"),
         ready("alpha", "Alpha", vec![spec, open("02-open")]),
+        chrono::DateTime::UNIX_EPOCH,
     );
 
     assert_eq!(
@@ -249,6 +256,7 @@ fn closed_tickets_are_hidden_from_the_queue_but_counted_as_decided() {
                 closed("03-done"),
             ],
         ),
+        chrono::DateTime::UNIX_EPOCH,
     );
 
     assert_eq!(rows(&list), ["── Frontier", "02-next"]);
@@ -272,6 +280,7 @@ fn unknown_dependency_tickets_fold_into_blocked_and_sort_last() {
                 open("03-open"),
             ],
         ),
+        chrono::DateTime::UNIX_EPOCH,
     );
     list.merge_effort(
         repo("web"),
@@ -280,6 +289,7 @@ fn unknown_dependency_tickets_fold_into_blocked_and_sort_last() {
             "Beta",
             vec![after("01-waiting", "beta", "02-open"), open("02-open")],
         ),
+        chrono::DateTime::UNIX_EPOCH,
     );
 
     assert_eq!(
@@ -312,6 +322,7 @@ fn rows_carry_their_marker_and_pool_wide_block_counts() {
                 unknown_dep("04-d", "gone.md"),
             ],
         ),
+        chrono::DateTime::UNIX_EPOCH,
     );
     let mut external = open("01-x");
     external.deps = vec![Dependency::External(ExternalDependency {
@@ -319,7 +330,11 @@ fn rows_carry_their_marker_and_pool_wide_block_counts() {
         state: TicketState::Open,
         title: None,
     })];
-    list.merge_effort(repo("web"), ready("beta", "Beta", vec![external]));
+    list.merge_effort(
+        repo("web"),
+        ready("beta", "Beta", vec![external]),
+        chrono::DateTime::UNIX_EPOCH,
+    );
 
     let summary = |display_ref: &str| {
         let row = ticket_row(&list, display_ref);
@@ -380,6 +395,7 @@ fn block_counts_read_distinct_targets_not_declared_edges() {
     list.merge_effort(
         repo("web"),
         ready("alpha", "Alpha", vec![open("01-a"), twice]),
+        chrono::DateTime::UNIX_EPOCH,
     );
 
     assert_eq!(
@@ -393,7 +409,11 @@ fn block_counts_read_distinct_targets_not_declared_edges() {
 #[test]
 fn empty_tiers_emit_no_header() {
     let mut list = TicketList::new();
-    list.merge_effort(repo("web"), ready("alpha", "Alpha", vec![open("01-a")]));
+    list.merge_effort(
+        repo("web"),
+        ready("alpha", "Alpha", vec![open("01-a")]),
+        chrono::DateTime::UNIX_EPOCH,
+    );
 
     assert_eq!(rows(&list), ["── Frontier", "01-a"]);
     assert_eq!(QueueTier::Frontier.label(), "Frontier");
@@ -406,9 +426,21 @@ fn empty_tiers_emit_no_header() {
 #[test]
 fn efforts_sort_by_repo_then_title_regardless_of_arrival_order() {
     let mut list = TicketList::new();
-    list.merge_effort(repo("web"), ready("zeta", "Zeta", vec![open("01-a")]));
-    list.merge_effort(repo("api"), ready("mid", "Mid", vec![open("01-b")]));
-    list.merge_effort(repo("web"), ready("alpha", "Alpha", vec![open("01-c")]));
+    list.merge_effort(
+        repo("web"),
+        ready("zeta", "Zeta", vec![open("01-a")]),
+        chrono::DateTime::UNIX_EPOCH,
+    );
+    list.merge_effort(
+        repo("api"),
+        ready("mid", "Mid", vec![open("01-b")]),
+        chrono::DateTime::UNIX_EPOCH,
+    );
+    list.merge_effort(
+        repo("web"),
+        ready("alpha", "Alpha", vec![open("01-c")]),
+        chrono::DateTime::UNIX_EPOCH,
+    );
 
     assert_eq!(rail_titles(&list), ["Mid", "Alpha", "Zeta"]);
     assert_eq!(
@@ -429,6 +461,7 @@ fn a_degraded_effort_keeps_its_card_with_the_error_and_contributes_no_tickets() 
             destination: Some("Somewhere".to_owned()),
             reason: "tickets/01-a.md: missing status".to_owned(),
         },
+        chrono::DateTime::UNIX_EPOCH,
     );
 
     let card = only_card(&list);
@@ -444,10 +477,15 @@ fn a_degraded_effort_keeps_its_card_with_the_error_and_contributes_no_tickets() 
 #[test]
 fn a_re_arriving_effort_replaces_its_pooled_read() {
     let mut list = TicketList::new();
-    list.merge_effort(repo("web"), ready("alpha", "Alpha", vec![open("01-a")]));
+    list.merge_effort(
+        repo("web"),
+        ready("alpha", "Alpha", vec![open("01-a")]),
+        chrono::DateTime::UNIX_EPOCH,
+    );
     list.merge_effort(
         repo("web"),
         ready("alpha", "Alpha renamed", vec![open("01-a"), open("02-b")]),
+        chrono::DateTime::UNIX_EPOCH,
     );
 
     assert_eq!(rail_titles(&list), ["Alpha renamed"]);
@@ -469,8 +507,13 @@ fn two_efforts() -> TicketList {
                 after("03-c", "alpha", "01-a"),
             ],
         ),
+        chrono::DateTime::UNIX_EPOCH,
     );
-    list.merge_effort(repo("web"), ready("beta", "Beta", vec![open("01-d")]));
+    list.merge_effort(
+        repo("web"),
+        ready("beta", "Beta", vec![open("01-d")]),
+        chrono::DateTime::UNIX_EPOCH,
+    );
     list
 }
 
@@ -479,10 +522,18 @@ fn selection_follows_the_top_until_navigated_then_sticks_to_its_ticket() {
     let mut list = TicketList::new();
     assert_eq!(selected(&list), None);
 
-    list.merge_effort(repo("web"), ready("mid", "Mid", vec![open("01-m")]));
+    list.merge_effort(
+        repo("web"),
+        ready("mid", "Mid", vec![open("01-m")]),
+        chrono::DateTime::UNIX_EPOCH,
+    );
     assert_eq!(selected(&list), Some("01-m".to_owned()));
     // An Effort sorting above the selection re-tops the still-default cursor…
-    list.merge_effort(repo("web"), ready("alpha", "Alpha", vec![open("01-a")]));
+    list.merge_effort(
+        repo("web"),
+        ready("alpha", "Alpha", vec![open("01-a")]),
+        chrono::DateTime::UNIX_EPOCH,
+    );
     assert_eq!(selected(&list), Some("01-a".to_owned()));
 
     // …but once the user has moved, the cursor sticks to its ticket.
@@ -491,6 +542,7 @@ fn selection_follows_the_top_until_navigated_then_sticks_to_its_ticket() {
     list.merge_effort(
         repo("web"),
         ready("aardvark", "Aardvark", vec![open("01-z")]),
+        chrono::DateTime::UNIX_EPOCH,
     );
     assert_eq!(selected(&list), Some("01-m".to_owned()));
 }
@@ -537,7 +589,11 @@ fn a_vanished_selection_snaps_to_the_top_ticket() {
     list.move_down();
     assert_eq!(selected(&list), Some("02-b".to_owned()));
 
-    list.merge_effort(repo("web"), ready("alpha", "Alpha", vec![closed("02-b")]));
+    list.merge_effort(
+        repo("web"),
+        ready("alpha", "Alpha", vec![closed("02-b")]),
+        chrono::DateTime::UNIX_EPOCH,
+    );
 
     assert_eq!(selected(&list), Some("01-d".to_owned()));
 }
@@ -567,6 +623,7 @@ fn rows_carry_what_they_show_resolved() {
     list.merge_effort(
         repo("web"),
         ready("alpha", "Alpha", vec![claimed("01-a", "mayfield")]),
+        chrono::DateTime::UNIX_EPOCH,
     );
 
     let row = ticket_row(&list, "01-a");
@@ -586,6 +643,7 @@ fn content_widths_measure_the_queued_tickets() {
             "Alpha",
             vec![open("01-a"), closed("02-a-long-decided-slug")],
         ),
+        chrono::DateTime::UNIX_EPOCH,
     );
 
     let widths = list.content_widths();
@@ -612,7 +670,7 @@ fn probe_phases_report_loading_until_every_unit_settles() {
     });
     assert!(list.is_loading());
 
-    list.finish_discovery(DiscoveryUnit::Cwd, None);
+    list.finish_discovery(DiscoveryUnit::Cwd, None, chrono::DateTime::UNIX_EPOCH);
     assert!(list.is_loading(), "one unit still in flight");
     list.fail_discovery(
         DiscoveryUnit::LocalRepo {
@@ -628,7 +686,11 @@ fn probe_phases_report_loading_until_every_unit_settles() {
 #[test]
 fn failed_units_lead_the_rail_ahead_of_every_effort() {
     let mut list = TicketList::new();
-    list.merge_effort(repo("api"), ready("alpha", "Alpha", vec![open("01-a")]));
+    list.merge_effort(
+        repo("api"),
+        ready("alpha", "Alpha", vec![open("01-a")]),
+        chrono::DateTime::UNIX_EPOCH,
+    );
     list.fail_discovery(DiscoveryUnit::Cwd, "not a directory".to_owned());
     list.begin_discovery(DiscoveryUnit::LocalRepo {
         name: "acme/web".to_owned(),
@@ -649,9 +711,17 @@ fn an_incomplete_unit_is_settled_but_leads_the_rail_with_its_caveat() {
         slug: RepoSlug::new("acme/api"),
     };
     list.begin_discovery(unit.clone());
-    list.merge_effort(repo("api"), ready("alpha", "Alpha", vec![open("01-a")]));
+    list.merge_effort(
+        repo("api"),
+        ready("alpha", "Alpha", vec![open("01-a")]),
+        chrono::DateTime::UNIX_EPOCH,
+    );
 
-    list.finish_discovery(unit.clone(), Some("more than 10 open maps".to_owned()));
+    list.finish_discovery(
+        unit.clone(),
+        Some("more than 10 open maps".to_owned()),
+        chrono::DateTime::UNIX_EPOCH,
+    );
 
     assert!(!list.is_loading());
     assert!(
@@ -664,4 +734,155 @@ fn an_incomplete_unit_is_settled_but_leads_the_rail_with_its_caveat() {
         "the pooled Effort keeps its card; the caveat leads it"
     );
     assert_eq!(rows(&list), ["── Frontier", "01-a"]);
+}
+
+// ── refresh runs ─────────────────────────────────────────────────────────────
+
+fn github_unit(name: &str) -> DiscoveryUnit {
+    DiscoveryUnit::GitHubRepo {
+        slug: RepoSlug::new(format!("acme/{name}")),
+    }
+}
+
+/// A GitHub Effort with no Tickets, so the queue selects nothing.
+fn github_read(name: &str, map_number: u64) -> EffortRead {
+    EffortRead::Ready(
+        Effort::new(
+            EffortKey::GitHub {
+                repo_slug: RepoSlug::new(format!("acme/{name}")),
+                map_number,
+            },
+            format!("Map {map_number}"),
+            None,
+            Vec::new(),
+        )
+        .unwrap(),
+    )
+}
+
+/// The units a refresh dispatches, by label, with every command built.
+fn dispatched(list: &mut TicketList, scope: RefreshScope) -> Vec<String> {
+    list.begin_refresh(scope, |target| {
+        Some(match target {
+            RefreshTarget::Discovery(unit) => unit.label().to_owned(),
+            RefreshTarget::Local { dir, .. } => dir.display().to_string(),
+        })
+    })
+}
+
+fn refreshing(list: &TicketList) -> Vec<bool> {
+    list.rail()
+        .filter_map(|card| match card {
+            RailCard::Effort(card) => Some(card.fetch.refreshing),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_failed_unit_retried_while_another_is_in_flight_still_lets_the_run_settle() {
+    let mut list = TicketList::new();
+    list.merge_effort(
+        repo("api"),
+        github_read("api", 1),
+        chrono::DateTime::UNIX_EPOCH,
+    );
+    list.merge_effort(
+        repo("web"),
+        github_read("web", 2),
+        chrono::DateTime::UNIX_EPOCH,
+    );
+    assert_eq!(dispatched(&mut list, RefreshScope::View), ["api", "web"]);
+
+    assert_eq!(
+        list.fail_discovery(github_unit("api"), "offline".to_owned()),
+        Some(RefreshNotice::Failed("api: offline".to_owned()))
+    );
+    assert_eq!(refreshing(&list), [false, true]);
+    assert_eq!(
+        dispatched(&mut list, RefreshScope::View),
+        ["api"],
+        "web is still in flight; api's failure is what the retry clears"
+    );
+
+    for name in ["api", "web"] {
+        let map = if name == "api" { 1 } else { 2 };
+        assert_eq!(
+            list.effort_arrived(
+                &github_unit(name),
+                repo(name),
+                github_read(name, map),
+                chrono::DateTime::UNIX_EPOCH
+            ),
+            None
+        );
+    }
+    assert_eq!(
+        list.finish_discovery(github_unit("api"), None, chrono::DateTime::UNIX_EPOCH),
+        None,
+        "web is still in flight"
+    );
+    assert_eq!(
+        list.finish_discovery(github_unit("web"), None, chrono::DateTime::UNIX_EPOCH),
+        Some(RefreshNotice::Refreshed(2))
+    );
+    assert_eq!(refreshing(&list), [false, false]);
+}
+
+#[test]
+fn a_unit_whose_command_was_not_built_is_left_idle() {
+    let mut list = TicketList::new();
+    list.merge_effort(
+        repo("api"),
+        github_read("api", 1),
+        chrono::DateTime::UNIX_EPOCH,
+    );
+
+    let none: Vec<()> = list.begin_refresh(RefreshScope::View, |_| None);
+
+    assert!(none.is_empty());
+    assert_eq!(refreshing(&list), [false]);
+    assert_eq!(
+        dispatched(&mut list, RefreshScope::View),
+        ["api"],
+        "nothing was in flight, so nothing is deduplicated"
+    );
+    assert_eq!(refreshing(&list), [true]);
+}
+
+#[test]
+fn the_selected_scope_covers_nothing_when_no_ticket_is_selected() {
+    let mut list = TicketList::new();
+    list.merge_effort(
+        repo("api"),
+        github_read("api", 1),
+        chrono::DateTime::UNIX_EPOCH,
+    );
+    list.fail_discovery(github_unit("web"), "404".to_owned());
+    assert_eq!(selected(&list), None);
+
+    assert_eq!(
+        dispatched(&mut list, RefreshScope::Selected),
+        ["web"],
+        "only the failed unit, which has no Ticket to select"
+    );
+    assert_eq!(dispatched(&mut list, RefreshScope::View), ["api"]);
+}
+
+#[test]
+fn a_startup_discovery_still_loading_is_not_re_dispatched() {
+    let mut list = TicketList::new();
+    list.merge_effort(
+        repo("api"),
+        github_read("api", 1),
+        chrono::DateTime::UNIX_EPOCH,
+    );
+    list.begin_discovery(github_unit("api"));
+
+    assert!(dispatched(&mut list, RefreshScope::View).is_empty());
+    assert_eq!(
+        refreshing(&list),
+        [false],
+        "a startup read shows no indicator"
+    );
 }

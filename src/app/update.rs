@@ -1076,18 +1076,16 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
             cmds.extend(tickets::maybe_discover_local_efforts(model));
             cmds
         }
-        Msg::EffortArrived { repo, read } => {
-            model.tickets.merge_effort(repo, read);
-            Vec::new()
+        Msg::EffortArrived { unit, repo, read } => {
+            tickets::effort_arrived(model, unit, repo, read, now)
+        }
+        Msg::LocalEffortRead { dir, repo, result } => {
+            tickets::local_effort_read(model, dir, repo, result, now)
         }
         Msg::DiscoveryFinished { unit, incomplete } => {
-            model.tickets.finish_discovery(unit, incomplete);
-            Vec::new()
+            tickets::discovery_finished(model, unit, incomplete, now)
         }
-        Msg::DiscoveryFailed { unit, error } => {
-            model.tickets.fail_discovery(unit, error);
-            Vec::new()
-        }
+        Msg::DiscoveryFailed { unit, error } => tickets::discovery_failed(model, unit, error),
         Msg::PrArrived(pr) => {
             if model.list.merge_listed(pr) {
                 // A new PR joins "Loading details…"; a re-streamed one took

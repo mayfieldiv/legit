@@ -4,6 +4,7 @@ use ratatui::crossterm::event::Event;
 use crate::{
     app::ticket_list::DiscoveryUnit,
     auth::AuthToken,
+    canonical_path::CanonicalPathBuf,
     config::{LegitConfig, RepoIdentity},
     file_category::FileChange,
     github::limiter::NetworkStats,
@@ -35,8 +36,14 @@ pub enum Msg {
     /// either way it gets a rail card, so a failed Effort is never silently
     /// missing (spec §5.5).
     EffortArrived {
+        unit: DiscoveryUnit,
         repo: RepoIdentity,
         read: EffortRead,
+    },
+    LocalEffortRead {
+        dir: CanonicalPathBuf,
+        repo: RepoIdentity,
+        result: Result<EffortRead, String>,
     },
     /// One discovery unit streamed its last Effort. `incomplete` is the caveat
     /// of a read that saw only a window of the unit (a map read past the fixed
@@ -48,9 +55,8 @@ pub enum Msg {
     },
     /// One discovery unit failed outright — a missing Main Worktree, an
     /// unreadable Wayfinder Root, a map read GitHub refused — before it could
-    /// attribute a single Effort. Recorded on the queue (the rail renders it
-    /// as a card), not as a transient status: the failure persists until a
-    /// re-read.
+    /// attribute a single Effort. Without stale data, the rail keeps the
+    /// failure until a re-read; a manual refresh also posts a status error.
     DiscoveryFailed {
         unit: DiscoveryUnit,
         error: String,

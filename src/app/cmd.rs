@@ -6,6 +6,7 @@ use tokio::sync::mpsc;
 use crate::{
     app::{browser, msg::Msg, ticket_list::DiscoveryUnit},
     auth::{self, AuthToken},
+    canonical_path::CanonicalPathBuf,
     clipboard,
     config::{self, LegitConfig, RepoConfig, RepoIdentity},
     git_remote,
@@ -170,6 +171,10 @@ pub enum Cmd {
         repo: RepoSlug,
         token: AuthToken,
     },
+    ReadLocalEffort {
+        dir: CanonicalPathBuf,
+        repo: RepoIdentity,
+    },
 }
 
 impl Cmd {
@@ -198,6 +203,7 @@ impl Cmd {
             Cmd::DiscoverRepoEfforts { .. } => "DiscoverRepoEfforts",
             Cmd::DiscoverCwdEfforts { .. } => "DiscoverCwdEfforts",
             Cmd::ReadGitHubEfforts { .. } => "ReadGitHubEfforts",
+            Cmd::ReadLocalEffort { .. } => "ReadLocalEffort",
         }
     }
 }
@@ -440,6 +446,13 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
         Cmd::ReadGitHubEfforts { repo, token } => {
             run_read_github_efforts(repo, token, tx, limiter).await;
         }
+        Cmd::ReadLocalEffort { dir, repo } => {
+            let path = dir.clone();
+            let result = blocking(move || Ok(local_effort::read_effort_at(path)))
+                .await
+                .map_err(|error| format!("{error:#}"));
+            let _ = tx.send(Msg::LocalEffortRead { dir, repo, result });
+        }
     }
 }
 
@@ -545,6 +558,7 @@ fn settle_discovery(
             tracing::info!(?unit, efforts = reads.len(), "efforts discovered");
             for read in reads {
                 let _ = tx.send(Msg::EffortArrived {
+                    unit: unit.clone(),
                     repo: repo.clone(),
                     read,
                 });

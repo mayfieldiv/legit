@@ -27,7 +27,7 @@ const TICKET_DIRS: &[&str] = &["tickets", "issues"];
 /// [`EffortRead`]. Infallible: the canonical directory is the identity to
 /// degrade under, so every failure past it degrades the Effort instead of
 /// erring (spec §5.5: never a crash, never silent).
-pub(super) fn read_effort_at(dir: CanonicalPathBuf) -> EffortRead {
+pub fn read_effort_at(dir: CanonicalPathBuf) -> EffortRead {
     let key = EffortKey::Local { dir: dir.clone() };
     // Map context is read first so a later ticket failure degrades with the
     // best available title/Destination rather than losing them.

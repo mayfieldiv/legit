@@ -2,6 +2,7 @@
 //! under its own app header and above the shared status bar (spec §6.1–§6.2,
 //! the prototype's "Efforts pane" layout).
 
+use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
@@ -22,7 +23,9 @@ use crate::{
         ticket_list_layout::{DIVIDER_WIDTH, rail_width},
     },
     color::repo_color,
-    format::{pad_to_width, truncate, truncate_middle},
+    format::{
+        REFRESH_GLYPH, fetched_age_spans, format_age, pad_to_width, truncate, truncate_middle,
+    },
     palette::Palette,
     ticket::EffortSource,
 };
@@ -30,7 +33,13 @@ use crate::{
 #[cfg(test)]
 mod tests;
 
-pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
+pub fn render(
+    model: &Model,
+    frame: &mut Frame<'_>,
+    area: Rect,
+    now: DateTime<Utc>,
+    palette: &Palette,
+) {
     let [header, main, status] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(1),
@@ -58,11 +67,11 @@ pub fn render(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Palett
                     Constraint::Min(1),
                 ])
                 .areas(main);
-                render_rail(tickets, frame, rail, palette);
+                render_rail(tickets, frame, rail, now, palette);
                 render_divider(frame, divider, palette);
-                render_queue(tickets, frame, queue, palette);
+                render_queue(tickets, frame, queue, now, palette);
             }
-            None => render_queue(tickets, frame, main, palette),
+            None => render_queue(tickets, frame, main, now, palette),
         }
     }
     render_status(model, frame, status, palette);
@@ -104,11 +113,13 @@ fn render_divider(frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
 
 // ── effort rail ──────────────────────────────────────────────────────────────
 
-/// The rail: the `All efforts` entry (the only filter this slice has, so it
-/// is always the active one), then one two-line card per failed or
-/// incomplete discovery unit and one three-line card per Effort, each
-/// followed by a blank row.
-fn render_rail(tickets: &TicketList, frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
+fn render_rail(
+    tickets: &TicketList,
+    frame: &mut Frame<'_>,
+    area: Rect,
+    now: DateTime<Utc>,
+    palette: &Palette,
+) {
     let width = usize::from(area.width);
     let mut lines = vec![
         Line::from(Span::styled(
@@ -127,14 +138,19 @@ fn render_rail(tickets: &TicketList, frame: &mut Frame<'_>, area: Rect, palette:
             RailCard::Incomplete { unit, caveat } => {
                 discovery_incomplete_card(unit, caveat, width, palette)
             }
-            RailCard::Effort(card) => effort_card(card, width, palette),
+            RailCard::Effort(card) => effort_card(card, width, now, palette),
         });
         lines.push(Line::default());
     }
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-fn effort_card(card: &EffortCard, width: usize, palette: &Palette) -> Vec<Line<'static>> {
+fn effort_card(
+    card: &EffortCard,
+    width: usize,
+    now: DateTime<Utc>,
+    palette: &Palette,
+) -> Vec<Line<'static>> {
     let source = match card.source {
         EffortSource::GitHub => "github",
         EffortSource::Local => "local",
@@ -167,7 +183,10 @@ fn effort_card(card: &EffortCard, width: usize, palette: &Palette) -> Vec<Line<'
             lines.push(Line::from(vec![
                 Span::styled(format!("{source} · "), muted),
                 Span::styled(
-                    truncate("couldn't read", width.saturating_sub(source.width() + 3)),
+                    truncate(
+                        "couldn't read — r to retry",
+                        width.saturating_sub(source.width() + 3),
+                    ),
                     Style::default().fg(palette.error),
                 ),
             ]));
@@ -176,6 +195,20 @@ fn effort_card(card: &EffortCard, width: usize, palette: &Palette) -> Vec<Line<'
                 Style::default().fg(palette.warning),
             )));
         }
+    }
+    let mut fetch = Vec::new();
+    if card.fetch.refreshing {
+        fetch.push(Span::styled(
+            format!("{REFRESH_GLYPH} refreshing"),
+            Style::default().fg(palette.accent),
+        ));
+        if card.fetch.fetched_at.is_some() {
+            fetch.push(Span::styled(" · ", muted));
+        }
+    }
+    fetch.extend(fetched_age_spans(card.fetch.fetched_at, now, palette));
+    if !fetch.is_empty() {
+        lines.push(Line::from(fetch));
     }
     lines
 }
@@ -191,8 +224,8 @@ fn discovery_failure_card(
     palette: &Palette,
 ) -> Vec<Line<'static>> {
     let failure = match unit.source() {
-        EffortSource::Local => "couldn't probe",
-        EffortSource::GitHub => "couldn't read",
+        EffortSource::Local => "couldn't probe — r to retry",
+        EffortSource::GitHub => "couldn't read — r to retry",
     };
     let failure = Span::styled(failure, Style::default().fg(palette.error));
     vec![
@@ -249,16 +282,10 @@ fn repo_led_line(
 
 // ── queue ────────────────────────────────────────────────────────────────────
 
-/// The leading one-column glyph slot every queue row starts with, like the
-/// PR list's worktree/refresh column. Empty in this slice.
-// TODO(#132): the per-row refresh indicator.
 const INDICATOR_COL: usize = 1;
 const TITLE_COL_MIN: usize = 40;
 /// `↑NN ↓NN`.
 const BLOCK_COL: usize = 7;
-/// Sized like the PR list's Updated column so the header lands where the data
-/// will; the cells stay empty until Fetch Age is stamped.
-// TODO(#132): render Fetch Age.
 const AGE_COL: usize = 7;
 
 /// How a content-sized queue column may grow. It opens at its content width
@@ -341,7 +368,13 @@ impl QueueLayout {
     }
 }
 
-fn render_queue(tickets: &TicketList, frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
+fn render_queue(
+    tickets: &TicketList,
+    frame: &mut Frame<'_>,
+    area: Rect,
+    now: DateTime<Utc>,
+    palette: &Palette,
+) {
     let [header_area, rows_area] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
     let width = usize::from(area.width);
@@ -359,7 +392,7 @@ fn render_queue(tickets: &TicketList, frame: &mut Frame<'_>, area: Rect, palette
         .visible_rows()
         .map(|(row, selected)| match row {
             QueueRow::Header(tier) => tier_header_line(*tier, width, palette),
-            QueueRow::Ticket(row) => ticket_line(row, &layout, selected, palette),
+            QueueRow::Ticket(row) => ticket_line(row, &layout, selected, now, palette),
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), rows_area);
@@ -407,6 +440,7 @@ fn ticket_line(
     row: &TicketRow,
     layout: &QueueLayout,
     selected: bool,
+    now: DateTime<Utc>,
     palette: &Palette,
 ) -> Line<'static> {
     // The Selected Row brightens only the title; every other cell keeps its
@@ -417,7 +451,15 @@ fn ticket_line(
         Style::default()
     };
     let cells = vec![
-        Cell::text("", INDICATOR_COL, Style::default()),
+        Cell::text(
+            if row.fetch.refreshing {
+                REFRESH_GLYPH
+            } else {
+                ""
+            },
+            INDICATOR_COL,
+            Style::default().fg(palette.accent),
+        ),
         Cell::text(
             truncate_middle(&row.display_ref, layout.ref_col),
             layout.ref_col,
@@ -443,7 +485,13 @@ fn ticket_line(
             palette,
         ),
         block_cell(row.upstream, row.downstream, palette),
-        Cell::text("", AGE_COL, Style::default()),
+        Cell::text(
+            row.fetch
+                .fetched_at
+                .map_or_else(String::new, |stamp| format_age(stamp, now)),
+            AGE_COL,
+            Style::default().fg(palette.muted),
+        ),
     ];
     render_cells(cells, selected.then_some(palette.selected_bg))
 }
@@ -513,6 +561,8 @@ fn render_status(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Pal
     let left = Line::from(vec![
         Span::styled("j/k", bold),
         Span::raw(" nav  "),
+        Span::styled("r/R", bold),
+        Span::raw(" refresh  "),
         Span::styled("t", bold),
         Span::raw(" PRs  "),
         Span::styled("q", bold),

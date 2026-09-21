@@ -40,7 +40,7 @@ pub fn view(model: &Model, frame: &mut Frame<'_>, now: DateTime<Utc>) {
     // status bar, key hints).
     match &model.view_mode {
         ViewMode::Detail(detail) => detail::render(model, detail, frame, area, now, palette),
-        ViewMode::TicketList => ticket_list::render(model, frame, area, palette),
+        ViewMode::TicketList => ticket_list::render(model, frame, area, now, palette),
         ViewMode::List => render_list_surface(model, frame, area, now, palette),
     }
 }

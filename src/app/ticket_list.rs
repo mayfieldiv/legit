@@ -11,18 +11,24 @@
 //! Ticket's identity, so arrivals that re-sort the queue move its row, never
 //! which Ticket is selected.
 //!
+//! The queue also owns the Effort refresh cycle: which Fetch Units `r`/`R`
+//! cover, which are in flight, and when a run has settled enough to summarize.
+//! The reducer only builds commands and posts what `RefreshNotice` tells it.
+//!
 //! Everything the surface shows is derived here, once per relayout, into
 //! self-contained rail cards and queue rows (ADR 0002: derivations live in
 //! `update`, never in the render path). The view formats them; it never
 //! reaches back into the pool.
 
-use std::collections::{BTreeMap, HashMap};
+use chrono::{DateTime, Utc};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
     app::list_cursor::{Direction, ListCursor, SelectableRow},
+    canonical_path::CanonicalPathBuf,
     config::{RepoConfig, RepoIdentity},
     format::format_repo_short,
     repo_slug::RepoSlug,
@@ -38,6 +44,7 @@ use crate::{
 /// definition) — so the repo rides here beside the read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EffortCard {
+    pub fetch: FetchState,
     /// The attributed Tracked Repo's short name (see `format_repo_short`).
     pub repo: String,
     /// The Map's title.
@@ -46,6 +53,12 @@ pub struct EffortCard {
     /// The read's tallies and Destination, or why the Effort degraded (a
     /// degraded Effort has no Tickets).
     pub outcome: Result<EffortSummary, String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FetchState {
+    pub fetched_at: Option<DateTime<Utc>>,
+    pub refreshing: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -94,22 +107,28 @@ pub enum RailCard<'a> {
 }
 
 /// One pooled Effort: its card, plus the normalized Effort the queue rows are
-/// derived from (`None` once the read degraded).
+/// derived from (`None` until a read succeeds).
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct EffortEntry {
     key: EffortKey,
+    repo: RepoIdentity,
     card: EffortCard,
     effort: Option<Effort>,
 }
 
 impl EffortEntry {
-    fn new(repo: RepoIdentity, read: EffortRead) -> Self {
-        let repo = format_repo_short(&repo.display_name()).to_owned();
+    fn new(repo: RepoIdentity, read: EffortRead, now: DateTime<Utc>) -> Self {
+        let name = format_repo_short(&repo.display_name()).to_owned();
         match read {
             EffortRead::Ready(effort) => Self {
                 key: effort.key.clone(),
+                repo,
                 card: EffortCard {
-                    repo,
+                    fetch: FetchState {
+                        fetched_at: Some(now),
+                        refreshing: false,
+                    },
+                    repo: name,
                     title: effort.title.clone(),
                     source: effort.key.source(),
                     outcome: Ok(EffortSummary {
@@ -125,8 +144,10 @@ impl EffortEntry {
                 destination: _,
                 reason,
             } => Self {
+                repo,
                 card: EffortCard {
-                    repo,
+                    fetch: FetchState::default(),
+                    repo: name,
                     title,
                     source: key.source(),
                     outcome: Err(reason),
@@ -223,6 +244,7 @@ impl RowMarker {
 /// row shows, resolved once per relayout so a redraw only formats.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TicketRow {
+    pub fetch: FetchState,
     pub key: TicketKey,
     pub marker: Option<RowMarker>,
     pub display_ref: String,
@@ -239,9 +261,10 @@ pub struct TicketRow {
 }
 
 impl TicketRow {
-    fn derive(repo: &str, ticket: &EffortTicket<'_>, downstream: usize) -> Self {
+    fn derive(repo: &str, ticket: &EffortTicket<'_>, downstream: usize, fetch: FetchState) -> Self {
         let open: Vec<&TicketKey> = ticket.open_dependencies().collect();
         Self {
+            fetch,
             key: ticket.key.clone(),
             marker: RowMarker::of(ticket, open.first().copied()),
             display_ref: ticket.key.display_ref(),
@@ -301,7 +324,7 @@ impl QueueContentWidths {
 /// the queue tracks so the view can tell "still discovering" from "nothing
 /// found" and surface a unit that failed outright (a missing Main Worktree, a
 /// map read GitHub refused: neither has an Effort card to degrade).
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DiscoveryUnit {
     LocalRepo {
         /// The repo's short name — its slug's repo half, or its Main
@@ -352,10 +375,27 @@ impl DiscoveryUnit {
     }
 }
 
-/// Lifecycle of one discovery unit; at most one variant holds per unit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReadOutcome {
+    Ready,
+    Degraded,
+}
+
+impl ReadOutcome {
+    fn of(read: &EffortRead) -> (&EffortKey, Self) {
+        match read {
+            EffortRead::Ready(effort) => (&effort.key, Self::Ready),
+            EffortRead::Degraded { key, .. } => (key, Self::Degraded),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum DiscoveryPhase {
-    Loading,
+enum DiscoveryPhase {
+    Loading {
+        reads: HashMap<EffortKey, ReadOutcome>,
+        caveat: Option<String>,
+    },
     Loaded,
     /// Settled with everything the read could see pooled, but the unit holds
     /// more than the read's window. Terminal like `Loaded` — a re-read sees
@@ -364,11 +404,101 @@ pub enum DiscoveryPhase {
     Failed(String),
 }
 
+/// The Fetch Unit (CONTEXT.md) an Effort's data rides on: its repo's map
+/// read, or its own directory probe.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum FetchUnit {
+    Discovery(DiscoveryUnit),
+    Local { dir: CanonicalPathBuf },
+}
+
+impl FetchUnit {
+    fn for_effort(key: &EffortKey) -> Self {
+        match key {
+            EffortKey::GitHub { repo_slug, .. } => Self::Discovery(DiscoveryUnit::GitHubRepo {
+                slug: repo_slug.clone(),
+            }),
+            EffortKey::Local { dir } => Self::Local { dir: dir.clone() },
+        }
+    }
+}
+
+/// Which Fetch Units a refresh key covers (CONTEXT.md, Refresh).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefreshScope {
+    /// `r`: the unit backing the selected Ticket. With nothing selected there
+    /// is nothing to re-read — the queue has no Re-list.
+    Selected,
+    /// `R`: every unit backing the view.
+    // TODO(#133): the rail filter narrows this to the selected Effort.
+    View,
+}
+
+/// One Fetch Unit to re-read, with what its command needs beyond the unit's
+/// identity.
+#[derive(Clone, Debug)]
+pub enum RefreshTarget {
+    Discovery(DiscoveryUnit),
+    Local {
+        dir: CanonicalPathBuf,
+        repo: RepoIdentity,
+    },
+}
+
+impl RefreshTarget {
+    fn for_entry(entry: &EffortEntry) -> Self {
+        match &entry.key {
+            EffortKey::GitHub { repo_slug, .. } => Self::Discovery(DiscoveryUnit::GitHubRepo {
+                slug: repo_slug.clone(),
+            }),
+            EffortKey::Local { dir } => Self::Local {
+                dir: dir.clone(),
+                repo: entry.repo.clone(),
+            },
+        }
+    }
+
+    fn unit(&self) -> FetchUnit {
+        match self {
+            Self::Discovery(unit) => FetchUnit::Discovery(unit.clone()),
+            Self::Local { dir, .. } => FetchUnit::Local { dir: dir.clone() },
+        }
+    }
+}
+
+/// What the status line owes the user after one fetch arrival. At most one
+/// per arrival: a failure marks its unit, which withholds the summary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RefreshNotice {
+    /// Every unit the user asked for settled clean: how many Efforts the run
+    /// re-read.
+    Refreshed(usize),
+    /// A read the user asked for failed, or a degraded read arrived over data
+    /// the queue already shows. Worded for the status line.
+    Failed(String),
+}
+
+/// One Fetch Unit's place in the current refresh run. Absent means idle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UnitRefresh {
+    /// Dispatched, not settled. `degraded` once a read under it came back
+    /// degraded: the unit then settles Failed however its stream ends.
+    InFlight { degraded: bool },
+    /// Settled failed. Withholds the run's summary until re-dispatched, which
+    /// puts it back in flight, or until the next run starts.
+    Failed,
+}
+
 #[derive(Clone, Default)]
 pub struct TicketList {
     /// Pooled Efforts in rail order (see `EffortEntry::order_key`).
     efforts: Vec<EffortEntry>,
     discoveries: BTreeMap<DiscoveryUnit, DiscoveryPhase>,
+    /// The current refresh run: every unit it dispatched that hasn't settled
+    /// clean, and the Efforts re-read so far. A run starts on the first
+    /// dispatch while no unit is in flight.
+    refresh: HashMap<FetchUnit, UnitRefresh>,
+    refreshed_efforts: HashSet<EffortKey>,
     /// Flattened display layout (tier headers + Ticket rows), rebuilt by
     /// `relayout` whenever the pool changes.
     rows: Vec<QueueRow>,
@@ -393,39 +523,302 @@ impl TicketList {
         Self::default()
     }
 
-    /// Pool one Effort read, attributed to `repo`. A re-read of an already
-    /// pooled Effort (same key) replaces it wholesale — one map read or probe
-    /// reconciles membership and enrichment together, so there is nothing to
-    /// graft back.
-    pub fn merge_effort(&mut self, repo: RepoIdentity, read: EffortRead) {
-        let entry = EffortEntry::new(repo, read);
+    // ── refresh ──────────────────────────────────────────────────────────────
+
+    /// Dispatch a refresh: `scope`'s units plus every unit whose last read
+    /// failed (a failed card has no selectable Ticket, so both keys retry
+    /// it), minus any unit already in flight — a refresh, or a startup
+    /// discovery still Loading. `dispatch` builds each survivor's command;
+    /// a unit is marked in flight only when it returns `Some`, so the
+    /// indicator never outlives a command that was never sent. Commands come
+    /// back in rail order.
+    pub fn begin_refresh<T>(
+        &mut self,
+        scope: RefreshScope,
+        mut dispatch: impl FnMut(&RefreshTarget) -> Option<T>,
+    ) -> Vec<T> {
+        if !self
+            .refresh
+            .values()
+            .any(|unit| matches!(unit, UnitRefresh::InFlight { .. }))
+        {
+            self.refresh.clear();
+            self.refreshed_efforts.clear();
+        }
+        let scoped = match scope {
+            RefreshScope::Selected => self.selected_fetch().into_iter().collect(),
+            RefreshScope::View => self.all_fetches(),
+        };
+        let mut dispatched = Vec::new();
+        for target in scoped.into_iter().chain(self.failed_fetches()) {
+            let unit = target.unit();
+            if self.in_flight(&unit) {
+                continue;
+            }
+            let Some(cmd) = dispatch(&target) else {
+                continue;
+            };
+            self.refresh
+                .insert(unit, UnitRefresh::InFlight { degraded: false });
+            if let RefreshTarget::Discovery(unit) = target {
+                self.begin_discovery(unit);
+            }
+            dispatched.push(cmd);
+        }
+        if !dispatched.is_empty() {
+            self.relayout();
+        }
+        dispatched
+    }
+
+    fn selected_fetch(&self) -> Option<RefreshTarget> {
+        let selected = self.selected_ticket()?;
+        self.efforts.iter().find_map(|entry| {
+            entry
+                .effort
+                .as_ref()?
+                .tickets()
+                .any(|ticket| &ticket.key == selected)
+                .then(|| RefreshTarget::for_entry(entry))
+        })
+    }
+
+    /// Every pooled Effort's unit, plus each repo's map read even when it
+    /// pooled nothing — the repo may have gained a map since.
+    fn all_fetches(&self) -> Vec<RefreshTarget> {
+        self.efforts
+            .iter()
+            .map(RefreshTarget::for_entry)
+            .chain(
+                self.discoveries
+                    .keys()
+                    .filter(|unit| matches!(unit, DiscoveryUnit::GitHubRepo { .. }))
+                    .cloned()
+                    .map(RefreshTarget::Discovery),
+            )
+            .collect()
+    }
+
+    fn failed_fetches(&self) -> Vec<RefreshTarget> {
+        self.efforts
+            .iter()
+            .filter(|entry| entry.card.outcome.is_err())
+            .map(RefreshTarget::for_entry)
+            .chain(
+                self.discoveries
+                    .iter()
+                    .filter(|(_, phase)| matches!(phase, DiscoveryPhase::Failed(_)))
+                    .map(|(unit, _)| RefreshTarget::Discovery(unit.clone())),
+            )
+            .collect()
+    }
+
+    fn refreshing(&self, unit: &FetchUnit) -> bool {
+        matches!(self.refresh.get(unit), Some(UnitRefresh::InFlight { .. }))
+    }
+
+    fn in_flight(&self, unit: &FetchUnit) -> bool {
+        self.refreshing(unit)
+            || matches!(unit, FetchUnit::Discovery(discovery)
+                if matches!(self.discoveries.get(discovery), Some(DiscoveryPhase::Loading { .. })))
+    }
+
+    fn has_data(&self, key: &EffortKey) -> bool {
+        self.efforts
+            .iter()
+            .any(|entry| entry.key == *key && entry.effort.is_some())
+    }
+
+    /// Credit a read to the refresh of the unit that delivered it, if any.
+    fn record_read(&mut self, unit: &FetchUnit, key: &EffortKey, outcome: ReadOutcome) {
+        let Some(UnitRefresh::InFlight { degraded }) = self.refresh.get_mut(unit) else {
+            return;
+        };
+        match outcome {
+            ReadOutcome::Ready => {
+                self.refreshed_efforts.insert(key.clone());
+            }
+            ReadOutcome::Degraded => *degraded = true,
+        }
+    }
+
+    /// Settle `unit`'s refresh. The run's summary posts once its last unit
+    /// settles with none left failed.
+    fn settle(&mut self, unit: &FetchUnit, succeeded: bool) -> Option<RefreshNotice> {
+        let Some(UnitRefresh::InFlight { degraded }) = self.refresh.get(unit).copied() else {
+            return None;
+        };
+        if succeeded && !degraded {
+            self.refresh.remove(unit);
+        } else {
+            self.refresh.insert(unit.clone(), UnitRefresh::Failed);
+        }
+        self.relayout();
+        self.refresh
+            .is_empty()
+            .then_some(RefreshNotice::Refreshed(self.refreshed_efforts.len()))
+    }
+
+    /// A degraded read is status-worthy when the user asked for it, or when
+    /// it arrives over data the queue already shows; a startup probe's
+    /// degraded Effort just gets its card.
+    fn degraded_notice(&self, unit: &FetchUnit, read: &EffortRead) -> Option<RefreshNotice> {
+        let EffortRead::Degraded {
+            key, title, reason, ..
+        } = read
+        else {
+            return None;
+        };
+        (self.refreshing(unit) || self.has_data(key))
+            .then(|| RefreshNotice::Failed(format!("{title}: {reason}")))
+    }
+
+    // ── arrivals ─────────────────────────────────────────────────────────────
+
+    /// Pool an Effort a discovery unit streamed (`Msg::EffortArrived`),
+    /// crediting the unit's refresh if one is in flight.
+    pub fn effort_arrived(
+        &mut self,
+        unit: &DiscoveryUnit,
+        repo: RepoIdentity,
+        read: EffortRead,
+        now: DateTime<Utc>,
+    ) -> Option<RefreshNotice> {
+        let fetch = FetchUnit::Discovery(unit.clone());
+        let (key, outcome) = ReadOutcome::of(&read);
+        self.record_read(&fetch, key, outcome);
+        if let Some(DiscoveryPhase::Loading { reads, .. }) = self.discoveries.get_mut(unit) {
+            reads.insert(key.clone(), outcome);
+        }
+        let notice = self.degraded_notice(&fetch, &read);
+        self.merge_effort(repo, read, now);
+        notice
+    }
+
+    /// Pool one local probe's result (`Msg::LocalEffortRead`). A local unit
+    /// is one read, so the read settles it: Ready re-stamps its Fetch Age;
+    /// degraded or `Err` keeps the stale data and age.
+    pub fn local_effort_read(
+        &mut self,
+        dir: CanonicalPathBuf,
+        repo: RepoIdentity,
+        result: Result<EffortRead, String>,
+        now: DateTime<Utc>,
+    ) -> Option<RefreshNotice> {
+        let unit = FetchUnit::Local { dir };
+        let read = match result {
+            Ok(read) => read,
+            Err(error) => {
+                self.settle(&unit, false);
+                return Some(RefreshNotice::Failed(error));
+            }
+        };
+        let (key, outcome) = ReadOutcome::of(&read);
+        self.record_read(&unit, key, outcome);
+        let notice = self.degraded_notice(&unit, &read);
+        self.merge_effort(repo, read, now);
+        let settled = self.settle(&unit, outcome == ReadOutcome::Ready);
+        notice.or(settled)
+    }
+
+    /// Pool one read. A degraded read never displaces loaded data: the card
+    /// keeps the last successful read's tallies and Fetch Age. The pool
+    /// primitive — arrivals go through `effort_arrived` and
+    /// `local_effort_read`, which also credit the unit's refresh.
+    pub fn merge_effort(&mut self, repo: RepoIdentity, read: EffortRead, now: DateTime<Utc>) {
+        let entry = EffortEntry::new(repo, read, now);
         match self
             .efforts
             .iter_mut()
             .find(|existing| existing.key == entry.key)
         {
-            Some(existing) => *existing = entry,
+            Some(existing) if entry.effort.is_some() || existing.effort.is_none() => {
+                *existing = entry
+            }
+            Some(_) => {}
             None => self.efforts.push(entry),
         }
         self.relayout();
     }
 
+    // ── discovery ────────────────────────────────────────────────────────────
+
+    /// Put `unit` in flight as a startup discovery: no indicator, no refresh
+    /// accounting. A refresh of a discovery unit goes through `begin_refresh`.
     pub fn begin_discovery(&mut self, unit: DiscoveryUnit) {
-        self.discoveries.insert(unit, DiscoveryPhase::Loading);
+        let caveat = match self.discoveries.get(&unit) {
+            Some(DiscoveryPhase::Incomplete(caveat)) => Some(caveat.clone()),
+            _ => None,
+        };
+        self.discoveries.insert(
+            unit,
+            DiscoveryPhase::Loading {
+                reads: HashMap::new(),
+                caveat,
+            },
+        );
     }
 
     /// Settle `unit`: complete, or with the caveat of a read that saw only a
-    /// window of it (`Msg::DiscoveryFinished`).
-    pub fn finish_discovery(&mut self, unit: DiscoveryUnit, incomplete: Option<String>) {
+    /// window of it (`Msg::DiscoveryFinished`). A complete map read is the
+    /// repo's whole membership, so maps it didn't return are dropped; an
+    /// incomplete one retains them.
+    pub fn finish_discovery(
+        &mut self,
+        unit: DiscoveryUnit,
+        incomplete: Option<String>,
+        now: DateTime<Utc>,
+    ) -> Option<RefreshNotice> {
+        if let Some(DiscoveryPhase::Loading { reads, .. }) = self.discoveries.get(&unit) {
+            if incomplete.is_none()
+                && let DiscoveryUnit::GitHubRepo { slug } = &unit
+            {
+                self.efforts.retain(|entry| {
+                    !matches!(&entry.key, EffortKey::GitHub { repo_slug, .. } if repo_slug == slug)
+                        || reads.contains_key(&entry.key)
+                });
+            }
+            for entry in &mut self.efforts {
+                if reads.get(&entry.key) == Some(&ReadOutcome::Ready) {
+                    entry.card.fetch.fetched_at = Some(now);
+                }
+            }
+            self.relayout();
+        }
         let phase = match incomplete {
             None => DiscoveryPhase::Loaded,
             Some(caveat) => DiscoveryPhase::Incomplete(caveat),
         };
+        let fetch = FetchUnit::Discovery(unit.clone());
         self.discoveries.insert(unit, phase);
+        self.settle(&fetch, true)
     }
 
-    pub fn fail_discovery(&mut self, unit: DiscoveryUnit, error: String) {
-        self.discoveries.insert(unit, DiscoveryPhase::Failed(error));
+    /// `unit` failed before it could settle (`Msg::DiscoveryFailed`). With
+    /// stale data pooled the unit stays settled so the data keeps its cards
+    /// and Fetch Age; without, the rail gets a failure card.
+    pub fn fail_discovery(&mut self, unit: DiscoveryUnit, error: String) -> Option<RefreshNotice> {
+        let fetch = FetchUnit::Discovery(unit.clone());
+        let notice = self
+            .refreshing(&fetch)
+            .then(|| RefreshNotice::Failed(format!("{}: {error}", unit.label())));
+        self.settle(&fetch, false);
+        let has_stale_data = matches!(&unit, DiscoveryUnit::GitHubRepo { slug }
+            if self.efforts.iter().any(|entry| entry.effort.is_some()
+                && matches!(&entry.key, EffortKey::GitHub { repo_slug, .. } if repo_slug == slug)));
+        let phase = if has_stale_data {
+            match self.discoveries.get(&unit) {
+                Some(DiscoveryPhase::Loading {
+                    caveat: Some(caveat),
+                    ..
+                }) => DiscoveryPhase::Incomplete(caveat.clone()),
+                _ => DiscoveryPhase::Loaded,
+            }
+        } else {
+            DiscoveryPhase::Failed(error)
+        };
+        self.discoveries.insert(unit, phase);
+        notice
     }
 
     /// Whether `unit` should have discovery dispatched: never run, or its
@@ -436,7 +829,9 @@ impl TicketList {
         match self.discoveries.get(unit) {
             None | Some(DiscoveryPhase::Failed(_)) => true,
             Some(
-                DiscoveryPhase::Loading | DiscoveryPhase::Loaded | DiscoveryPhase::Incomplete(_),
+                DiscoveryPhase::Loading { .. }
+                | DiscoveryPhase::Loaded
+                | DiscoveryPhase::Incomplete(_),
             ) => false,
         }
     }
@@ -445,7 +840,7 @@ impl TicketList {
     pub fn is_loading(&self) -> bool {
         self.discoveries
             .values()
-            .any(|phase| *phase == DiscoveryPhase::Loading)
+            .any(|phase| matches!(phase, DiscoveryPhase::Loading { .. }))
     }
 
     /// The rail in display order: every unit that failed outright or settled
@@ -460,8 +855,12 @@ impl TicketList {
             .iter()
             .filter_map(|(unit, phase)| match phase {
                 DiscoveryPhase::Failed(error) => Some(RailCard::Failure { unit, error }),
-                DiscoveryPhase::Incomplete(caveat) => Some(RailCard::Incomplete { unit, caveat }),
-                DiscoveryPhase::Loading | DiscoveryPhase::Loaded => None,
+                DiscoveryPhase::Incomplete(caveat)
+                | DiscoveryPhase::Loading {
+                    caveat: Some(caveat),
+                    ..
+                } => Some(RailCard::Incomplete { unit, caveat }),
+                DiscoveryPhase::Loading { .. } | DiscoveryPhase::Loaded => None,
             });
         units.chain(
             self.efforts
@@ -518,11 +917,18 @@ impl TicketList {
     /// Rebuild rail order and the tiered queue, then re-anchor the cursor
     /// (see `ListCursor::re_anchor`).
     fn relayout(&mut self) {
+        let refresh = &self.refresh;
+        for entry in &mut self.efforts {
+            entry.card.fetch.refreshing = matches!(
+                refresh.get(&FetchUnit::for_effort(&entry.key)),
+                Some(UnitRefresh::InFlight { .. })
+            );
+        }
         self.efforts.sort_by_cached_key(EffortEntry::order_key);
 
         // Blocks, pool-wide: how many open Tickets wait on each target.
         let mut dependents: HashMap<TicketKey, usize> = HashMap::new();
-        for (_, ticket) in self.queued_tickets() {
+        for (_, ticket, _) in self.queued_tickets() {
             for target in ticket
                 .dependencies
                 .iter()
@@ -533,9 +939,9 @@ impl TicketList {
         }
         let mut tickets: Vec<TicketRow> = self
             .queued_tickets()
-            .map(|(repo, ticket)| {
+            .map(|(repo, ticket, fetch)| {
                 let downstream = dependents.get(&ticket.key).copied().unwrap_or(0);
-                TicketRow::derive(repo, &ticket, downstream)
+                TicketRow::derive(repo, &ticket, downstream, fetch)
             })
             .collect();
         // Stable, so within a tier the pool's rail-then-effort order holds.
@@ -560,15 +966,21 @@ impl TicketList {
 
     /// Every open Ticket of every pooled Effort with its repo's display name,
     /// in rail then effort order.
-    fn queued_tickets(&self) -> impl Iterator<Item = (&str, EffortTicket<'_>)> {
+    fn queued_tickets(&self) -> impl Iterator<Item = (&str, EffortTicket<'_>, FetchState)> {
         self.efforts
             .iter()
-            .filter_map(|entry| Some((entry.card.repo.as_str(), entry.effort.as_ref()?)))
-            .flat_map(|(repo, effort)| {
+            .filter_map(|entry| {
+                Some((
+                    entry.card.repo.as_str(),
+                    entry.effort.as_ref()?,
+                    entry.card.fetch,
+                ))
+            })
+            .flat_map(|(repo, effort, fetch)| {
                 effort
                     .tickets()
                     .filter(|ticket| ticket.state == TicketState::Open)
-                    .map(move |ticket| (repo, ticket))
+                    .map(move |ticket| (repo, ticket, fetch))
             })
     }
 }

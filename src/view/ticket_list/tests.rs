@@ -120,6 +120,7 @@ fn populated_model() -> Model {
                 mystery,
             ],
         ),
+        chrono::DateTime::UNIX_EPOCH,
     );
     model.tickets.merge_effort(
         RepoIdentity::Path(CanonicalPathBuf::assume_canonical("/src/notes")),
@@ -129,6 +130,7 @@ fn populated_model() -> Model {
             "Docs done",
             vec![ticket("beta", "01-read", "Read the RFC", "research")],
         ),
+        chrono::DateTime::UNIX_EPOCH,
     );
     model.view_mode = ViewMode::TicketList;
     model.terminal_width = 140;
@@ -153,19 +155,18 @@ fn the_ticket_surface_renders_the_rail_and_the_tiered_queue() {
         "legit — Tickets — 2 efforts · 2 frontier                                                                                                    ",
         "All efforts                           │  Ticket     Repo  Type      Title                                                    Block   Age    ",
         "                                      │  ── Frontier                                                                                        ",
-        "notes · Map: docs                     │  01-read    notes research  Read the RFC                                                            ",
-        "local · 0/1 decided · 1 frontier      │  01-free    web   grilling  Name the destination                                     ↓1             ",
+        "notes · Map: docs                     │  01-read    notes research  Read the RFC                                                     now    ",
+        "local · 0/1 decided · 1 frontier      │  01-free    web   grilling  Name the destination                                     ↓1      now    ",
         "Docs done                             │  ── Claimed                                                                                         ",
-        "                                      │  02-claimed web   prototype Prototype the rail ⟨claimed mayfield⟩                                   ",
-        "web · Map: ticket surface             │  ── Blocked                                                                                         ",
-        "local · 1/5 decided · 1 frontier      │  03-blocked web   task      Wire the queue ⟨after 01-free⟩                           ↑1             ",
-        "A queue toggled from the PR view      │  05-mystery web   task      Ship it ⟨dep? ../gone/tickets/09-x.md⟩                                  ",
+        "fetched just now                      │  02-claimed web   prototype Prototype the rail ⟨claimed mayfield⟩                            now    ",
+        "                                      │  ── Blocked                                                                                         ",
+        "web · Map: ticket surface             │  03-blocked web   task      Wire the queue ⟨after 01-free⟩                           ↑1      now    ",
+        "local · 1/5 decided · 1 frontier      │  05-mystery web   task      Ship it ⟨dep? ../gone/tickets/09-x.md⟩                           now    ",
+        "A queue toggled from the PR view      │                                                                                                     ",
+        "fetched just now                      │                                                                                                     ",
     ];
-    let blank = "                                      │                                                                                                     ";
-    expected.extend(std::iter::repeat_n(blank, 13));
-    expected.push(
-        "j/k nav  t PRs  q quit                                                                                               0 in-flight · 0 waiting",
-    );
+    expected.extend(std::iter::repeat_n("                                      │                                                                                                     ", 11));
+    expected.push("j/k nav  r/R refresh  t PRs  q quit                                                                                  0 in-flight · 0 waiting");
     assert_eq!(buffer_text(&terminal), expected);
 }
 
@@ -230,6 +231,7 @@ fn a_failed_probe_leads_the_rail_and_a_degraded_effort_keeps_its_card_with_the_e
             destination: Some("Somewhere".to_owned()),
             reason: "tickets/01-a.md: missing status".to_owned(),
         },
+        chrono::DateTime::UNIX_EPOCH,
     );
     model.tickets.fail_discovery(
         DiscoveryUnit::LocalRepo {
@@ -248,15 +250,15 @@ fn a_failed_probe_leads_the_rail_and_a_degraded_effort_keeps_its_card_with_the_e
             "legit — Tickets — 1 effort · 0 frontier                                                             ",
             "All efforts                           │  Ticket Repo Type Title                      Block   Age    ",
             "                                      │                       No open tickets                       ",
-            "immybot · couldn't probe              │                                                             ",
+            "immybot · couldn't probe — r to retry │                                                             ",
             "main worktree /src/immybot does not e…│                                                             ",
             "                                      │                                                             ",
             "web · Map: broken                     │                                                             ",
-            "local · couldn't read                 │                                                             ",
+            "local · couldn't read — r to retry    │                                                             ",
             "tickets/01-a.md: missing status       │                                                             ",
             "                                      │                                                             ",
             "                                      │                                                             ",
-            "j/k nav  t PRs  q quit                                                       0 in-flight · 0 waiting",
+            "j/k nav  r/R refresh  t PRs  q quit                                          0 in-flight · 0 waiting",
         ]
     );
     assert_eq!(fg_of(&terminal, "couldn't read"), DARK.error);
@@ -304,9 +306,11 @@ fn a_github_effort_reads_github_with_issue_refs_and_a_failed_map_read_says_could
         ],
     )
     .unwrap();
-    model
-        .tickets
-        .merge_effort(RepoIdentity::Slug(legit), EffortRead::Ready(effort));
+    model.tickets.merge_effort(
+        RepoIdentity::Slug(legit),
+        EffortRead::Ready(effort),
+        chrono::DateTime::UNIX_EPOCH,
+    );
     model.tickets.fail_discovery(
         DiscoveryUnit::GitHubRepo {
             slug: RepoSlug::new("acme/api"),
@@ -326,15 +330,15 @@ fn a_github_effort_reads_github_with_issue_refs_and_a_failed_map_read_says_could
             "legit — Tickets — 1 effort · 1 frontier                                                             ",
             "All efforts                           │  Ticket Repo  Type Title                     Block   Age    ",
             "                                      │  ── Frontier                                                ",
-            "api · couldn't read                   │  #117   legit task GitHub transport          ↓1             ",
+            "api · couldn't read — r to retry      │  #117   legit task GitHub transport          ↓1      now    ",
             "GitHub GraphQL error: 404 Not Found   │  ── Blocked                                                 ",
-            "                                      │  #120   legit task Fetch integ… ⟨after #117⟩ ↑1             ",
+            "                                      │  #120   legit task Fetch integ… ⟨after #117⟩ ↑1      now    ",
             "legit · Map: ticket surface           │                                                             ",
             "github · 1/3 decided · 1 frontier     │                                                             ",
             "All eight issues merged               │                                                             ",
+            "fetched just now                      │                                                             ",
             "                                      │                                                             ",
-            "                                      │                                                             ",
-            "j/k nav  t PRs  q quit                                                       0 in-flight · 0 waiting",
+            "j/k nav  r/R refresh  t PRs  q quit                                          0 in-flight · 0 waiting",
         ]
     );
     assert_eq!(fg_of(&terminal, "couldn't read"), DARK.error);
@@ -367,10 +371,12 @@ fn an_incomplete_map_read_leads_the_rail_as_a_warning_and_keeps_its_efforts() {
     model.tickets.merge_effort(
         RepoIdentity::Slug(immybot.clone()),
         EffortRead::Ready(effort),
+        chrono::DateTime::UNIX_EPOCH,
     );
     model.tickets.finish_discovery(
         DiscoveryUnit::GitHubRepo { slug: immybot },
         Some("more than 10 open maps; showing the first 10".to_owned()),
+        chrono::DateTime::UNIX_EPOCH,
     );
     model.view_mode = ViewMode::TicketList;
 
@@ -384,15 +390,15 @@ fn an_incomplete_map_read_leads_the_rail_as_a_warning_and_keeps_its_efforts() {
             "legit — Tickets — 1 effort · 1 frontier                                                             ",
             "All efforts                           │  Ticket Repo    Type Title                   Block   Age    ",
             "                                      │  ── Frontier                                                ",
-            "immybot · incomplete                  │  #901   immybot task Run the pilot                          ",
+            "immybot · incomplete                  │  #901   immybot task Run the pilot                   now    ",
             "more than 10 open maps; showing the f…│                                                             ",
             "                                      │                                                             ",
             "immybot · Map: memory image           │                                                             ",
             "github · 0/1 decided · 1 frontier     │                                                             ",
             "Owned tables in memory                │                                                             ",
+            "fetched just now                      │                                                             ",
             "                                      │                                                             ",
-            "                                      │                                                             ",
-            "j/k nav  t PRs  q quit                                                       0 in-flight · 0 waiting",
+            "j/k nav  r/R refresh  t PRs  q quit                                          0 in-flight · 0 waiting",
         ]
     );
     assert_eq!(fg_of(&terminal, "incomplete"), DARK.warning);
@@ -412,11 +418,13 @@ fn an_empty_surface_says_loading_while_a_probe_is_in_flight_then_no_efforts() {
             "                      Loading efforts…                      ",
             "                                                            ",
             "                                                            ",
-            "j/k nav  t PRs  q quit               0 in-flight · 0 waiting",
+            "j/k nav  r/R refresh  t PRs  q quit  0 in-flight · 0 waiting",
         ]
     );
 
-    model.tickets.finish_discovery(DiscoveryUnit::Cwd, None);
+    model
+        .tickets
+        .finish_discovery(DiscoveryUnit::Cwd, None, chrono::DateTime::UNIX_EPOCH);
     let terminal = render(&model, 60, 5);
     assert_eq!(
         buffer_text(&terminal)[1],
@@ -440,6 +448,7 @@ fn long_refs_still_truncate_when_the_terminal_is_narrow() {
                 "task",
             )],
         ),
+        chrono::DateTime::UNIX_EPOCH,
     );
     model.view_mode = ViewMode::TicketList;
 
@@ -506,6 +515,7 @@ fn wide_columns_fit_ticket_names_and_stay_stable_while_scrolling() {
                 ticket("memory-image", long_ref, "Plan the funnel", "research"),
             ],
         ),
+        chrono::DateTime::UNIX_EPOCH,
     );
     model.view_mode = ViewMode::TicketList;
     model.tickets.resize(2);
@@ -526,4 +536,38 @@ fn wide_columns_fit_ticket_names_and_stay_stable_while_scrolling() {
     assert!(narrow[1].contains("Block"));
     assert!(narrow[1].contains("Age"));
     assert!(narrow.iter().any(|row| row.contains("Plan the funnel")));
+}
+
+#[test]
+fn the_refresh_indicator_and_fetch_age_appear_on_the_effort_card_and_its_rows() {
+    let mut model = populated_model();
+    let now = chrono::DateTime::UNIX_EPOCH + chrono::Duration::minutes(2);
+    crate::app::update::update(
+        &mut model,
+        crate::app::msg::Msg::TerminalEvent(ratatui::crossterm::event::Event::Key(
+            ratatui::crossterm::event::KeyEvent::new(
+                ratatui::crossterm::event::KeyCode::Char('r'),
+                ratatui::crossterm::event::KeyModifiers::NONE,
+            ),
+        )),
+        now,
+    );
+    let mut terminal = Terminal::new(TestBackend::new(140, 24)).unwrap();
+    terminal
+        .draw(|frame| view::view(&model, frame, now))
+        .unwrap();
+    let rows = buffer_text(&terminal);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("↻ refreshing") && row.contains("fetched 2m ago")),
+        "{}",
+        rows.join("\n")
+    );
+    let selected = rows
+        .iter()
+        .find(|row| row.contains("Read the RFC"))
+        .unwrap();
+    assert!(selected.contains("↻"), "{selected}");
+    assert!(selected.ends_with("2m     "), "{selected}");
+    assert_eq!(fg_of(&terminal, "↻ refreshing"), DARK.accent);
 }
