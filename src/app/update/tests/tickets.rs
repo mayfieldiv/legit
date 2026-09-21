@@ -302,6 +302,7 @@ fn effort_arrivals_pool_and_probe_settlement_clears_loading() {
         &mut model,
         Msg::DiscoveryFinished {
             unit: DiscoveryUnit::Cwd,
+            incomplete: None,
         },
     );
     assert!(!model.tickets.is_loading());
@@ -320,7 +321,7 @@ fn a_failed_probe_is_recorded_on_the_queue_not_as_a_status_error() {
     let cmds = update(
         &mut model,
         Msg::DiscoveryFailed {
-            unit,
+            unit: unit.clone(),
             error: "main worktree /src/local-only does not exist".to_owned(),
         },
     );
@@ -329,7 +330,7 @@ fn a_failed_probe_is_recorded_on_the_queue_not_as_a_status_error() {
     assert_eq!(
         model.tickets.rail().collect::<Vec<_>>(),
         [RailCard::Failure {
-            unit: "local-only",
+            unit: &unit,
             error: "main worktree /src/local-only does not exist",
         }]
     );
@@ -337,4 +338,149 @@ fn a_failed_probe_is_recorded_on_the_queue_not_as_a_status_error() {
         model.status, None,
         "the rail card carries the error; the status bar is for transient failures"
     );
+}
+
+// ── GitHub map reads ──────────────────────────────────────────────────────
+
+fn map_read_slugs(cmds: &[Cmd]) -> Vec<RepoSlug> {
+    cmds.iter()
+        .filter_map(|cmd| match cmd {
+            Cmd::ReadGitHubEfforts { repo, .. } => Some(repo.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn github_unit(slug: &str) -> DiscoveryUnit {
+    DiscoveryUnit::GitHubRepo {
+        slug: RepoSlug::new(slug),
+    }
+}
+
+#[test]
+fn github_map_reads_dispatch_once_auth_config_and_detection_settle() {
+    let (mut model, _) = Model::new();
+    update(&mut model, Msg::ConfigLoaded(discovery_config()));
+    let cmds = update(
+        &mut model,
+        Msg::RepoDetected(Some(RepoSlug::new("mayfieldiv/legit"))),
+    );
+    assert!(
+        map_read_slugs(&cmds).is_empty(),
+        "a map read is an HTTP request, so unlike the local probes it waits on auth: {cmds:?}"
+    );
+    assert!(
+        model.tickets.needs_discovery(&github_unit("acme/web")),
+        "the unit must not read as in flight before its read dispatches"
+    );
+
+    let token = AuthToken::parse("ghp_test").unwrap();
+    let cmds = update(&mut model, Msg::AuthTokenResolved(token.clone()));
+
+    assert_eq!(
+        map_read_slugs(&cmds),
+        ["acme/web", "acme/slug-only", "mayfieldiv/legit"],
+        "one map read per PR-capable Tracked Repo — configured slugs in config order, then \
+         the cwd repo; a slug-less repo has no GitHub tracker to read: {cmds:?}"
+    );
+    assert!(cmds.contains(&Cmd::ReadGitHubEfforts {
+        repo: RepoSlug::new("acme/web"),
+        token,
+    }));
+    assert!(
+        !model
+            .tickets
+            .needs_discovery(&github_unit("acme/slug-only"))
+    );
+    assert!(model.tickets.is_loading());
+
+    // A config reload (`R`) must not re-read maps already in flight or loaded.
+    let cmds = update(&mut model, Msg::ConfigLoaded(discovery_config()));
+    assert!(map_read_slugs(&cmds).is_empty(), "{cmds:?}");
+}
+
+#[test]
+fn config_landing_last_releases_the_map_reads_with_the_pr_listings() {
+    let (mut model, _) = Model::new();
+    model.auth_token = Some(AuthToken::parse("ghp_test").unwrap());
+    update(&mut model, Msg::RepoDetected(None));
+
+    let cmds = update(
+        &mut model,
+        Msg::ConfigLoaded(config_with_repos(&["acme/api"])),
+    );
+
+    assert_eq!(fetched_slugs(&cmds), ["acme/api"]);
+    assert_eq!(map_read_slugs(&cmds), ["acme/api"]);
+}
+
+#[test]
+fn a_failed_map_read_is_recorded_on_the_queue_under_its_repo() {
+    let (mut model, _) = Model::new();
+    model.auth_token = Some(AuthToken::parse("ghp_test").unwrap());
+    model.config_loaded = true;
+    update(
+        &mut model,
+        Msg::RepoDetected(Some(RepoSlug::new("mayfieldiv/legit"))),
+    );
+    assert!(model.tickets.is_loading());
+
+    let cmds = update(
+        &mut model,
+        Msg::DiscoveryFailed {
+            unit: github_unit("mayfieldiv/legit"),
+            error: "GitHub GraphQL error: 404 Not Found".to_owned(),
+        },
+    );
+
+    assert!(cmds.is_empty(), "{cmds:?}");
+    assert_eq!(
+        model.tickets.rail().collect::<Vec<_>>(),
+        [RailCard::Failure {
+            unit: &github_unit("mayfieldiv/legit"),
+            error: "GitHub GraphQL error: 404 Not Found",
+        }]
+    );
+    assert!(
+        model
+            .tickets
+            .needs_discovery(&github_unit("mayfieldiv/legit")),
+        "a failed read retries on the next gate release"
+    );
+    assert_eq!(model.status, None);
+}
+
+#[test]
+fn an_incomplete_map_read_settles_its_unit_and_records_the_caveat_on_the_queue() {
+    let (mut model, _) = Model::new();
+    model.auth_token = Some(AuthToken::parse("ghp_test").unwrap());
+    model.config_loaded = true;
+    update(
+        &mut model,
+        Msg::RepoDetected(Some(RepoSlug::new("immense/immybot"))),
+    );
+
+    let cmds = update(
+        &mut model,
+        Msg::DiscoveryFinished {
+            unit: github_unit("immense/immybot"),
+            incomplete: Some("more than 10 open maps; showing the first 10".to_owned()),
+        },
+    );
+
+    assert!(cmds.is_empty(), "{cmds:?}");
+    assert_eq!(
+        model.tickets.rail().collect::<Vec<_>>(),
+        [RailCard::Incomplete {
+            unit: &github_unit("immense/immybot"),
+            caveat: "more than 10 open maps; showing the first 10",
+        }]
+    );
+    assert!(
+        !model
+            .tickets
+            .needs_discovery(&github_unit("immense/immybot")),
+        "the read settled — a config reload must not re-read the same window"
+    );
+    assert_eq!(model.status, None);
 }

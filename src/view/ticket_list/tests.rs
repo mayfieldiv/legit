@@ -264,6 +264,141 @@ fn a_failed_probe_leads_the_rail_and_a_degraded_effort_keeps_its_card_with_the_e
 }
 
 #[test]
+fn a_github_effort_reads_github_with_issue_refs_and_a_failed_map_read_says_couldnt_read() {
+    let (mut model, _) = Model::new();
+    let legit = RepoSlug::new("mayfieldiv/legit");
+    let issue = |number: u64| TicketKey::GitHub {
+        repo_slug: legit.clone(),
+        number,
+    };
+    let github_ticket = |number, title: &str, dependencies| Ticket {
+        key: issue(number),
+        title: title.to_owned(),
+        state: TicketState::Open,
+        claim: None,
+        ty: TicketType("task".to_owned()),
+        dependencies,
+    };
+    let mut decided = github_ticket(116, "Domain types", Vec::new());
+    decided.state = TicketState::Closed;
+    decided.claim = Some(Claim::By("mayfieldiv".to_owned()));
+    let effort = Effort::new(
+        EffortKey::GitHub {
+            repo_slug: legit.clone(),
+            map_number: 123,
+        },
+        "Map: ticket surface".to_owned(),
+        Some("All eight issues merged".to_owned()),
+        vec![
+            decided,
+            github_ticket(
+                117,
+                "GitHub transport",
+                vec![Dependency::SameEffort(issue(116))],
+            ),
+            github_ticket(
+                120,
+                "Fetch integration",
+                vec![Dependency::SameEffort(issue(117))],
+            ),
+        ],
+    )
+    .unwrap();
+    model
+        .tickets
+        .merge_effort(RepoIdentity::Slug(legit), EffortRead::Ready(effort));
+    model.tickets.fail_discovery(
+        DiscoveryUnit::GitHubRepo {
+            slug: RepoSlug::new("acme/api"),
+        },
+        "GitHub GraphQL error: 404 Not Found".to_owned(),
+    );
+    model.view_mode = ViewMode::TicketList;
+
+    let terminal = render(&model, 100, 12);
+
+    // The card's source line reads `github`; refs are issue numbers; a closed
+    // Dependency (#116) doesn't block #117, an open one (#117) blocks #120.
+    // The failed map read leads the rail worded as a read, not a probe.
+    assert_eq!(
+        buffer_text(&terminal),
+        vec![
+            "legit — Tickets — 1 effort · 1 frontier                                                             ",
+            "All efforts                           │  Ticket Repo  Type Title                     Block   Age    ",
+            "                                      │  ── Frontier                                                ",
+            "api · couldn't read                   │  #117   legit task GitHub transport          ↓1             ",
+            "GitHub GraphQL error: 404 Not Found   │  ── Blocked                                                 ",
+            "                                      │  #120   legit task Fetch integ… ⟨after #117⟩ ↑1             ",
+            "legit · Map: ticket surface           │                                                             ",
+            "github · 1/3 decided · 1 frontier     │                                                             ",
+            "All eight issues merged               │                                                             ",
+            "                                      │                                                             ",
+            "                                      │                                                             ",
+            "j/k nav  t PRs  q quit                                                       0 in-flight · 0 waiting",
+        ]
+    );
+    assert_eq!(fg_of(&terminal, "couldn't read"), DARK.error);
+}
+
+#[test]
+fn an_incomplete_map_read_leads_the_rail_as_a_warning_and_keeps_its_efforts() {
+    let (mut model, _) = Model::new();
+    let immybot = RepoSlug::new("immense/immybot");
+    let effort = Effort::new(
+        EffortKey::GitHub {
+            repo_slug: immybot.clone(),
+            map_number: 900,
+        },
+        "Map: memory image".to_owned(),
+        Some("Owned tables in memory".to_owned()),
+        vec![Ticket {
+            key: TicketKey::GitHub {
+                repo_slug: immybot.clone(),
+                number: 901,
+            },
+            title: "Run the pilot".to_owned(),
+            state: TicketState::Open,
+            claim: None,
+            ty: TicketType("task".to_owned()),
+            dependencies: Vec::new(),
+        }],
+    )
+    .unwrap();
+    model.tickets.merge_effort(
+        RepoIdentity::Slug(immybot.clone()),
+        EffortRead::Ready(effort),
+    );
+    model.tickets.finish_discovery(
+        DiscoveryUnit::GitHubRepo { slug: immybot },
+        Some("more than 10 open maps; showing the first 10".to_owned()),
+    );
+    model.view_mode = ViewMode::TicketList;
+
+    let terminal = render(&model, 100, 12);
+
+    // The unit card says the read was short and why; the map it did read
+    // keeps its own card and its tickets stay queued.
+    assert_eq!(
+        buffer_text(&terminal),
+        vec![
+            "legit — Tickets — 1 effort · 1 frontier                                                             ",
+            "All efforts                           │  Ticket Repo    Type Title                   Block   Age    ",
+            "                                      │  ── Frontier                                                ",
+            "immybot · incomplete                  │  #901   immybot task Run the pilot                          ",
+            "more than 10 open maps; showing the f…│                                                             ",
+            "                                      │                                                             ",
+            "immybot · Map: memory image           │                                                             ",
+            "github · 0/1 decided · 1 frontier     │                                                             ",
+            "Owned tables in memory                │                                                             ",
+            "                                      │                                                             ",
+            "                                      │                                                             ",
+            "j/k nav  t PRs  q quit                                                       0 in-flight · 0 waiting",
+        ]
+    );
+    assert_eq!(fg_of(&terminal, "incomplete"), DARK.warning);
+}
+
+#[test]
 fn an_empty_surface_says_loading_while_a_probe_is_in_flight_then_no_efforts() {
     let (mut model, _) = Model::new();
     model.view_mode = ViewMode::TicketList;
@@ -281,7 +416,7 @@ fn an_empty_surface_says_loading_while_a_probe_is_in_flight_then_no_efforts() {
         ]
     );
 
-    model.tickets.finish_discovery(DiscoveryUnit::Cwd);
+    model.tickets.finish_discovery(DiscoveryUnit::Cwd, None);
     let terminal = render(&model, 60, 5);
     assert_eq!(
         buffer_text(&terminal)[1],

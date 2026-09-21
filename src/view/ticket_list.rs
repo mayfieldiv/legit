@@ -16,8 +16,8 @@ use crate::{
     app::{
         model::Model,
         ticket_list::{
-            EffortCard, QueueContentWidths, QueueRow, QueueTier, RailCard, RowMarker, TicketList,
-            TicketRow,
+            DiscoveryUnit, EffortCard, QueueContentWidths, QueueRow, QueueTier, RailCard,
+            RowMarker, TicketList, TicketRow,
         },
         ticket_list_layout::{DIVIDER_WIDTH, rail_width},
     },
@@ -74,7 +74,7 @@ fn render_header(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Pal
         .rail()
         .filter_map(|card| match card {
             RailCard::Effort(card) => Some(card),
-            RailCard::Failure { .. } => None,
+            RailCard::Failure { .. } | RailCard::Incomplete { .. } => None,
         })
         .fold((0, 0), |(efforts, frontier), card| {
             let on_frontier = card
@@ -105,8 +105,9 @@ fn render_divider(frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
 // ── effort rail ──────────────────────────────────────────────────────────────
 
 /// The rail: the `All efforts` entry (the only filter this slice has, so it
-/// is always the active one), then one two-line card per failed discovery
-/// unit and one three-line card per Effort, each followed by a blank row.
+/// is always the active one), then one two-line card per failed or
+/// incomplete discovery unit and one three-line card per Effort, each
+/// followed by a blank row.
 fn render_rail(tickets: &TicketList, frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
     let width = usize::from(area.width);
     let mut lines = vec![
@@ -122,6 +123,9 @@ fn render_rail(tickets: &TicketList, frame: &mut Frame<'_>, area: Rect, palette:
         lines.extend(match card {
             RailCard::Failure { unit, error } => {
                 discovery_failure_card(unit, error, width, palette)
+            }
+            RailCard::Incomplete { unit, caveat } => {
+                discovery_incomplete_card(unit, caveat, width, palette)
             }
             RailCard::Effort(card) => effort_card(card, width, palette),
         });
@@ -178,20 +182,46 @@ fn effort_card(card: &EffortCard, width: usize, palette: &Palette) -> Vec<Line<'
 
 /// A discovery unit that failed before attributing any Effort: the unit's
 /// name where a card's repo goes, so the failure reads in the same place a
-/// card would have.
+/// card would have, and what it couldn't do worded by source — a local unit
+/// probes the filesystem, a GitHub unit reads the map.
 fn discovery_failure_card(
-    name: &str,
+    unit: &DiscoveryUnit,
     error: &str,
     width: usize,
     palette: &Palette,
 ) -> Vec<Line<'static>> {
-    let failure = Span::styled("couldn't probe", Style::default().fg(palette.error));
+    let failure = match unit.source() {
+        EffortSource::Local => "couldn't probe",
+        EffortSource::GitHub => "couldn't read",
+    };
+    let failure = Span::styled(failure, Style::default().fg(palette.error));
     vec![
-        repo_led_line(name, failure, width, palette),
+        repo_led_line(unit.label(), failure, width, palette),
         Line::from(Span::styled(
             truncate(error, width),
             Style::default().fg(palette.warning),
         )),
+    ]
+}
+
+/// A discovery unit whose read settled short of the whole unit: `repo ·
+/// incomplete` in the warning colour (a warning, not the failure red — its
+/// Efforts did pool and keep their cards), then what lies beyond the window.
+fn discovery_incomplete_card(
+    unit: &DiscoveryUnit,
+    caveat: &str,
+    width: usize,
+    palette: &Palette,
+) -> Vec<Line<'static>> {
+    let warning = Style::default().fg(palette.warning);
+    vec![
+        repo_led_line(
+            unit.label(),
+            Span::styled("incomplete", warning),
+            width,
+            palette,
+        ),
+        Line::from(Span::styled(truncate(caveat, width), warning)),
     ]
 }
 

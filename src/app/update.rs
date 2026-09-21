@@ -46,48 +46,61 @@ fn set_status(model: &mut Model, kind: StatusKind, text: String) -> Vec<Cmd> {
     }]
 }
 
-/// Fire one `Cmd::FetchOpenPRs` per Tracked Repo once all three startup
-/// prerequisites have landed: the auth token authorizes the requests, repo
-/// detection has *settled* (it completes the tracked set with the CWD repo when
-/// detection succeeds, and contributes nothing when it fails — but either way
-/// the tracked set is final), and a settled config supplies the current user
-/// and bot logins that drive smart-status. Any one missing yields no command —
-/// we wait for the last. The detection gate keys off settled-ness, not success:
+/// Fire the GitHub reads every PR-capable Tracked Repo needs — its open-PR
+/// listing (`Cmd::FetchOpenPRs`) and its wayfinder map read
+/// (`Cmd::ReadGitHubEfforts`) — once all three startup prerequisites have
+/// landed: the auth token authorizes the requests, repo detection has
+/// *settled* (it completes the tracked set with the CWD repo when detection
+/// succeeds, and contributes nothing when it fails — but either way the
+/// tracked set is final), and a settled config supplies the current user and
+/// bot logins that drive smart-status. Any one missing yields no command — we
+/// wait for the last. The detection gate keys off settled-ness, not success:
 /// gating on `Detected` would wedge the app at an empty list when detection
 /// fails (outside a git repo / no GitHub remote), never fetching even the
 /// configured Tracked Repos. The config gate is load-bearing twice over: it
 /// guarantees no PR's blocker is derived before the user is known, and it
 /// guarantees the tracked set is final so every repo fetches exactly once.
-/// Marks each repo's listing as Loading so the view swaps from "No open PRs" to
-/// "Loading pull requests…" until results land.
-fn maybe_fetch_open_prs(model: &mut Model) -> Vec<Cmd> {
-    let Some(token) = model.auth_token.as_ref() else {
+///
+/// Each Fetch Unit dedupes itself (`pr_listing_cmd`,
+/// `tickets::map_read_cmd`), so one unit's phase never gates the other's and
+/// a `R`-driven config reload re-dispatches only units never run or failed.
+/// Listings lead the map reads so the default surface's data is ahead in the
+/// limiter's FIFO background lane. Local Effort discovery is not gated here:
+/// it needs no token (`tickets::maybe_discover_local_efforts`).
+fn maybe_fetch_github(model: &mut Model) -> Vec<Cmd> {
+    let Some(token) = model.auth_token.clone() else {
         return Vec::new();
     };
     if !model.repo.is_settled() || !model.config_loaded {
         return Vec::new();
     }
-    let token = token.clone();
+    let repos = model.tracked_repos();
     let mut cmds = Vec::new();
-    for repo in model.tracked_repos() {
-        // (Re)fetch only repos that have never been listed or whose last
-        // listing failed; skip ones in flight or already loaded so a `R`-driven
-        // config reload doesn't re-stream — and duplicate — PRs already pooled.
-        // On first run none have a phase, so every repo fetches.
-        if !model.list.needs_listing(&repo) {
-            continue;
-        }
-        // A failed listing may have streamed some PRs before erroring, but the
-        // retry needs no up-front clear: `merge_listed` dedupes the re-stream
-        // (keeping each survivor) and `finish_listing` prunes any now-closed
-        // ones once `PrListLoaded` settles.
-        model.list.begin_fetch(&repo);
-        cmds.push(Cmd::FetchOpenPRs {
-            repo,
-            token: token.clone(),
-        });
+    for repo in &repos {
+        cmds.extend(pr_listing_cmd(model, repo, &token));
+    }
+    for repo in &repos {
+        cmds.extend(tickets::map_read_cmd(model, repo, &token));
     }
     cmds
+}
+
+/// One Tracked Repo's open-PR listing, unless one is in flight or already
+/// loaded — a reload must not re-stream (and duplicate) PRs already pooled.
+/// A failed listing retries, and may have streamed some PRs before erroring,
+/// but needs no up-front clear: `merge_listed` dedupes the re-stream (keeping
+/// each survivor) and `finish_listing` prunes any now-closed ones once
+/// `PrListLoaded` settles. Marks the listing as Loading so the view swaps from
+/// "No open PRs" to "Loading pull requests…" until results land.
+fn pr_listing_cmd(model: &mut Model, repo: &RepoSlug, token: &AuthToken) -> Option<Cmd> {
+    if !model.list.needs_listing(repo) {
+        return None;
+    }
+    model.list.begin_fetch(repo);
+    Some(Cmd::FetchOpenPRs {
+        repo: repo.clone(),
+        token: token.clone(),
+    })
 }
 
 /// List worktrees for one Tracked Repo when it has a configured Main Worktree.
@@ -1035,7 +1048,7 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
             // already landed — config (a local file read) usually wins the
             // startup race, but when it arrives last it must kick off the fetch.
             model.config_loaded = true;
-            let mut cmds = maybe_fetch_open_prs(model);
+            let mut cmds = maybe_fetch_github(model);
             // Main Worktrees are config-derived, so reconcile them only after the
             // fresh config is installed. This serves both startup and `R`
             // without resolving paths from stale config or dispatching duplicates.
@@ -1045,7 +1058,7 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
         }
         Msg::AuthTokenResolved(token) => {
             model.auth_token = Some(token);
-            maybe_fetch_open_prs(model)
+            maybe_fetch_github(model)
         }
         Msg::RepoDetected(repo) => {
             // Settle the detection gate either way: `Some` adds the CWD repo to
@@ -1059,7 +1072,7 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
             // Worktree listing stays config-driven: only configured repos can
             // declare a mainWorktreePath, so ConfigLoaded is the event that has
             // enough information to list them.
-            let mut cmds = maybe_fetch_open_prs(model);
+            let mut cmds = maybe_fetch_github(model);
             cmds.extend(tickets::maybe_discover_local_efforts(model));
             cmds
         }
@@ -1067,8 +1080,8 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
             model.tickets.merge_effort(repo, read);
             Vec::new()
         }
-        Msg::DiscoveryFinished { unit } => {
-            model.tickets.finish_discovery(unit);
+        Msg::DiscoveryFinished { unit, incomplete } => {
+            model.tickets.finish_discovery(unit, incomplete);
             Vec::new()
         }
         Msg::DiscoveryFailed { unit, error } => {
@@ -1266,7 +1279,7 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
             // Config is a hard prerequisite (current user + bot logins drive
             // smart-status), so a malformed config is an app-level fatal that
             // blocks every fetch instead of fetching with wrong defaults.
-            // `config_loaded` stays false, so `maybe_fetch_open_prs` never fires.
+            // `config_loaded` stays false, so `maybe_fetch_github` never fires.
             model.fatal = Some(format!("config error: {error}"));
             Vec::new()
         }

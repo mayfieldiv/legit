@@ -8,10 +8,6 @@
 //! label, the wire shapes, normalization into [`Effort`], and the map-body
 //! dialect rules are all implementation.
 
-// TODO(#131): remove once the fetch layer dispatches map reads and ticket
-// refreshes.
-#![allow(dead_code)]
-
 use std::collections::HashSet;
 
 use anyhow::{Context, Result};
@@ -34,6 +30,9 @@ use crate::{
 };
 
 const MAP_LABEL: &str = "wayfinder:map";
+/// The caveat a read carries past the query's `first:10` map window. The
+/// query is fixed (spec §4.1), so the surplus is reported, never fetched.
+const MORE_MAPS: &str = "more than 10 open maps; showing the first 10";
 
 /// Each operation constructs its transport per call and issues exactly one
 /// HTTP request.
@@ -96,9 +95,7 @@ impl Wayfinder {
         }
         let batch = parse_wayfinder_maps(response, slug)?;
         if batch.has_more_maps {
-            // The fixed query reads one `first:10` window; a repo with more
-            // open maps gets the surplus reported, not silently dropped.
-            tracing::warn!(%slug, "more than 10 open wayfinder maps; reading the first 10");
+            tracing::warn!(%slug, "{}", MORE_MAPS);
         }
         Ok(batch)
     }
@@ -109,6 +106,8 @@ impl Wayfinder {
     /// issue, while `parent_issue_url` already answers parentage — so every
     /// 404 here stays a genuine error (including a token without Issues read
     /// scope, which surfaces as 404, not 403).
+    // TODO(#134): consumed by the ticket detail page's drill-in.
+    #[allow(dead_code)]
     #[tracing::instrument(name = "refresh_ticket", skip(self))]
     pub async fn refresh_ticket(&self, slug: &RepoSlug, number: u64) -> Result<TicketRefresh> {
         let route = format!("/repos/{slug}/issues/{number}");
@@ -248,9 +247,16 @@ struct RawRepoName {
 #[derive(Debug)]
 pub struct EffortReadBatch {
     pub efforts: Vec<EffortRead>,
-    /// The repo has more open maps than the query's `first:10` window. The
-    /// query is fixed (spec §4.1), so the surplus is reported, not fetched.
+    /// The repo has more open maps than the query's `first:10` window.
     pub has_more_maps: bool,
+}
+
+impl EffortReadBatch {
+    /// Why the read is not the whole repo, when it isn't — worded for the
+    /// rail, so a partial read is never silently complete (§5.5).
+    pub fn incomplete(&self) -> Option<String> {
+        self.has_more_maps.then(|| MORE_MAPS.to_owned())
+    }
 }
 
 /// Parse a whole-map response into per-map [`EffortRead`]s. Blocked-ness
@@ -526,6 +532,8 @@ fn line_has_issue_ref(line: &str) -> bool {
 
 /// One ticket's refresh outcome: the issue plus the §4.4 fallback-dialect
 /// verdict.
+// TODO(#134): read by the ticket detail page's drill-in.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct TicketRefresh {
     pub issue: Issue,

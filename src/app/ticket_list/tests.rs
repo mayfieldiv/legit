@@ -126,13 +126,14 @@ fn selected(list: &TicketList) -> Option<String> {
     list.selected_ticket().map(|key| key.display_ref())
 }
 
-/// The rail as `repo · title` for Effort cards and `unit ✗ error` for failed
-/// units, in display order.
+/// The rail as `repo · title` for Effort cards, `unit ✗ error` for failed
+/// units, and `unit ⚠ caveat` for incomplete ones, in display order.
 fn rail(list: &TicketList) -> Vec<String> {
     list.rail()
         .map(|card| match card {
             RailCard::Effort(card) => format!("{} · {}", card.repo, card.title),
-            RailCard::Failure { unit, error } => format!("{unit} ✗ {error}"),
+            RailCard::Failure { unit, error } => format!("{} ✗ {error}", unit.label()),
+            RailCard::Incomplete { unit, caveat } => format!("{} ⚠ {caveat}", unit.label()),
         })
         .collect()
 }
@@ -141,7 +142,7 @@ fn rail_titles(list: &TicketList) -> Vec<String> {
     list.rail()
         .filter_map(|card| match card {
             RailCard::Effort(card) => Some(card.title.clone()),
-            RailCard::Failure { .. } => None,
+            RailCard::Failure { .. } | RailCard::Incomplete { .. } => None,
         })
         .collect()
 }
@@ -150,7 +151,7 @@ fn rail_titles(list: &TicketList) -> Vec<String> {
 fn only_card(list: &TicketList) -> &super::EffortCard {
     let mut cards = list.rail().filter_map(|card| match card {
         RailCard::Effort(card) => Some(card),
-        RailCard::Failure { .. } => None,
+        RailCard::Failure { .. } | RailCard::Incomplete { .. } => None,
     });
     let card = cards.next().expect("one effort card");
     assert!(cards.next().is_none(), "one effort card: {:?}", rail(list));
@@ -611,7 +612,7 @@ fn probe_phases_report_loading_until_every_unit_settles() {
     });
     assert!(list.is_loading());
 
-    list.finish_discovery(DiscoveryUnit::Cwd);
+    list.finish_discovery(DiscoveryUnit::Cwd, None);
     assert!(list.is_loading(), "one unit still in flight");
     list.fail_discovery(
         DiscoveryUnit::LocalRepo {
@@ -639,4 +640,28 @@ fn failed_units_lead_the_rail_ahead_of_every_effort() {
         ["cwd ✗ not a directory", "api · Alpha"],
         "a unit still in flight has no card"
     );
+}
+
+#[test]
+fn an_incomplete_unit_is_settled_but_leads_the_rail_with_its_caveat() {
+    let mut list = TicketList::new();
+    let unit = DiscoveryUnit::GitHubRepo {
+        slug: RepoSlug::new("acme/api"),
+    };
+    list.begin_discovery(unit.clone());
+    list.merge_effort(repo("api"), ready("alpha", "Alpha", vec![open("01-a")]));
+
+    list.finish_discovery(unit.clone(), Some("more than 10 open maps".to_owned()));
+
+    assert!(!list.is_loading());
+    assert!(
+        !list.needs_discovery(&unit),
+        "settled: a re-read would see the same window"
+    );
+    assert_eq!(
+        rail(&list),
+        ["api ⚠ more than 10 open maps", "api · Alpha"],
+        "the pooled Effort keeps its card; the caveat leads it"
+    );
+    assert_eq!(rows(&list), ["── Frontier", "01-a"]);
 }

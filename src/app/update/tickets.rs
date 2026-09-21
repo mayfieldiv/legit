@@ -1,16 +1,21 @@
-//! The ticket surface's reducer arms: dispatching local Effort discovery and
-//! handling the surface's keys. Split out of `update` the way `refresh` is,
-//! so the reducer stays a dispatcher and the ticket story reads in one place
-//! — `super::apply` delegates here.
+//! The ticket surface's reducer arms: dispatching Effort discovery — the
+//! local probes and the GitHub map reads — and handling the surface's keys.
+//! Split out of `update` the way `refresh` is, so the reducer stays a
+//! dispatcher and the ticket story reads in one place — `super::apply`
+//! delegates here.
 // TODO(#132): `r`/`R`. TODO(#133): `h`/`l`, `J`/`K`, `m`, `p`, `y`, wheel
 // ticks to the queue viewport.
 
 use ratatui::crossterm::event::KeyCode;
 
-use crate::app::{
-    cmd::Cmd,
-    model::{Model, ViewMode},
-    ticket_list::DiscoveryUnit,
+use crate::{
+    app::{
+        cmd::Cmd,
+        model::{Model, ViewMode},
+        ticket_list::DiscoveryUnit,
+    },
+    auth::AuthToken,
+    repo_slug::RepoSlug,
 };
 
 /// Dispatch local Effort discovery once config and repo detection have both
@@ -48,6 +53,23 @@ pub(super) fn maybe_discover_local_efforts(model: &mut Model) -> Vec<Cmd> {
         });
     }
     cmds
+}
+
+/// One PR-capable Tracked Repo's map read, unless its unit is in flight or
+/// loaded — so a `R`-driven config reload reads only new or failed repos. The
+/// gate is the caller's (`super::maybe_fetch_github`): a map read is an HTTP
+/// request, so unlike the local probes it waits on the token, and its unit is
+/// a slug, which the detected cwd repo supplies even when it isn't configured.
+pub(super) fn map_read_cmd(model: &mut Model, repo: &RepoSlug, token: &AuthToken) -> Option<Cmd> {
+    let unit = DiscoveryUnit::GitHubRepo { slug: repo.clone() };
+    if !model.tickets.needs_discovery(&unit) {
+        return None;
+    }
+    model.tickets.begin_discovery(unit);
+    Some(Cmd::ReadGitHubEfforts {
+        repo: repo.clone(),
+        token: token.clone(),
+    })
 }
 
 /// Handle one keypress on the ticket surface: the queue cursor and the

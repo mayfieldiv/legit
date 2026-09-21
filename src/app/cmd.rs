@@ -15,6 +15,7 @@ use crate::{
     github::rest::PrKey,
     github::rest::WorkflowNameCache,
     github::types::ReviewStatus,
+    github::wayfinder::{EffortReadBatch, Wayfinder},
     local_effort,
     ticket::EffortRead,
     worktree,
@@ -159,6 +160,16 @@ pub enum Cmd {
         detected: Option<RepoSlug>,
         config: LegitConfig,
     },
+    /// Read one PR-capable Tracked Repo's GitHub Efforts: every open
+    /// wayfinder map with its sub-issues, in one GraphQL request behind one
+    /// background permit — unit-wide work with no affinity, never promoted
+    /// (spec §5.1). Settles like a local probe: one `Msg::EffortArrived` per
+    /// map then `DiscoveryFinished`, or `DiscoveryFailed` when the read
+    /// itself fails (§5.5). Carries only repo + token, like `FetchOpenPRs`.
+    ReadGitHubEfforts {
+        repo: RepoSlug,
+        token: AuthToken,
+    },
 }
 
 impl Cmd {
@@ -186,6 +197,7 @@ impl Cmd {
             Cmd::DelayedRetry { .. } => "DelayedRetry",
             Cmd::DiscoverRepoEfforts { .. } => "DiscoverRepoEfforts",
             Cmd::DiscoverCwdEfforts { .. } => "DiscoverCwdEfforts",
+            Cmd::ReadGitHubEfforts { .. } => "ReadGitHubEfforts",
         }
     }
 }
@@ -425,6 +437,9 @@ pub async fn run(cmd: Cmd, tx: mpsc::UnboundedSender<Msg>, limiter: Arc<NetworkL
             };
             run_discover_cwd_efforts(cwd, detected, config, tx).await;
         }
+        Cmd::ReadGitHubEfforts { repo, token } => {
+            run_read_github_efforts(repo, token, tx, limiter).await;
+        }
     }
 }
 
@@ -442,8 +457,12 @@ async fn run_discover_repo_efforts(
         // Discovery first: its missing-worktree error names the path plainly,
         // where identity's would be a bare canonicalize failure.
         let reads = local_effort::discover_repo_efforts(&repo)?;
-        let identity = repo.identity()?;
-        Ok((identity, reads))
+        let repo = repo.identity()?;
+        Ok(Discovered {
+            repo,
+            reads,
+            incomplete: None,
+        })
     })
     .await;
     settle_discovery(unit, result, &tx);
@@ -458,27 +477,79 @@ async fn run_discover_cwd_efforts(
 ) {
     let result =
         blocking(move || local_effort::discover_cwd_efforts(&cwd, &config, detected.as_ref()))
-            .await;
+            .await
+            .map(|(repo, reads)| Discovered {
+                repo,
+                reads,
+                incomplete: None,
+            });
     settle_discovery(DiscoveryUnit::Cwd, result, &tx);
 }
 
-/// Deliver one probe's outcome: an arrival per Effort then the unit's
-/// completion, or the unit's failure.
+/// One PR-capable Tracked Repo's map read: one request behind one background
+/// permit, then `settle_map_read`.
+async fn run_read_github_efforts(
+    repo: RepoSlug,
+    token: AuthToken,
+    tx: mpsc::UnboundedSender<Msg>,
+    limiter: Arc<NetworkLimiter>,
+) {
+    let result = limited(&limiter, None, async {
+        Wayfinder::new(&token).read_efforts(&repo).await
+    })
+    .await;
+    settle_map_read(repo, result, &tx);
+}
+
+/// A map read's settlement — the sync half of `run_read_github_efforts`, so
+/// it is testable without a transport. The slug is the attribution outright:
+/// a GitHub Effort belongs to the repo whose tracker holds it, so nothing here
+/// touches the filesystem the local probes resolve identity through. A read
+/// that saw only the first window of maps settles incomplete, not complete.
+fn settle_map_read(
+    repo: RepoSlug,
+    result: anyhow::Result<EffortReadBatch>,
+    tx: &mpsc::UnboundedSender<Msg>,
+) {
+    let unit = DiscoveryUnit::GitHubRepo { slug: repo.clone() };
+    let result = result.map(|batch| Discovered {
+        repo: RepoIdentity::Slug(repo),
+        incomplete: batch.incomplete(),
+        reads: batch.efforts,
+    });
+    settle_discovery(unit, result, tx);
+}
+
+/// What one unit's read delivered: its Efforts, attributed, plus the caveat
+/// of a read that saw only a window of the unit (`EffortReadBatch::incomplete`).
+/// Local probes walk the whole unit, so theirs is always `None`.
+struct Discovered {
+    repo: RepoIdentity,
+    reads: Vec<EffortRead>,
+    incomplete: Option<String>,
+}
+
+/// Deliver one unit's outcome: an arrival per Effort then the unit's
+/// completion (complete or with its caveat), or the unit's failure.
 fn settle_discovery(
     unit: DiscoveryUnit,
-    result: anyhow::Result<(RepoIdentity, Vec<EffortRead>)>,
+    result: anyhow::Result<Discovered>,
     tx: &mpsc::UnboundedSender<Msg>,
 ) {
     match result {
-        Ok((repo, reads)) => {
-            tracing::info!(?unit, efforts = reads.len(), "local efforts discovered");
+        Ok(Discovered {
+            repo,
+            reads,
+            incomplete,
+        }) => {
+            tracing::info!(?unit, efforts = reads.len(), "efforts discovered");
             for read in reads {
                 let _ = tx.send(Msg::EffortArrived {
                     repo: repo.clone(),
                     read,
                 });
             }
-            let _ = tx.send(Msg::DiscoveryFinished { unit });
+            let _ = tx.send(Msg::DiscoveryFinished { unit, incomplete });
         }
         Err(error) => {
             let _ = tx.send(discovery_failed(unit, error));
@@ -486,11 +557,11 @@ fn settle_discovery(
     }
 }
 
-/// Log a probe failure here (the impure layer) and build the `Msg` for the
-/// queue to record — the local analogue of `pr_list_failed`.
+/// Log a unit's failure here (the impure layer) and build the `Msg` for the
+/// queue to record — the Effort analogue of `pr_list_failed`.
 fn discovery_failed(unit: DiscoveryUnit, error: anyhow::Error) -> Msg {
     let error = format!("{error:#}");
-    tracing::warn!(?unit, %error, "local effort discovery failed");
+    tracing::warn!(?unit, %error, "effort discovery failed");
     Msg::DiscoveryFailed { unit, error }
 }
 
@@ -686,15 +757,28 @@ async fn run_fetch_open_prs(
     }
 }
 
-/// Hold one concurrency permit, run a single GitHub request, and forward the
-/// messages it produces — or, on error, one `CommandFailed` (covering the
-/// client build inside the request too). Captures the build-permit-dispatch
-/// shape every per-PR enrichment command shares; `context` names the operation
-/// so the failure reads e.g. "fetch reviews: ...". `affinity` is the entity the
-/// fetch serves — prioritised by the limiter while it is focused — or `None`
-/// for unit-wide work that can never be focused (the batched review-status
-/// query, a map read). `op` is a lazy future, so the permit is held only
-/// across the actual await, not while it's constructed.
+/// Hold one concurrency permit across a single GitHub request — the one place
+/// the transport's limiting is opted into, so every HTTP call the app makes
+/// counts in `NetworkStats` and none of the clients hold permits themselves.
+/// `affinity` is the entity the request serves — prioritised by the limiter
+/// while it is focused — or `None` for unit-wide work that can never be
+/// focused (the batched review-status query, a map read). `op` is a lazy
+/// future, so the permit is held only across the actual await, not while it's
+/// constructed.
+async fn limited<T>(
+    limiter: &Arc<NetworkLimiter>,
+    affinity: Option<Affinity>,
+    op: impl Future<Output = anyhow::Result<T>>,
+) -> anyhow::Result<T> {
+    let _permit = limiter.acquire(affinity).await;
+    op.await
+}
+
+/// Run one `limited` GitHub request and forward the messages it produces —
+/// or, on error, one `CommandFailed` (covering the client build inside the
+/// request too). Captures the build-permit-dispatch shape every per-PR
+/// enrichment command shares; `context` names the operation so the failure
+/// reads e.g. "fetch reviews: ...".
 ///
 /// Returns whether the request succeeded so a caller that recorded in-flight
 /// state in the model can send its own rollback message after the
@@ -708,8 +792,7 @@ async fn request<T>(
     op: impl Future<Output = anyhow::Result<T>>,
     to_msgs: impl FnOnce(T) -> Vec<Msg>,
 ) -> bool {
-    let _permit = limiter.acquire(affinity).await;
-    match op.await {
+    match limited(limiter, affinity, op).await {
         Ok(value) => {
             for msg in to_msgs(value) {
                 let _ = tx.send(msg);
