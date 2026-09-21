@@ -10,12 +10,13 @@ const APP_HEADER_ROWS: usize = 1;
 const TABLE_HEADER_ROWS: usize = 1;
 /// The status bar pinned to the bottom.
 const STATUS_ROWS: usize = 1;
+const TAB_ROWS: usize = 1;
+const FILTER_ROWS: usize = 1;
 
 /// Width of the `│` rule between the rail and the queue.
 pub const DIVIDER_WIDTH: u16 = 1;
 /// Below this many queue columns the rail is dropped so the queue keeps a
 /// usable width — the floor only.
-// TODO(#133): the narrow-width collapse proper (spec §6.4).
 const MIN_QUEUE_WIDTH: u16 = 40;
 
 /// The rail's width for the main region's width, or `None` when the rail and
@@ -26,10 +27,23 @@ pub fn rail_width(main_width: u16) -> Option<u16> {
     (main_width >= rail + DIVIDER_WIDTH + MIN_QUEUE_WIDTH).then_some(rail)
 }
 
+pub fn summary_width(main_width: u16) -> Option<u16> {
+    (main_width >= 170).then_some(44)
+}
+
+pub fn queue_contains(width: u16, height: u16, column: u16, row: u16) -> bool {
+    let right = width.saturating_sub(summary_width(width).map_or(0, |width| width + DIVIDER_WIDTH));
+    let left = rail_width(right).map_or(0, |width| width + DIVIDER_WIDTH);
+    column >= left
+        && column < right
+        && row >= (APP_HEADER_ROWS + TAB_ROWS + FILTER_ROWS + TABLE_HEADER_ROWS) as u16
+        && row < height.saturating_sub(STATUS_ROWS as u16)
+}
+
 /// Total chrome rows around the selectable queue rows — what `sync_viewport`
 /// subtracts from the terminal height.
 pub fn chrome_rows() -> usize {
-    APP_HEADER_ROWS + TABLE_HEADER_ROWS + STATUS_ROWS
+    APP_HEADER_ROWS + TAB_ROWS + FILTER_ROWS + TABLE_HEADER_ROWS + STATUS_ROWS
 }
 
 #[cfg(test)]

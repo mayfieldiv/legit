@@ -6,6 +6,8 @@ use super::{
     DiscoveryUnit, QueueRow, QueueTier, RailCard, RefreshNotice, RefreshScope, RefreshTarget,
     RowMarker, TicketList, TicketRow,
 };
+
+mod filters;
 use crate::{
     canonical_path::CanonicalPathBuf,
     config::RepoIdentity,
@@ -653,7 +655,7 @@ fn content_widths_measure_the_queued_tickets() {
         "closed tickets aren't queued, so they don't size the column"
     );
     assert_eq!(widths.repo, "web".len());
-    assert_eq!(widths.ty, "task".len());
+    assert_eq!(widths.ty, "*task".len());
 }
 
 // ── probe phases ─────────────────────────────────────────────────────────────

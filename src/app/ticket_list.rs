@@ -26,6 +26,9 @@ use std::fmt;
 
 use unicode_width::UnicodeWidthStr;
 
+mod summary;
+pub use summary::{DependencySummary, TicketSummary};
+
 use crate::{
     app::list_cursor::{Direction, ListCursor, SelectableRow},
     canonical_path::CanonicalPathBuf,
@@ -33,8 +36,8 @@ use crate::{
     format::format_repo_short,
     repo_slug::RepoSlug,
     ticket::{
-        Claim, Effort, EffortKey, EffortRead, EffortSource, EffortTicket, TicketKey, TicketState,
-        TicketType,
+        Claim, Effort, EffortKey, EffortRead, EffortSource, EffortTicket, Mode, TicketKey,
+        TicketState, TicketType,
     },
 };
 
@@ -44,6 +47,7 @@ use crate::{
 /// definition) — so the repo rides here beside the read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EffortCard {
+    pub selected: bool,
     pub fetch: FetchState,
     /// The attributed Tracked Repo's short name (see `format_repo_short`).
     pub repo: String,
@@ -124,6 +128,7 @@ impl EffortEntry {
                 key: effort.key.clone(),
                 repo,
                 card: EffortCard {
+                    selected: false,
                     fetch: FetchState {
                         fetched_at: Some(now),
                         refreshing: false,
@@ -146,6 +151,7 @@ impl EffortEntry {
             } => Self {
                 repo,
                 card: EffortCard {
+                    selected: false,
                     fetch: FetchState::default(),
                     repo: name,
                     title,
@@ -315,7 +321,9 @@ impl QueueContentWidths {
     fn fit(&mut self, row: &TicketRow) {
         self.display_ref = self.display_ref.max(row.display_ref.width());
         self.repo = self.repo.max(row.repo.width());
-        self.ty = self.ty.max(row.ty.0.width());
+        self.ty = self
+            .ty
+            .max(row.ty.0.width() + if row.ty.mode() == Mode::Either { 1 } else { 0 });
     }
 }
 
@@ -430,7 +438,6 @@ pub enum RefreshScope {
     /// is nothing to re-read — the queue has no Re-list.
     Selected,
     /// `R`: every unit backing the view.
-    // TODO(#133): the rail filter narrows this to the selected Effort.
     View,
 }
 
@@ -493,6 +500,10 @@ enum UnitRefresh {
 pub struct TicketList {
     /// Pooled Efforts in rail order (see `EffortEntry::order_key`).
     efforts: Vec<EffortEntry>,
+    effort_filter: Option<EffortKey>,
+    mode_filter: ModeFilter,
+    repo_scope: Option<RepoScope>,
+    summary: Option<TicketSummary>,
     discoveries: BTreeMap<DiscoveryUnit, DiscoveryPhase>,
     /// The current refresh run: every unit it dispatched that hasn't settled
     /// clean, and the Efforts re-read so far. A run starts on the first
@@ -521,6 +532,85 @@ impl fmt::Debug for TicketList {
 impl TicketList {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn set_repo_scope(&mut self, scope: Option<RepoScope>) {
+        if self.repo_scope == scope {
+            return;
+        }
+        self.repo_scope = scope;
+        self.effort_filter = None;
+        self.relayout();
+        self.cursor.reset_to_top(&self.rows);
+        self.refresh_summary();
+    }
+
+    fn repo_matches(&self, entry: &EffortEntry) -> bool {
+        self.repo_scope
+            .as_ref()
+            .is_none_or(|scope| entry.repo == RepoIdentity::Slug(scope.repo.clone()))
+    }
+
+    fn effort_matches(&self, entry: &EffortEntry) -> bool {
+        self.repo_matches(entry)
+            && self
+                .effort_filter
+                .as_ref()
+                .is_none_or(|key| key == &entry.key)
+    }
+
+    fn discovery_matches(&self, unit: &DiscoveryUnit) -> bool {
+        self.repo_scope.as_ref().is_none_or(|scope| match unit {
+            DiscoveryUnit::GitHubRepo { slug } => slug == &scope.repo,
+            _ => scope.discoveries.contains(unit),
+        })
+    }
+
+    pub fn cycle_mode(&mut self) {
+        self.mode_filter = match self.mode_filter {
+            ModeFilter::All => ModeFilter::Afk,
+            ModeFilter::Afk => ModeFilter::Hitl,
+            ModeFilter::Hitl => ModeFilter::All,
+        };
+        self.relayout();
+    }
+
+    pub fn mode_filter(&self) -> ModeFilter {
+        self.mode_filter
+    }
+
+    pub fn effort_filter_label(&self) -> &str {
+        self.efforts
+            .iter()
+            .find(|entry| Some(&entry.key) == self.effort_filter.as_ref())
+            .map_or("All efforts", |entry| entry.card.title.as_str())
+    }
+
+    pub fn all_efforts_selected(&self) -> bool {
+        self.effort_filter.is_none()
+    }
+
+    pub fn step_effort(&mut self, direction: Direction) {
+        let choices: Vec<_> = std::iter::once(None)
+            .chain(
+                self.efforts
+                    .iter()
+                    .filter(|entry| self.repo_matches(entry))
+                    .map(|entry| Some(entry.key.clone())),
+            )
+            .collect();
+        let current = choices
+            .iter()
+            .position(|key| key == &self.effort_filter)
+            .unwrap_or(0);
+        let next = match direction {
+            Direction::Down => (current + 1).min(choices.len() - 1),
+            Direction::Up => current.saturating_sub(1),
+        };
+        self.effort_filter = choices[next].clone();
+        self.relayout();
+        self.cursor.reset_to_top(&self.rows);
+        self.refresh_summary();
     }
 
     // ── refresh ──────────────────────────────────────────────────────────────
@@ -588,10 +678,12 @@ impl TicketList {
     fn all_fetches(&self) -> Vec<RefreshTarget> {
         self.efforts
             .iter()
+            .filter(|entry| self.effort_matches(entry))
             .map(RefreshTarget::for_entry)
             .chain(
                 self.discoveries
                     .keys()
+                    .filter(|unit| self.effort_filter.is_none() && self.discovery_matches(unit))
                     .filter(|unit| matches!(unit, DiscoveryUnit::GitHubRepo { .. }))
                     .cloned()
                     .map(RefreshTarget::Discovery),
@@ -602,11 +694,15 @@ impl TicketList {
     fn failed_fetches(&self) -> Vec<RefreshTarget> {
         self.efforts
             .iter()
+            .filter(|entry| self.effort_matches(entry))
             .filter(|entry| entry.card.outcome.is_err())
             .map(RefreshTarget::for_entry)
             .chain(
                 self.discoveries
                     .iter()
+                    .filter(|(unit, _)| {
+                        self.effort_filter.is_none() && self.discovery_matches(unit)
+                    })
                     .filter(|(_, phase)| matches!(phase, DiscoveryPhase::Failed(_)))
                     .map(|(unit, _)| RefreshTarget::Discovery(unit.clone())),
             )
@@ -843,16 +939,13 @@ impl TicketList {
             .any(|phase| matches!(phase, DiscoveryPhase::Loading { .. }))
     }
 
-    /// The rail in display order: every unit that failed outright or settled
-    /// incomplete, then the Effort cards in rail order. The unit cards lead
-    /// because the rail doesn't scroll yet — below the Efforts, a full rail
-    /// would push them offscreen with no way to reach them (spec §5.5, never
-    /// silently missing).
-    // TODO(#133): rail scrolling with the effort filter.
+    /// Failed and incomplete discovery units lead the Effort cards so the
+    /// unfiltered rail exposes read failures before potentially many Efforts.
     pub fn rail(&self) -> impl Iterator<Item = RailCard<'_>> {
         let units = self
             .discoveries
             .iter()
+            .filter(|(unit, _)| self.discovery_matches(unit))
             .filter_map(|(unit, phase)| match phase {
                 DiscoveryPhase::Failed(error) => Some(RailCard::Failure { unit, error }),
                 DiscoveryPhase::Incomplete(caveat)
@@ -865,6 +958,7 @@ impl TicketList {
         units.chain(
             self.efforts
                 .iter()
+                .filter(|entry| self.repo_matches(entry))
                 .map(|entry| RailCard::Effort(&entry.card)),
         )
     }
@@ -904,14 +998,23 @@ impl TicketList {
 
     pub fn move_down(&mut self) {
         self.cursor.step(&self.rows, Direction::Down);
+        self.refresh_summary();
     }
 
     pub fn move_up(&mut self) {
         self.cursor.step(&self.rows, Direction::Up);
+        self.refresh_summary();
     }
 
     pub fn resize(&mut self, viewport_height: usize) {
         self.cursor.resize(&self.rows, viewport_height);
+    }
+
+    pub fn scroll(&mut self, direction: Direction, rows: usize) {
+        match direction {
+            Direction::Down => self.cursor.scroll_down(&self.rows, rows),
+            Direction::Up => self.cursor.scroll_up(&self.rows, rows),
+        }
     }
 
     /// Rebuild rail order and the tiered queue, then re-anchor the cursor
@@ -925,6 +1028,17 @@ impl TicketList {
             );
         }
         self.efforts.sort_by_cached_key(EffortEntry::order_key);
+        if self.effort_filter.as_ref().is_some_and(|key| {
+            !self
+                .efforts
+                .iter()
+                .any(|entry| &entry.key == key && self.repo_matches(entry))
+        }) {
+            self.effort_filter = None;
+        }
+        for entry in &mut self.efforts {
+            entry.card.selected = Some(&entry.key) == self.effort_filter.as_ref();
+        }
 
         // Blocks, pool-wide: how many open Tickets wait on each target.
         let mut dependents: HashMap<TicketKey, usize> = HashMap::new();
@@ -939,6 +1053,16 @@ impl TicketList {
         }
         let mut tickets: Vec<TicketRow> = self
             .queued_tickets()
+            .filter(|(_, ticket, _)| self.mode_filter.matches(ticket.ty.mode()))
+            .filter(|(_, ticket, _)| {
+                self.efforts.iter().any(|entry| {
+                    self.effort_matches(entry)
+                        && entry
+                            .effort
+                            .as_ref()
+                            .is_some_and(|effort| effort.ticket(&ticket.key).is_some())
+                })
+            })
             .map(|(repo, ticket, fetch)| {
                 let downstream = dependents.get(&ticket.key).copied().unwrap_or(0);
                 TicketRow::derive(repo, &ticket, downstream, fetch)
@@ -962,6 +1086,7 @@ impl TicketList {
         self.rows = rows;
         self.content_widths = widths;
         self.cursor.re_anchor(&self.rows);
+        self.refresh_summary();
     }
 
     /// Every open Ticket of every pooled Effort with its repo's display name,
@@ -982,6 +1107,31 @@ impl TicketList {
                     .filter(|ticket| ticket.state == TicketState::Open)
                     .map(move |ticket| (repo, ticket, fetch))
             })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ModeFilter {
+    #[default]
+    All,
+    Afk,
+    Hitl,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RepoScope {
+    pub repo: RepoSlug,
+    /// Local discovery units attributed to this Repo Tab, including failures
+    /// that produced no Effort from which attribution could be recovered.
+    pub discoveries: Vec<DiscoveryUnit>,
+}
+
+impl ModeFilter {
+    fn matches(self, mode: Mode) -> bool {
+        matches!(
+            (self, mode),
+            (Self::All, _) | (_, Mode::Either) | (Self::Afk, Mode::Afk) | (Self::Hitl, Mode::Hitl)
+        )
     }
 }
 

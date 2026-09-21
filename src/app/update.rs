@@ -959,6 +959,7 @@ fn skips_normalize(msg: &Msg, model: &Model) -> bool {
 pub fn update(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
     let skip_normalize = skips_normalize(&msg, model);
     let cmds = apply(model, msg, now);
+    tickets::sync_scope(model);
     if !skip_normalize {
         normalize_detail(model);
     }
@@ -1028,8 +1029,22 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
                     }
                     Vec::new()
                 }
-                // TODO(#133): route wheel ticks to the queue viewport.
-                ViewMode::TicketList => Vec::new(),
+                ViewMode::TicketList => {
+                    if super::ticket_list_layout::queue_contains(
+                        model.terminal_width,
+                        model.terminal_height,
+                        mouse.column,
+                        mouse.row,
+                    ) {
+                        let direction = if down {
+                            super::list_cursor::Direction::Down
+                        } else {
+                            super::list_cursor::Direction::Up
+                        };
+                        model.tickets.scroll(direction, LIST_SCROLL_WHEEL);
+                    }
+                    Vec::new()
+                }
             }
         }
         Msg::TerminalEvent(Event::Mouse(mouse))

@@ -17,21 +17,23 @@ use crate::{
     app::{
         model::Model,
         ticket_list::{
-            DiscoveryUnit, EffortCard, QueueContentWidths, QueueRow, QueueTier, RailCard,
-            RowMarker, TicketList, TicketRow,
+            DiscoveryUnit, EffortCard, ModeFilter, QueueContentWidths, QueueRow, QueueTier,
+            RailCard, RowMarker, TicketList, TicketRow,
         },
-        ticket_list_layout::{DIVIDER_WIDTH, rail_width},
+        ticket_list_layout::{DIVIDER_WIDTH, rail_width, summary_width},
     },
     color::repo_color,
     format::{
         REFRESH_GLYPH, fetched_age_spans, format_age, pad_to_width, truncate, truncate_middle,
     },
     palette::Palette,
-    ticket::EffortSource,
+    ticket::{EffortSource, Mode},
 };
 
 #[cfg(test)]
 mod tests;
+
+mod summary;
 
 pub fn render(
     model: &Model,
@@ -40,14 +42,31 @@ pub fn render(
     now: DateTime<Utc>,
     palette: &Palette,
 ) {
-    let [header, main, status] = Layout::vertical([
+    let [header, tabs, filters, main, status] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Min(1),
         Constraint::Length(1),
     ])
     .areas(area);
     render_header(model, frame, header, palette);
+    super::render_tabs(model, frame, tabs, palette);
+    render_filters(&model.tickets, frame, filters, palette);
     let tickets = &model.tickets;
+    let main = if let Some(width) = summary_width(main.width) {
+        let [remaining, divider, panel] = Layout::horizontal([
+            Constraint::Min(0),
+            Constraint::Length(DIVIDER_WIDTH),
+            Constraint::Length(width),
+        ])
+        .areas(main);
+        render_divider(frame, divider, palette);
+        summary::render(tickets.selected_summary(), frame, panel, now, palette);
+        remaining
+    } else {
+        main
+    };
     if tickets.rail().next().is_none() {
         let text = if tickets.is_loading() {
             "Loading efforts…"
@@ -69,12 +88,40 @@ pub fn render(
                 .areas(main);
                 render_rail(tickets, frame, rail, now, palette);
                 render_divider(frame, divider, palette);
-                render_queue(tickets, frame, queue, now, palette);
+                render_queue(tickets, frame, queue, false, now, palette);
             }
-            None => render_queue(tickets, frame, main, now, palette),
+            None => render_queue(tickets, frame, main, true, now, palette),
         }
     }
     render_status(model, frame, status, palette);
+}
+
+fn render_filters(tickets: &TicketList, frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
+    let mut spans = vec![Span::raw("Mode ")];
+    for (filter, label) in [
+        (ModeFilter::All, "All"),
+        (ModeFilter::Afk, "AFK"),
+        (ModeFilter::Hitl, "HITL"),
+    ] {
+        let selected = filter == tickets.mode_filter();
+        spans.push(Span::styled(
+            if selected {
+                format!("[{label}] ")
+            } else {
+                format!(" {label}  ")
+            },
+            Style::default().fg(if selected {
+                palette.accent
+            } else {
+                palette.muted
+            }),
+        ));
+    }
+    spans.push(Span::raw(format!(
+        " · {} · * Either",
+        tickets.effort_filter_label()
+    )));
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn render_header(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
@@ -130,7 +177,15 @@ fn render_rail(
         )),
         Line::default(),
     ];
+    if tickets.all_efforts_selected() {
+        lines[0] = lines[0]
+            .clone()
+            .style(Style::default().bg(palette.selected_bg));
+    }
+    let mut selected_range = 0..1;
     for card in tickets.rail() {
+        let selected = matches!(&card, RailCard::Effort(card) if card.selected);
+        let start = lines.len();
         lines.extend(match card {
             RailCard::Failure { unit, error } => {
                 discovery_failure_card(unit, error, width, palette)
@@ -140,9 +195,22 @@ fn render_rail(
             }
             RailCard::Effort(card) => effort_card(card, width, now, palette),
         });
+        if selected {
+            selected_range = start..lines.len();
+            for line in &mut lines[selected_range.clone()] {
+                *line = line.clone().style(Style::default().bg(palette.selected_bg));
+            }
+        }
         lines.push(Line::default());
     }
-    frame.render_widget(Paragraph::new(lines), area);
+    let offset = selected_range
+        .end
+        .saturating_sub(usize::from(area.height))
+        .min(selected_range.start);
+    frame.render_widget(
+        Paragraph::new(lines.into_iter().skip(offset).collect::<Vec<_>>()),
+        area,
+    );
 }
 
 fn effort_card(
@@ -329,22 +397,45 @@ struct QueueLayout {
     ref_col: usize,
     repo_col: usize,
     type_col: usize,
+    state_col: usize,
+    block_col: usize,
+    age_col: usize,
 }
 
 impl QueueLayout {
-    fn new(width: usize, content: QueueContentWidths) -> Self {
+    fn new(width: usize, content: QueueContentWidths, compact: bool) -> Self {
         let mut layout = Self {
             width,
-            ref_col: REF_COL.opening(content.display_ref),
-            repo_col: REPO_COL.opening(content.repo),
-            type_col: TYPE_COL.opening(content.ty),
+            ref_col: REF_COL
+                .opening(content.display_ref)
+                .min(width.saturating_sub(28).max(6)),
+            repo_col: 0,
+            type_col: 0,
+            state_col: if compact { 8 } else { 0 },
+            block_col: 0,
+            age_col: 0,
         };
+        let mut budget = layout.title_col().saturating_sub(18);
+        for (column, desired) in [
+            (&mut layout.type_col, TYPE_COL.opening(content.ty)),
+            (&mut layout.repo_col, REPO_COL.opening(content.repo)),
+            (&mut layout.block_col, BLOCK_COL),
+            (&mut layout.age_col, AGE_COL),
+        ] {
+            if budget >= desired + GAP {
+                *column = desired;
+                budget -= desired + GAP;
+            }
+        }
         let mut spare = layout.title_col().saturating_sub(TITLE_COL_MIN);
         for (column, grown) in [
             (&mut layout.ref_col, REF_COL.grown(content.display_ref)),
             (&mut layout.repo_col, REPO_COL.grown(content.repo)),
             (&mut layout.type_col, TYPE_COL.grown(content.ty)),
         ] {
+            if *column == 0 {
+                continue;
+            }
             let extra = grown.saturating_sub(*column).min(spare);
             *column += extra;
             spare -= extra;
@@ -361,9 +452,12 @@ impl QueueLayout {
                 self.ref_col,
                 self.repo_col,
                 self.type_col,
-                BLOCK_COL,
-                AGE_COL,
-            ],
+                self.state_col,
+                self.block_col,
+                self.age_col,
+            ]
+            .into_iter()
+            .filter(|width| *width > 0),
         )
     }
 }
@@ -372,13 +466,14 @@ fn render_queue(
     tickets: &TicketList,
     frame: &mut Frame<'_>,
     area: Rect,
+    compact: bool,
     now: DateTime<Utc>,
     palette: &Palette,
 ) {
     let [header_area, rows_area] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
     let width = usize::from(area.width);
-    let layout = QueueLayout::new(width, tickets.content_widths());
+    let layout = QueueLayout::new(width, tickets.content_widths(), compact);
     frame.render_widget(Paragraph::new(header_row(&layout)), header_area);
 
     if tickets.visible_is_empty() {
@@ -428,10 +523,14 @@ fn header_row(layout: &QueueLayout) -> Line<'static> {
             Cell::text("Ticket", layout.ref_col, bold),
             Cell::text("Repo", layout.repo_col, bold),
             Cell::text("Type", layout.type_col, bold),
+            Cell::text("State", layout.state_col, bold),
             Cell::text("Title", layout.title_col(), bold),
-            Cell::text("Block", BLOCK_COL, bold),
-            Cell::text("Age", AGE_COL, bold),
-        ],
+            Cell::text("Block", layout.block_col, bold),
+            Cell::text("Age", layout.age_col, bold),
+        ]
+        .into_iter()
+        .filter(|cell| cell.width > 0)
+        .collect(),
         None,
     )
 }
@@ -473,9 +572,18 @@ fn ticket_line(
             Style::default().fg(repo_color(&row.repo)),
         ),
         Cell::text(
-            row.ty.0.clone(),
+            if row.ty.mode() == Mode::Either {
+                format!("*{}", row.ty.0)
+            } else {
+                row.ty.0.clone()
+            },
             layout.type_col,
             Style::default().fg(palette.mode(row.ty.mode())),
+        ),
+        Cell::text(
+            row.tier().label(),
+            layout.state_col,
+            Style::default().fg(tier_color(row.tier(), palette)),
         ),
         title_cell(
             &row.title,
@@ -484,16 +592,22 @@ fn ticket_line(
             title_style,
             palette,
         ),
-        block_cell(row.upstream, row.downstream, palette),
+        Cell {
+            width: layout.block_col,
+            ..block_cell(row.upstream, row.downstream, palette)
+        },
         Cell::text(
             row.fetch
                 .fetched_at
                 .map_or_else(String::new, |stamp| format_age(stamp, now)),
-            AGE_COL,
+            layout.age_col,
             Style::default().fg(palette.muted),
         ),
     ];
-    render_cells(cells, selected.then_some(palette.selected_bg))
+    render_cells(
+        cells.into_iter().filter(|cell| cell.width > 0).collect(),
+        selected.then_some(palette.selected_bg),
+    )
 }
 
 /// The title plus its state marker — `⟨claimed X⟩`, `⟨after Y⟩`, or
@@ -561,6 +675,14 @@ fn render_status(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Pal
     let left = Line::from(vec![
         Span::styled("j/k", bold),
         Span::raw(" nav  "),
+        Span::styled("J/K", bold),
+        Span::raw(" efforts  "),
+        Span::styled("h/l", bold),
+        Span::raw(" tabs  "),
+        Span::styled("m", bold),
+        Span::raw(" mode  "),
+        Span::styled("p/y", bold),
+        Span::raw(" copy prompt/ref  "),
         Span::styled("r/R", bold),
         Span::raw(" refresh  "),
         Span::styled("t", bold),
