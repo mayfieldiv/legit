@@ -13,9 +13,10 @@ use crate::{
     app::{
         cmd::Cmd,
         model::{Model, StatusKind, ViewMode},
-        ticket_list::{DiscoveryUnit, FetchUnit},
+        ticket_list::{DiscoveryUnit, FetchUnit, RefreshTarget},
     },
     auth::AuthToken,
+    canonical_path::CanonicalPathBuf,
     config::RepoIdentity,
     repo_slug::RepoSlug,
     ticket::EffortRead,
@@ -103,75 +104,51 @@ fn refresh_cmds(model: &mut Model, all: bool) -> Vec<Cmd> {
     // Failed cards have no selectable tickets until the rail filter lands.
     // Both refresh keys must therefore retry them from the current queue.
     targets.extend(model.tickets.failed_fetches());
-    let mut cmds: Vec<Cmd> = targets
+    targets
         .into_iter()
-        .filter_map(|(unit, repo)| refresh_cmd(model, unit, repo))
-        .collect();
-    for unit in model.tickets.failed_discoveries() {
-        let cmd = match &unit {
-            DiscoveryUnit::GitHubRepo { slug } => {
-                cmds.extend(refresh_cmd(
-                    model,
-                    FetchUnit::GitHub { repo: slug.clone() },
-                    RepoIdentity::Slug(slug.clone()),
-                ));
-                continue;
-            }
-            DiscoveryUnit::LocalRepo { .. } => {
-                let Some(repo) = model
+        .filter_map(|target| refresh_cmd(model, target))
+        .collect()
+}
+
+fn refresh_cmd(model: &mut Model, target: RefreshTarget) -> Option<Cmd> {
+    let unit = target.unit();
+    if let FetchUnit::Discovery(discovery) = &unit
+        && model.tickets.discovery_is_loading(discovery)
+    {
+        return None;
+    }
+    let cmd = match target {
+        RefreshTarget::Discovery(unit) => match &unit {
+            DiscoveryUnit::GitHubRepo { slug } => Cmd::ReadGitHubEfforts {
+                repo: slug.clone(),
+                token: model.auth_token.clone()?,
+            },
+            DiscoveryUnit::LocalRepo { .. } => Cmd::DiscoverRepoEfforts {
+                repo: model
                     .config
                     .repos
                     .iter()
-                    .find(|repo| DiscoveryUnit::for_repo(repo).as_ref() == Some(&unit))
-                else {
-                    continue;
-                };
-                Cmd::DiscoverRepoEfforts {
-                    unit: unit.clone(),
-                    repo: repo.clone(),
-                }
-            }
+                    .find(|repo| DiscoveryUnit::for_repo(repo).as_ref() == Some(&unit))?
+                    .clone(),
+                unit,
+            },
             DiscoveryUnit::Cwd => Cmd::DiscoverCwdEfforts {
                 detected: model.repo.repo().cloned(),
                 config: model.config.clone(),
             },
-        };
-        model.tickets.begin_discovery(unit);
-        cmds.push(cmd);
-    }
-    cmds
-}
-
-fn refresh_cmd(model: &mut Model, unit: FetchUnit, repo: RepoIdentity) -> Option<Cmd> {
-    if let FetchUnit::GitHub { repo } = &unit
-        && model
-            .tickets
-            .discovery_is_loading(&DiscoveryUnit::GitHubRepo { slug: repo.clone() })
-    {
-        return None;
-    }
-    let cmd = match &unit {
-        FetchUnit::GitHub { repo } => Cmd::ReadGitHubEfforts {
-            repo: repo.clone(),
-            token: model.auth_token.clone()?,
         },
-        FetchUnit::Local { dir } => Cmd::ReadLocalEffort {
-            dir: dir.clone(),
-            repo,
-        },
+        RefreshTarget::Local { dir, repo } => Cmd::ReadLocalEffort { dir, repo },
     };
     if !model.tickets.begin_refresh(unit.clone()) {
         return None;
     }
-    if let FetchUnit::GitHub { repo } = unit {
-        model
-            .tickets
-            .begin_discovery(DiscoveryUnit::GitHubRepo { slug: repo });
+    if let FetchUnit::Discovery(unit) = unit {
+        model.tickets.begin_discovery(unit);
     }
     Some(cmd)
 }
 
-pub(super) fn finish_refresh(model: &mut Model, unit: &FetchUnit, succeeded: bool) -> Vec<Cmd> {
+fn finish_refresh(model: &mut Model, unit: &FetchUnit, succeeded: bool) -> Vec<Cmd> {
     match model.tickets.finish_refresh(unit, succeeded) {
         Some(count) => super::set_status(
             model,
@@ -187,18 +164,27 @@ pub(super) fn finish_refresh(model: &mut Model, unit: &FetchUnit, succeeded: boo
 
 pub(super) fn effort_arrived(
     model: &mut Model,
+    unit: DiscoveryUnit,
     repo: RepoIdentity,
     read: EffortRead,
     now: DateTime<Utc>,
 ) -> Vec<Cmd> {
+    model.tickets.record_discovery_read(&unit, &read);
+    let refreshing = model.tickets.is_refreshing(&FetchUnit::Discovery(unit));
+    merge_effort(model, repo, read, now, refreshing)
+}
+
+fn merge_effort(
+    model: &mut Model,
+    repo: RepoIdentity,
+    read: EffortRead,
+    now: DateTime<Utc>,
+    refreshing: bool,
+) -> Vec<Cmd> {
     let error = match &read {
         EffortRead::Degraded {
             key, title, reason, ..
-        } if model.tickets.has_data(key)
-            || model.tickets.is_refreshing(&FetchUnit::for_effort(key)) =>
-        {
-            Some(format!("{title}: {reason}"))
-        }
+        } if refreshing || model.tickets.has_data(key) => Some(format!("{title}: {reason}")),
         _ => None,
     };
     model.tickets.merge_effort(repo, read, now);
@@ -207,16 +193,44 @@ pub(super) fn effort_arrived(
     })
 }
 
-pub(super) fn discovery_failed(model: &mut Model, unit: DiscoveryUnit, error: String) -> Vec<Cmd> {
-    let refreshing = match &unit {
-        DiscoveryUnit::GitHubRepo { slug } => {
-            let fetch = FetchUnit::GitHub { repo: slug.clone() };
-            let refreshing = model.tickets.is_refreshing(&fetch);
-            finish_refresh(model, &fetch, false);
-            refreshing
+pub(super) fn local_effort_read(
+    model: &mut Model,
+    dir: CanonicalPathBuf,
+    repo: RepoIdentity,
+    result: Result<EffortRead, String>,
+    now: DateTime<Utc>,
+) -> Vec<Cmd> {
+    let unit = FetchUnit::Local { dir };
+    match result {
+        Ok(read) => {
+            let succeeded = matches!(read, EffortRead::Ready(_));
+            let mut cmds = merge_effort(model, repo, read, now, true);
+            cmds.extend(finish_refresh(model, &unit, succeeded));
+            cmds
         }
-        _ => false,
-    };
+        Err(error) => {
+            finish_refresh(model, &unit, false);
+            super::set_status(model, StatusKind::Error, error)
+        }
+    }
+}
+
+pub(super) fn discovery_finished(
+    model: &mut Model,
+    unit: DiscoveryUnit,
+    incomplete: Option<String>,
+    now: DateTime<Utc>,
+) -> Vec<Cmd> {
+    model
+        .tickets
+        .finish_discovery(unit.clone(), incomplete, now);
+    finish_refresh(model, &FetchUnit::Discovery(unit), true)
+}
+
+pub(super) fn discovery_failed(model: &mut Model, unit: DiscoveryUnit, error: String) -> Vec<Cmd> {
+    let fetch = FetchUnit::Discovery(unit.clone());
+    let refreshing = model.tickets.is_refreshing(&fetch);
+    finish_refresh(model, &fetch, false);
     let message = format!("{}: {error}", unit.label());
     model.tickets.fail_discovery(unit, error);
     if refreshing {

@@ -68,10 +68,12 @@ async fn a_repo_probe_streams_one_arrival_per_effort_then_finishes() {
     match msgs.as_slice() {
         [
             Msg::EffortArrived {
+                unit: first_unit,
                 repo: first_repo,
                 read: first,
             },
             Msg::EffortArrived {
+                unit: second_unit,
                 repo: second_repo,
                 read: second,
             },
@@ -85,6 +87,8 @@ async fn a_repo_probe_streams_one_arrival_per_effort_then_finishes() {
             assert_eq!(first_repo, &identity, "attributed by canonical identity");
             assert_eq!(second_repo, &identity);
             assert_eq!(finished, &unit);
+            assert_eq!(first_unit, &unit);
+            assert_eq!(second_unit, &unit);
         }
         other => panic!("expected two arrivals then a finish, got {other:?}"),
     }
@@ -131,7 +135,11 @@ async fn the_cwd_walk_attributes_to_the_detected_repo_or_the_toplevel() {
     run_discover_cwd_efforts(dir.path().to_owned(), None, LegitConfig::default(), tx).await;
     match drain(rx).as_slice() {
         [
-            Msg::EffortArrived { repo, read },
+            Msg::EffortArrived {
+                unit: DiscoveryUnit::Cwd,
+                repo,
+                read,
+            },
             Msg::DiscoveryFinished {
                 unit: DiscoveryUnit::Cwd,
                 incomplete: None,
@@ -237,10 +245,12 @@ fn a_map_read_attributes_every_effort_to_the_slug_then_finishes_complete() {
     match drain(rx).as_slice() {
         [
             Msg::EffortArrived {
+                unit: first_unit,
                 repo: first_repo,
                 read: first,
             },
             Msg::EffortArrived {
+                unit: second_unit,
                 repo: second_repo,
                 read: second,
             },
@@ -258,6 +268,8 @@ fn a_map_read_attributes_every_effort_to_the_slug_then_finishes_complete() {
             );
             assert_eq!(second_repo, &RepoIdentity::Slug(slug.clone()));
             assert_eq!(unit, &DiscoveryUnit::GitHubRepo { slug });
+            assert_eq!(first_unit, unit);
+            assert_eq!(second_unit, unit);
         }
         other => panic!("expected two arrivals then a complete finish, got {other:?}"),
     }

@@ -36,6 +36,7 @@ pub enum Msg {
     /// either way it gets a rail card, so a failed Effort is never silently
     /// missing (spec §5.5).
     EffortArrived {
+        unit: DiscoveryUnit,
         repo: RepoIdentity,
         read: EffortRead,
     },

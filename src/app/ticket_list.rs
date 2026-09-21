@@ -320,7 +320,7 @@ impl QueueContentWidths {
 /// the queue tracks so the view can tell "still discovering" from "nothing
 /// found" and surface a unit that failed outright (a missing Main Worktree, a
 /// map read GitHub refused: neither has an Effort card to degrade).
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DiscoveryUnit {
     LocalRepo {
         /// The repo's short name — its slug's repo half, or its Main
@@ -393,17 +393,47 @@ enum DiscoveryPhase {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum FetchUnit {
-    GitHub { repo: RepoSlug },
+    Discovery(DiscoveryUnit),
     Local { dir: CanonicalPathBuf },
 }
 
 impl FetchUnit {
     pub fn for_effort(key: &EffortKey) -> Self {
         match key {
-            EffortKey::GitHub { repo_slug, .. } => Self::GitHub {
-                repo: repo_slug.clone(),
-            },
+            EffortKey::GitHub { repo_slug, .. } => Self::Discovery(DiscoveryUnit::GitHubRepo {
+                slug: repo_slug.clone(),
+            }),
             EffortKey::Local { dir } => Self::Local { dir: dir.clone() },
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum RefreshTarget {
+    Discovery(DiscoveryUnit),
+    Local {
+        dir: CanonicalPathBuf,
+        repo: RepoIdentity,
+    },
+}
+
+impl RefreshTarget {
+    fn for_entry(entry: &EffortEntry) -> Self {
+        match &entry.key {
+            EffortKey::GitHub { repo_slug, .. } => Self::Discovery(DiscoveryUnit::GitHubRepo {
+                slug: repo_slug.clone(),
+            }),
+            EffortKey::Local { dir } => Self::Local {
+                dir: dir.clone(),
+                repo: entry.repo.clone(),
+            },
+        }
+    }
+
+    pub fn unit(&self) -> FetchUnit {
+        match self {
+            Self::Discovery(unit) => FetchUnit::Discovery(unit.clone()),
+            Self::Local { dir, .. } => FetchUnit::Local { dir: dir.clone() },
         }
     }
 }
@@ -440,7 +470,7 @@ impl TicketList {
         Self::default()
     }
 
-    pub fn selected_fetch(&self) -> Option<(FetchUnit, RepoIdentity)> {
+    pub fn selected_fetch(&self) -> Option<RefreshTarget> {
         let selected = self.selected_ticket()?;
         self.efforts.iter().find_map(|entry| {
             entry
@@ -448,38 +478,35 @@ impl TicketList {
                 .as_ref()?
                 .tickets()
                 .any(|ticket| &ticket.key == selected)
-                .then(|| (FetchUnit::for_effort(&entry.key), entry.repo.clone()))
+                .then(|| RefreshTarget::for_entry(entry))
         })
     }
 
-    pub fn all_fetches(&self) -> Vec<(FetchUnit, RepoIdentity)> {
+    pub fn all_fetches(&self) -> Vec<RefreshTarget> {
         self.efforts
             .iter()
-            .map(|entry| (FetchUnit::for_effort(&entry.key), entry.repo.clone()))
-            .chain(self.discoveries.keys().filter_map(|unit| match unit {
-                DiscoveryUnit::GitHubRepo { slug } => Some((
-                    FetchUnit::GitHub { repo: slug.clone() },
-                    RepoIdentity::Slug(slug.clone()),
-                )),
-                _ => None,
-            }))
+            .map(RefreshTarget::for_entry)
+            .chain(
+                self.discoveries
+                    .keys()
+                    .filter(|unit| matches!(unit, DiscoveryUnit::GitHubRepo { .. }))
+                    .cloned()
+                    .map(RefreshTarget::Discovery),
+            )
             .collect()
     }
 
-    pub fn failed_fetches(&self) -> Vec<(FetchUnit, RepoIdentity)> {
+    pub fn failed_fetches(&self) -> Vec<RefreshTarget> {
         self.efforts
             .iter()
             .filter(|entry| entry.card.outcome.is_err())
-            .map(|entry| (FetchUnit::for_effort(&entry.key), entry.repo.clone()))
-            .collect()
-    }
-
-    pub fn failed_discoveries(&self) -> Vec<DiscoveryUnit> {
-        self.discoveries
-            .iter()
-            .filter_map(|(unit, phase)| {
-                matches!(phase, DiscoveryPhase::Failed(_)).then_some(unit.clone())
-            })
+            .map(RefreshTarget::for_entry)
+            .chain(
+                self.discoveries
+                    .iter()
+                    .filter(|(_, phase)| matches!(phase, DiscoveryPhase::Failed(_)))
+                    .map(|(unit, _)| RefreshTarget::Discovery(unit.clone())),
+            )
             .collect()
     }
 
@@ -522,21 +549,6 @@ impl TicketList {
     /// Failed reads preserve previously loaded data and its Fetch Age.
     pub fn merge_effort(&mut self, repo: RepoIdentity, read: EffortRead, now: DateTime<Utc>) {
         let entry = EffortEntry::new(repo, read, now);
-        if let EffortKey::GitHub { repo_slug, .. } = &entry.key
-            && let Some(DiscoveryPhase::Loading { reads, .. }) =
-                self.discoveries.get_mut(&DiscoveryUnit::GitHubRepo {
-                    slug: repo_slug.clone(),
-                })
-        {
-            reads.insert(
-                entry.key.clone(),
-                if entry.effort.is_some() {
-                    ReadOutcome::Ready
-                } else {
-                    ReadOutcome::Degraded
-                },
-            );
-        }
         if self.is_refreshing(&FetchUnit::for_effort(&entry.key)) {
             if entry.effort.is_some() {
                 self.refreshed_efforts.insert(entry.key.clone());
@@ -556,6 +568,23 @@ impl TicketList {
             None => self.efforts.push(entry),
         }
         self.relayout();
+    }
+
+    pub fn record_discovery_read(&mut self, unit: &DiscoveryUnit, read: &EffortRead) {
+        let (key, outcome) = match read {
+            EffortRead::Ready(effort) => (&effort.key, ReadOutcome::Ready),
+            EffortRead::Degraded { key, .. } => (key, ReadOutcome::Degraded),
+        };
+        if self.is_refreshing(&FetchUnit::Discovery(unit.clone())) {
+            if outcome == ReadOutcome::Ready {
+                self.refreshed_efforts.insert(key.clone());
+            } else {
+                self.refresh_failed = true;
+            }
+        }
+        if let Some(DiscoveryPhase::Loading { reads, .. }) = self.discoveries.get_mut(unit) {
+            reads.insert(key.clone(), outcome);
+        }
     }
 
     pub fn begin_discovery(&mut self, unit: DiscoveryUnit) {
@@ -580,10 +609,10 @@ impl TicketList {
         incomplete: Option<String>,
         now: DateTime<Utc>,
     ) {
-        if let DiscoveryUnit::GitHubRepo { slug } = &unit
-            && let Some(DiscoveryPhase::Loading { reads, .. }) = self.discoveries.get(&unit)
-        {
-            if incomplete.is_none() {
+        if let Some(DiscoveryPhase::Loading { reads, .. }) = self.discoveries.get(&unit) {
+            if incomplete.is_none()
+                && let DiscoveryUnit::GitHubRepo { slug } = &unit
+            {
                 self.efforts.retain(|entry| {
                     !matches!(&entry.key, EffortKey::GitHub { repo_slug, .. } if repo_slug == slug)
                         || reads.contains_key(&entry.key)

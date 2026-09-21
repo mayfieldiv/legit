@@ -558,6 +558,7 @@ fn settle_discovery(
             tracing::info!(?unit, efforts = reads.len(), "efforts discovered");
             for read in reads {
                 let _ = tx.send(Msg::EffortArrived {
+                    unit: unit.clone(),
                     repo: repo.clone(),
                     read,
                 });

@@ -291,6 +291,7 @@ fn effort_arrivals_pool_and_probe_settlement_clears_loading() {
     let cmds = update(
         &mut model,
         Msg::EffortArrived {
+            unit: DiscoveryUnit::Cwd,
             repo: RepoIdentity::Path(CanonicalPathBuf::assume_canonical("/w")),
             read: EffortRead::Ready(effort),
         },
@@ -534,6 +535,7 @@ fn a_github_refresh_shares_one_read_across_maps_and_can_repeat_after_completion(
         update(
             &mut model,
             Msg::EffortArrived {
+                unit: github_unit("acme/web"),
                 repo: RepoIdentity::Slug(RepoSlug::new("acme/web")),
                 read: github_read(map, number),
             },
@@ -549,6 +551,7 @@ fn a_github_refresh_shares_one_read_across_maps_and_can_repeat_after_completion(
         update(
             &mut model,
             Msg::EffortArrived {
+                unit: github_unit("acme/web"),
                 repo: RepoIdentity::Slug(RepoSlug::new("acme/web")),
                 read: github_read(map, number),
             },
@@ -577,6 +580,7 @@ fn refresh_all_covers_each_unit_once_including_efforts_with_no_open_tickets() {
         update(
             &mut model,
             Msg::EffortArrived {
+                unit: github_unit("acme/web"),
                 repo: RepoIdentity::Slug(RepoSlug::new("acme/web")),
                 read: github_read(map, number),
             },
@@ -585,6 +589,7 @@ fn refresh_all_covers_each_unit_once_including_efforts_with_no_open_tickets() {
     update(
         &mut model,
         Msg::EffortArrived {
+            unit: github_unit("acme/web"),
             repo: RepoIdentity::Slug(RepoSlug::new("acme/web")),
             read: EffortRead::Ready(
                 Effort::new(
@@ -634,6 +639,7 @@ fn a_failed_github_refresh_keeps_stale_tickets_and_age_and_allows_retry() {
     update(
         &mut model,
         Msg::EffortArrived {
+            unit: github_unit("acme/web"),
             repo: RepoIdentity::Slug(RepoSlug::new("acme/web")),
             read: github_read(10, 11),
         },
@@ -750,6 +756,7 @@ fn a_complete_map_read_removes_absent_maps_but_an_incomplete_read_retains_them()
         update(
             &mut model,
             Msg::EffortArrived {
+                unit: github_unit("acme/web"),
                 repo: repo.clone(),
                 read: github_read(map, number),
             },
@@ -760,6 +767,7 @@ fn a_complete_map_read_removes_absent_maps_but_an_incomplete_read_retains_them()
         update(
             &mut model,
             Msg::EffortArrived {
+                unit: github_unit("acme/web"),
                 repo: repo.clone(),
                 read: github_read(20, 21),
             },
@@ -804,6 +812,7 @@ fn r_retries_startup_failures_even_when_another_effort_has_the_selection() {
     update(
         &mut model,
         Msg::EffortArrived {
+            unit: DiscoveryUnit::Cwd,
             repo: RepoIdentity::Slug(RepoSlug::new("acme/web")),
             read: EffortRead::Degraded {
                 key: EffortKey::Local {
@@ -841,6 +850,7 @@ fn all_successful_efforts_in_one_map_read_share_its_settlement_time() {
         update_at(
             &mut model,
             Msg::EffortArrived {
+                unit: github_unit("acme/web"),
                 repo: RepoIdentity::Slug(RepoSlug::new("acme/web")),
                 read: github_read(map, number),
             },
@@ -897,6 +907,7 @@ fn an_incomplete_refresh_counts_only_the_efforts_it_read() {
         update(
             &mut model,
             Msg::EffortArrived {
+                unit: github_unit("acme/web"),
                 repo: repo.clone(),
                 read: github_read(map, number),
             },
@@ -906,6 +917,7 @@ fn an_incomplete_refresh_counts_only_the_efforts_it_read() {
     update(
         &mut model,
         Msg::EffortArrived {
+            unit: github_unit("acme/web"),
             repo,
             read: github_read(20, 21),
         },
@@ -926,4 +938,120 @@ fn an_incomplete_refresh_counts_only_the_efforts_it_read() {
         2
     );
     assert_eq!(model.status.as_ref().unwrap().text, "Refreshed 1 effort");
+}
+
+fn model_with_failed_local_discovery() -> (Model, DiscoveryUnit) {
+    let mut model = ticket_model(&["01-a"]);
+    model.config = discovery_config();
+    let unit = DiscoveryUnit::for_repo(&model.config.repos[1]).unwrap();
+    update(
+        &mut model,
+        Msg::DiscoveryFailed {
+            unit: unit.clone(),
+            error: "missing worktree".to_owned(),
+        },
+    );
+    (model, unit)
+}
+
+#[test]
+fn a_local_discovery_retry_keeps_the_refresh_pending_until_it_settles() {
+    let (mut model, unit) = model_with_failed_local_discovery();
+    let cmds = update(&mut model, key_event(KeyCode::Char('r')));
+    assert_eq!(discovery_cmds(&cmds).len(), 1);
+    assert!(update(&mut model, key_event(KeyCode::Char('r'))).is_empty());
+    let repo = RepoIdentity::Slug(RepoSlug::new("acme/web"));
+    let dir = CanonicalPathBuf::assume_canonical("/w/alpha");
+    let read = EffortRead::Ready(
+        Effort::new(
+            EffortKey::Local { dir: dir.clone() },
+            "Alpha".to_owned(),
+            None,
+            Vec::new(),
+        )
+        .unwrap(),
+    );
+    update(
+        &mut model,
+        Msg::LocalEffortRead {
+            dir,
+            repo: repo.clone(),
+            result: Ok(read),
+        },
+    );
+    assert_eq!(model.status, None, "the recovery probe still runs");
+    let read = EffortRead::Ready(
+        Effort::new(
+            EffortKey::Local {
+                dir: CanonicalPathBuf::assume_canonical("/w/recovered"),
+            },
+            "Recovered".to_owned(),
+            None,
+            Vec::new(),
+        )
+        .unwrap(),
+    );
+    update(
+        &mut model,
+        Msg::EffortArrived {
+            unit: unit.clone(),
+            repo,
+            read,
+        },
+    );
+    update(
+        &mut model,
+        Msg::DiscoveryFinished {
+            unit,
+            incomplete: None,
+        },
+    );
+    assert_eq!(model.status.as_ref().unwrap().text, "Refreshed 2 efforts");
+}
+
+#[test]
+fn a_failed_local_discovery_retry_posts_an_error_and_suppresses_later_success() {
+    let (mut model, unit) = model_with_failed_local_discovery();
+    update(&mut model, key_event(KeyCode::Char('r')));
+    let cmds = update(
+        &mut model,
+        Msg::DiscoveryFailed {
+            unit,
+            error: "still missing".to_owned(),
+        },
+    );
+    assert!(cmds.iter().any(|cmd| matches!(
+        cmd,
+        Cmd::ScheduleStatusClear {
+            delay_ms: 8_000,
+            ..
+        }
+    )));
+    let dir = CanonicalPathBuf::assume_canonical("/w/alpha");
+    let read = EffortRead::Ready(
+        Effort::new(
+            EffortKey::Local { dir: dir.clone() },
+            "Alpha".to_owned(),
+            None,
+            Vec::new(),
+        )
+        .unwrap(),
+    );
+    update(
+        &mut model,
+        Msg::LocalEffortRead {
+            dir,
+            repo: RepoIdentity::Slug(RepoSlug::new("acme/web")),
+            result: Ok(read),
+        },
+    );
+    assert_eq!(model.status.as_ref().unwrap().kind, StatusKind::Error);
+    assert!(
+        model
+            .status
+            .as_ref()
+            .unwrap()
+            .text
+            .contains("still missing")
+    );
 }
