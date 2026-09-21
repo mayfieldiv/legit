@@ -1,18 +1,21 @@
-//! Tests for the command layer's local discovery probes — the one place a
-//! probe's outcome is turned into messages. Fixture Efforts are built in
-//! tempdirs, since the filesystem is exactly what a probe reads.
+//! Tests for the command layer's Effort discovery — the one place a unit's
+//! outcome is turned into messages. Local probes read fixture Efforts built
+//! in tempdirs, since the filesystem is exactly what a probe reads; a map
+//! read settles from a hand-built `EffortReadBatch`, the transport's one
+//! output.
 
 use std::path::Path;
 
 use tokio::sync::mpsc;
 
-use super::{run_discover_cwd_efforts, run_discover_repo_efforts};
+use super::{run_discover_cwd_efforts, run_discover_repo_efforts, settle_map_read};
 use crate::{
     app::{msg::Msg, ticket_list::DiscoveryUnit},
     canonical_path::CanonicalPathBuf,
     config::{LegitConfig, RepoConfig, RepoIdentity},
+    github::wayfinder::EffortReadBatch,
     repo_slug::RepoSlug,
-    ticket::EffortRead,
+    ticket::{Effort, EffortKey, EffortRead},
 };
 
 fn write(path: &Path, content: &str) {
@@ -196,6 +199,114 @@ async fn the_cwd_walk_keeps_a_configured_slug_less_repo_keyed_by_path() {
             );
         }
         other => panic!("expected one arrival then a finish, got {other:?}"),
+    }
+}
+
+// ── GitHub map reads ──────────────────────────────────────────────────────
+
+/// A Ready GitHub Effort with no Tickets — settlement never looks inside.
+fn github_effort(slug: &RepoSlug, map_number: u64, title: &str) -> EffortRead {
+    EffortRead::Ready(
+        Effort::new(
+            EffortKey::GitHub {
+                repo_slug: slug.clone(),
+                map_number,
+            },
+            title.to_owned(),
+            None,
+            Vec::new(),
+        )
+        .unwrap(),
+    )
+}
+
+#[test]
+fn a_map_read_attributes_every_effort_to_the_slug_then_finishes_complete() {
+    let slug = RepoSlug::new("acme/web");
+    let batch = EffortReadBatch {
+        efforts: vec![
+            github_effort(&slug, 1, "Alpha"),
+            github_effort(&slug, 2, "Beta"),
+        ],
+        has_more_maps: false,
+    };
+    let (tx, rx) = mpsc::unbounded_channel();
+
+    settle_map_read(slug.clone(), Ok(batch), &tx);
+
+    match drain(rx).as_slice() {
+        [
+            Msg::EffortArrived {
+                repo: first_repo,
+                read: first,
+            },
+            Msg::EffortArrived {
+                repo: second_repo,
+                read: second,
+            },
+            Msg::DiscoveryFinished {
+                unit,
+                incomplete: None,
+            },
+        ] => {
+            assert_eq!(effort_title(first), "Alpha");
+            assert_eq!(effort_title(second), "Beta");
+            assert_eq!(
+                first_repo,
+                &RepoIdentity::Slug(slug.clone()),
+                "the slug is the attribution outright"
+            );
+            assert_eq!(second_repo, &RepoIdentity::Slug(slug.clone()));
+            assert_eq!(unit, &DiscoveryUnit::GitHubRepo { slug });
+        }
+        other => panic!("expected two arrivals then a complete finish, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_map_read_past_the_window_keeps_what_it_read_and_finishes_incomplete() {
+    let slug = RepoSlug::new("immense/immybot");
+    let batch = EffortReadBatch {
+        efforts: vec![github_effort(&slug, 1, "Alpha")],
+        has_more_maps: true,
+    };
+    let (tx, rx) = mpsc::unbounded_channel();
+
+    settle_map_read(slug.clone(), Ok(batch), &tx);
+
+    match drain(rx).as_slice() {
+        [
+            Msg::EffortArrived { read, .. },
+            Msg::DiscoveryFinished {
+                unit,
+                incomplete: Some(caveat),
+            },
+        ] => {
+            assert_eq!(effort_title(read), "Alpha", "what was read still pools");
+            assert_eq!(unit, &DiscoveryUnit::GitHubRepo { slug });
+            assert!(caveat.contains("more than 10 open maps"), "{caveat}");
+        }
+        other => panic!("expected one arrival then an incomplete finish, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_refused_map_read_fails_the_repo_unit() {
+    let slug = RepoSlug::new("acme/api");
+    let (tx, rx) = mpsc::unbounded_channel();
+
+    settle_map_read(
+        slug.clone(),
+        Err(anyhow::anyhow!("GitHub GraphQL error: 404 Not Found")),
+        &tx,
+    );
+
+    match drain(rx).as_slice() {
+        [Msg::DiscoveryFailed { unit, error }] => {
+            assert_eq!(unit, &DiscoveryUnit::GitHubRepo { slug });
+            assert!(error.contains("404 Not Found"), "{error}");
+        }
+        other => panic!("expected one failure, got {other:?}"),
     }
 }
 

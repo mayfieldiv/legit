@@ -15,7 +15,7 @@ use crate::{
     github::rest::PrKey,
     github::rest::WorkflowNameCache,
     github::types::ReviewStatus,
-    github::wayfinder::Wayfinder,
+    github::wayfinder::{EffortReadBatch, Wayfinder},
     local_effort,
     ticket::EffortRead,
     worktree,
@@ -486,27 +486,38 @@ async fn run_discover_cwd_efforts(
     settle_discovery(DiscoveryUnit::Cwd, result, &tx);
 }
 
-/// One PR-capable Tracked Repo's map read. The slug is the attribution
-/// outright — a GitHub Effort belongs to the repo whose tracker holds it —
-/// so nothing here touches the filesystem the local probes resolve identity
-/// through.
+/// One PR-capable Tracked Repo's map read: one request behind one background
+/// permit, then `settle_map_read`.
 async fn run_read_github_efforts(
     repo: RepoSlug,
     token: AuthToken,
     tx: mpsc::UnboundedSender<Msg>,
     limiter: Arc<NetworkLimiter>,
 ) {
-    let unit = DiscoveryUnit::GitHubRepo { slug: repo.clone() };
     let result = limited(&limiter, None, async {
         Wayfinder::new(&token).read_efforts(&repo).await
     })
-    .await
-    .map(|batch| Discovered {
+    .await;
+    settle_map_read(repo, result, &tx);
+}
+
+/// A map read's settlement — the sync half of `run_read_github_efforts`, so
+/// it is testable without a transport. The slug is the attribution outright:
+/// a GitHub Effort belongs to the repo whose tracker holds it, so nothing here
+/// touches the filesystem the local probes resolve identity through. A read
+/// that saw only the first window of maps settles incomplete, not complete.
+fn settle_map_read(
+    repo: RepoSlug,
+    result: anyhow::Result<EffortReadBatch>,
+    tx: &mpsc::UnboundedSender<Msg>,
+) {
+    let unit = DiscoveryUnit::GitHubRepo { slug: repo.clone() };
+    let result = result.map(|batch| Discovered {
         repo: RepoIdentity::Slug(repo),
         incomplete: batch.incomplete(),
         reads: batch.efforts,
     });
-    settle_discovery(unit, result, &tx);
+    settle_discovery(unit, result, tx);
 }
 
 /// What one unit's read delivered: its Efforts, attributed, plus the caveat
