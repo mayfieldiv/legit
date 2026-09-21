@@ -457,8 +457,12 @@ async fn run_discover_repo_efforts(
         // Discovery first: its missing-worktree error names the path plainly,
         // where identity's would be a bare canonicalize failure.
         let reads = local_effort::discover_repo_efforts(&repo)?;
-        let identity = repo.identity()?;
-        Ok((identity, reads))
+        let repo = repo.identity()?;
+        Ok(Discovered {
+            repo,
+            reads,
+            incomplete: None,
+        })
     })
     .await;
     settle_discovery(unit, result, &tx);
@@ -473,7 +477,12 @@ async fn run_discover_cwd_efforts(
 ) {
     let result =
         blocking(move || local_effort::discover_cwd_efforts(&cwd, &config, detected.as_ref()))
-            .await;
+            .await
+            .map(|(repo, reads)| Discovered {
+                repo,
+                reads,
+                incomplete: None,
+            });
     settle_discovery(DiscoveryUnit::Cwd, result, &tx);
 }
 
@@ -492,19 +501,36 @@ async fn run_read_github_efforts(
         Wayfinder::new(&token).read_efforts(&repo).await
     })
     .await
-    .map(|batch| (RepoIdentity::Slug(repo), batch.efforts));
+    .map(|batch| Discovered {
+        repo: RepoIdentity::Slug(repo),
+        incomplete: batch.incomplete(),
+        reads: batch.efforts,
+    });
     settle_discovery(unit, result, &tx);
 }
 
+/// What one unit's read delivered: its Efforts, attributed, plus the caveat
+/// of a read that saw only a window of the unit (`EffortReadBatch::incomplete`).
+/// Local probes walk the whole unit, so theirs is always `None`.
+struct Discovered {
+    repo: RepoIdentity,
+    reads: Vec<EffortRead>,
+    incomplete: Option<String>,
+}
+
 /// Deliver one unit's outcome: an arrival per Effort then the unit's
-/// completion, or the unit's failure.
+/// completion (complete or with its caveat), or the unit's failure.
 fn settle_discovery(
     unit: DiscoveryUnit,
-    result: anyhow::Result<(RepoIdentity, Vec<EffortRead>)>,
+    result: anyhow::Result<Discovered>,
     tx: &mpsc::UnboundedSender<Msg>,
 ) {
     match result {
-        Ok((repo, reads)) => {
+        Ok(Discovered {
+            repo,
+            reads,
+            incomplete,
+        }) => {
             tracing::info!(?unit, efforts = reads.len(), "efforts discovered");
             for read in reads {
                 let _ = tx.send(Msg::EffortArrived {
@@ -512,7 +538,7 @@ fn settle_discovery(
                     read,
                 });
             }
-            let _ = tx.send(Msg::DiscoveryFinished { unit });
+            let _ = tx.send(Msg::DiscoveryFinished { unit, incomplete });
         }
         Err(error) => {
             let _ = tx.send(discovery_failed(unit, error));

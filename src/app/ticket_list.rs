@@ -78,12 +78,17 @@ impl TicketCounts {
 }
 
 /// One rail entry in display order: a discovery unit that failed before it
-/// could attribute any Effort, or an Effort's card.
+/// could attribute any Effort, a unit whose read settled but saw only a
+/// window of it, or an Effort's card.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RailCard<'a> {
     Failure {
         unit: &'a DiscoveryUnit,
         error: &'a str,
+    },
+    Incomplete {
+        unit: &'a DiscoveryUnit,
+        caveat: &'a str,
     },
     Effort(&'a EffortCard),
 }
@@ -352,6 +357,10 @@ impl DiscoveryUnit {
 pub enum DiscoveryPhase {
     Loading,
     Loaded,
+    /// Settled with everything the read could see pooled, but the unit holds
+    /// more than the read's window. Terminal like `Loaded` — a re-read sees
+    /// the same window — but the rail must say so (spec §5.5).
+    Incomplete(String),
     Failed(String),
 }
 
@@ -405,8 +414,14 @@ impl TicketList {
         self.discoveries.insert(unit, DiscoveryPhase::Loading);
     }
 
-    pub fn finish_discovery(&mut self, unit: DiscoveryUnit) {
-        self.discoveries.insert(unit, DiscoveryPhase::Loaded);
+    /// Settle `unit`: complete, or with the caveat of a read that saw only a
+    /// window of it (`Msg::DiscoveryFinished`).
+    pub fn finish_discovery(&mut self, unit: DiscoveryUnit, incomplete: Option<String>) {
+        let phase = match incomplete {
+            None => DiscoveryPhase::Loaded,
+            Some(caveat) => DiscoveryPhase::Incomplete(caveat),
+        };
+        self.discoveries.insert(unit, phase);
     }
 
     pub fn fail_discovery(&mut self, unit: DiscoveryUnit, error: String) {
@@ -414,12 +429,15 @@ impl TicketList {
     }
 
     /// Whether `unit` should have discovery dispatched: never run, or its
-    /// last run failed. False while in flight or loaded — re-running then
-    /// would only redo work the pool already holds.
+    /// last run failed. False while in flight or settled — re-running then
+    /// would only redo work the pool already holds (an incomplete read would
+    /// see the same window again).
     pub fn needs_discovery(&self, unit: &DiscoveryUnit) -> bool {
         match self.discoveries.get(unit) {
             None | Some(DiscoveryPhase::Failed(_)) => true,
-            Some(DiscoveryPhase::Loading | DiscoveryPhase::Loaded) => false,
+            Some(
+                DiscoveryPhase::Loading | DiscoveryPhase::Loaded | DiscoveryPhase::Incomplete(_),
+            ) => false,
         }
     }
 
@@ -430,20 +448,22 @@ impl TicketList {
             .any(|phase| *phase == DiscoveryPhase::Loading)
     }
 
-    /// The rail in display order: every unit that failed outright, then the
-    /// Effort cards in rail order. Failures lead because the rail doesn't
-    /// scroll yet — below the Efforts, a full rail would push them offscreen
-    /// with no way to reach them (spec §5.5, never silently missing).
+    /// The rail in display order: every unit that failed outright or settled
+    /// incomplete, then the Effort cards in rail order. The unit cards lead
+    /// because the rail doesn't scroll yet — below the Efforts, a full rail
+    /// would push them offscreen with no way to reach them (spec §5.5, never
+    /// silently missing).
     // TODO(#133): rail scrolling with the effort filter.
     pub fn rail(&self) -> impl Iterator<Item = RailCard<'_>> {
-        let failures = self
+        let units = self
             .discoveries
             .iter()
             .filter_map(|(unit, phase)| match phase {
                 DiscoveryPhase::Failed(error) => Some(RailCard::Failure { unit, error }),
+                DiscoveryPhase::Incomplete(caveat) => Some(RailCard::Incomplete { unit, caveat }),
                 DiscoveryPhase::Loading | DiscoveryPhase::Loaded => None,
             });
-        failures.chain(
+        units.chain(
             self.efforts
                 .iter()
                 .map(|entry| RailCard::Effort(&entry.card)),

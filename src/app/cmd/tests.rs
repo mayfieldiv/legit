@@ -72,7 +72,10 @@ async fn a_repo_probe_streams_one_arrival_per_effort_then_finishes() {
                 repo: second_repo,
                 read: second,
             },
-            Msg::DiscoveryFinished { unit: finished },
+            Msg::DiscoveryFinished {
+                unit: finished,
+                incomplete: None,
+            },
         ] => {
             assert_eq!(effort_title(first), "Alpha");
             assert_eq!(effort_title(second), "Beta");
@@ -128,6 +131,7 @@ async fn the_cwd_walk_attributes_to_the_detected_repo_or_the_toplevel() {
             Msg::EffortArrived { repo, read },
             Msg::DiscoveryFinished {
                 unit: DiscoveryUnit::Cwd,
+                incomplete: None,
             },
         ] => {
             assert_eq!(effort_title(read), "Local");

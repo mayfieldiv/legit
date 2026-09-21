@@ -302,6 +302,7 @@ fn effort_arrivals_pool_and_probe_settlement_clears_loading() {
         &mut model,
         Msg::DiscoveryFinished {
             unit: DiscoveryUnit::Cwd,
+            incomplete: None,
         },
     );
     assert!(!model.tickets.is_loading());
@@ -445,6 +446,41 @@ fn a_failed_map_read_is_recorded_on_the_queue_under_its_repo() {
             .tickets
             .needs_discovery(&github_unit("mayfieldiv/legit")),
         "a failed read retries on the next gate release"
+    );
+    assert_eq!(model.status, None);
+}
+
+#[test]
+fn an_incomplete_map_read_settles_its_unit_and_records_the_caveat_on_the_queue() {
+    let (mut model, _) = Model::new();
+    model.auth_token = Some(AuthToken::parse("ghp_test").unwrap());
+    model.config_loaded = true;
+    update(
+        &mut model,
+        Msg::RepoDetected(Some(RepoSlug::new("immense/immybot"))),
+    );
+
+    let cmds = update(
+        &mut model,
+        Msg::DiscoveryFinished {
+            unit: github_unit("immense/immybot"),
+            incomplete: Some("more than 10 open maps; showing the first 10".to_owned()),
+        },
+    );
+
+    assert!(cmds.is_empty(), "{cmds:?}");
+    assert_eq!(
+        model.tickets.rail().collect::<Vec<_>>(),
+        [RailCard::Incomplete {
+            unit: &github_unit("immense/immybot"),
+            caveat: "more than 10 open maps; showing the first 10",
+        }]
+    );
+    assert!(
+        !model
+            .tickets
+            .needs_discovery(&github_unit("immense/immybot")),
+        "the read settled — a config reload must not re-read the same window"
     );
     assert_eq!(model.status, None);
 }

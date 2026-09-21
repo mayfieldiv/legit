@@ -38,9 +38,13 @@ pub enum Msg {
         repo: RepoIdentity,
         read: EffortRead,
     },
-    /// One discovery unit streamed its last Effort.
+    /// One discovery unit streamed its last Effort. `incomplete` is the caveat
+    /// of a read that saw only a window of the unit (a map read past the fixed
+    /// query's `first:10`): the unit still settles and its Efforts stay
+    /// pooled, but the rail says what lies beyond (spec §5.5).
     DiscoveryFinished {
         unit: DiscoveryUnit,
+        incomplete: Option<String>,
     },
     /// One discovery unit failed outright — a missing Main Worktree, an
     /// unreadable Wayfinder Root, a map read GitHub refused — before it could

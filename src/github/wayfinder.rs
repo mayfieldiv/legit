@@ -30,6 +30,9 @@ use crate::{
 };
 
 const MAP_LABEL: &str = "wayfinder:map";
+/// The caveat a read carries past the query's `first:10` map window. The
+/// query is fixed (spec §4.1), so the surplus is reported, never fetched.
+const MORE_MAPS: &str = "more than 10 open maps; showing the first 10";
 
 /// Each operation constructs its transport per call and issues exactly one
 /// HTTP request.
@@ -92,9 +95,7 @@ impl Wayfinder {
         }
         let batch = parse_wayfinder_maps(response, slug)?;
         if batch.has_more_maps {
-            // The fixed query reads one `first:10` window; a repo with more
-            // open maps gets the surplus reported, not silently dropped.
-            tracing::warn!(%slug, "more than 10 open wayfinder maps; reading the first 10");
+            tracing::warn!(%slug, "{}", MORE_MAPS);
         }
         Ok(batch)
     }
@@ -246,9 +247,16 @@ struct RawRepoName {
 #[derive(Debug)]
 pub struct EffortReadBatch {
     pub efforts: Vec<EffortRead>,
-    /// The repo has more open maps than the query's `first:10` window. The
-    /// query is fixed (spec §4.1), so the surplus is reported, not fetched.
+    /// The repo has more open maps than the query's `first:10` window.
     pub has_more_maps: bool,
+}
+
+impl EffortReadBatch {
+    /// Why the read is not the whole repo, when it isn't — worded for the
+    /// rail, so a partial read is never silently complete (§5.5).
+    pub fn incomplete(&self) -> Option<String> {
+        self.has_more_maps.then(|| MORE_MAPS.to_owned())
+    }
 }
 
 /// Parse a whole-map response into per-map [`EffortRead`]s. Blocked-ness

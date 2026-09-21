@@ -1080,8 +1080,8 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
             model.tickets.merge_effort(repo, read);
             Vec::new()
         }
-        Msg::DiscoveryFinished { unit } => {
-            model.tickets.finish_discovery(unit);
+        Msg::DiscoveryFinished { unit, incomplete } => {
+            model.tickets.finish_discovery(unit, incomplete);
             Vec::new()
         }
         Msg::DiscoveryFailed { unit, error } => {
