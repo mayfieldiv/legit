@@ -371,7 +371,7 @@ impl DiscoveryUnit {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ReadOutcome {
     Ready,
     Degraded,
@@ -549,13 +549,15 @@ impl TicketList {
     /// Failed reads preserve previously loaded data and its Fetch Age.
     pub fn merge_effort(&mut self, repo: RepoIdentity, read: EffortRead, now: DateTime<Utc>) {
         let entry = EffortEntry::new(repo, read, now);
-        if self.is_refreshing(&FetchUnit::for_effort(&entry.key)) {
+        self.record_refresh_read(
+            &FetchUnit::for_effort(&entry.key),
+            &entry.key,
             if entry.effort.is_some() {
-                self.refreshed_efforts.insert(entry.key.clone());
+                ReadOutcome::Ready
             } else {
-                self.refresh_failed = true;
-            }
-        }
+                ReadOutcome::Degraded
+            },
+        );
         match self
             .efforts
             .iter_mut()
@@ -575,15 +577,21 @@ impl TicketList {
             EffortRead::Ready(effort) => (&effort.key, ReadOutcome::Ready),
             EffortRead::Degraded { key, .. } => (key, ReadOutcome::Degraded),
         };
-        if self.is_refreshing(&FetchUnit::Discovery(unit.clone())) {
-            if outcome == ReadOutcome::Ready {
-                self.refreshed_efforts.insert(key.clone());
-            } else {
-                self.refresh_failed = true;
-            }
-        }
+        self.record_refresh_read(&FetchUnit::Discovery(unit.clone()), key, outcome);
         if let Some(DiscoveryPhase::Loading { reads, .. }) = self.discoveries.get_mut(unit) {
             reads.insert(key.clone(), outcome);
+        }
+    }
+
+    fn record_refresh_read(&mut self, unit: &FetchUnit, key: &EffortKey, outcome: ReadOutcome) {
+        if !self.is_refreshing(unit) {
+            return;
+        }
+        match outcome {
+            ReadOutcome::Ready => {
+                self.refreshed_efforts.insert(key.clone());
+            }
+            ReadOutcome::Degraded => self.refresh_failed = true,
         }
     }
 
