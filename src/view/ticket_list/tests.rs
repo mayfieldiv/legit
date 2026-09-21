@@ -156,7 +156,7 @@ fn the_ticket_surface_renders_the_rail_and_the_tiered_queue() {
     let mut expected = vec![
         "legit — Tickets — 2 efforts · 2 frontier                                                                                                    ",
         "[All]                                                                                                                                       ",
-        "Mode [All]  AFK   HITL   · All efforts · * Either                                                                                           ",
+        "Mode [All]  AFK   HITL   · * Either · All efforts                                                                                           ",
         "All efforts                           │  Ticket     Repo  Type      Title                                                    Block   Age    ",
         "                                      │  ── Frontier                                                                                        ",
         "notes · Map: docs                     │  01-read    notes research  Read the RFC                                                     now    ",

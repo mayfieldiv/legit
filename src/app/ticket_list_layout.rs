@@ -31,6 +31,16 @@ pub fn summary_width(main_width: u16) -> Option<u16> {
     (main_width >= 170).then_some(44)
 }
 
+pub fn summary_rows(height: u16) -> usize {
+    usize::from(height).saturating_sub(APP_HEADER_ROWS + TAB_ROWS + FILTER_ROWS + STATUS_ROWS)
+}
+
+pub fn summary_contains(width: u16, height: u16, column: u16, row: u16) -> bool {
+    summary_width(width).is_some_and(|panel| column >= width - panel && column < width)
+        && row >= (APP_HEADER_ROWS + TAB_ROWS + FILTER_ROWS) as u16
+        && row < height.saturating_sub(STATUS_ROWS as u16)
+}
+
 pub fn queue_contains(width: u16, height: u16, column: u16, row: u16) -> bool {
     let right = width.saturating_sub(summary_width(width).map_or(0, |width| width + DIVIDER_WIDTH));
     let left = rail_width(right).map_or(0, |width| width + DIVIDER_WIDTH);

@@ -11,4 +11,5 @@ pub mod pr_list;
 pub mod summary_layout;
 pub mod ticket_list;
 pub mod ticket_list_layout;
+pub mod ticket_summary_layout;
 pub mod update;

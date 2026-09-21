@@ -1042,7 +1042,7 @@ impl TicketList {
 
         // Blocks, pool-wide: how many open Tickets wait on each target.
         let mut dependents: HashMap<TicketKey, usize> = HashMap::new();
-        for (_, ticket, _) in self.queued_tickets() {
+        for (_, ticket) in self.queued_tickets() {
             for target in ticket
                 .dependencies
                 .iter()
@@ -1053,19 +1053,12 @@ impl TicketList {
         }
         let mut tickets: Vec<TicketRow> = self
             .queued_tickets()
-            .filter(|(_, ticket, _)| self.mode_filter.matches(ticket.ty.mode()))
-            .filter(|(_, ticket, _)| {
-                self.efforts.iter().any(|entry| {
-                    self.effort_matches(entry)
-                        && entry
-                            .effort
-                            .as_ref()
-                            .is_some_and(|effort| effort.ticket(&ticket.key).is_some())
-                })
+            .filter(|(entry, ticket)| {
+                self.effort_matches(entry) && self.mode_filter.matches(ticket.ty.mode())
             })
-            .map(|(repo, ticket, fetch)| {
+            .map(|(entry, ticket)| {
                 let downstream = dependents.get(&ticket.key).copied().unwrap_or(0);
-                TicketRow::derive(repo, &ticket, downstream, fetch)
+                TicketRow::derive(&entry.card.repo, &ticket, downstream, entry.card.fetch)
             })
             .collect();
         // Stable, so within a tier the pool's rail-then-effort order holds.
@@ -1089,23 +1082,16 @@ impl TicketList {
         self.refresh_summary();
     }
 
-    /// Every open Ticket of every pooled Effort with its repo's display name,
-    /// in rail then effort order.
-    fn queued_tickets(&self) -> impl Iterator<Item = (&str, EffortTicket<'_>, FetchState)> {
+    /// Open Tickets in rail then effort order, before any view filters.
+    fn queued_tickets(&self) -> impl Iterator<Item = (&EffortEntry, EffortTicket<'_>)> {
         self.efforts
             .iter()
-            .filter_map(|entry| {
-                Some((
-                    entry.card.repo.as_str(),
-                    entry.effort.as_ref()?,
-                    entry.card.fetch,
-                ))
-            })
-            .flat_map(|(repo, effort, fetch)| {
+            .filter_map(|entry| Some((entry, entry.effort.as_ref()?)))
+            .flat_map(|(entry, effort)| {
                 effort
                     .tickets()
                     .filter(|ticket| ticket.state == TicketState::Open)
-                    .map(move |ticket| (repo, ticket, fetch))
+                    .map(move |ticket| (entry, ticket))
             })
     }
 }

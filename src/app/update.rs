@@ -964,6 +964,7 @@ pub fn update(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
         normalize_detail(model);
     }
     normalize_summary(model, now);
+    tickets::normalize_summary(model, now);
     cmds
 }
 
@@ -1030,7 +1031,19 @@ fn apply(model: &mut Model, msg: Msg, now: DateTime<Utc>) -> Vec<Cmd> {
                     Vec::new()
                 }
                 ViewMode::TicketList => {
-                    if super::ticket_list_layout::queue_contains(
+                    if super::ticket_list_layout::summary_contains(
+                        model.terminal_width,
+                        model.terminal_height,
+                        mouse.column,
+                        mouse.row,
+                    ) {
+                        let direction = if down {
+                            super::list_cursor::Direction::Down
+                        } else {
+                            super::list_cursor::Direction::Up
+                        };
+                        model.tickets.scroll_summary(direction, DETAIL_SCROLL_WHEEL);
+                    } else if super::ticket_list_layout::queue_contains(
                         model.terminal_width,
                         model.terminal_height,
                         mouse.column,

@@ -1,8 +1,10 @@
-use super::{QueueRow, TicketList, TicketRow};
+use super::{EffortEntry, QueueRow, TicketList, TicketRow};
+use crate::app::list_cursor::Direction;
 use crate::ticket::{Dependency, EffortKey, TicketKey, TicketState};
 
 #[derive(Clone, Debug)]
 pub struct TicketSummary {
+    scroll: usize,
     pub row: TicketRow,
     pub effort: String,
     pub destination: Option<String>,
@@ -12,15 +14,49 @@ pub struct TicketSummary {
     pub location: String,
 }
 
+impl TicketSummary {
+    pub fn scroll(&self) -> usize {
+        self.scroll
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum DependencySummary {
     Known {
         display_ref: String,
         title: String,
         state: TicketState,
-        qualifier: Option<String>,
+        qualifier: Option<DependencyQualifier>,
     },
     Unknown(String),
+}
+
+#[derive(Clone, Debug)]
+pub struct DependencyQualifier {
+    pub text: String,
+    pub repo: Option<String>,
+}
+
+impl DependencyQualifier {
+    fn for_effort(entry: &EffortEntry) -> Self {
+        Self {
+            text: format!("{} · {}", entry.card.repo, entry.card.title),
+            repo: Some(entry.card.repo.clone()),
+        }
+    }
+
+    fn for_key(key: &TicketKey) -> Self {
+        match key {
+            TicketKey::GitHub { repo_slug, .. } => Self {
+                text: repo_slug.to_string(),
+                repo: Some(repo_slug.to_string()),
+            },
+            TicketKey::Local { path } => Self {
+                text: path.display().to_string(),
+                repo: None,
+            },
+        }
+    }
 }
 
 impl TicketList {
@@ -29,7 +65,28 @@ impl TicketList {
     }
 
     pub(super) fn refresh_summary(&mut self) {
-        self.summary = self.derive_summary();
+        let mut summary = self.derive_summary();
+        if let (Some(previous), Some(next)) = (&self.summary, &mut summary)
+            && previous.row.key == next.row.key
+        {
+            next.scroll = previous.scroll;
+        }
+        self.summary = summary;
+    }
+
+    pub fn scroll_summary(&mut self, direction: Direction, lines: usize) {
+        if let Some(summary) = &mut self.summary {
+            summary.scroll = match direction {
+                Direction::Down => summary.scroll.saturating_add(lines),
+                Direction::Up => summary.scroll.saturating_sub(lines),
+            };
+        }
+    }
+
+    pub fn clamp_summary(&mut self, max_scroll: usize) {
+        if let Some(summary) = &mut self.summary {
+            summary.scroll = summary.scroll.min(max_scroll);
+        }
     }
 
     fn derive_summary(&self) -> Option<TicketSummary> {
@@ -52,6 +109,7 @@ impl TicketList {
         };
         let location = location(key);
         Some(TicketSummary {
+            scroll: 0,
             row: row.clone(),
             effort: effort.title.clone(),
             destination: effort.destination.clone(),
@@ -85,13 +143,8 @@ impl TicketList {
                                     .as_ref()
                                     .is_some_and(|effort| effort.ticket(&target.key).is_some())
                             })
-                            .map(|entry| format!("{} · {}", entry.card.repo, entry.card.title))
-                            .or_else(|| {
-                                Some(match &target.key {
-                                    TicketKey::GitHub { repo_slug, .. } => repo_slug.to_string(),
-                                    TicketKey::Local { path } => path.display().to_string(),
-                                })
-                            }),
+                            .map(DependencyQualifier::for_effort)
+                            .or_else(|| Some(DependencyQualifier::for_key(&target.key))),
                     },
                     Dependency::Unknown { raw } => DependencySummary::Unknown(raw.clone()),
                 })
@@ -115,7 +168,7 @@ impl TicketList {
                             title: ticket.title.clone(),
                             state: ticket.state,
                             qualifier: (source.key != effort.key)
-                                .then(|| format!("{} · {}", entry.card.repo, entry.card.title)),
+                                .then(|| DependencyQualifier::for_effort(entry)),
                         })
                 })
                 .collect(),

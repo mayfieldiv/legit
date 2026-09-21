@@ -1,6 +1,83 @@
 use super::*;
 
 #[test]
+fn an_overflowing_summary_can_be_scrolled_to_the_prompt_without_moving_the_ticket() {
+    use ratatui::crossterm::event::{
+        Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind,
+    };
+    let (mut model, _) = Model::new();
+    let mut dependencies: Vec<_> = (1..=20)
+        .map(|i| {
+            let mut ticket = ticket(
+                "alpha",
+                &format!("{i:02}-done"),
+                &format!("Settled decision {i}"),
+                "research",
+            );
+            ticket.state = TicketState::Closed;
+            ticket
+        })
+        .collect();
+    let mut selected = ticket("alpha", "21-next", "Long summary", "task");
+    selected.dependencies = dependencies
+        .iter()
+        .map(|ticket| Dependency::SameEffort(ticket.key.clone()))
+        .collect();
+    dependencies.push(selected);
+    dependencies.push(ticket("alpha", "22-other", "Other ticket", "task"));
+    model.tickets.merge_effort(
+        web(),
+        effort("alpha", "Map", "Destination", dependencies),
+        chrono::DateTime::UNIX_EPOCH,
+    );
+    model.view_mode = ViewMode::TicketList;
+    let event = |model: &mut Model, event| {
+        crate::app::update::update(
+            model,
+            crate::app::msg::Msg::TerminalEvent(event),
+            chrono::DateTime::UNIX_EPOCH,
+        )
+    };
+    event(&mut model, Event::Resize(200, 24));
+    let initial = buffer_text(&render(&model, 200, 24)).join("\n");
+    assert!(initial.contains("more ↓"), "{initial}");
+    assert!(!initial.contains("p  Long summary"));
+    let selected = model.tickets.selected_ticket().cloned();
+    for _ in 0..20 {
+        assert!(
+            event(
+                &mut model,
+                Event::Key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE))
+            )
+            .is_empty()
+        );
+    }
+    let bottom = buffer_text(&render(&model, 200, 24)).join("\n");
+    assert!(bottom.contains("p  Long summary"), "{bottom}");
+    assert!(!bottom.contains("more ↓"));
+    assert_eq!(model.tickets.selected_ticket(), selected.as_ref());
+    event(
+        &mut model,
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 190,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        }),
+    );
+    assert!(
+        buffer_text(&render(&model, 200, 24))
+            .join("\n")
+            .contains("more ↓")
+    );
+    event(
+        &mut model,
+        Event::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE)),
+    );
+    assert!(buffer_text(&render(&model, 200, 24))[3].contains("22-other Other ticket"));
+}
+
+#[test]
 fn shrinking_drops_summary_then_rail_and_keeps_a_state_column_and_titles() {
     let model = populated_model();
     let wide = buffer_text(&render(&model, 200, 24)).join("\n");
@@ -16,6 +93,10 @@ fn shrinking_drops_summary_then_rail_and_keeps_a_state_column_and_titles() {
     let tiny = buffer_text(&render(&model, 40, 24)).join("\n");
     assert!(tiny.contains("State"));
     assert!(tiny.contains("Read the RFC"), "{tiny}");
+    assert!(
+        tiny.lines().any(|line| line.starts_with("* 03-blocked")),
+        "Either must stay visible without a Type column:\n{tiny}"
+    );
 }
 
 #[test]

@@ -118,7 +118,7 @@ fn render_filters(tickets: &TicketList, frame: &mut Frame<'_>, area: Rect, palet
         ));
     }
     spans.push(Span::raw(format!(
-        " · {} · * Either",
+        " · * Either · {}",
         tickets.effort_filter_label()
     )));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
@@ -553,6 +553,8 @@ fn ticket_line(
         Cell::text(
             if row.fetch.refreshing {
                 REFRESH_GLYPH
+            } else if layout.type_col == 0 && row.ty.mode() == Mode::Either {
+                "*"
             } else {
                 ""
             },
@@ -671,6 +673,16 @@ fn block_cell(upstream: usize, downstream: usize, palette: &Palette) -> Cell {
 }
 
 fn render_status(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
+    if area.width < 100 {
+        let hints = if area.width < 60 {
+            "p copy t PRs"
+        } else {
+            "J/K effort m mode p/y copy"
+        };
+        frame.render_widget(Paragraph::new(hints), area);
+        super::render_status_right(model, frame, area, palette);
+        return;
+    }
     let bold = Style::default().add_modifier(Modifier::BOLD);
     let left = Line::from(vec![
         Span::styled("j/k", bold),
