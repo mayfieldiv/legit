@@ -502,7 +502,11 @@ fn r_refreshes_the_selected_local_effort_once_until_it_settles() {
 }
 
 fn github_read(map_number: u64, number: u64) -> EffortRead {
-    let slug = RepoSlug::new("acme/web");
+    github_read_in("acme/web", map_number, number)
+}
+
+fn github_read_in(slug: &str, map_number: u64, number: u64) -> EffortRead {
+    let slug = RepoSlug::new(slug);
     EffortRead::Ready(
         Effort::new(
             EffortKey::GitHub {
@@ -916,6 +920,60 @@ fn r_with_no_selected_ticket_re_reads_nothing_while_shift_r_still_rechecks_the_v
         map_read_slugs(&update(&mut model, key_event(KeyCode::Char('R')))),
         ["acme/web"]
     );
+}
+
+#[test]
+fn a_failed_unit_retried_while_another_is_in_flight_still_settles_the_run() {
+    let (mut model, _) = Model::new();
+    model.auth_token = Some(AuthToken::parse("test").unwrap());
+    model.view_mode = ViewMode::TicketList;
+    for slug in ["acme/api", "acme/web"] {
+        update(
+            &mut model,
+            Msg::EffortArrived {
+                unit: github_unit(slug),
+                repo: RepoIdentity::Slug(RepoSlug::new(slug)),
+                read: github_read_in(slug, 10, 11),
+            },
+        );
+    }
+    assert_eq!(
+        map_read_slugs(&update(&mut model, key_event(KeyCode::Char('R')))),
+        ["acme/api", "acme/web"]
+    );
+    update(
+        &mut model,
+        Msg::DiscoveryFailed {
+            unit: github_unit("acme/api"),
+            error: "offline".to_owned(),
+        },
+    );
+    assert_eq!(model.status.as_ref().unwrap().kind, StatusKind::Error);
+
+    assert_eq!(
+        map_read_slugs(&update(&mut model, key_event(KeyCode::Char('R')))),
+        ["acme/api"],
+        "web is still in flight"
+    );
+    for slug in ["acme/api", "acme/web"] {
+        update(
+            &mut model,
+            Msg::EffortArrived {
+                unit: github_unit(slug),
+                repo: RepoIdentity::Slug(RepoSlug::new(slug)),
+                read: github_read_in(slug, 10, 11),
+            },
+        );
+        update(
+            &mut model,
+            Msg::DiscoveryFinished {
+                unit: github_unit(slug),
+                incomplete: None,
+            },
+        );
+    }
+
+    assert_eq!(model.status.as_ref().unwrap().text, "Refreshed 2 efforts");
 }
 
 #[test]

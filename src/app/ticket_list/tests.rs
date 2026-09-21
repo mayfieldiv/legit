@@ -2,7 +2,10 @@
 //! cursor, and the probe phases. Expected values come from spec §6.1–§6.3
 //! (issue #112's resolution comment). Pure — Efforts are built in memory.
 
-use super::{DiscoveryUnit, QueueRow, QueueTier, RailCard, RowMarker, TicketList, TicketRow};
+use super::{
+    DiscoveryUnit, QueueRow, QueueTier, RailCard, RefreshNotice, RefreshScope, RefreshTarget,
+    RowMarker, TicketList, TicketRow,
+};
 use crate::{
     canonical_path::CanonicalPathBuf,
     config::RepoIdentity,
@@ -731,4 +734,155 @@ fn an_incomplete_unit_is_settled_but_leads_the_rail_with_its_caveat() {
         "the pooled Effort keeps its card; the caveat leads it"
     );
     assert_eq!(rows(&list), ["── Frontier", "01-a"]);
+}
+
+// ── refresh runs ─────────────────────────────────────────────────────────────
+
+fn github_unit(name: &str) -> DiscoveryUnit {
+    DiscoveryUnit::GitHubRepo {
+        slug: RepoSlug::new(format!("acme/{name}")),
+    }
+}
+
+/// A GitHub Effort with no Tickets, so the queue selects nothing.
+fn github_read(name: &str, map_number: u64) -> EffortRead {
+    EffortRead::Ready(
+        Effort::new(
+            EffortKey::GitHub {
+                repo_slug: RepoSlug::new(format!("acme/{name}")),
+                map_number,
+            },
+            format!("Map {map_number}"),
+            None,
+            Vec::new(),
+        )
+        .unwrap(),
+    )
+}
+
+/// The units a refresh dispatches, by label, with every command built.
+fn dispatched(list: &mut TicketList, scope: RefreshScope) -> Vec<String> {
+    list.begin_refresh(scope, |target| {
+        Some(match target {
+            RefreshTarget::Discovery(unit) => unit.label().to_owned(),
+            RefreshTarget::Local { dir, .. } => dir.display().to_string(),
+        })
+    })
+}
+
+fn refreshing(list: &TicketList) -> Vec<bool> {
+    list.rail()
+        .filter_map(|card| match card {
+            RailCard::Effort(card) => Some(card.fetch.refreshing),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_failed_unit_retried_while_another_is_in_flight_still_lets_the_run_settle() {
+    let mut list = TicketList::new();
+    list.merge_effort(
+        repo("api"),
+        github_read("api", 1),
+        chrono::DateTime::UNIX_EPOCH,
+    );
+    list.merge_effort(
+        repo("web"),
+        github_read("web", 2),
+        chrono::DateTime::UNIX_EPOCH,
+    );
+    assert_eq!(dispatched(&mut list, RefreshScope::View), ["api", "web"]);
+
+    assert_eq!(
+        list.fail_discovery(github_unit("api"), "offline".to_owned()),
+        Some(RefreshNotice::Failed("api: offline".to_owned()))
+    );
+    assert_eq!(refreshing(&list), [false, true]);
+    assert_eq!(
+        dispatched(&mut list, RefreshScope::View),
+        ["api"],
+        "web is still in flight; api's failure is what the retry clears"
+    );
+
+    for name in ["api", "web"] {
+        let map = if name == "api" { 1 } else { 2 };
+        assert_eq!(
+            list.effort_arrived(
+                &github_unit(name),
+                repo(name),
+                github_read(name, map),
+                chrono::DateTime::UNIX_EPOCH
+            ),
+            None
+        );
+    }
+    assert_eq!(
+        list.finish_discovery(github_unit("api"), None, chrono::DateTime::UNIX_EPOCH),
+        None,
+        "web is still in flight"
+    );
+    assert_eq!(
+        list.finish_discovery(github_unit("web"), None, chrono::DateTime::UNIX_EPOCH),
+        Some(RefreshNotice::Refreshed(2))
+    );
+    assert_eq!(refreshing(&list), [false, false]);
+}
+
+#[test]
+fn a_unit_whose_command_was_not_built_is_left_idle() {
+    let mut list = TicketList::new();
+    list.merge_effort(
+        repo("api"),
+        github_read("api", 1),
+        chrono::DateTime::UNIX_EPOCH,
+    );
+
+    let none: Vec<()> = list.begin_refresh(RefreshScope::View, |_| None);
+
+    assert!(none.is_empty());
+    assert_eq!(refreshing(&list), [false]);
+    assert_eq!(
+        dispatched(&mut list, RefreshScope::View),
+        ["api"],
+        "nothing was in flight, so nothing is deduplicated"
+    );
+    assert_eq!(refreshing(&list), [true]);
+}
+
+#[test]
+fn the_selected_scope_covers_nothing_when_no_ticket_is_selected() {
+    let mut list = TicketList::new();
+    list.merge_effort(
+        repo("api"),
+        github_read("api", 1),
+        chrono::DateTime::UNIX_EPOCH,
+    );
+    list.fail_discovery(github_unit("web"), "404".to_owned());
+    assert_eq!(selected(&list), None);
+
+    assert_eq!(
+        dispatched(&mut list, RefreshScope::Selected),
+        ["web"],
+        "only the failed unit, which has no Ticket to select"
+    );
+    assert_eq!(dispatched(&mut list, RefreshScope::View), ["api"]);
+}
+
+#[test]
+fn a_startup_discovery_still_loading_is_not_re_dispatched() {
+    let mut list = TicketList::new();
+    list.merge_effort(
+        repo("api"),
+        github_read("api", 1),
+        chrono::DateTime::UNIX_EPOCH,
+    );
+    list.begin_discovery(github_unit("api"));
+
+    assert!(dispatched(&mut list, RefreshScope::View).is_empty());
+    assert_eq!(
+        refreshing(&list),
+        [false],
+        "a startup read shows no indicator"
+    );
 }
