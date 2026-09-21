@@ -354,7 +354,7 @@ const INDICATOR_COL: usize = 1;
 const TITLE_COL_MIN: usize = 40;
 /// `↑NN ↓NN`.
 const BLOCK_COL: usize = 7;
-const AGE_COL: usize = 7;
+const UPDATED_COL: usize = 7;
 
 /// How a content-sized queue column may grow. It opens at its content width
 /// within `min..=opening_max`; once the title has more than `TITLE_COL_MIN`,
@@ -399,7 +399,7 @@ struct QueueLayout {
     type_col: usize,
     state_col: usize,
     block_col: usize,
-    age_col: usize,
+    updated_col: usize,
 }
 
 impl QueueLayout {
@@ -413,14 +413,14 @@ impl QueueLayout {
             type_col: 0,
             state_col: if compact { 8 } else { 0 },
             block_col: 0,
-            age_col: 0,
+            updated_col: 0,
         };
         let mut budget = layout.title_col().saturating_sub(18);
         for (column, desired) in [
             (&mut layout.type_col, TYPE_COL.opening(content.ty)),
             (&mut layout.repo_col, REPO_COL.opening(content.repo)),
             (&mut layout.block_col, BLOCK_COL),
-            (&mut layout.age_col, AGE_COL),
+            (&mut layout.updated_col, UPDATED_COL),
         ] {
             if budget >= desired + GAP {
                 *column = desired;
@@ -454,7 +454,7 @@ impl QueueLayout {
                 self.type_col,
                 self.state_col,
                 self.block_col,
-                self.age_col,
+                self.updated_col,
             ]
             .into_iter()
             .filter(|width| *width > 0),
@@ -526,7 +526,7 @@ fn header_row(layout: &QueueLayout) -> Line<'static> {
             Cell::text("State", layout.state_col, bold),
             Cell::text("Title", layout.title_col(), bold),
             Cell::text("Block", layout.block_col, bold),
-            Cell::text("Age", layout.age_col, bold),
+            Cell::text("Updated", layout.updated_col, bold),
         ]
         .into_iter()
         .filter(|cell| cell.width > 0)
@@ -551,7 +551,7 @@ fn ticket_line(
     };
     let cells = vec![
         Cell::text(
-            if row.fetch.refreshing {
+            if row.refreshing {
                 REFRESH_GLYPH
             } else if layout.type_col == 0 && row.ty.mode() == Mode::Either {
                 "*"
@@ -599,11 +599,10 @@ fn ticket_line(
             ..block_cell(row.upstream, row.downstream, palette)
         },
         Cell::text(
-            row.fetch
-                .fetched_at
+            row.updated_at
                 .map_or_else(String::new, |stamp| format_age(stamp, now)),
-            layout.age_col,
-            Style::default().fg(palette.muted),
+            layout.updated_col,
+            Style::default(),
         ),
     ];
     render_cells(

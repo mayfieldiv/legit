@@ -1,11 +1,13 @@
 use super::{EffortEntry, QueueRow, TicketList, TicketRow};
 use crate::app::list_cursor::Direction;
 use crate::ticket::{Dependency, EffortKey, TicketKey, TicketState};
+use chrono::{DateTime, Utc};
 
 #[derive(Clone, Debug)]
 pub struct TicketSummary {
     scroll: usize,
     pub row: TicketRow,
+    pub fetched_at: Option<DateTime<Utc>>,
     pub effort: String,
     pub destination: Option<String>,
     pub waits_on: Vec<DependencySummary>,
@@ -95,11 +97,11 @@ impl TicketList {
             QueueRow::Ticket(row) if &row.key == key => Some(row),
             _ => None,
         })?;
-        let effort = self
+        let (entry, effort) = self
             .efforts
             .iter()
-            .filter_map(|entry| entry.effort.as_ref())
-            .find(|effort| effort.ticket(key).is_some())?;
+            .filter_map(|entry| Some((entry, entry.effort.as_ref()?)))
+            .find(|(_, effort)| effort.ticket(key).is_some())?;
         let map_ref = match &effort.key {
             EffortKey::GitHub {
                 repo_slug,
@@ -111,6 +113,7 @@ impl TicketList {
         Some(TicketSummary {
             scroll: 0,
             row: row.clone(),
+            fetched_at: entry.card.fetch.fetched_at,
             effort: effort.title.clone(),
             destination: effort.destination.clone(),
             waits_on: effort

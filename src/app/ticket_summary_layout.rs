@@ -52,7 +52,7 @@ pub fn content_lines(
                 QueueTier::Blocked => palette.blocked,
             }),
         )),
-        Line::from(fetched_age_spans(row.fetch.fetched_at, now, palette)),
+        Line::from(fetched_age_spans(summary.fetched_at, now, palette)),
         Line::default(),
         Line::from(Span::styled("waits on (↑)", bold)),
     ];

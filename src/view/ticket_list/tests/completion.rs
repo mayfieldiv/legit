@@ -1,6 +1,47 @@
 use super::*;
 
 #[test]
+fn local_ticket_updated_age_uses_file_modification_time_and_survives_refresh() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("map.md"), "# Local map\n").unwrap();
+    std::fs::create_dir(dir.path().join("issues")).unwrap();
+    let path = dir.path().join("issues/01-research.md");
+    std::fs::write(&path, "# Research the protocol\n\nType: research\n").unwrap();
+    std::fs::File::open(&path)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(2 * 86_400))
+        .unwrap();
+    let now = chrono::DateTime::UNIX_EPOCH + chrono::Duration::days(5);
+    let (mut model, _) = Model::new();
+    model.view_mode = ViewMode::TicketList;
+
+    for (fetched_at, fetch_label) in [
+        (now - chrono::Duration::minutes(2), "fetched 2m ago"),
+        (now, "fetched just now"),
+    ] {
+        model.tickets.merge_effort(
+            web(),
+            crate::local_effort::read_effort_at(
+                CanonicalPathBuf::canonicalize(dir.path()).unwrap(),
+            ),
+            fetched_at,
+        );
+        let mut terminal = Terminal::new(TestBackend::new(140, 24)).unwrap();
+        terminal
+            .draw(|frame| view::view(&model, frame, now))
+            .unwrap();
+        let rows = buffer_text(&terminal);
+        assert!(rows[3].contains("Updated"), "{}", rows[3]);
+        let ticket = rows
+            .iter()
+            .find(|row| row.contains("Research the protocol"))
+            .unwrap();
+        assert!(ticket.ends_with("3d     "), "{ticket}");
+        assert!(rows.iter().any(|row| row.contains(fetch_label)));
+    }
+}
+
+#[test]
 fn a_local_map_with_no_blockers_keeps_its_tickets_visible() {
     for no_blockers in ["none", " None ", "NONE"] {
         let dir = tempfile::tempdir().unwrap();

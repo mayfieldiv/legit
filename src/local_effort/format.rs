@@ -10,6 +10,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use chrono::{DateTime, Utc};
+
 use crate::{
     canonical_path::CanonicalPathBuf,
     map_body::{first_h1, scan_map_body},
@@ -112,6 +114,7 @@ pub(super) fn find_map_file(dir: &Path) -> Result<Option<PathBuf>, String> {
 struct MemberFile {
     path: PathBuf,
     key: TicketKey,
+    updated_at: Option<DateTime<Utc>>,
     /// The `NN` filename prefix a `blocked-by` ref names.
     number: Option<u64>,
     title: Option<String>,
@@ -173,6 +176,10 @@ fn read_member_files(dir: &Path) -> Result<Vec<MemberFile>, String> {
             };
             members.push(MemberFile {
                 number: filename_number(&path),
+                updated_at: fs::metadata(&path)
+                    .and_then(|metadata| metadata.modified())
+                    .ok()
+                    .map(DateTime::from),
                 path,
                 key,
                 title,
@@ -235,6 +242,7 @@ fn resolve_ticket(member: &MemberFile, members: &[MemberFile]) -> Result<Ticket,
             .clone()
             .ok_or_else(|| "no H1 title or frontmatter title".to_owned())?,
         state,
+        updated_at: member.updated_at,
         claim,
         ty: TicketType(fields.ty.clone().unwrap_or_default()),
         dependencies,

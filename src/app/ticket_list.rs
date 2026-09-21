@@ -250,7 +250,8 @@ impl RowMarker {
 /// row shows, resolved once per relayout so a redraw only formats.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TicketRow {
-    pub fetch: FetchState,
+    pub refreshing: bool,
+    pub updated_at: Option<DateTime<Utc>>,
     pub key: TicketKey,
     pub marker: Option<RowMarker>,
     pub display_ref: String,
@@ -267,10 +268,11 @@ pub struct TicketRow {
 }
 
 impl TicketRow {
-    fn derive(repo: &str, ticket: &EffortTicket<'_>, downstream: usize, fetch: FetchState) -> Self {
+    fn derive(repo: &str, ticket: &EffortTicket<'_>, downstream: usize, refreshing: bool) -> Self {
         let open: Vec<&TicketKey> = ticket.open_dependencies().collect();
         Self {
-            fetch,
+            refreshing,
+            updated_at: ticket.updated_at,
             key: ticket.key.clone(),
             marker: RowMarker::of(ticket, open.first().copied()),
             display_ref: ticket.key.display_ref(),
@@ -1062,7 +1064,12 @@ impl TicketList {
             })
             .map(|(entry, ticket)| {
                 let downstream = dependents.get(&ticket.key).copied().unwrap_or(0);
-                TicketRow::derive(&entry.card.repo, &ticket, downstream, entry.card.fetch)
+                TicketRow::derive(
+                    &entry.card.repo,
+                    &ticket,
+                    downstream,
+                    entry.card.fetch.refreshing,
+                )
             })
             .collect();
         // Stable, so within a tier the pool's rail-then-effort order holds.

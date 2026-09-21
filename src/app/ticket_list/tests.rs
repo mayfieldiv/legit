@@ -94,6 +94,7 @@ fn effort(name: &str, title: &str, tickets: Vec<TicketSpec>) -> Effort {
                 title: format!("Ticket {}", spec.slug),
                 state: spec.state,
                 claim: spec.claim,
+                updated_at: None,
                 ty: TicketType("task".to_owned()),
                 dependencies: spec.deps,
             })

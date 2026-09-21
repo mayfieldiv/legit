@@ -34,6 +34,7 @@ fn model() -> Model {
                 title: format!("{title} {ty}"),
                 state: TicketState::Open,
                 claim: None,
+                updated_at: None,
                 ty: TicketType(ty.to_owned()),
                 dependencies: vec![],
             })
@@ -130,6 +131,7 @@ fn copy_keys_emit_self_contained_github_and_local_references() {
                     title: "Design".to_owned(),
                     state: TicketState::Open,
                     claim: None,
+                    updated_at: None,
                     ty: TicketType("task".to_owned()),
                     dependencies: vec![],
                 }],

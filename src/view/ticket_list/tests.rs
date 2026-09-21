@@ -70,6 +70,7 @@ fn ticket(effort: &str, slug: &str, title: &str, ty: &str) -> Ticket {
         title: title.to_owned(),
         state: TicketState::Open,
         claim: None,
+        updated_at: Some(chrono::DateTime::UNIX_EPOCH),
         ty: TicketType(ty.to_owned()),
         dependencies: Vec::new(),
     }
@@ -157,7 +158,7 @@ fn the_ticket_surface_renders_the_rail_and_the_tiered_queue() {
         "legit — Tickets — 2 efforts · 2 frontier                                                                                                    ",
         "[All]                                                                                                                                       ",
         "Mode [All]  AFK   HITL   · * Either · All efforts                                                                                           ",
-        "All efforts                           │  Ticket     Repo  Type      Title                                                    Block   Age    ",
+        "All efforts                           │  Ticket     Repo  Type      Title                                                    Block   Updated",
         "                                      │  ── Frontier                                                                                        ",
         "notes · Map: docs                     │  01-read    notes research  Read the RFC                                                     now    ",
         "local · 0/1 decided · 1 frontier      │  01-free    web   grilling  Name the destination                                     ↓1      now    ",
@@ -280,6 +281,7 @@ fn a_github_effort_reads_github_with_issue_refs_and_a_failed_map_read_says_could
         title: title.to_owned(),
         state: TicketState::Open,
         claim: None,
+        updated_at: Some(chrono::DateTime::UNIX_EPOCH),
         ty: TicketType("task".to_owned()),
         dependencies,
     };
@@ -365,6 +367,7 @@ fn an_incomplete_map_read_leads_the_rail_as_a_warning_and_keeps_its_efforts() {
             title: "Run the pilot".to_owned(),
             state: TicketState::Open,
             claim: None,
+            updated_at: Some(chrono::DateTime::UNIX_EPOCH),
             ty: TicketType("task".to_owned()),
             dependencies: Vec::new(),
         }],
@@ -528,12 +531,12 @@ fn wide_columns_fit_ticket_names_and_stay_stable_while_scrolling() {
     let narrow = buffer_text(&render(&model, 140, 8));
     assert!(narrow[3].contains("Title"));
     assert!(narrow[3].contains("Block"));
-    assert!(narrow[3].contains("Age"));
+    assert!(narrow[3].contains("Updated"));
     assert!(narrow.iter().any(|row| row.contains("Plan the funnel")));
 }
 
 #[test]
-fn the_refresh_indicator_and_fetch_age_appear_on_the_effort_card_and_its_rows() {
+fn the_refresh_indicator_appears_on_the_effort_card_and_its_rows() {
     let mut model = populated_model();
     let now = chrono::DateTime::UNIX_EPOCH + chrono::Duration::minutes(2);
     crate::app::update::update(

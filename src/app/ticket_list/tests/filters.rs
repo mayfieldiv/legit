@@ -131,6 +131,7 @@ fn mode_filter_cycles_and_either_types_remain_in_both_views() {
             title: ty.to_owned(),
             state: TicketState::Open,
             claim: None,
+            updated_at: None,
             ty: TicketType(ty.to_owned()),
             dependencies: vec![],
         })
