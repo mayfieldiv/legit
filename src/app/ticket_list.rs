@@ -551,6 +551,18 @@ impl TicketList {
             .is_none_or(|scope| entry.repo == RepoIdentity::Slug(scope.repo.clone()))
     }
 
+    fn rail_efforts(&self) -> impl Iterator<Item = &EffortEntry> {
+        self.efforts
+            .iter()
+            .filter(|entry| self.repo_matches(entry))
+            .filter(|entry| match &entry.card.outcome {
+                Ok(summary) => {
+                    summary.counts.total == 0 || summary.counts.decided < summary.counts.total
+                }
+                Err(_) => true,
+            })
+    }
+
     fn effort_matches(&self, entry: &EffortEntry) -> bool {
         self.repo_matches(entry)
             && self
@@ -592,12 +604,7 @@ impl TicketList {
 
     pub fn step_effort(&mut self, direction: Direction) {
         let choices: Vec<_> = std::iter::once(None)
-            .chain(
-                self.efforts
-                    .iter()
-                    .filter(|entry| self.repo_matches(entry))
-                    .map(|entry| Some(entry.key.clone())),
-            )
+            .chain(self.rail_efforts().map(|entry| Some(entry.key.clone())))
             .collect();
         let current = choices
             .iter()
@@ -956,9 +963,7 @@ impl TicketList {
                 DiscoveryPhase::Loading { .. } | DiscoveryPhase::Loaded => None,
             });
         units.chain(
-            self.efforts
-                .iter()
-                .filter(|entry| self.repo_matches(entry))
+            self.rail_efforts()
                 .map(|entry| RailCard::Effort(&entry.card)),
         )
     }
@@ -1028,12 +1033,11 @@ impl TicketList {
             );
         }
         self.efforts.sort_by_cached_key(EffortEntry::order_key);
-        if self.effort_filter.as_ref().is_some_and(|key| {
-            !self
-                .efforts
-                .iter()
-                .any(|entry| &entry.key == key && self.repo_matches(entry))
-        }) {
+        if self
+            .effort_filter
+            .as_ref()
+            .is_some_and(|key| !self.rail_efforts().any(|entry| &entry.key == key))
+        {
             self.effort_filter = None;
         }
         for entry in &mut self.efforts {
