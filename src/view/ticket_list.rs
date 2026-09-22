@@ -52,7 +52,6 @@ pub fn render(
     .areas(area);
     render_header(model, frame, header, palette);
     super::render_tabs(model, frame, tabs, palette);
-    render_filters(&model.tickets, frame, filters, palette);
     let tickets = &model.tickets;
     let main = if let Some(width) = summary_width(main.width) {
         let [remaining, divider, panel] = Layout::horizontal([
@@ -67,6 +66,8 @@ pub fn render(
     } else {
         main
     };
+    let rail_width = rail_width(main.width);
+    render_filters(tickets, frame, filters, rail_width.is_none(), palette);
     if tickets.rail().next().is_none() {
         let text = if tickets.is_loading() {
             "Loading efforts…"
@@ -78,7 +79,7 @@ pub fn render(
             main,
         );
     } else {
-        match rail_width(main.width) {
+        match rail_width {
             Some(rail_width) => {
                 let [rail, divider, queue] = Layout::horizontal([
                     Constraint::Length(rail_width),
@@ -96,31 +97,71 @@ pub fn render(
     render_status(model, frame, status, palette);
 }
 
-fn render_filters(tickets: &TicketList, frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
-    let mut spans = vec![Span::raw("Mode ")];
-    for (filter, label) in [
-        (ModeFilter::All, "All"),
-        (ModeFilter::Afk, "AFK"),
-        (ModeFilter::Hitl, "HITL"),
-    ] {
-        let selected = filter == tickets.mode_filter();
-        spans.push(Span::styled(
-            if selected {
-                format!("[{label}] ")
-            } else {
-                format!(" {label}  ")
-            },
-            Style::default().fg(if selected {
+const MODE_CHIPS: [(ModeFilter, &str); 3] = [
+    (ModeFilter::All, "All"),
+    (ModeFilter::Afk, "AFK"),
+    (ModeFilter::Hitl, "HITL"),
+];
+
+/// The Mode chips, the Either legend, and the active effort. Beside the rail
+/// the effort trails, since its highlighted card already names it; with the
+/// rail hidden this row is the only place the effort is named, so it leads,
+/// truncated to what the tightened chips leave it.
+fn render_filters(
+    tickets: &TicketList,
+    frame: &mut Frame<'_>,
+    area: Rect,
+    rail_hidden: bool,
+    palette: &Palette,
+) {
+    let chip = |filter: ModeFilter, text: String| {
+        Span::styled(
+            text,
+            Style::default().fg(if filter == tickets.mode_filter() {
                 palette.accent
             } else {
                 palette.muted
             }),
-        ));
-    }
-    spans.push(Span::raw(format!(
-        " · * Either · {}",
-        tickets.effort_filter_label()
-    )));
+        )
+    };
+    let spans = if rail_hidden {
+        let mut tail = vec![Span::raw(" · ")];
+        for (i, (filter, label)) in MODE_CHIPS.into_iter().enumerate() {
+            if i > 0 {
+                tail.push(Span::raw(" "));
+            }
+            let text = if filter == tickets.mode_filter() {
+                format!("[{label}]")
+            } else {
+                label.to_owned()
+            };
+            tail.push(chip(filter, text));
+        }
+        tail.push(Span::raw(" · * Either"));
+        let tail_width: usize = tail.iter().map(Span::width).sum();
+        let effort = truncate(
+            tickets.effort_filter_label(),
+            usize::from(area.width).saturating_sub(tail_width),
+        );
+        let mut spans = vec![Span::raw(effort)];
+        spans.extend(tail);
+        spans
+    } else {
+        let mut spans = vec![Span::raw("Mode ")];
+        for (filter, label) in MODE_CHIPS {
+            let text = if filter == tickets.mode_filter() {
+                format!("[{label}] ")
+            } else {
+                format!(" {label}  ")
+            };
+            spans.push(chip(filter, text));
+        }
+        spans.push(Span::raw(format!(
+            " · * Either · {}",
+            tickets.effort_filter_label()
+        )));
+        spans
+    };
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 

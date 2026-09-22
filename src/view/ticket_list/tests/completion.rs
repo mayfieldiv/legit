@@ -339,3 +339,31 @@ fn summary_resolves_dependencies_and_open_dependents_from_loaded_efforts() {
     );
     assert_eq!(fg_of(&terminal, "Choose the contract"), DARK.muted);
 }
+
+#[test]
+fn the_effort_leads_the_filter_row_when_the_rail_is_hidden() {
+    let mut model = populated_model();
+    model.tickets.cycle_mode();
+    model
+        .tickets
+        .step_effort(crate::app::list_cursor::Direction::Down);
+    assert_eq!(
+        buffer_text(&render(&model, 40, 8))[2],
+        "Map: docs · All [AFK] HITL · * Either   "
+    );
+    assert_eq!(fg_of(&render(&model, 40, 8), "[AFK]"), DARK.accent);
+
+    model
+        .tickets
+        .step_effort(crate::app::list_cursor::Direction::Down);
+    assert_eq!(
+        buffer_text(&render(&model, 40, 8))[2],
+        "Map: ticket… · All [AFK] HITL · * Either",
+        "a long effort yields to the chips and the legend"
+    );
+    assert!(
+        buffer_text(&render(&model, 140, 8))[2]
+            .starts_with("Mode  All  [AFK]  HITL   · * Either · Map: ticket surface"),
+        "beside the rail the wide form is unchanged"
+    );
+}
