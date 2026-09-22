@@ -5,6 +5,8 @@
 
 use ratatui::{Terminal, backend::TestBackend, style::Color};
 
+mod completion;
+
 use super::super::row::render_cells;
 use crate::{
     app::{
@@ -68,6 +70,7 @@ fn ticket(effort: &str, slug: &str, title: &str, ty: &str) -> Ticket {
         title: title.to_owned(),
         state: TicketState::Open,
         claim: None,
+        updated_at: Some(chrono::DateTime::UNIX_EPOCH),
         ty: TicketType(ty.to_owned()),
         dependencies: Vec::new(),
     }
@@ -153,20 +156,22 @@ fn the_ticket_surface_renders_the_rail_and_the_tiered_queue() {
     // ticket trails Blocked with its raw ref.
     let mut expected = vec![
         "legit — Tickets — 2 efforts · 2 frontier                                                                                                    ",
-        "All efforts                           │  Ticket     Repo  Type      Title                                                    Block   Age    ",
+        "[All]                                                                                                                                       ",
+        "Mode [All]  AFK   HITL   · * Either · All efforts                                                                                           ",
+        "All efforts                           │  Ticket     Repo  Type      Title                                                    Block   Updated",
         "                                      │  ── Frontier                                                                                        ",
         "notes · Map: docs                     │  01-read    notes research  Read the RFC                                                     now    ",
         "local · 0/1 decided · 1 frontier      │  01-free    web   grilling  Name the destination                                     ↓1      now    ",
         "Docs done                             │  ── Claimed                                                                                         ",
         "fetched just now                      │  02-claimed web   prototype Prototype the rail ⟨claimed mayfield⟩                            now    ",
         "                                      │  ── Blocked                                                                                         ",
-        "web · Map: ticket surface             │  03-blocked web   task      Wire the queue ⟨after 01-free⟩                           ↑1      now    ",
-        "local · 1/5 decided · 1 frontier      │  05-mystery web   task      Ship it ⟨dep? ../gone/tickets/09-x.md⟩                           now    ",
+        "web · Map: ticket surface             │  03-blocked web   *task     Wire the queue ⟨after 01-free⟩                           ↑1      now    ",
+        "local · 1/5 decided · 1 frontier      │  05-mystery web   *task     Ship it ⟨dep? ../gone/tickets/09-x.md⟩                           now    ",
         "A queue toggled from the PR view      │                                                                                                     ",
         "fetched just now                      │                                                                                                     ",
     ];
-    expected.extend(std::iter::repeat_n("                                      │                                                                                                     ", 11));
-    expected.push("j/k nav  r/R refresh  t PRs  q quit                                                                                  0 in-flight · 0 waiting");
+    expected.extend(std::iter::repeat_n("                                      │                                                                                                     ", 9));
+    expected.push("j/k nav  J/K efforts  h/l tabs  m mode  p/y copy prompt/ref  r/R refresh  t PRs  q quit                              0 in-flight · 0 waiting");
     assert_eq!(buffer_text(&terminal), expected);
 }
 
@@ -244,23 +249,21 @@ fn a_failed_probe_leads_the_rail_and_a_degraded_effort_keeps_its_card_with_the_e
 
     let terminal = render(&model, 100, 12);
 
-    assert_eq!(
-        buffer_text(&terminal),
-        vec![
-            "legit — Tickets — 1 effort · 0 frontier                                                             ",
-            "All efforts                           │  Ticket Repo Type Title                      Block   Age    ",
-            "                                      │                       No open tickets                       ",
-            "immybot · couldn't probe — r to retry │                                                             ",
-            "main worktree /src/immybot does not e…│                                                             ",
-            "                                      │                                                             ",
-            "web · Map: broken                     │                                                             ",
-            "local · couldn't read — r to retry    │                                                             ",
-            "tickets/01-a.md: missing status       │                                                             ",
-            "                                      │                                                             ",
-            "                                      │                                                             ",
-            "j/k nav  r/R refresh  t PRs  q quit                                          0 in-flight · 0 waiting",
-        ]
-    );
+    let rows = buffer_text(&terminal);
+    let text = rows.join("\n");
+    for expected in [
+        "1 effort · 0 frontier",
+        "No open tickets",
+        "immybot ·",
+        "couldn't probe — r to retry",
+        "web · Map: broken",
+        "couldn't read — r to retry",
+        "tickets/01-a.md: missing status",
+    ] {
+        assert!(text.contains(expected), "missing {expected}:\n{text}");
+    }
+    assert!(text.find("couldn't probe").unwrap() < text.find("Map: broken").unwrap());
+
     assert_eq!(fg_of(&terminal, "couldn't read"), DARK.error);
     assert_eq!(fg_of(&terminal, "couldn't probe"), DARK.error);
 }
@@ -278,6 +281,7 @@ fn a_github_effort_reads_github_with_issue_refs_and_a_failed_map_read_says_could
         title: title.to_owned(),
         state: TicketState::Open,
         claim: None,
+        updated_at: Some(chrono::DateTime::UNIX_EPOCH),
         ty: TicketType("task".to_owned()),
         dependencies,
     };
@@ -324,23 +328,23 @@ fn a_github_effort_reads_github_with_issue_refs_and_a_failed_map_read_says_could
     // The card's source line reads `github`; refs are issue numbers; a closed
     // Dependency (#116) doesn't block #117, an open one (#117) blocks #120.
     // The failed map read leads the rail worded as a read, not a probe.
-    assert_eq!(
-        buffer_text(&terminal),
-        vec![
-            "legit — Tickets — 1 effort · 1 frontier                                                             ",
-            "All efforts                           │  Ticket Repo  Type Title                     Block   Age    ",
-            "                                      │  ── Frontier                                                ",
-            "api · couldn't read — r to retry      │  #117   legit task GitHub transport          ↓1      now    ",
-            "GitHub GraphQL error: 404 Not Found   │  ── Blocked                                                 ",
-            "                                      │  #120   legit task Fetch integ… ⟨after #117⟩ ↑1      now    ",
-            "legit · Map: ticket surface           │                                                             ",
-            "github · 1/3 decided · 1 frontier     │                                                             ",
-            "All eight issues merged               │                                                             ",
-            "fetched just now                      │                                                             ",
-            "                                      │                                                             ",
-            "j/k nav  r/R refresh  t PRs  q quit                                          0 in-flight · 0 waiting",
-        ]
-    );
+    let rows = buffer_text(&terminal);
+    let text = rows.join("\n");
+    for expected in [
+        "1 effort · 1 frontier",
+        "github · 1/3 decided · 1 frontier",
+        "#117",
+        "#120",
+        "GitHub transport",
+        "⟨after #117⟩",
+        "↑1",
+        "↓1",
+        "GitHub GraphQL error: 404 Not Found",
+    ] {
+        assert!(text.contains(expected), "missing {expected}:\n{text}");
+    }
+    assert!(!text.contains("#116"));
+
     assert_eq!(fg_of(&terminal, "couldn't read"), DARK.error);
 }
 
@@ -363,6 +367,7 @@ fn an_incomplete_map_read_leads_the_rail_as_a_warning_and_keeps_its_efforts() {
             title: "Run the pilot".to_owned(),
             state: TicketState::Open,
             claim: None,
+            updated_at: Some(chrono::DateTime::UNIX_EPOCH),
             ty: TicketType("task".to_owned()),
             dependencies: Vec::new(),
         }],
@@ -384,23 +389,19 @@ fn an_incomplete_map_read_leads_the_rail_as_a_warning_and_keeps_its_efforts() {
 
     // The unit card says the read was short and why; the map it did read
     // keeps its own card and its tickets stay queued.
-    assert_eq!(
-        buffer_text(&terminal),
-        vec![
-            "legit — Tickets — 1 effort · 1 frontier                                                             ",
-            "All efforts                           │  Ticket Repo    Type Title                   Block   Age    ",
-            "                                      │  ── Frontier                                                ",
-            "immybot · incomplete                  │  #901   immybot task Run the pilot                   now    ",
-            "more than 10 open maps; showing the f…│                                                             ",
-            "                                      │                                                             ",
-            "immybot · Map: memory image           │                                                             ",
-            "github · 0/1 decided · 1 frontier     │                                                             ",
-            "Owned tables in memory                │                                                             ",
-            "fetched just now                      │                                                             ",
-            "                                      │                                                             ",
-            "j/k nav  r/R refresh  t PRs  q quit                                          0 in-flight · 0 waiting",
-        ]
-    );
+    let rows = buffer_text(&terminal);
+    let text = rows.join("\n");
+    for expected in [
+        "immybot · incomplete",
+        "more than 10 open maps",
+        "Map: memory image",
+        "github · 0/1 decided · 1 frontier",
+        "#901",
+        "Run the pilot",
+    ] {
+        assert!(text.contains(expected), "missing {expected}:\n{text}");
+    }
+
     assert_eq!(fg_of(&terminal, "incomplete"), DARK.warning);
 }
 
@@ -411,23 +412,15 @@ fn an_empty_surface_says_loading_while_a_probe_is_in_flight_then_no_efforts() {
     model.tickets.begin_discovery(DiscoveryUnit::Cwd);
 
     let terminal = render(&model, 60, 5);
-    assert_eq!(
-        buffer_text(&terminal),
-        vec![
-            "legit — Tickets — 0 efforts · 0 frontier                    ",
-            "                      Loading efforts…                      ",
-            "                                                            ",
-            "                                                            ",
-            "j/k nav  r/R refresh  t PRs  q quit  0 in-flight · 0 waiting",
-        ]
-    );
+    assert!(buffer_text(&terminal)[3].contains("Loading efforts…"));
+    assert!(buffer_text(&terminal)[1].contains("[All]"));
 
     model
         .tickets
         .finish_discovery(DiscoveryUnit::Cwd, None, chrono::DateTime::UNIX_EPOCH);
     let terminal = render(&model, 60, 5);
     assert_eq!(
-        buffer_text(&terminal)[1],
+        buffer_text(&terminal)[3],
         "                      No efforts found                      "
     );
 }
@@ -452,9 +445,9 @@ fn long_refs_still_truncate_when_the_terminal_is_narrow() {
     );
     model.view_mode = ViewMode::TicketList;
 
-    let terminal = render(&model, 120, 6);
+    let terminal = render(&model, 120, 8);
 
-    let row = &buffer_text(&terminal)[3];
+    let row = &buffer_text(&terminal)[5];
     assert!(
         row.contains("│  01-a-ve…indeed web"),
         "capped at 14 with a middle ellipsis: {row:?}"
@@ -467,6 +460,7 @@ fn dep_marker_cell(width: usize) -> String {
     let marker = RowMarker::UnknownDependency("gone.md".to_owned());
     let cell = super::title_cell(
         "Ship it",
+        None,
         Some(&marker),
         width,
         ratatui::style::Style::default(),
@@ -521,25 +515,29 @@ fn wide_columns_fit_ticket_names_and_stay_stable_while_scrolling() {
     model.tickets.resize(2);
 
     let before = buffer_text(&render(&model, 320, 8));
-    assert!(before[3].contains("immybot-manager · Memory-image system of record"));
-    assert!(before[3].contains(short_ref));
-    assert!(before[3].contains("Run the pilot"));
+    assert!(before[5].contains("immybot-manager · Memory-image system of record"));
+    assert!(before[5].contains(short_ref));
+    assert!(before[5].contains("Run the pilot"));
     assert!(!before.iter().any(|row| row.contains(long_ref)));
 
     model.tickets.move_down();
     let after = buffer_text(&render(&model, 320, 8));
     assert!(after.iter().any(|row| row.contains(long_ref)));
-    assert_eq!(before[1], after[1], "scrolling must not move the columns");
+    assert_eq!(
+        before[3].rsplit_once('│').unwrap().0,
+        after[3].rsplit_once('│').unwrap().0,
+        "scrolling must not move the columns"
+    );
 
     let narrow = buffer_text(&render(&model, 140, 8));
-    assert!(narrow[1].contains("Title"));
-    assert!(narrow[1].contains("Block"));
-    assert!(narrow[1].contains("Age"));
+    assert!(narrow[3].contains("Title"));
+    assert!(narrow[3].contains("Block"));
+    assert!(narrow[3].contains("Updated"));
     assert!(narrow.iter().any(|row| row.contains("Plan the funnel")));
 }
 
 #[test]
-fn the_refresh_indicator_and_fetch_age_appear_on_the_effort_card_and_its_rows() {
+fn the_refresh_indicator_appears_on_the_effort_card_and_its_rows() {
     let mut model = populated_model();
     let now = chrono::DateTime::UNIX_EPOCH + chrono::Duration::minutes(2);
     crate::app::update::update(

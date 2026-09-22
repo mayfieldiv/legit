@@ -11,6 +11,7 @@
 use std::collections::HashSet;
 
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -53,7 +54,7 @@ impl Wayfinder {
     /// 5,000 points/hr, flat in map size (spec §4.1).
     #[tracing::instrument(name = "read_efforts", skip(self))]
     pub async fn read_efforts(&self, slug: &RepoSlug) -> Result<EffortReadBatch> {
-        // Verbatim from spec §4.1. `first:100`/`first:50` are GitHub's hard
+        // `first:100`/`first:50` are GitHub's hard
         // relation caps, so `hasNextPage` can't be true — `pageInfo` is
         // selected anyway, and the parse degrades if it ever lies.
         const QUERY: &str = "query($owner:String!, $repo:String!, $label:String!) {
@@ -67,7 +68,7 @@ impl Wayfinder {
                         subIssues(first:100) {
                             pageInfo { hasNextPage endCursor }
                             nodes {
-                                number title state stateReason url
+                                number title state stateReason url updatedAt
                                 assignees(first:5) { nodes { login } }
                                 labels(first:10) { nodes { name } }
                                 issueDependenciesSummary { blockedBy blocking totalBlockedBy totalBlocking }
@@ -191,6 +192,7 @@ struct RawTicketNode {
     title: String,
     #[serde(default)]
     state: Option<String>,
+    updated_at: Option<DateTime<Utc>>,
     #[serde(default)]
     assignees: Option<RawLoginConnection>,
     #[serde(default)]
@@ -407,6 +409,7 @@ fn parse_ticket_node(
         },
         title: node.title,
         state: IssueState::parse(node.state.as_deref()).into(),
+        updated_at: node.updated_at,
         claim,
         ty,
         dependencies,

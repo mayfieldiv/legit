@@ -17,21 +17,23 @@ use crate::{
     app::{
         model::Model,
         ticket_list::{
-            DiscoveryUnit, EffortCard, QueueContentWidths, QueueRow, QueueTier, RailCard,
-            RowMarker, TicketList, TicketRow,
+            DiscoveryUnit, EffortCard, ModeFilter, QueueContentWidths, QueueRow, QueueTier,
+            RailCard, RowMarker, TicketList, TicketRow,
         },
-        ticket_list_layout::{DIVIDER_WIDTH, rail_width},
+        ticket_list_layout::{DIVIDER_WIDTH, rail_width, summary_width},
     },
     color::repo_color,
     format::{
         REFRESH_GLYPH, fetched_age_spans, format_age, pad_to_width, truncate, truncate_middle,
     },
     palette::Palette,
-    ticket::EffortSource,
+    ticket::{EffortSource, Mode},
 };
 
 #[cfg(test)]
 mod tests;
+
+mod summary;
 
 pub fn render(
     model: &Model,
@@ -40,14 +42,32 @@ pub fn render(
     now: DateTime<Utc>,
     palette: &Palette,
 ) {
-    let [header, main, status] = Layout::vertical([
+    let [header, tabs, filters, main, status] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Min(1),
         Constraint::Length(1),
     ])
     .areas(area);
     render_header(model, frame, header, palette);
+    super::render_tabs(model, frame, tabs, palette);
     let tickets = &model.tickets;
+    let main = if let Some(width) = summary_width(main.width) {
+        let [remaining, divider, panel] = Layout::horizontal([
+            Constraint::Min(0),
+            Constraint::Length(DIVIDER_WIDTH),
+            Constraint::Length(width),
+        ])
+        .areas(main);
+        render_divider(frame, divider, palette);
+        summary::render(tickets.selected_summary(), frame, panel, now, palette);
+        remaining
+    } else {
+        main
+    };
+    let rail_width = rail_width(main.width);
+    render_filters(tickets, frame, filters, rail_width.is_none(), palette);
     if tickets.rail().next().is_none() {
         let text = if tickets.is_loading() {
             "Loading efforts…"
@@ -59,7 +79,7 @@ pub fn render(
             main,
         );
     } else {
-        match rail_width(main.width) {
+        match rail_width {
             Some(rail_width) => {
                 let [rail, divider, queue] = Layout::horizontal([
                     Constraint::Length(rail_width),
@@ -69,12 +89,80 @@ pub fn render(
                 .areas(main);
                 render_rail(tickets, frame, rail, now, palette);
                 render_divider(frame, divider, palette);
-                render_queue(tickets, frame, queue, now, palette);
+                render_queue(tickets, frame, queue, false, now, palette);
             }
-            None => render_queue(tickets, frame, main, now, palette),
+            None => render_queue(tickets, frame, main, true, now, palette),
         }
     }
     render_status(model, frame, status, palette);
+}
+
+const MODE_CHIPS: [(ModeFilter, &str); 3] = [
+    (ModeFilter::All, "All"),
+    (ModeFilter::Afk, "AFK"),
+    (ModeFilter::Hitl, "HITL"),
+];
+
+/// The Mode chips, the Either legend, and the active effort. Beside the rail
+/// the effort trails, since its highlighted card already names it; with the
+/// rail hidden this row is the only place the effort is named, so it leads,
+/// truncated to what the tightened chips leave it.
+fn render_filters(
+    tickets: &TicketList,
+    frame: &mut Frame<'_>,
+    area: Rect,
+    rail_hidden: bool,
+    palette: &Palette,
+) {
+    let chip = |filter: ModeFilter, text: String| {
+        Span::styled(
+            text,
+            Style::default().fg(if filter == tickets.mode_filter() {
+                palette.accent
+            } else {
+                palette.muted
+            }),
+        )
+    };
+    let spans = if rail_hidden {
+        let mut tail = vec![Span::raw(" · ")];
+        for (i, (filter, label)) in MODE_CHIPS.into_iter().enumerate() {
+            if i > 0 {
+                tail.push(Span::raw(" "));
+            }
+            let text = if filter == tickets.mode_filter() {
+                format!("[{label}]")
+            } else {
+                label.to_owned()
+            };
+            tail.push(chip(filter, text));
+        }
+        tail.push(Span::raw(" · * Either"));
+        let tail_width: usize = tail.iter().map(Span::width).sum();
+        let effort = truncate(
+            tickets.effort_filter_label(),
+            usize::from(area.width).saturating_sub(tail_width),
+        );
+        let mut spans = vec![Span::raw(effort)];
+        spans.extend(tail);
+        spans
+    } else {
+        let mut spans = vec![Span::raw("Mode ")];
+        for (filter, label) in MODE_CHIPS {
+            let text = if filter == tickets.mode_filter() {
+                format!("[{label}] ")
+            } else {
+                format!(" {label}  ")
+            };
+            spans.push(chip(filter, text));
+        }
+        spans.push(Span::raw(format!(
+            " · * Either · {}",
+            tickets.effort_filter_label()
+        )));
+        spans
+    };
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn render_header(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
@@ -130,7 +218,15 @@ fn render_rail(
         )),
         Line::default(),
     ];
+    if tickets.all_efforts_selected() {
+        lines[0] = lines[0]
+            .clone()
+            .style(Style::default().bg(palette.selected_bg));
+    }
+    let mut selected_range = 0..1;
     for card in tickets.rail() {
+        let selected = matches!(&card, RailCard::Effort(card) if card.selected);
+        let start = lines.len();
         lines.extend(match card {
             RailCard::Failure { unit, error } => {
                 discovery_failure_card(unit, error, width, palette)
@@ -140,9 +236,22 @@ fn render_rail(
             }
             RailCard::Effort(card) => effort_card(card, width, now, palette),
         });
+        if selected {
+            selected_range = start..lines.len();
+            for line in &mut lines[selected_range.clone()] {
+                *line = line.clone().style(Style::default().bg(palette.selected_bg));
+            }
+        }
         lines.push(Line::default());
     }
-    frame.render_widget(Paragraph::new(lines), area);
+    let offset = selected_range
+        .end
+        .saturating_sub(usize::from(area.height))
+        .min(selected_range.start);
+    frame.render_widget(
+        Paragraph::new(lines.into_iter().skip(offset).collect::<Vec<_>>()),
+        area,
+    );
 }
 
 fn effort_card(
@@ -286,7 +395,7 @@ const INDICATOR_COL: usize = 1;
 const TITLE_COL_MIN: usize = 40;
 /// `↑NN ↓NN`.
 const BLOCK_COL: usize = 7;
-const AGE_COL: usize = 7;
+const UPDATED_COL: usize = 7;
 
 /// How a content-sized queue column may grow. It opens at its content width
 /// within `min..=opening_max`; once the title has more than `TITLE_COL_MIN`,
@@ -329,22 +438,45 @@ struct QueueLayout {
     ref_col: usize,
     repo_col: usize,
     type_col: usize,
+    state_col: usize,
+    block_col: usize,
+    updated_col: usize,
 }
 
 impl QueueLayout {
-    fn new(width: usize, content: QueueContentWidths) -> Self {
+    fn new(width: usize, content: QueueContentWidths, compact: bool) -> Self {
         let mut layout = Self {
             width,
-            ref_col: REF_COL.opening(content.display_ref),
-            repo_col: REPO_COL.opening(content.repo),
-            type_col: TYPE_COL.opening(content.ty),
+            ref_col: REF_COL
+                .opening(content.display_ref)
+                .min(width.saturating_sub(28).max(6)),
+            repo_col: 0,
+            type_col: 0,
+            state_col: if compact { 8 } else { 0 },
+            block_col: 0,
+            updated_col: 0,
         };
+        let mut budget = layout.title_col().saturating_sub(18);
+        for (column, desired) in [
+            (&mut layout.type_col, TYPE_COL.opening(content.ty)),
+            (&mut layout.repo_col, REPO_COL.opening(content.repo)),
+            (&mut layout.block_col, BLOCK_COL),
+            (&mut layout.updated_col, UPDATED_COL),
+        ] {
+            if budget >= desired + GAP {
+                *column = desired;
+                budget -= desired + GAP;
+            }
+        }
         let mut spare = layout.title_col().saturating_sub(TITLE_COL_MIN);
         for (column, grown) in [
             (&mut layout.ref_col, REF_COL.grown(content.display_ref)),
             (&mut layout.repo_col, REPO_COL.grown(content.repo)),
             (&mut layout.type_col, TYPE_COL.grown(content.ty)),
         ] {
+            if *column == 0 {
+                continue;
+            }
             let extra = grown.saturating_sub(*column).min(spare);
             *column += extra;
             spare -= extra;
@@ -361,9 +493,12 @@ impl QueueLayout {
                 self.ref_col,
                 self.repo_col,
                 self.type_col,
-                BLOCK_COL,
-                AGE_COL,
-            ],
+                self.state_col,
+                self.block_col,
+                self.updated_col,
+            ]
+            .into_iter()
+            .filter(|width| *width > 0),
         )
     }
 }
@@ -372,13 +507,14 @@ fn render_queue(
     tickets: &TicketList,
     frame: &mut Frame<'_>,
     area: Rect,
+    compact: bool,
     now: DateTime<Utc>,
     palette: &Palette,
 ) {
     let [header_area, rows_area] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
     let width = usize::from(area.width);
-    let layout = QueueLayout::new(width, tickets.content_widths());
+    let layout = QueueLayout::new(width, tickets.content_widths(), compact);
     frame.render_widget(Paragraph::new(header_row(&layout)), header_area);
 
     if tickets.visible_is_empty() {
@@ -428,10 +564,14 @@ fn header_row(layout: &QueueLayout) -> Line<'static> {
             Cell::text("Ticket", layout.ref_col, bold),
             Cell::text("Repo", layout.repo_col, bold),
             Cell::text("Type", layout.type_col, bold),
+            Cell::text("State", layout.state_col, bold),
             Cell::text("Title", layout.title_col(), bold),
-            Cell::text("Block", BLOCK_COL, bold),
-            Cell::text("Age", AGE_COL, bold),
-        ],
+            Cell::text("Block", layout.block_col, bold),
+            Cell::text("Updated", layout.updated_col, bold),
+        ]
+        .into_iter()
+        .filter(|cell| cell.width > 0)
+        .collect(),
         None,
     )
 }
@@ -450,13 +590,13 @@ fn ticket_line(
     } else {
         Style::default()
     };
+    // Without a Type column the title carries the Either tag, so the indicator
+    // cell stays free for the refresh glyph and neither signal hides the other.
+    let either_tag = (layout.type_col == 0 && row.ty.mode() == Mode::Either)
+        .then(|| Span::styled("*", Style::default().fg(palette.mode(Mode::Either))));
     let cells = vec![
         Cell::text(
-            if row.fetch.refreshing {
-                REFRESH_GLYPH
-            } else {
-                ""
-            },
+            if row.refreshing { REFRESH_GLYPH } else { "" },
             INDICATOR_COL,
             Style::default().fg(palette.accent),
         ),
@@ -473,40 +613,63 @@ fn ticket_line(
             Style::default().fg(repo_color(&row.repo)),
         ),
         Cell::text(
-            row.ty.0.clone(),
+            if row.ty.mode() == Mode::Either {
+                format!("*{}", row.ty.0)
+            } else {
+                row.ty.0.clone()
+            },
             layout.type_col,
             Style::default().fg(palette.mode(row.ty.mode())),
         ),
+        Cell::text(
+            row.tier().label(),
+            layout.state_col,
+            Style::default().fg(tier_color(row.tier(), palette)),
+        ),
         title_cell(
             &row.title,
+            either_tag,
             row.marker.as_ref(),
             layout.title_col(),
             title_style,
             palette,
         ),
-        block_cell(row.upstream, row.downstream, palette),
+        Cell {
+            width: layout.block_col,
+            ..block_cell(row.upstream, row.downstream, palette)
+        },
         Cell::text(
-            row.fetch
-                .fetched_at
+            row.updated_at
                 .map_or_else(String::new, |stamp| format_age(stamp, now)),
-            AGE_COL,
-            Style::default().fg(palette.muted),
+            layout.updated_col,
+            Style::default(),
         ),
     ];
-    render_cells(cells, selected.then_some(palette.selected_bg))
+    render_cells(
+        cells.into_iter().filter(|cell| cell.width > 0).collect(),
+        selected.then_some(palette.selected_bg),
+    )
 }
 
-/// The title plus its state marker — `⟨claimed X⟩`, `⟨after Y⟩`, or
-/// `⟨dep? Z⟩` — with the title truncated first so the marker survives.
+/// An optional leading `tag`, the title, then its state marker — `⟨claimed
+/// X⟩`, `⟨after Y⟩`, or `⟨dep? Z⟩` — with the title truncated first so the
+/// tag and marker survive.
 fn title_cell(
     title: &str,
+    tag: Option<Span<'static>>,
     marker: Option<&RowMarker>,
     width: usize,
     title_style: Style,
     palette: &Palette,
 ) -> Cell {
+    let tag_width = tag.as_ref().map_or(0, |tag| tag.width());
+    let mut spans: Vec<Span<'static>> = tag.into_iter().collect();
     let Some(marker) = marker else {
-        return Cell::text(title.to_owned(), width, title_style);
+        spans.push(Span::styled(
+            truncate(title, width.saturating_sub(tag_width)),
+            title_style,
+        ));
+        return Cell { spans, width };
     };
     let (marker, color) = match marker {
         RowMarker::Claimed(Some(who)) => (format!("⟨claimed {who}⟩"), palette.claimed),
@@ -517,17 +680,15 @@ fn title_cell(
     // The marker is the row's state signal, so it takes the width first and
     // the title gets the rest — none at all when the marker alone fills the
     // cell, where `render_cells` truncates the marker rather than lose it.
-    let title_budget = width.saturating_sub(marker.width() + 1);
+    let title_budget = width.saturating_sub(tag_width + marker.width() + 1);
     let marker = Span::styled(marker, Style::default().fg(color));
-    let spans = if title_budget == 0 {
-        vec![marker]
+    if title_budget == 0 {
+        spans.push(marker);
     } else {
-        vec![
-            Span::styled(truncate(title, title_budget), title_style),
-            Span::raw(" "),
-            marker,
-        ]
-    };
+        spans.push(Span::styled(truncate(title, title_budget), title_style));
+        spans.push(Span::raw(" "));
+        spans.push(marker);
+    }
     Cell { spans, width }
 }
 
@@ -557,10 +718,28 @@ fn block_cell(upstream: usize, downstream: usize, palette: &Palette) -> Cell {
 }
 
 fn render_status(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
+    if area.width < 100 {
+        let hints = if area.width < 60 {
+            "p copy t PRs"
+        } else {
+            "J/K effort m mode p/y copy"
+        };
+        frame.render_widget(Paragraph::new(hints), area);
+        super::render_status_right(model, frame, area, palette);
+        return;
+    }
     let bold = Style::default().add_modifier(Modifier::BOLD);
     let left = Line::from(vec![
         Span::styled("j/k", bold),
         Span::raw(" nav  "),
+        Span::styled("J/K", bold),
+        Span::raw(" efforts  "),
+        Span::styled("h/l", bold),
+        Span::raw(" tabs  "),
+        Span::styled("m", bold),
+        Span::raw(" mode  "),
+        Span::styled("p/y", bold),
+        Span::raw(" copy prompt/ref  "),
         Span::styled("r/R", bold),
         Span::raw(" refresh  "),
         Span::styled("t", bold),

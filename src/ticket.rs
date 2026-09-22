@@ -7,6 +7,8 @@
 //! and local dialect parser (#118) normalize their wire/file shapes into
 //! these types; the fetch and view layers consume them.
 
+use chrono::{DateTime, Utc};
+
 use crate::canonical_path::CanonicalPathBuf;
 use crate::repo_slug::RepoSlug;
 
@@ -168,6 +170,8 @@ pub struct Ticket {
     /// fallback. Never the filename slug, which can drift after rescopes.
     pub title: String,
     pub state: TicketState,
+    /// GitHub activity time or local file modification time; absent when unavailable.
+    pub updated_at: Option<DateTime<Utc>>,
     pub claim: Option<Claim>,
     pub ty: TicketType,
     pub dependencies: Vec<Dependency>,

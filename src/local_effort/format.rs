@@ -10,6 +10,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use chrono::{DateTime, Utc};
+
 use crate::{
     canonical_path::CanonicalPathBuf,
     map_body::{first_h1, scan_map_body},
@@ -112,6 +114,7 @@ pub(super) fn find_map_file(dir: &Path) -> Result<Option<PathBuf>, String> {
 struct MemberFile {
     path: PathBuf,
     key: TicketKey,
+    updated_at: Option<DateTime<Utc>>,
     /// The `NN` filename prefix a `blocked-by` ref names.
     number: Option<u64>,
     title: Option<String>,
@@ -173,6 +176,10 @@ fn read_member_files(dir: &Path) -> Result<Vec<MemberFile>, String> {
             };
             members.push(MemberFile {
                 number: filename_number(&path),
+                updated_at: fs::metadata(&path)
+                    .and_then(|metadata| metadata.modified())
+                    .ok()
+                    .map(DateTime::from),
                 path,
                 key,
                 title,
@@ -212,14 +219,13 @@ fn resolve_ticket(member: &MemberFile, members: &[MemberFile]) -> Result<Ticket,
     let (state, claim) = fields.lifecycle()?;
     let mut dependencies = Vec::new();
     for reference in &fields.blocked_by {
-        let number: u64 = reference
-            .parse()
-            .map_err(|_| format!("blocked-by ref {reference:?} is not a ticket number"))?;
-        dependencies.push(match members.iter().find(|m| m.number == Some(number)) {
+        let target = reference
+            .parse::<u64>()
+            .ok()
+            .and_then(|number| members.iter().find(|m| m.number == Some(number)));
+        dependencies.push(match target {
             Some(target) => Dependency::SameEffort(target.key.clone()),
-            // No member file carries that number: the target can't be
-            // found, and an unseen Dependency must never put the ticket
-            // on the Frontier.
+            // An unresolvable reference must never put the Ticket on the Frontier.
             None => Dependency::Unknown {
                 raw: reference.clone(),
             },
@@ -236,6 +242,7 @@ fn resolve_ticket(member: &MemberFile, members: &[MemberFile]) -> Result<Ticket,
             .clone()
             .ok_or_else(|| "no H1 title or frontmatter title".to_owned())?,
         state,
+        updated_at: member.updated_at,
         claim,
         ty: TicketType(fields.ty.clone().unwrap_or_default()),
         dependencies,
@@ -293,10 +300,8 @@ fn resolve_external_target(
     }))
 }
 
-/// Which local ticket dialect a file spelled its fields in — kept on the
-/// parsed fields because the lifecycle vocabularies never cross: `open`/
-/// `closed` belongs to the older dialect, `claimed`/`resolved` to the newer,
-/// and a value from the wrong one degrades rather than guesses.
+/// Older tickets require an `open`/`closed` status; newer tickets may omit
+/// the Open status and encode claims as `claimed` and closure as `resolved`.
 #[derive(Clone, Copy)]
 enum Dialect {
     Older,
@@ -356,7 +361,7 @@ impl TicketFields {
                 }
             }
             Dialect::Newer => match status.as_deref() {
-                None => Ok((TicketState::Open, None)),
+                None | Some("open") => Ok((TicketState::Open, None)),
                 // Claimed-ness without a claimant name — the dialect has no
                 // assignee field.
                 Some("claimed") => Ok((TicketState::Open, Some(Claim::Anonymous))),
@@ -424,6 +429,7 @@ fn parse_newer_dialect(content: &str) -> ParsedFile {
         match prefix {
             "Status:" => fields.status = Some(value),
             "Type:" => fields.ty = Some(value),
+            "Blocked by:" if value.eq_ignore_ascii_case("none") => fields.blocked_by.clear(),
             _ => {
                 fields.blocked_by = value
                     .split(',')

@@ -6,6 +6,8 @@ use super::{
     DiscoveryUnit, QueueRow, QueueTier, RailCard, RefreshNotice, RefreshScope, RefreshTarget,
     RowMarker, TicketList, TicketRow,
 };
+
+mod filters;
 use crate::{
     canonical_path::CanonicalPathBuf,
     config::RepoIdentity,
@@ -92,6 +94,7 @@ fn effort(name: &str, title: &str, tickets: Vec<TicketSpec>) -> Effort {
                 title: format!("Ticket {}", spec.slug),
                 state: spec.state,
                 claim: spec.claim,
+                updated_at: None,
                 ty: TicketType("task".to_owned()),
                 dependencies: spec.deps,
             })
@@ -653,7 +656,7 @@ fn content_widths_measure_the_queued_tickets() {
         "closed tickets aren't queued, so they don't size the column"
     );
     assert_eq!(widths.repo, "web".len());
-    assert_eq!(widths.ty, "task".len());
+    assert_eq!(widths.ty, "*task".len());
 }
 
 // ── probe phases ─────────────────────────────────────────────────────────────

@@ -29,6 +29,7 @@ fn ticket(number: u64, state: TicketState) -> Ticket {
         title: format!("Ticket {number}"),
         state,
         claim: None,
+        updated_at: None,
         ty: ty("task"),
         dependencies: Vec::new(),
     }

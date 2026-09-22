@@ -1,1 +1,4 @@
 * text=auto eol=lf
+
+tests.rs linguist-generated=true
+**/tests/** linguist-generated=true

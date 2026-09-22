@@ -4,17 +4,19 @@
 //! Split out of `update` the way `refresh` is, so the reducer stays a
 //! dispatcher and the ticket story reads in one place — `super::apply`
 //! delegates here.
-// TODO(#133): `h`/`l`, `J`/`K`, `m`, `p`, `y`, wheel
-// ticks to the queue viewport.
 
 use chrono::{DateTime, Utc};
+
+#[cfg(test)]
+mod tests;
 use ratatui::crossterm::event::KeyCode;
 
 use crate::{
     app::{
         cmd::Cmd,
+        list_cursor::Direction,
         model::{Model, StatusKind, ViewMode},
-        ticket_list::{DiscoveryUnit, RefreshNotice, RefreshScope, RefreshTarget},
+        ticket_list::{DiscoveryUnit, RefreshNotice, RefreshScope, RefreshTarget, RepoScope},
     },
     auth::AuthToken,
     canonical_path::CanonicalPathBuf,
@@ -77,11 +79,34 @@ pub(super) fn map_read_cmd(model: &mut Model, repo: &RepoSlug, token: &AuthToken
     })
 }
 
-/// Handle one keypress on the ticket surface: the queue cursor and the
-/// surface toggle back to the PR list. None of these keys move the PR
-/// selection, so the list surface's files-fetch path never runs for them.
+/// Ticket-surface navigation never dispatches the PR selection's files fetch.
 pub(super) fn handle_ticket_list_key(model: &mut Model, code: KeyCode) -> Vec<Cmd> {
     match code {
+        KeyCode::PageDown => model
+            .tickets
+            .scroll_summary(Direction::Down, super::DETAIL_SCROLL_PAGE),
+        KeyCode::PageUp => model
+            .tickets
+            .scroll_summary(Direction::Up, super::DETAIL_SCROLL_PAGE),
+        KeyCode::Char('p' | 'y') => {
+            if let Some(summary) = model.tickets.selected_summary() {
+                let text = if code == KeyCode::Char('p') {
+                    summary.handoff_prompt.clone()
+                } else {
+                    summary.location.clone()
+                };
+                super::set_status(model, StatusKind::Info, format!("Copying {text}"));
+                return vec![Cmd::CopyToClipboard { text }];
+            }
+        }
+        KeyCode::Char('h') | KeyCode::Left | KeyCode::Char('[') => super::step_tab(model, -1),
+        KeyCode::Char('l') | KeyCode::Right | KeyCode::Char(']') => super::step_tab(model, 1),
+        KeyCode::Char(c) if c.is_ascii_digit() => {
+            super::jump_to_tab(model, (c as u8 - b'0') as usize)
+        }
+        KeyCode::Char('J') => model.tickets.step_effort(Direction::Down),
+        KeyCode::Char('K') => model.tickets.step_effort(Direction::Up),
+        KeyCode::Char('m') => model.tickets.cycle_mode(),
         KeyCode::Char('R') => return refresh_cmds(model, RefreshScope::View),
         KeyCode::Char('r') => return refresh_cmds(model, RefreshScope::Selected),
         KeyCode::Char('q') => model.should_quit = true,
@@ -93,6 +118,43 @@ pub(super) fn handle_ticket_list_key(model: &mut Model, code: KeyCode) -> Vec<Cm
         _ => {}
     }
     Vec::new()
+}
+
+pub(super) fn sync_scope(model: &mut Model) {
+    let scope = model.active_scope().map(|repo| {
+        let mut discoveries: Vec<_> = model
+            .config
+            .repos
+            .iter()
+            .filter(|entry| entry.slug.as_ref() == Some(&repo))
+            .filter_map(DiscoveryUnit::for_repo)
+            .collect();
+        if model.repo.repo() == Some(&repo) {
+            discoveries.push(DiscoveryUnit::Cwd);
+        }
+        RepoScope { repo, discoveries }
+    });
+    model.tickets.set_repo_scope(scope);
+}
+
+pub(super) fn normalize_summary(model: &mut Model, now: DateTime<Utc>) {
+    use crate::app::{ticket_list_layout, ticket_summary_layout};
+    if !matches!(model.view_mode, ViewMode::TicketList) {
+        return;
+    }
+    let max_scroll = ticket_list_layout::summary_width(model.terminal_width)
+        .zip(model.tickets.selected_summary())
+        .map_or(0, |(width, summary)| {
+            ticket_summary_layout::content_lines(
+                summary,
+                usize::from(width),
+                now,
+                &crate::palette::DARK,
+            )
+            .len()
+            .saturating_sub(ticket_list_layout::summary_rows(model.terminal_height))
+        });
+    model.tickets.clamp_summary(max_scroll);
 }
 
 /// Build each target's command from the Model's side of the seam — the
