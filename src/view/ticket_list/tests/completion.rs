@@ -215,9 +215,47 @@ fn shrinking_drops_summary_then_rail_and_keeps_a_state_column_and_titles() {
     assert!(tiny.contains("State"));
     assert!(tiny.contains("Read the RFC"), "{tiny}");
     assert!(
-        tiny.lines().any(|line| line.starts_with("* 03-blocked")),
+        tiny.lines()
+            .any(|line| line.starts_with("  03-blocked Blocked  *")),
         "Either must stay visible without a Type column:\n{tiny}"
     );
+}
+
+#[test]
+fn a_refreshing_either_ticket_keeps_both_glyphs_without_a_type_column() {
+    let mut model = populated_model();
+    let now = chrono::DateTime::UNIX_EPOCH + chrono::Duration::minutes(2);
+    model.tickets.move_down();
+    model.tickets.move_down();
+    model.tickets.move_down();
+    assert_eq!(
+        model.tickets.selected_ticket().map(TicketKey::display_ref),
+        Some("03-blocked".to_owned())
+    );
+    crate::app::update::update(
+        &mut model,
+        crate::app::msg::Msg::TerminalEvent(ratatui::crossterm::event::Event::Key(
+            ratatui::crossterm::event::KeyEvent::new(
+                ratatui::crossterm::event::KeyCode::Char('r'),
+                ratatui::crossterm::event::KeyModifiers::NONE,
+            ),
+        )),
+        now,
+    );
+    let mut terminal = Terminal::new(TestBackend::new(40, 24)).unwrap();
+    terminal
+        .draw(|frame| view::view(&model, frame, now))
+        .unwrap();
+    let rows = buffer_text(&terminal);
+    let row = rows
+        .iter()
+        .find(|row| row.contains("03-blocked"))
+        .unwrap_or_else(|| panic!("{}", rows.join("\n")));
+    assert!(
+        row.starts_with("↻ 03-blocked Blocked  *"),
+        "refresh and Either must both show: {row:?}"
+    );
+    assert_eq!(fg_of(&terminal, "*…"), DARK.mode_either);
 }
 
 #[test]

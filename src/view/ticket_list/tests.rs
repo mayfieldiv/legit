@@ -460,6 +460,7 @@ fn dep_marker_cell(width: usize) -> String {
     let marker = RowMarker::UnknownDependency("gone.md".to_owned());
     let cell = super::title_cell(
         "Ship it",
+        None,
         Some(&marker),
         width,
         ratatui::style::Style::default(),

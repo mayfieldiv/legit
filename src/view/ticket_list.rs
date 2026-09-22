@@ -549,15 +549,13 @@ fn ticket_line(
     } else {
         Style::default()
     };
+    // Without a Type column the title carries the Either tag, so the indicator
+    // cell stays free for the refresh glyph and neither signal hides the other.
+    let either_tag = (layout.type_col == 0 && row.ty.mode() == Mode::Either)
+        .then(|| Span::styled("*", Style::default().fg(palette.mode(Mode::Either))));
     let cells = vec![
         Cell::text(
-            if row.refreshing {
-                REFRESH_GLYPH
-            } else if layout.type_col == 0 && row.ty.mode() == Mode::Either {
-                "*"
-            } else {
-                ""
-            },
+            if row.refreshing { REFRESH_GLYPH } else { "" },
             INDICATOR_COL,
             Style::default().fg(palette.accent),
         ),
@@ -589,6 +587,7 @@ fn ticket_line(
         ),
         title_cell(
             &row.title,
+            either_tag,
             row.marker.as_ref(),
             layout.title_col(),
             title_style,
@@ -611,17 +610,25 @@ fn ticket_line(
     )
 }
 
-/// The title plus its state marker — `⟨claimed X⟩`, `⟨after Y⟩`, or
-/// `⟨dep? Z⟩` — with the title truncated first so the marker survives.
+/// An optional leading `tag`, the title, then its state marker — `⟨claimed
+/// X⟩`, `⟨after Y⟩`, or `⟨dep? Z⟩` — with the title truncated first so the
+/// tag and marker survive.
 fn title_cell(
     title: &str,
+    tag: Option<Span<'static>>,
     marker: Option<&RowMarker>,
     width: usize,
     title_style: Style,
     palette: &Palette,
 ) -> Cell {
+    let tag_width = tag.as_ref().map_or(0, |tag| tag.width());
+    let mut spans: Vec<Span<'static>> = tag.into_iter().collect();
     let Some(marker) = marker else {
-        return Cell::text(title.to_owned(), width, title_style);
+        spans.push(Span::styled(
+            truncate(title, width.saturating_sub(tag_width)),
+            title_style,
+        ));
+        return Cell { spans, width };
     };
     let (marker, color) = match marker {
         RowMarker::Claimed(Some(who)) => (format!("⟨claimed {who}⟩"), palette.claimed),
@@ -632,17 +639,15 @@ fn title_cell(
     // The marker is the row's state signal, so it takes the width first and
     // the title gets the rest — none at all when the marker alone fills the
     // cell, where `render_cells` truncates the marker rather than lose it.
-    let title_budget = width.saturating_sub(marker.width() + 1);
+    let title_budget = width.saturating_sub(tag_width + marker.width() + 1);
     let marker = Span::styled(marker, Style::default().fg(color));
-    let spans = if title_budget == 0 {
-        vec![marker]
+    if title_budget == 0 {
+        spans.push(marker);
     } else {
-        vec![
-            Span::styled(truncate(title, title_budget), title_style),
-            Span::raw(" "),
-            marker,
-        ]
-    };
+        spans.push(Span::styled(truncate(title, title_budget), title_style));
+        spans.push(Span::raw(" "));
+        spans.push(marker);
+    }
     Cell { spans, width }
 }
 
