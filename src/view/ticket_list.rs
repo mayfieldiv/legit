@@ -12,7 +12,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use super::row::{Cell, GAP, fill_width, render_cells};
+use super::table::{Column, ColumnBounds, Columns, FillReserves, Table};
 use crate::{
     app::{
         model::Model,
@@ -391,116 +391,57 @@ fn repo_led_line(
 
 // ── queue ────────────────────────────────────────────────────────────────────
 
-const INDICATOR_COL: usize = 1;
-const TITLE_COL_MIN: usize = 40;
-/// `↑NN ↓NN`.
-const BLOCK_COL: usize = 7;
-const UPDATED_COL: usize = 7;
-
-/// How a content-sized queue column may grow. It opens at its content width
-/// within `min..=opening_max`; once the title has more than `TITLE_COL_MIN`,
-/// the surplus widens the fitted columns in order, each up to `max` — so a
-/// long ref or type takes room only when the title can spare it.
-struct ColumnBounds {
-    min: usize,
-    opening_max: usize,
-    max: usize,
+/// The ticket queue's columns, in display order.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum QueueColumn {
+    Indicator,
+    Ref,
+    Repo,
+    Type,
+    State,
+    Title,
+    Block,
+    Updated,
 }
 
-impl ColumnBounds {
-    fn opening(&self, content: usize) -> usize {
-        content.clamp(self.min, self.opening_max)
-    }
-
-    fn grown(&self, content: usize) -> usize {
-        content.clamp(self.min, self.max)
-    }
-}
-
-const REF_COL: ColumnBounds = ColumnBounds {
-    min: 6,
-    opening_max: 14,
-    max: 64,
-};
-const REPO_COL: ColumnBounds = ColumnBounds {
-    min: 4,
-    opening_max: 14,
-    max: 32,
-};
-const TYPE_COL: ColumnBounds = ColumnBounds {
-    min: 4,
-    opening_max: 12,
-    max: 24,
-};
-
-struct QueueLayout {
-    width: usize,
-    ref_col: usize,
-    repo_col: usize,
-    type_col: usize,
-    state_col: usize,
-    block_col: usize,
-    updated_col: usize,
-}
-
-impl QueueLayout {
-    fn new(width: usize, content: QueueContentWidths, compact: bool) -> Self {
-        let mut layout = Self {
-            width,
-            ref_col: REF_COL
-                .opening(content.display_ref)
-                .min(width.saturating_sub(28).max(6)),
-            repo_col: 0,
-            type_col: 0,
-            state_col: if compact { 8 } else { 0 },
-            block_col: 0,
-            updated_col: 0,
-        };
-        let mut budget = layout.title_col().saturating_sub(18);
-        for (column, desired) in [
-            (&mut layout.type_col, TYPE_COL.opening(content.ty)),
-            (&mut layout.repo_col, REPO_COL.opening(content.repo)),
-            (&mut layout.block_col, BLOCK_COL),
-            (&mut layout.updated_col, UPDATED_COL),
-        ] {
-            if budget >= desired + GAP {
-                *column = desired;
-                budget -= desired + GAP;
-            }
-        }
-        let mut spare = layout.title_col().saturating_sub(TITLE_COL_MIN);
-        for (column, grown) in [
-            (&mut layout.ref_col, REF_COL.grown(content.display_ref)),
-            (&mut layout.repo_col, REPO_COL.grown(content.repo)),
-            (&mut layout.type_col, TYPE_COL.grown(content.ty)),
-        ] {
-            if *column == 0 {
-                continue;
-            }
-            let extra = grown.saturating_sub(*column).min(spare);
-            *column += extra;
-            spare -= extra;
-        }
-        layout
-    }
-
-    /// Whatever the fixed columns and their gaps leave for the title.
-    fn title_col(&self) -> usize {
-        fill_width(
-            self.width,
-            [
-                INDICATOR_COL,
-                self.ref_col,
-                self.repo_col,
-                self.type_col,
-                self.state_col,
-                self.block_col,
-                self.updated_col,
-            ]
-            .into_iter()
-            .filter(|width| *width > 0),
+/// The one queue column declaration, fitted to `row_width` with the cached
+/// display-set measurements. `compact` means the effort rail is hidden, so
+/// the row carries a State column in its place. Ref is the only required
+/// fitted column: it yields toward its minimum when the row cannot hold it
+/// and Title's 18-column admission reserve, and takes surplus first once
+/// Title has 40. Metadata is admitted by rank — Type, Repo, Block, Updated.
+fn queue_table(row_width: usize, content: QueueContentWidths, compact: bool) -> Table<QueueColumn> {
+    Columns::new()
+        .column(Column::fixed(QueueColumn::Indicator, "", 1))
+        .column(Column::fitted(
+            QueueColumn::Ref,
+            "Ticket",
+            content.display_ref,
+            ColumnBounds::new(6, 14, 64),
+        ))
+        .column(
+            Column::fitted(
+                QueueColumn::Repo,
+                "Repo",
+                content.repo,
+                ColumnBounds::new(4, 14, 32),
+            )
+            .optional(1),
         )
-    }
+        .column(
+            Column::fitted(
+                QueueColumn::Type,
+                "Type",
+                content.ty,
+                ColumnBounds::new(4, 12, 24),
+            )
+            .optional(0),
+        )
+        .column_if(compact, Column::fixed(QueueColumn::State, "State", 8))
+        .fill(QueueColumn::Title, "Title", FillReserves::new(18, 40))
+        .column(Column::fixed(QueueColumn::Block, "Block", 7).optional(2))
+        .column(Column::fixed(QueueColumn::Updated, "Updated", 7).optional(3))
+        .fit(row_width)
 }
 
 fn render_queue(
@@ -514,8 +455,11 @@ fn render_queue(
     let [header_area, rows_area] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
     let width = usize::from(area.width);
-    let layout = QueueLayout::new(width, tickets.content_widths(), compact);
-    frame.render_widget(Paragraph::new(header_row(&layout)), header_area);
+    let table = queue_table(width, tickets.content_widths(), compact);
+    frame.render_widget(
+        Paragraph::new(table.header(Style::default().add_modifier(Modifier::BOLD))),
+        header_area,
+    );
 
     if tickets.visible_is_empty() {
         frame.render_widget(
@@ -528,7 +472,7 @@ fn render_queue(
         .visible_rows()
         .map(|(row, selected)| match row {
             QueueRow::Header(tier) => tier_header_line(*tier, width, palette),
-            QueueRow::Ticket(row) => ticket_line(row, &layout, selected, now, palette),
+            QueueRow::Ticket(row) => ticket_line(row, &table, selected, now, palette),
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), rows_area);
@@ -538,7 +482,7 @@ fn render_queue(
 /// queue's state signal, so the rule takes the tier colour (unlike the PR
 /// list's accent-coloured Smart-status headers).
 fn tier_header_line(tier: QueueTier, width: usize, palette: &Palette) -> Line<'static> {
-    let text = format!("{}── {} ", " ".repeat(INDICATOR_COL + GAP), tier.label());
+    let text = format!("  ── {} ", tier.label());
     Line::from(Span::styled(
         pad_to_width(&text, width),
         Style::default()
@@ -547,7 +491,7 @@ fn tier_header_line(tier: QueueTier, width: usize, palette: &Palette) -> Line<'s
     ))
 }
 
-/// The tier's role colour, echoed by the markers `title_cell` paints.
+/// The tier's role colour, echoed by the markers `title_spans` paints.
 fn tier_color(tier: QueueTier, palette: &Palette) -> Color {
     match tier {
         QueueTier::Frontier => palette.frontier,
@@ -556,35 +500,17 @@ fn tier_color(tier: QueueTier, palette: &Palette) -> Color {
     }
 }
 
-fn header_row(layout: &QueueLayout) -> Line<'static> {
-    let bold = Style::default().add_modifier(Modifier::BOLD);
-    render_cells(
-        vec![
-            Cell::text("", INDICATOR_COL, Style::default()),
-            Cell::text("Ticket", layout.ref_col, bold),
-            Cell::text("Repo", layout.repo_col, bold),
-            Cell::text("Type", layout.type_col, bold),
-            Cell::text("State", layout.state_col, bold),
-            Cell::text("Title", layout.title_col(), bold),
-            Cell::text("Block", layout.block_col, bold),
-            Cell::text("Updated", layout.updated_col, bold),
-        ]
-        .into_iter()
-        .filter(|cell| cell.width > 0)
-        .collect(),
-        None,
-    )
-}
-
+/// One ticket's display row: the fitted table asks for each present column's
+/// content by ID, so the row can neither omit nor reorder a column.
 fn ticket_line(
     row: &TicketRow,
-    layout: &QueueLayout,
+    table: &Table<QueueColumn>,
     selected: bool,
     now: DateTime<Utc>,
     palette: &Palette,
 ) -> Line<'static> {
     // The Selected Row brightens only the title; every other cell keeps its
-    // semantic foreground over the band `render_cells` lays down (ADR 0005).
+    // semantic foreground over the band the table lays down (ADR 0005).
     let title_style = if selected {
         Style::default().fg(palette.selected_fg)
     } else {
@@ -592,76 +518,69 @@ fn ticket_line(
     };
     // Without a Type column the title carries the Either tag, so the indicator
     // cell stays free for the refresh glyph and neither signal hides the other.
-    let either_tag = (layout.type_col == 0 && row.ty.mode() == Mode::Either)
-        .then(|| Span::styled("*", Style::default().fg(palette.mode(Mode::Either))));
-    let cells = vec![
-        Cell::text(
-            if row.refreshing { REFRESH_GLYPH } else { "" },
-            INDICATOR_COL,
-            Style::default().fg(palette.accent),
-        ),
-        Cell::text(
-            truncate_middle(&row.display_ref, layout.ref_col),
-            layout.ref_col,
-            Style::default()
-                .fg(palette.count)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Cell::text(
-            truncate_middle(&row.repo, layout.repo_col),
-            layout.repo_col,
-            Style::default().fg(repo_color(&row.repo)),
-        ),
-        Cell::text(
-            if row.ty.mode() == Mode::Either {
-                format!("*{}", row.ty.0)
-            } else {
-                row.ty.0.clone()
-            },
-            layout.type_col,
-            Style::default().fg(palette.mode(row.ty.mode())),
-        ),
-        Cell::text(
-            row.tier().label(),
-            layout.state_col,
-            Style::default().fg(tier_color(row.tier(), palette)),
-        ),
-        title_cell(
-            &row.title,
-            either_tag,
-            row.marker.as_ref(),
-            layout.title_col(),
-            title_style,
-            palette,
-        ),
-        Cell {
-            width: layout.block_col,
-            ..block_cell(row.upstream, row.downstream, palette)
-        },
-        Cell::text(
-            row.updated_at
-                .map_or_else(String::new, |stamp| format_age(stamp, now)),
-            layout.updated_col,
-            Style::default(),
-        ),
-    ];
-    render_cells(
-        cells.into_iter().filter(|cell| cell.width > 0).collect(),
-        selected.then_some(palette.selected_bg),
-    )
+    let type_is_hidden = table.width(QueueColumn::Type).is_none();
+    table.row(selected.then_some(palette.selected_bg), |column, width| {
+        let text = |text: String, style: Style| vec![Span::styled(text, style)];
+        match column {
+            QueueColumn::Indicator => text(
+                if row.refreshing { REFRESH_GLYPH } else { "" }.to_owned(),
+                Style::default().fg(palette.accent),
+            ),
+            QueueColumn::Ref => text(
+                truncate_middle(&row.display_ref, width),
+                Style::default()
+                    .fg(palette.count)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            QueueColumn::Repo => text(
+                truncate_middle(&row.repo, width),
+                Style::default().fg(repo_color(&row.repo)),
+            ),
+            QueueColumn::Type => text(
+                if row.ty.mode() == Mode::Either {
+                    format!("*{}", row.ty.0)
+                } else {
+                    row.ty.0.clone()
+                },
+                Style::default().fg(palette.mode(row.ty.mode())),
+            ),
+            QueueColumn::State => text(
+                row.tier().label().to_owned(),
+                Style::default().fg(tier_color(row.tier(), palette)),
+            ),
+            QueueColumn::Title => {
+                let either_tag = (type_is_hidden && row.ty.mode() == Mode::Either)
+                    .then(|| Span::styled("*", Style::default().fg(palette.mode(Mode::Either))));
+                title_spans(
+                    &row.title,
+                    either_tag,
+                    row.marker.as_ref(),
+                    width,
+                    title_style,
+                    palette,
+                )
+            }
+            QueueColumn::Block => block_spans(row.upstream, row.downstream, palette),
+            QueueColumn::Updated => text(
+                row.updated_at
+                    .map_or_else(String::new, |stamp| format_age(stamp, now)),
+                Style::default(),
+            ),
+        }
+    })
 }
 
 /// An optional leading `tag`, the title, then its state marker — `⟨claimed
-/// X⟩`, `⟨after Y⟩`, or `⟨dep? Z⟩` — with the title truncated first so the
-/// tag and marker survive.
-fn title_cell(
+/// X⟩`, `⟨after Y⟩`, or `⟨dep? Z⟩` — fitted to a `width`-column cell with
+/// the title truncated first so the tag and marker survive.
+fn title_spans(
     title: &str,
     tag: Option<Span<'static>>,
     marker: Option<&RowMarker>,
     width: usize,
     title_style: Style,
     palette: &Palette,
-) -> Cell {
+) -> Vec<Span<'static>> {
     let tag_width = tag.as_ref().map_or(0, |tag| tag.width());
     let mut spans: Vec<Span<'static>> = tag.into_iter().collect();
     let Some(marker) = marker else {
@@ -669,7 +588,7 @@ fn title_cell(
             truncate(title, width.saturating_sub(tag_width)),
             title_style,
         ));
-        return Cell { spans, width };
+        return spans;
     };
     let (marker, color) = match marker {
         RowMarker::Claimed(Some(who)) => (format!("⟨claimed {who}⟩"), palette.claimed),
@@ -679,7 +598,7 @@ fn title_cell(
     };
     // The marker is the row's state signal, so it takes the width first and
     // the title gets the rest — none at all when the marker alone fills the
-    // cell, where `render_cells` truncates the marker rather than lose it.
+    // cell, where the table truncates the marker rather than lose it.
     let title_budget = width.saturating_sub(tag_width + marker.width() + 1);
     let marker = Span::styled(marker, Style::default().fg(color));
     if title_budget == 0 {
@@ -689,12 +608,12 @@ fn title_cell(
         spans.push(Span::raw(" "));
         spans.push(marker);
     }
-    Cell { spans, width }
+    spans
 }
 
 /// `↑N` open upstream Dependencies (red) and `↓N` open downstream dependents
 /// (blue), either omitted when zero.
-fn block_cell(upstream: usize, downstream: usize, palette: &Palette) -> Cell {
+fn block_spans(upstream: usize, downstream: usize, palette: &Palette) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     if upstream > 0 {
         spans.push(Span::styled(
@@ -711,10 +630,7 @@ fn block_cell(upstream: usize, downstream: usize, palette: &Palette) -> Cell {
             Style::default().fg(palette.blocks),
         ));
     }
-    Cell {
-        spans,
-        width: BLOCK_COL,
-    }
+    spans
 }
 
 fn render_status(model: &Model, frame: &mut Frame<'_>, area: Rect, palette: &Palette) {

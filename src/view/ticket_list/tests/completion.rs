@@ -222,6 +222,37 @@ fn shrinking_drops_summary_then_rail_and_keeps_a_state_column_and_titles() {
 }
 
 #[test]
+fn the_either_tag_moves_from_title_to_type_where_type_is_admitted() {
+    let model = populated_model();
+    // Compact with measured Ref/Repo/Type 10/5/9: at 49 Type (cost 10) fails
+    // and Repo (6) is admitted, so Either rides in the title; at 50 Type fits
+    // and takes over, and Repo drops out.
+    let at_49 = buffer_text(&render(&model, 49, 24));
+    let blocked = at_49
+        .iter()
+        .find(|row| row.contains("03-blocked"))
+        .unwrap_or_else(|| panic!("{}", at_49.join("\n")));
+    assert_eq!(
+        blocked.as_str(),
+        "  03-blocked web   Blocked  *Wir… ⟨after 01-free⟩"
+    );
+    assert!(at_49[3].contains("Repo") && !at_49[3].contains("Type"));
+
+    let terminal = render(&model, 50, 24);
+    let at_50 = buffer_text(&terminal);
+    let blocked = at_50
+        .iter()
+        .find(|row| row.contains("03-blocked"))
+        .unwrap_or_else(|| panic!("{}", at_50.join("\n")));
+    assert_eq!(
+        blocked.as_str(),
+        "  03-blocked *task     Blocked  W… ⟨after 01-free⟩"
+    );
+    assert!(at_50[3].contains("Type") && !at_50[3].contains("Repo"));
+    assert_eq!(fg_of(&terminal, "*task"), DARK.mode_either);
+}
+
+#[test]
 fn a_refreshing_either_ticket_keeps_both_glyphs_without_a_type_column() {
     let mut model = populated_model();
     let now = chrono::DateTime::UNIX_EPOCH + chrono::Duration::minutes(2);

@@ -16,7 +16,6 @@ use crate::repo_slug::RepoSlug;
 
 pub mod detail;
 pub mod list;
-pub mod row;
 pub mod summary;
 pub mod table;
 pub mod ticket_list;

@@ -1,19 +1,20 @@
 //! Column tables declared once and fitted to a row width. A surface lists its
-//! columns in display order — fixed-width columns, optionally admitted by
-//! rank, around exactly one Fill column — and fits them once per render. The
-//! fitted [`Table`] then renders the header and every row from the same
-//! present columns, so labels and data cannot drift and hidden columns leave
-//! neither a cell nor a gap.
+//! columns in display order — fixed or content-fitted columns, optionally
+//! admitted by rank, around exactly one Fill column — and fits them once per
+//! render. The fitted [`Table`] then renders the header and every row from
+//! the same present columns, so labels and data cannot drift and hidden
+//! columns leave neither a cell nor a gap.
 
 use ratatui::{
     style::{Color, Style},
     text::{Line, Span},
 };
 
-use super::row::{Cell, GAP, render_cells};
-
+mod row;
 #[cfg(test)]
 mod tests;
+
+use row::{Cell, GAP, render_cells};
 
 /// Title space the Fill column keeps from the two allocation phases: optional
 /// columns are admitted only while `admission_reserve` columns remain for the
@@ -22,8 +23,6 @@ mod tests;
 /// columns alone overflow the row.
 pub struct FillReserves {
     admission_reserve: usize,
-    // TODO(#140): read by fitted-column growth once the ticket queue migrates.
-    #[allow(dead_code)]
     growth_reserve: usize,
 }
 
@@ -45,17 +44,66 @@ impl FillReserves {
     }
 }
 
+/// How far a content-fitted column may stretch. It opens at its measured
+/// content within `min..=opening_max`; a required one shrinks toward `min`
+/// only while the required columns crowd the Fill's admission reserve, and a
+/// present one grows toward its content within `min..=max` from the surplus
+/// above the Fill's growth reserve.
+pub struct ColumnBounds {
+    min: usize,
+    opening_max: usize,
+    max: usize,
+}
+
+impl ColumnBounds {
+    /// Panics unless `1 <= min <= opening_max <= max`.
+    pub fn new(min: usize, opening_max: usize, max: usize) -> Self {
+        assert!(min >= 1, "fitted column bounds need a positive minimum");
+        assert!(
+            min <= opening_max,
+            "fitted column opening maximum ({opening_max}) must not be below its minimum ({min})"
+        );
+        assert!(
+            opening_max <= max,
+            "fitted column maximum ({max}) must not be below its opening maximum ({opening_max})"
+        );
+        Self {
+            min,
+            opening_max,
+            max,
+        }
+    }
+}
+
+enum Sizing {
+    Fixed(usize),
+    Fitted {
+        content: usize,
+        bounds: ColumnBounds,
+    },
+}
+
+impl Sizing {
+    /// The width a column asks for before any shrinking or growth.
+    fn opening(&self) -> usize {
+        match self {
+            Sizing::Fixed(width) => *width,
+            Sizing::Fitted { content, bounds } => (*content).clamp(bounds.min, bounds.opening_max),
+        }
+    }
+}
+
 enum Admission {
     Required,
     Optional { rank: u8 },
 }
 
-/// One non-Fill column declaration: identity, header label, width, and
+/// One non-Fill column declaration: identity, header label, sizing, and
 /// whether the fitter may drop it for space.
 pub struct Column<Id> {
     id: Id,
     header: &'static str,
-    width: usize,
+    sizing: Sizing,
     admission: Admission,
 }
 
@@ -68,7 +116,18 @@ impl<Id> Column<Id> {
         Self {
             id,
             header,
-            width,
+            sizing: Sizing::Fixed(width),
+            admission: Admission::Required,
+        }
+    }
+
+    /// A required column sized to its measured `content` within `bounds`. An
+    /// empty measurement is valid and opens at the minimum.
+    pub fn fitted(id: Id, header: &'static str, content: usize, bounds: ColumnBounds) -> Self {
+        Self {
+            id,
+            header,
+            sizing: Sizing::Fitted { content, bounds },
             admission: Admission::Required,
         }
     }
@@ -155,13 +214,19 @@ impl<Id, State> Columns<Id, State> {
 impl<Id: Copy + Eq> Columns<Id, AfterFill<Id>> {
     /// Fit the declaration to `row_width` terminal columns.
     ///
-    /// Required columns are always present. Optional columns are tried by
-    /// ascending rank (declaration order breaks ties) while the Fill keeps its
-    /// admission reserve; each costs its width plus one gap, a failed attempt
-    /// spends nothing and later candidates still get their turn. The Fill then
-    /// takes what remains, never less than one column — so required columns
-    /// wider than the row produce a line wider than the row, which the caller's
-    /// widget clips.
+    /// Required columns are always present, opening at their fixed or
+    /// content-fitted widths. When they and the Fill's admission reserve
+    /// overflow the row, required fitted columns shrink toward their minima in
+    /// reverse declaration order until the overflow is paid — no further, so a
+    /// required column never gives space just to admit metadata. Optional
+    /// columns are then tried by ascending rank (declaration order breaks
+    /// ties) while the Fill keeps its admission reserve; each costs its width
+    /// plus one gap, a failed attempt spends nothing and later candidates still
+    /// get their turn. Present fitted columns grow in declaration order toward
+    /// their bounded content from the surplus above the Fill's growth reserve;
+    /// an absent column never grows back. The Fill then takes what remains,
+    /// never less than one column — so required minima wider than the row
+    /// produce a line wider than the row, which the caller's widget clips.
     ///
     /// Panics when two declarations (including the Fill and unadmitted
     /// optionals) share an ID: a declaration is developer-authored, so a
@@ -169,13 +234,27 @@ impl<Id: Copy + Eq> Columns<Id, AfterFill<Id>> {
     pub fn fit(self, row_width: usize) -> Table<Id> {
         let Columns { columns, state } = self;
         assert_unique_ids(&columns, state.fill_id);
+        let reserves = state.reserves;
 
-        let mut present = vec![false; columns.len()];
-        let mut used = 0;
-        for (index, column) in columns.iter().enumerate() {
-            if matches!(column.admission, Admission::Required) {
-                present[index] = true;
-                used += column.width + GAP;
+        let mut widths: Vec<usize> = columns
+            .iter()
+            .map(|column| column.sizing.opening())
+            .collect();
+        let mut present: Vec<bool> = columns
+            .iter()
+            .map(|column| matches!(column.admission, Admission::Required))
+            .collect();
+
+        let mut deficit =
+            (occupied(&widths, &present) + reserves.admission_reserve).saturating_sub(row_width);
+        for (index, column) in columns.iter().enumerate().rev() {
+            if deficit == 0 {
+                break;
+            }
+            if let (true, Sizing::Fitted { bounds, .. }) = (present[index], &column.sizing) {
+                let given = (widths[index] - bounds.min).min(deficit);
+                widths[index] -= given;
+                deficit -= given;
             }
         }
 
@@ -188,24 +267,36 @@ impl<Id: Copy + Eq> Columns<Id, AfterFill<Id>> {
             })
             .collect();
         candidates.sort_by_key(|&(rank, index)| (rank, index));
-
         let mut budget = row_width
-            .saturating_sub(used)
-            .saturating_sub(state.reserves.admission_reserve);
+            .saturating_sub(occupied(&widths, &present))
+            .saturating_sub(reserves.admission_reserve);
         for (_, index) in candidates {
-            let cost = columns[index].width + GAP;
+            let cost = widths[index] + GAP;
             if budget >= cost {
                 budget -= cost;
                 present[index] = true;
-                used += cost;
             }
         }
 
-        let fill_width = row_width.saturating_sub(used).max(1);
+        let mut surplus = row_width
+            .saturating_sub(occupied(&widths, &present))
+            .saturating_sub(reserves.growth_reserve);
+        for (index, column) in columns.iter().enumerate() {
+            if surplus == 0 {
+                break;
+            }
+            if let (true, Sizing::Fitted { content, bounds }) = (present[index], &column.sizing) {
+                let target = (*content).clamp(bounds.min, bounds.max);
+                let taken = target.saturating_sub(widths[index]).min(surplus);
+                widths[index] += taken;
+                surplus -= taken;
+            }
+        }
+
         let fill = FittedColumn {
             id: state.fill_id,
             header: state.fill_header,
-            width: fill_width,
+            width: row_width.saturating_sub(occupied(&widths, &present)).max(1),
         };
 
         let declared = columns.len();
@@ -218,7 +309,7 @@ impl<Id: Copy + Eq> Columns<Id, AfterFill<Id>> {
                 fitted.push(FittedColumn {
                     id: column.id,
                     header: column.header,
-                    width: column.width,
+                    width: widths[index],
                 });
             }
         }
@@ -227,6 +318,17 @@ impl<Id: Copy + Eq> Columns<Id, AfterFill<Id>> {
         }
         Table { columns: fitted }
     }
+}
+
+/// The columns the present non-Fill columns take, each with its one gap: with
+/// one Fill among N present columns there are exactly N gaps.
+fn occupied(widths: &[usize], present: &[bool]) -> usize {
+    widths
+        .iter()
+        .zip(present)
+        .filter(|(_, present)| **present)
+        .map(|(width, _)| width + GAP)
+        .sum()
 }
 
 fn assert_unique_ids<Id: Copy + Eq>(columns: &[Column<Id>], fill_id: Id) {
@@ -260,9 +362,6 @@ pub struct Table<Id> {
 impl<Id: Copy + Eq> Table<Id> {
     /// The width assigned to `id`, or `None` when the column is absent —
     /// omitted from the declaration or not admitted at this row width.
-    // TODO(#140): the ticket queue's Type-presence query is the first
-    // production caller; until it migrates only tests read fitted widths.
-    #[allow(dead_code)]
     pub fn width(&self, id: Id) -> Option<usize> {
         self.columns
             .iter()
