@@ -21,3 +21,6 @@
 .claude/worktrees/
 
 docs/superpowers
+
+# Riptide artifacts (cloud-synced)
+.humanlayer/tasks/
