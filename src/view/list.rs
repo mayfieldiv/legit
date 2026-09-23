@@ -7,7 +7,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use super::row::{Cell, GAP, fill_width, render_cells};
+use super::table::{Column, Columns, FillReserves, Table};
 use crate::{
     app::grouping::{DisplayRow, Grouping},
     app::model::Model,
@@ -60,17 +60,16 @@ pub fn render(
     // Size columns to the visible PRs only, so an off-tab PR's wide number or
     // diff size can't widen this tab's columns.
     let visible: Vec<&PR> = pr_list.visible_pr_indices().map(|i| &prs[i]).collect();
-    let pr_num_col = pr_num_col_width(&visible);
-    let show_repo = should_show_repo_column(model);
-    let size_col = size_col_width(&visible);
-    let layout = RowLayout {
-        width: usize::from(width),
-        pr_num_col,
-        size_col,
-        show_repo,
-        visible: compute_visible_columns(usize::from(width), show_repo, pr_num_col, size_col),
-    };
-    frame.render_widget(Paragraph::new(header_row_line(&layout)), header_area);
+    let table = pr_table(
+        usize::from(width),
+        should_show_repo_column(model),
+        pr_num_col_width(&visible),
+        size_col_width(&visible),
+    );
+    frame.render_widget(
+        Paragraph::new(table.header(Style::default().add_modifier(Modifier::BOLD))),
+        header_area,
+    );
 
     let lines: Vec<Line<'_>> = pr_list
         .visible_rows()
@@ -78,7 +77,7 @@ pub fn render(
             DisplayRow::Header(label) => header_line(label, model.list.grouping(), width, palette),
             DisplayRow::Pr(index) => {
                 let pr = &prs[*index];
-                row_line(pr, model, &layout, now, selected, palette)
+                row_line(pr, model, &table, now, selected, palette)
             }
         })
         .collect();
@@ -87,15 +86,44 @@ pub fn render(
 }
 
 const PR_NUM_COL_MIN: usize = 7;
-const WORKTREE_COL: usize = 1;
-const TITLE_MIN: usize = 30;
-const AUTHOR_COL: usize = 14;
-const REPO_COL: usize = 14;
 const SIZE_SIDE_COL_MIN: usize = 6;
 const SIZE_COL_MIN: usize = SIZE_SIDE_COL_MIN * 2 + 1;
-const UPDATED_COL: usize = 7;
-const REVIEW_COL: usize = 18;
-const ACTION_COL: usize = 26;
+
+/// The Open PR List's columns, in display order.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PrColumn {
+    Indicator,
+    Number,
+    Repo,
+    Title,
+    Author,
+    Size,
+    Updated,
+    Review,
+    Action,
+}
+
+/// The one PR column declaration, fitted to `row_width`. Optional metadata is
+/// admitted by rank — Updated, Author, Size, Review, Action — while the Title
+/// keeps 30 columns, so shrinking hides Action first and Updated last.
+fn pr_table(
+    row_width: usize,
+    show_repo: bool,
+    pr_num_col: usize,
+    size_col: usize,
+) -> Table<PrColumn> {
+    Columns::new()
+        .column(Column::fixed(PrColumn::Indicator, "", 1))
+        .column(Column::fixed(PrColumn::Number, "PR", pr_num_col))
+        .column_if(show_repo, Column::fixed(PrColumn::Repo, "Repo", 14))
+        .fill(PrColumn::Title, "Title", FillReserves::new(30, 30))
+        .column(Column::fixed(PrColumn::Author, "Author", 14).optional(1))
+        .column(Column::fixed(PrColumn::Size, "Size", size_col).optional(2))
+        .column(Column::fixed(PrColumn::Updated, "Updated", 7).optional(0))
+        .column(Column::fixed(PrColumn::Review, "Review", 18).optional(3))
+        .column(Column::fixed(PrColumn::Action, "Action", 26).optional(4))
+        .fit(row_width)
+}
 
 /// Whether the All tab shows the repo column. Keys off the tracked-repo count
 /// (mirroring the TS `showRepo`) rather than the repo spread of the visible
@@ -165,17 +193,14 @@ fn centered_ellipsis(width: usize) -> String {
     format!("{}…{}", " ".repeat(left), " ".repeat(right))
 }
 
-/// A group header row: `── <label> `, padded to the row width and bolded.
+/// A group header row: `  ── <label> `, padded to the row width and bolded.
 /// Visually distinct from PR rows (the leading rule and colour). A repo group's
 /// header takes the repo's stable Repo Color so the boundaries between repos are
 /// obvious; every other grouping keeps the accent colour (Smart-status tier
 /// headers keep their accent rather than borrowing a tier colour, so tier
 /// meaning stays a property of the action cell, not the header rule).
 fn header_line(label: &str, grouping: Grouping, width: u16, palette: &Palette) -> Line<'static> {
-    let text = pad_to_width(
-        &format!("{}── {label} ", " ".repeat(WORKTREE_COL + GAP)),
-        width as usize,
-    );
+    let text = pad_to_width(&format!("  ── {label} "), width as usize);
     // Under repo grouping the header label is the repo slug (`parse_pr` always
     // stamps a non-empty `owner/repo`), so it resolves to that repo's colour.
     let fg = match grouping {
@@ -188,185 +213,54 @@ fn header_line(label: &str, grouping: Grouping, width: u16, palette: &Palette) -
     ))
 }
 
-/// Per-render layout shared by every PR row: the row width and the column
-/// sizing derived from the visible PRs (widest number/size, repo column on a
-/// multi-repo All tab).
-struct RowLayout {
-    width: usize,
-    pr_num_col: usize,
-    size_col: usize,
-    show_repo: bool,
-    visible: VisibleColumns,
-}
-
-#[derive(Clone, Copy)]
-struct VisibleColumns {
-    author: bool,
-    size: bool,
-    updated: bool,
-    review: bool,
-    action: bool,
-}
-
-/// Compute optional list-column visibility from the available list width.
-/// Columns are enabled in descending priority (updated, author, size, review,
-/// action), so shrinking hides the least important first: action, then
-/// review, size, author, and finally updated.
-fn compute_visible_columns(
-    width: usize,
-    show_repo: bool,
-    pr_num_col: usize,
-    size_col: usize,
-) -> VisibleColumns {
-    let base = WORKTREE_COL
-        + GAP
-        + pr_num_col
-        + GAP
-        + TITLE_MIN
-        + usize::from(show_repo) * (REPO_COL + GAP);
-    let mut budget = width.saturating_sub(base);
-    let mut columns = VisibleColumns {
-        updated: false,
-        author: false,
-        size: false,
-        review: false,
-        action: false,
-    };
-
-    if reserve_visible_column(&mut budget, UPDATED_COL) {
-        columns.updated = true;
-    }
-    if reserve_visible_column(&mut budget, AUTHOR_COL) {
-        columns.author = true;
-    }
-    if reserve_visible_column(&mut budget, size_col) {
-        columns.size = true;
-    }
-    if reserve_visible_column(&mut budget, REVIEW_COL) {
-        columns.review = true;
-    }
-    if reserve_visible_column(&mut budget, ACTION_COL) {
-        columns.action = true;
-    }
-
-    columns
-}
-
-fn reserve_visible_column(budget: &mut usize, column_width: usize) -> bool {
-    let cost = column_width + GAP;
-    if *budget < cost {
-        return false;
-    }
-
-    *budget -= cost;
-    true
-}
-
-/// Column header row. Built from the same layout as PR rows so labels and data
-/// cannot drift apart. Never selected, so it carries no `selected_bg` fill.
-fn header_row_line(layout: &RowLayout) -> Line<'static> {
-    let bold = Style::default().add_modifier(Modifier::BOLD);
-    let mut cells = base_cells("", Style::default(), "PR", layout, bold);
-    if layout.show_repo {
-        cells.push(Cell::text("Repo".to_owned(), REPO_COL, bold));
-    }
-    let title_slot = cells.len();
-    if layout.visible.author {
-        cells.push(Cell::text("Author".to_owned(), AUTHOR_COL, bold));
-    }
-    if layout.visible.size {
-        cells.push(Cell::text("Size".to_owned(), layout.size_col, bold));
-    }
-    if layout.visible.updated {
-        cells.push(Cell::text("Updated".to_owned(), UPDATED_COL, bold));
-    }
-    if layout.visible.review {
-        cells.push(Cell::text("Review".to_owned(), REVIEW_COL, bold));
-    }
-    if layout.visible.action {
-        cells.push(Cell::text("Action".to_owned(), ACTION_COL, bold));
-    }
-    insert_title_cell(&mut cells, title_slot, layout, "Title".to_owned(), bold);
-    render_cells(cells, None)
-}
-
-/// One PR's display row. The fixed-width cells are built as data so the
-/// leftover-title-width math and the rendered spans derive from the same list.
+/// One PR's display row: the fitted table asks for each present column's
+/// content by ID, so the row can neither omit nor reorder a column.
 fn row_line(
     pr: &PR,
     model: &Model,
-    layout: &RowLayout,
+    table: &Table<PrColumn>,
     now: DateTime<Utc>,
     selected: bool,
     palette: &Palette,
 ) -> Line<'static> {
-    let (glyph, glyph_style) = leading_glyph(pr, model, palette);
-    let mut cells = base_cells(
-        glyph,
-        glyph_style,
-        &format!("#{}", pr.number),
-        layout,
-        Style::default()
-            .fg(palette.count)
-            .add_modifier(Modifier::BOLD),
-    );
-    if layout.show_repo {
-        // The repo cell takes the repo's stable Repo Color, so a mixed All-tab
-        // list groups visually by repo while scanning.
-        let repo = truncate_middle(format_repo_short(pr.repo_slug.as_str()), REPO_COL);
-        cells.push(Cell::text(
-            repo,
-            REPO_COL,
-            Style::default().fg(repo_color(pr.repo_slug.as_str())),
-        ));
-    }
-    let title_slot = cells.len();
-    if layout.visible.author {
-        cells.push(Cell::text(
-            truncate_middle(&pr.author, AUTHOR_COL),
-            AUTHOR_COL,
-            Style::default().fg(palette.author),
-        ));
-    }
-    if layout.visible.size {
-        cells.push(Cell::text(
-            format_list_size(pr, layout.size_col),
-            layout.size_col,
-            Style::default(),
-        ));
-    }
-    if layout.visible.updated {
-        cells.push(Cell::text(
-            format_age(pr.updated_at, now),
-            UPDATED_COL,
-            Style::default(),
-        ));
-    }
-    if layout.visible.review {
-        let (text, style) = review_cell(pr, model, palette);
-        cells.push(Cell::text(text, REVIEW_COL, style));
-    }
-    if layout.visible.action {
-        let (text, style) = action_cell(model.blockers.get(&pr.key()), palette);
-        cells.push(Cell::text(text, ACTION_COL, style));
-    }
-
     // The Selected Row brightens only the title to `selected_fg`; every other
-    // cell keeps its semantic foreground, and `render_cells` lays the
-    // `selected_bg` fill under the whole line (see ADR 0005).
+    // cell keeps its semantic foreground over the `selected_bg` band the table
+    // lays under the whole line (see ADR 0005).
     let title_style = if selected {
         Style::default().fg(palette.selected_fg)
     } else {
         Style::default()
     };
-    insert_title_cell(
-        &mut cells,
-        title_slot,
-        layout,
-        pr.title.clone(),
-        title_style,
-    );
-    render_cells(cells, selected.then_some(palette.selected_bg))
+    table.row(selected.then_some(palette.selected_bg), |column, width| {
+        let (text, style) = match column {
+            PrColumn::Indicator => {
+                let (glyph, style) = leading_glyph(pr, model, palette);
+                (glyph.to_owned(), style)
+            }
+            PrColumn::Number => (
+                format!("#{}", pr.number),
+                Style::default()
+                    .fg(palette.count)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            // The repo cell takes the repo's stable Repo Color, so a mixed
+            // All-tab list groups visually by repo while scanning.
+            PrColumn::Repo => (
+                truncate_middle(format_repo_short(pr.repo_slug.as_str()), width),
+                Style::default().fg(repo_color(pr.repo_slug.as_str())),
+            ),
+            PrColumn::Title => (pr.title.clone(), title_style),
+            PrColumn::Author => (
+                truncate_middle(&pr.author, width),
+                Style::default().fg(palette.author),
+            ),
+            PrColumn::Size => (format_list_size(pr, width), Style::default()),
+            PrColumn::Updated => (format_age(pr.updated_at, now), Style::default()),
+            PrColumn::Review => review_cell(pr, model, palette),
+            PrColumn::Action => action_cell(model.blockers.get(&pr.key()), palette),
+        };
+        vec![Span::styled(text, style)]
+    })
 }
 
 /// The leading one-column glyph for a PR row, with its colour: the refresh
@@ -381,30 +275,6 @@ fn leading_glyph(pr: &PR, model: &Model, palette: &Palette) -> (&'static str, St
     } else {
         ("", Style::default())
     }
-}
-
-fn base_cells(
-    glyph: &str,
-    glyph_style: Style,
-    pr_number: &str,
-    layout: &RowLayout,
-    style: Style,
-) -> Vec<Cell> {
-    vec![
-        Cell::text(glyph.to_owned(), WORKTREE_COL, glyph_style),
-        Cell::text(pr_number.to_owned(), layout.pr_num_col, style),
-    ]
-}
-
-fn insert_title_cell(
-    cells: &mut Vec<Cell>,
-    title_slot: usize,
-    layout: &RowLayout,
-    text: String,
-    style: Style,
-) {
-    let title_col = fill_width(layout.width, cells.iter().map(|cell| cell.width));
-    cells.insert(title_slot, Cell::text(text, title_col, style));
 }
 
 fn review_cell(pr: &PR, model: &Model, palette: &Palette) -> (String, Style) {

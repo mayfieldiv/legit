@@ -1,5 +1,5 @@
 use super::*;
-use crate::app::list_cursor::Direction;
+use crate::app::{list_cursor::Direction, ticket_list::ModeFilter};
 
 #[test]
 fn completed_efforts_are_hidden_from_the_rail_and_effort_filter() {
@@ -151,6 +151,105 @@ fn mode_filter_cycles_and_either_types_remain_in_both_views() {
     assert_eq!(selected(&list).as_deref(), Some("3"));
     list.cycle_mode();
     assert_eq!(rows(&list), ["── Frontier", "0", "1", "2", "3", "4"]);
+}
+
+/// Two Efforts whose Tickets size the queue columns differently: `web`'s
+/// `01-a` is an Either `task` (4 / 3 / `*task` 5); `catalog`'s
+/// `02-longer-ref` is a HITL `prototype` (13 / 7 / 9).
+fn two_widths() -> TicketList {
+    let mut list = TicketList::new();
+    list.merge_effort(
+        repo("web"),
+        ready("alpha", "Alpha", vec![open("01-a")]),
+        chrono::DateTime::UNIX_EPOCH,
+    );
+    list.merge_effort(
+        repo("catalog"),
+        EffortRead::Ready(
+            Effort::new(
+                effort_key("beta"),
+                "Beta".to_owned(),
+                None,
+                vec![Ticket {
+                    key: local_key("beta", "02-longer-ref"),
+                    title: "Ticket 02".to_owned(),
+                    state: TicketState::Open,
+                    claim: None,
+                    updated_at: None,
+                    ty: TicketType("prototype".to_owned()),
+                    dependencies: vec![],
+                }],
+            )
+            .unwrap(),
+        ),
+        chrono::DateTime::UNIX_EPOCH,
+    );
+    list
+}
+
+fn widths(list: &TicketList) -> (usize, usize, usize) {
+    let widths = list.content_widths();
+    (widths.display_ref, widths.repo, widths.ty)
+}
+
+#[test]
+fn content_widths_follow_the_repo_scope_and_are_restored_when_it_clears() {
+    let mut list = two_widths();
+    assert_eq!(widths(&list), (13, 7, 9));
+
+    list.set_repo_scope(Some(super::super::RepoScope {
+        repo: RepoSlug::new("acme/web"),
+        discoveries: vec![],
+    }));
+    assert_eq!(
+        widths(&list),
+        (4, 3, 5),
+        "the scoped-out Ticket no longer sizes the columns"
+    );
+
+    list.set_repo_scope(None);
+    assert_eq!(widths(&list), (13, 7, 9));
+}
+
+#[test]
+fn content_widths_follow_the_effort_filter_and_are_restored_when_it_clears() {
+    let mut list = two_widths();
+    assert_eq!(
+        rail_titles(&list),
+        ["Beta", "Alpha"],
+        "catalog sorts before web"
+    );
+
+    list.step_effort(Direction::Down);
+    assert_eq!(widths(&list), (13, 7, 9), "Beta alone");
+    list.step_effort(Direction::Down);
+    assert_eq!(widths(&list), (4, 3, 5), "Alpha alone");
+
+    list.step_effort(Direction::Up);
+    list.step_effort(Direction::Up);
+    assert!(list.all_efforts_selected());
+    assert_eq!(widths(&list), (13, 7, 9));
+}
+
+#[test]
+fn content_widths_follow_the_mode_filter_and_are_restored_when_it_cycles_back() {
+    let mut list = two_widths();
+
+    list.cycle_mode();
+    assert_eq!(list.mode_filter(), ModeFilter::Afk);
+    assert_eq!(
+        widths(&list),
+        (4, 3, 5),
+        "the HITL prototype leaves; the Either task stays"
+    );
+
+    list.cycle_mode();
+    assert_eq!(list.mode_filter(), ModeFilter::Hitl);
+    assert_eq!(widths(&list), (13, 7, 9), "both Tickets match HITL");
+
+    list.cycle_mode();
+    assert_eq!(list.mode_filter(), ModeFilter::All);
+    assert_eq!(widths(&list), (13, 7, 9));
 }
 
 #[test]

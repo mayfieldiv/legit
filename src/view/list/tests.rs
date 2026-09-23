@@ -2,6 +2,7 @@ use crate::repo_slug::RepoSlug;
 use chrono::{DateTime, TimeZone, Utc};
 use ratatui::{Terminal, backend::TestBackend, style::Color};
 
+use super::PrColumn;
 use crate::{
     app::{
         grouping::Grouping,
@@ -401,76 +402,172 @@ fn size_column_widens_uniformly_after_five_digits() {
     assert_eq!(super::format_list_size(&huge, width), "+123456/-7     ");
 }
 
-fn title_width_for_visible_columns(
-    width: usize,
-    show_repo: bool,
-    pr_num_col: usize,
-    size_col: usize,
-    visible: super::VisibleColumns,
-) -> usize {
-    let mut fixed_width = pr_num_col;
-    let mut fixed_cells = 1;
+// ── column declaration ──────────────────────────────────────────────────────
 
-    if show_repo {
-        fixed_width += super::REPO_COL;
-        fixed_cells += 1;
-    }
-    if visible.author {
-        fixed_width += super::AUTHOR_COL;
-        fixed_cells += 1;
-    }
-    if visible.size {
-        fixed_width += size_col;
-        fixed_cells += 1;
-    }
-    if visible.updated {
-        fixed_width += super::UPDATED_COL;
-        fixed_cells += 1;
-    }
-    if visible.review {
-        fixed_width += super::REVIEW_COL;
-        fixed_cells += 1;
-    }
-    if visible.action {
-        fixed_width += super::ACTION_COL;
-        fixed_cells += 1;
-    }
+/// The IDs the fitted table renders, in display order.
+fn present_columns(table: &super::Table<PrColumn>) -> Vec<PrColumn> {
+    let mut order = Vec::new();
+    table.row(None, |id, _| {
+        order.push(id);
+        Vec::new()
+    });
+    order
+}
 
-    width.saturating_sub(fixed_width + fixed_cells * super::GAP)
+/// The present optional columns at a no-Repo, Number 7, Size 13 row width,
+/// with the Title width.
+fn optionals_and_title(row_width: usize) -> (Vec<PrColumn>, usize) {
+    let table = super::pr_table(row_width, false, 7, super::SIZE_COL_MIN);
+    let optionals = present_columns(&table)
+        .into_iter()
+        .filter(|column| {
+            !matches!(
+                column,
+                PrColumn::Indicator | PrColumn::Number | PrColumn::Title
+            )
+        })
+        .collect();
+    (
+        optionals,
+        table.width(PrColumn::Title).expect("title present"),
+    )
 }
 
 #[test]
-fn visible_column_budget_accounts_for_gaps_before_enabling_size() {
-    let width = 85;
-    let pr_num_col = 7;
-    let show_repo = true;
-    let visible = super::compute_visible_columns(width, show_repo, pr_num_col, super::SIZE_COL_MIN);
+fn a_wide_all_tab_declares_every_column_in_display_order() {
+    let table = super::pr_table(200, true, 7, super::SIZE_COL_MIN);
 
-    assert!(visible.updated, "updated should still fit");
-    assert!(visible.author, "author should still fit");
-    assert!(!visible.size, "size plus its gap would shrink the title");
-    assert!(
-        title_width_for_visible_columns(width, show_repo, pr_num_col, super::SIZE_COL_MIN, visible)
-            >= super::TITLE_MIN
+    assert_eq!(
+        present_columns(&table),
+        vec![
+            PrColumn::Indicator,
+            PrColumn::Number,
+            PrColumn::Repo,
+            PrColumn::Title,
+            PrColumn::Author,
+            PrColumn::Size,
+            PrColumn::Updated,
+            PrColumn::Review,
+            PrColumn::Action,
+        ]
+    );
+    assert_eq!(table.width(PrColumn::Indicator), Some(1));
+    assert_eq!(table.width(PrColumn::Number), Some(7));
+    assert_eq!(table.width(PrColumn::Repo), Some(14));
+    assert_eq!(table.width(PrColumn::Author), Some(14));
+    assert_eq!(table.width(PrColumn::Size), Some(13));
+    assert_eq!(table.width(PrColumn::Updated), Some(7));
+    assert_eq!(table.width(PrColumn::Review), Some(18));
+    assert_eq!(table.width(PrColumn::Action), Some(26));
+    // 200 minus eight non-Title columns (100) and their eight gaps.
+    assert_eq!(table.width(PrColumn::Title), Some(92));
+}
+
+#[test]
+fn the_repo_column_is_declared_only_for_the_multi_repo_all_scope() {
+    let table = super::pr_table(200, false, 7, super::SIZE_COL_MIN);
+
+    assert_eq!(table.width(PrColumn::Repo), None);
+    assert!(!present_columns(&table).contains(&PrColumn::Repo));
+    assert_eq!(
+        table.width(PrColumn::Title),
+        Some(92 + 14 + 1),
+        "the absent repo column gives its width and gap to the title"
     );
 }
 
 #[test]
-fn visible_column_budget_uses_the_actual_size_column_width() {
-    let width = 80;
-    let pr_num_col = 7;
-    let size_col = 20;
-    let visible = super::compute_visible_columns(width, false, pr_num_col, size_col);
+fn size_admission_accounts_for_its_gap_beside_a_repo_column() {
+    // Base 1 + 7 + 14 + 3 gaps + title 30 = 55; budget 30 at width 85.
+    // Updated (8) → 22; Author (15) → 7; Size (14) does not fit.
+    let table = super::pr_table(85, true, 7, super::SIZE_COL_MIN);
 
-    assert!(visible.updated, "updated should still fit");
-    assert!(visible.author, "author should still fit");
-    assert!(
-        !visible.size,
-        "the widened size column plus its gap would shrink the title"
+    assert_eq!(table.width(PrColumn::Updated), Some(7));
+    assert_eq!(table.width(PrColumn::Author), Some(14));
+    assert_eq!(table.width(PrColumn::Size), None);
+    assert!(table.width(PrColumn::Title).expect("title") >= 30);
+}
+
+#[test]
+fn size_admission_uses_the_measured_size_width() {
+    let table = super::pr_table(80, false, 7, 20);
+
+    assert_eq!(table.width(PrColumn::Updated), Some(7));
+    assert_eq!(table.width(PrColumn::Author), Some(14));
+    assert_eq!(
+        table.width(PrColumn::Size),
+        None,
+        "a 20-column size plus its gap would push the title below 30"
     );
-    assert!(
-        title_width_for_visible_columns(width, false, pr_num_col, size_col, visible)
-            >= super::TITLE_MIN
+    assert!(table.width(PrColumn::Title).expect("title") >= 30);
+}
+
+#[test]
+fn optional_admission_is_not_monotonic_across_widths_61_62_63() {
+    assert_eq!(optionals_and_title(61), (vec![PrColumn::Updated], 43));
+    assert_eq!(
+        optionals_and_title(62),
+        (vec![PrColumn::Size, PrColumn::Updated], 30),
+        "Author's 15 fails on a 14 budget; Size's 14 then fits exactly"
+    );
+    assert_eq!(
+        optionals_and_title(63),
+        (vec![PrColumn::Author, PrColumn::Updated], 30),
+        "one more column lets Author take the budget Size had"
+    );
+}
+
+#[test]
+fn a_seven_digit_number_widens_the_number_column_and_shifts_admission() {
+    let wide = pr(1234567, "wide", "octocat", 1);
+    assert_eq!(super::pr_num_col_width(&[&wide]), 8);
+    assert_eq!(
+        super::pr_num_col_width(&[&pr(123456, "six", "octocat", 1)]),
+        7,
+        "six digits still fit the floor"
+    );
+
+    // Width 62 admits Size beside Updated with Number 7 (see the 61/62/63
+    // case); the extra number column leaves only Updated.
+    let table = super::pr_table(62, false, 8, super::SIZE_COL_MIN);
+    assert_eq!(table.width(PrColumn::Number), Some(8));
+    assert_eq!(table.width(PrColumn::Updated), Some(7));
+    assert_eq!(table.width(PrColumn::Size), None);
+    assert_eq!(table.width(PrColumn::Title), Some(43));
+}
+
+#[test]
+fn a_fifteen_column_size_needs_two_more_columns_to_be_admitted() {
+    // With Repo, Number 7: Updated and Author leave Size a 14 budget at 92.
+    assert_eq!(
+        super::pr_table(92, true, 7, 13).width(PrColumn::Size),
+        Some(13)
+    );
+    assert_eq!(super::pr_table(92, true, 7, 15).width(PrColumn::Size), None);
+    assert_eq!(super::pr_table(93, true, 7, 15).width(PrColumn::Size), None);
+    assert_eq!(
+        super::pr_table(94, true, 7, 15).width(PrColumn::Size),
+        Some(15)
+    );
+}
+
+#[test]
+fn narrow_rows_keep_the_required_columns_and_floor_the_title_at_one() {
+    // Indicator 1 + Number 7 + two gaps = 10 columns before the title.
+    let exact = super::pr_table(11, false, 7, super::SIZE_COL_MIN);
+    assert_eq!(
+        present_columns(&exact),
+        vec![PrColumn::Indicator, PrColumn::Number, PrColumn::Title]
+    );
+    assert_eq!(exact.width(PrColumn::Title), Some(1));
+
+    let overflowing = super::pr_table(5, false, 7, super::SIZE_COL_MIN);
+    assert_eq!(overflowing.width(PrColumn::Number), Some(7));
+    assert_eq!(overflowing.width(PrColumn::Title), Some(1));
+    assert_eq!(
+        overflowing.header(ratatui::style::Style::default()).width(),
+        11,
+        "required columns overflow the row; the Paragraph clips them"
     );
 }
 
@@ -1441,36 +1538,9 @@ fn status_bar_shows_error_message_on_the_right() {
 }
 
 #[test]
-fn narrow_width_clamps_title_rather_than_overflowing_the_row() {
-    // Choose a width one column past the fixed cells, so the title clamps to
-    // its 1-column floor — a row must never render wider than its width.
-    let pr_num_col = 6;
-    let size_col = 8;
-    let column_count = 8;
-    let gaps = column_count - 1;
-    let width = super::WORKTREE_COL
-        + pr_num_col
-        + super::AUTHOR_COL
-        + size_col
-        + super::UPDATED_COL
-        + super::REVIEW_COL
-        + super::ACTION_COL
-        + gaps
-        + 1;
-    let layout = super::RowLayout {
-        width,
-        pr_num_col,
-        size_col,
-        show_repo: false,
-        visible: super::VisibleColumns {
-            author: true,
-            size: true,
-            updated: true,
-            review: true,
-            action: true,
-        },
-    };
-
+fn a_row_one_column_past_the_required_cells_renders_exactly_its_width() {
+    // Indicator 1 + Number 7 + two gaps + a one-column title.
+    let width = 11;
     let pr = pr(
         1234,
         "a title far too long to fit in this row",
@@ -1478,17 +1548,133 @@ fn narrow_width_clamps_title_rather_than_overflowing_the_row() {
         72,
     );
     let mut model = model_with(vec![pr.clone()], Grouping::None, |_| None);
-    let blocker = BlockerResult {
-        blocker: "someone".to_owned(),
-        tier: Tier::NeedsReview,
-        reason: "Review requested from someone".to_owned(),
-    };
-    model.blockers.insert(pr.key(), blocker);
-    let line = super::row_line(&pr, &model, &layout, fixed_now(), false, &Palette::dark());
+    model.blockers.insert(
+        pr.key(),
+        BlockerResult {
+            blocker: "someone".to_owned(),
+            tier: Tier::NeedsReview,
+            reason: "Review requested from someone".to_owned(),
+        },
+    );
+    let table = super::pr_table(width, false, 7, super::SIZE_COL_MIN);
 
+    let line = super::row_line(&pr, &model, &table, fixed_now(), false, &Palette::dark());
+
+    assert_eq!(line.width(), width, "{:?}", line.to_string());
+    assert_eq!(line.to_string(), "  #1234   …");
+}
+
+// ── measurement across scrolling and filtering ──────────────────────────────
+
+/// The table header row, wherever the chrome puts it: below the filter chip
+/// while the filter is visible.
+fn table_header_row_of(model: &Model, terminal: &Terminal<TestBackend>) -> String {
+    let width = terminal.backend().buffer().area().width;
+    let list_width = crate::app::list_layout::list_width(width);
+    let header_y = crate::app::list_layout::rows_above_list(model.list.filter().is_visible()) - 1;
+    buffer_text(terminal)
+        .remove(usize::from(header_y))
+        .chars()
+        .take(list_width as usize)
+        .collect()
+}
+
+fn column_starts(row: &str, labels: &[&str]) -> Vec<Option<usize>> {
+    labels.iter().map(|label| row.find(label)).collect()
+}
+
+#[test]
+fn offscreen_prs_size_the_columns_and_a_filter_that_hides_them_contracts_the_columns() {
+    let mut wide = pr(1234567, "wide one", "bob", 3);
+    wide.additions = 123456;
+    wide.deletions = 7;
+    let mut model = model_with(
+        vec![
+            pr(42, "first alpha", "octocat", 1),
+            pr(43, "second alpha", "alice", 2),
+            wide,
+        ],
+        Grouping::None,
+        |_| Some(Tier::NeedsReview),
+    );
+    // Two visible rows: the seven-digit, six-digit-diff PR starts offscreen.
+    model.list.resize(2);
+
+    // 130 total -> 89-column list.
+    let terminal = render_snapshot(&model, 130, 8);
+    let header = table_header_row_of(&model, &terminal);
+    let rows = list_rows(&terminal);
     assert!(
-        line.width() <= width,
-        "row overflowed its width: {} > {width}",
-        line.width(),
+        rows[0].contains("#42") && rows[1].contains("#43"),
+        "{rows:?}"
+    );
+    assert!(!rows.iter().any(|row| row.contains("#1234567")), "{rows:?}");
+    let labels = ["PR", "Title", "Author", "Size", "Updated"];
+    let starts = column_starts(&header, &labels);
+    assert!(starts.iter().all(Option::is_some), "{header:?}");
+    let title_x = starts[1].expect("title label");
+    assert_eq!(
+        title_x,
+        1 + 8 + 2,
+        "the number column is eight wide for #1234567 even while it is offscreen"
+    );
+    assert_eq!(rows[0].find("first alpha"), Some(title_x), "{rows:?}");
+    // Size is 15 wide, so Updated follows Author 14 + gap + 15 + gap.
+    assert_eq!(
+        starts[4].expect("updated") - starts[2].expect("author"),
+        14 + 1 + 15 + 1,
+        "{header:?}"
+    );
+
+    model.list.move_down();
+    model.list.move_down();
+    let terminal = render_snapshot(&model, 130, 8);
+    let rows = list_rows(&terminal);
+    assert!(rows.iter().any(|row| row.contains("#1234567")), "{rows:?}");
+    assert!(
+        rows.iter().any(|row| row.contains("+123456/-7")),
+        "{rows:?}"
+    );
+    assert_eq!(
+        table_header_row_of(&model, &terminal),
+        header,
+        "scrolling the wide PR into view must not move the columns"
+    );
+    let wide_row = rows
+        .iter()
+        .find(|row| row.contains("wide one"))
+        .expect("wide row");
+    assert_eq!(wide_row.find("wide one"), Some(title_x));
+
+    // Hide the wide PR: both remaining titles contain "alpha".
+    model.list.filter_open();
+    for c in "alpha".chars() {
+        model.list.filter_push(c);
+    }
+    model.list.filter_submit();
+    model.relayout();
+    let terminal = render_snapshot(&model, 130, 8);
+    let filtered = table_header_row_of(&model, &terminal);
+    let filtered_starts = column_starts(&filtered, &labels);
+    assert_eq!(
+        filtered_starts[1],
+        Some(title_x - 1),
+        "the number column falls back to its seven-column floor: {filtered:?}"
+    );
+    assert_eq!(
+        filtered_starts[4].expect("updated") - filtered_starts[2].expect("author"),
+        14 + 1 + 13 + 1,
+        "size falls back to 13: {filtered:?}"
+    );
+    let rows = list_rows(&terminal);
+    assert_eq!(rows[0].find("first alpha"), Some(title_x - 1), "{rows:?}");
+
+    model.list.filter_clear();
+    model.relayout();
+    let terminal = render_snapshot(&model, 130, 8);
+    assert_eq!(
+        table_header_row_of(&model, &terminal),
+        header,
+        "clearing the filter restores the wide measurements"
     );
 }

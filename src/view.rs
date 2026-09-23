@@ -16,8 +16,8 @@ use crate::repo_slug::RepoSlug;
 
 pub mod detail;
 pub mod list;
-pub mod row;
 pub mod summary;
+pub mod table;
 pub mod ticket_list;
 
 /// Short label for the active grouping mode, shown in the status-bar `g` hint.

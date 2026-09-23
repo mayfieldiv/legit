@@ -3,15 +3,19 @@
 //! that carry meaning (tier headers, Mode on the Type cell) are asserted on
 //! their cells. Expected shapes come from spec §6.1–§6.2.
 
-use ratatui::{Terminal, backend::TestBackend, style::Color};
+use ratatui::{
+    Terminal,
+    backend::TestBackend,
+    style::{Color, Style},
+};
 
 mod completion;
 
-use super::super::row::render_cells;
+use super::{QueueColumn, queue_table};
 use crate::{
     app::{
         model::{Model, ViewMode},
-        ticket_list::{DiscoveryUnit, RowMarker},
+        ticket_list::{DiscoveryUnit, QueueContentWidths, RowMarker},
     },
     canonical_path::CanonicalPathBuf,
     config::RepoIdentity,
@@ -21,7 +25,10 @@ use crate::{
         Claim, Dependency, Effort, EffortKey, EffortRead, Ticket, TicketKey, TicketState,
         TicketType,
     },
-    view,
+    view::{
+        self,
+        table::{Columns, FillReserves},
+    },
 };
 
 fn render(model: &Model, width: u16, height: u16) -> Terminal<TestBackend> {
@@ -454,19 +461,25 @@ fn long_refs_still_truncate_when_the_terminal_is_narrow() {
     );
 }
 
-/// `title_cell` for a Blocked ticket whose marker is `⟨dep? gone.md⟩` (14
-/// columns), rendered alone at `width` — the joined cell text.
+/// `title_spans` for a Blocked ticket whose marker is `⟨dep? gone.md⟩` (14
+/// columns), rendered as the only cell of a `width`-column row — the joined
+/// cell text.
 fn dep_marker_cell(width: usize) -> String {
     let marker = RowMarker::UnknownDependency("gone.md".to_owned());
-    let cell = super::title_cell(
-        "Ship it",
-        None,
-        Some(&marker),
-        width,
-        ratatui::style::Style::default(),
-        &DARK,
-    );
-    render_cells(vec![cell], None)
+    let table = Columns::new()
+        .fill(QueueColumn::Title, "Title", FillReserves::new(1, 1))
+        .fit(width);
+    table
+        .row(None, |_, width| {
+            super::title_spans(
+                "Ship it",
+                None,
+                Some(&marker),
+                width,
+                Style::default(),
+                &DARK,
+            )
+        })
         .spans
         .iter()
         .map(|span| span.content.as_ref())
@@ -490,6 +503,148 @@ fn the_state_marker_outranks_the_title_when_the_cell_is_tight() {
         dep_marker_cell(10),
         "⟨dep? gon…",
         "a marker wider than the cell truncates rather than vanishing"
+    );
+}
+
+fn content(display_ref: usize, repo: usize, ty: usize) -> QueueContentWidths {
+    QueueContentWidths {
+        display_ref,
+        repo,
+        ty,
+    }
+}
+
+/// Every present queue column with its fitted width, in display order, for a
+/// `row_width`-column queue (the width left after the panel and rail).
+fn allocation(
+    row_width: usize,
+    content: QueueContentWidths,
+    compact: bool,
+) -> Vec<(QueueColumn, usize)> {
+    let mut columns = Vec::new();
+    queue_table(row_width, content, compact).row(None, |id, width| {
+        columns.push((id, width));
+        Vec::new()
+    });
+    columns
+}
+
+#[test]
+fn a_long_ref_yields_to_the_title_reserve_instead_of_a_row_width_cap() {
+    use QueueColumn::*;
+    // Ref opens at 14. Compact: Indicator 1 + Ref 14 + State 8 + three gaps
+    // + Title's 18 = 44 overflows 40 by four, which Ref gives up.
+    assert_eq!(
+        allocation(40, content(14, 5, 9), true),
+        [(Indicator, 1), (Ref, 10), (State, 8), (Title, 18)]
+    );
+    // Beside the rail there is no State: Ref keeps 14 and Title the surplus,
+    // though not enough of it to admit Type (10) or Repo (6).
+    assert_eq!(
+        allocation(40, content(14, 5, 9), false),
+        [(Indicator, 1), (Ref, 14), (Title, 23)]
+    );
+    // Ref shrinks only as far as Title's reserve needs, not to its minimum.
+    assert_eq!(
+        allocation(30, content(14, 5, 9), false),
+        [(Indicator, 1), (Ref, 9), (Title, 18)]
+    );
+}
+
+#[test]
+fn compact_metadata_is_admitted_by_rank_at_equality_and_a_failed_type_lets_repo_in() {
+    use QueueColumn::*;
+    let content = content(10, 5, 9);
+    // Required columns and gaps cost 22; with Title's 18 the budget opens at 40.
+    assert_eq!(
+        allocation(40, content, true),
+        [(Indicator, 1), (Ref, 10), (State, 8), (Title, 18)]
+    );
+    assert_eq!(
+        allocation(45, content, true),
+        [(Indicator, 1), (Ref, 10), (State, 8), (Title, 23)],
+        "budget 5: Type costs 10 and Repo 6, so the surplus stays with Title"
+    );
+    assert_eq!(
+        allocation(46, content, true),
+        [
+            (Indicator, 1),
+            (Ref, 10),
+            (Repo, 5),
+            (State, 8),
+            (Title, 18)
+        ],
+        "Type fails first, then Repo fits exactly"
+    );
+    assert_eq!(
+        allocation(49, content, true),
+        [
+            (Indicator, 1),
+            (Ref, 10),
+            (Repo, 5),
+            (State, 8),
+            (Title, 21)
+        ]
+    );
+    assert_eq!(
+        allocation(50, content, true),
+        [
+            (Indicator, 1),
+            (Ref, 10),
+            (Type, 9),
+            (State, 8),
+            (Title, 18)
+        ],
+        "Type now fits and spends the budget Repo had"
+    );
+}
+
+#[test]
+fn a_wide_row_shows_every_declared_column_and_grows_fitted_ones_in_display_order() {
+    use QueueColumn::*;
+    // Beside the rail: 61 columns of opening metadata and gaps leave Title 59,
+    // so 19 above its 40 grow Ref to its content and Repo as far as the rest.
+    assert_eq!(
+        allocation(120, content(30, 20, 18), false),
+        [
+            (Indicator, 1),
+            (Ref, 30),
+            (Repo, 17),
+            (Type, 12),
+            (Title, 40),
+            (Block, 7),
+            (Updated, 7),
+        ]
+    );
+    // Compact adds State before Title; with room to spare every fitted
+    // column reaches its measured content and Title keeps the rest.
+    assert_eq!(
+        allocation(200, content(30, 20, 18), true),
+        [
+            (Indicator, 1),
+            (Ref, 30),
+            (Repo, 20),
+            (Type, 18),
+            (State, 8),
+            (Title, 102),
+            (Block, 7),
+            (Updated, 7),
+        ]
+    );
+}
+
+#[test]
+fn required_minima_overflow_a_row_too_narrow_for_them() {
+    use QueueColumn::*;
+    let table = queue_table(18, content(14, 5, 9), true);
+    assert_eq!(
+        allocation(18, content(14, 5, 9), true),
+        [(Indicator, 1), (Ref, 6), (State, 8), (Title, 1)]
+    );
+    assert_eq!(
+        table.header(Style::default()).width(),
+        19,
+        "the constructed line is wider than the row; the widget clips it"
     );
 }
 
